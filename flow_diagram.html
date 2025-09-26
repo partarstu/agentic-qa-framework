@@ -58,20 +58,19 @@
             <div class="mermaid">
 graph TD
     subgraph "Workflow 3: Test Execution & Reporting"
-        TE1[API Call<br>/execute-tests] --> TE2[Fetch 'automated' TCs<br>from Test Mgmt System];
-        TE2 --> TE3[Group TCs by Labels];
-        TE3 --> TE4[For each Label, Select ALL<br>Suitable Execution Agents];
-        TE4 --> TE5[Distribute TCs Among Agents];
-        TE5 --> TE6[Send Execution Tasks];
-        TE6 --> TE7[Wait & Gather Results];
-        TE7 --> TE8{Parse Agent Responses into<br>structured TestExecutionResult};
-        TE8 --> TE9[Create Test Cycle in<br>Test Mgmt System];
-        TE9 --> TE10[Push Execution Statuses<br>to Test Mgmt System];
-        TE10 --> TE11[Generate Local Allure Report];
-        TE11 --> TE12((End));
+        TE1[API Call<br>/execute-tests] --> TE2[Fetch ready for automated execution TCs <br>from Test Mgmt System];
+        TE2 --> TE3[Group TCs by their type];
+        TE3 --> TE4[For each test type, Select ALL<br>Suitable Execution Agents];
+        TE4 --> TE5[Distribute TCs Among Agents in parallel];
+        TE5 --> TE6[Send Execution Tasks for each selected agent in parallel];
+        TE6 --> TE7[Wait & Gather Execution Results];
+        TE7 --> TE8{Analyze Agent Responses};
+        TE8 --> TE9[Create Test Execution Results in<br>Test Mgmt System];
+        TE9 --> TE10[Generate Test Execution Reports];
+        TE10 --> TE11((End));
     end
 
-    subgraph "Workflow 2: Test Case Generation"
+    subgraph "Workflow 2: Test Case Generation, Review and Classification"
         TCG1[Jira Webhook<br>/story-ready-for-test-case-generation] --> TCG2[Extract User Story ID];
         TCG2 --> TCG3[Select Agent for<br>'Generate test cases'];
         TCG3 --> TCG4[Send Generation Task];
@@ -95,11 +94,9 @@ graph TD
 
     subgraph "System Startup & Agent Discovery"
         A[Orchestrator Starts] --> B{Periodic Agent Discovery};
-        B --> C[Scan Configured URLs/Ports];
-        C --> D{Fetch agent.json Card};
+        B --> C[Scan Configured Agent URLs];
+        C --> D{Fetch Agent Cards};
         D -- Success --> E[Add/Update Agent in Registry];
-        D -- Failure --> C;
-        F[Agent sends POST /register] --> E;
     end
             </div>
         </div>

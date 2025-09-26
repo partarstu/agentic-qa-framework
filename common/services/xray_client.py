@@ -274,7 +274,7 @@ class XrayClient(TestManagementClientBase):
 
             test_cases.append(
                 TestCase(
-                    id=result["issueId"],
+                    key=result["issueId"],
                     name=summary,
                     summary=summary,
                     preconditions=preconditions,

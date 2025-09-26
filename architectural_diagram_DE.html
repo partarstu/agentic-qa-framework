@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Architekturdiagramm von Agentic QA Framework</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f8fafc; /* slate-50 */
+        }
+        .mermaid svg {
+            margin: 0 auto;
+            display: block;
+        }
+        h1, h2 {
+            color: #1e293b; /* slate-800 */
+        }
+    </style>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body class="p-4 sm:p-6 md:p-8">
+    <div class="max-w-7xl mx-auto">
+        <header class="text-center mb-8">
+            <h1 class="text-3xl md:text-4xl font-bold tracking-tight">Architekturdiagramm von Agentic QA Framework</h1>
+        </header>
+
+        <div class="bg-white p-6 rounded-2xl shadow-lg border border-slate-200">
+            <div class="mermaid w-full overflow-auto">
+graph LR
+    subgraph "Systemgrenze"
+        direction TB
+        UserRequest["Benutzeranfrage / Auslöser"] --> Orchestrator
+
+        subgraph "Orchestrierung & Kommunikation"
+            Orchestrator["Orchestrator (orchestrator/main.py)"]
+            A2A["<b>A2A-Protokoll-SDK</b>"]
+            Orchestrator -- "Nutzt zur Agenten-Anrufung" --> A2A
+        end
+
+        subgraph "Agenten-Schicht"
+            subgraph "Agenten"
+                ReqReview["1. Anforderungsprüfung"]
+                Classification["2. Testfall-Klassifizierung"]
+                Generation["3. Testfall-Erstellung"]
+                CaseReview["4. Testfall-Überprüfung"]
+                UITest["5. UI-Testausführung"]
+            end
+        end
+
+        %% Hub-and-spoke Kommunikation
+        A2A -- "Sendet Anfrage / Empfängt Ergebnis" <--> ReqReview
+        A2A -- "Sendet Anfrage / Empfängt Ergebnis" <--> Classification
+        A2A -- "Sendet Anfrage / Empfängt Ergebnis" <--> Generation
+        A2A -- "Sendet Anfrage / Empfängt Ergebnis" <--> CaseReview
+        A2A -- "Sendet Anfrage / Empfängt Ergebnis" <--> UITest
+
+        subgraph "Kernabhängigkeiten"
+            LLM["Großes Sprachmodell (LLM)"]
+            Reporting["Berichtsdienst<br/>(Allure)"]
+            MCP["<b>Modellkontext-Protokoll (MCP)</b><br/>Protokoll für Jira-Zugriff"]
+        end
+
+        %% Styling
+        style MCP fill:#eef2ff,stroke:#4f46e5,stroke-width:2px,stroke-dasharray: 5 5
+        style A2A fill:#dcfce7,stroke:#16a34a,stroke-width:2px
+
+        %% Interaktionen der Agenten mit internen Abhängigkeiten
+        ReqReview -- "Interagiert mit" --> LLM
+        Classification -- "Interagiert mit" --> LLM
+        Generation -- "Interagiert mit" --> LLM
+        CaseReview -- "Interagiert mit" --> LLM
+        UITest -- "Interagiert mit" --> LLM
+
+        %% Interaktion des Orchestrators mit dem Reporting
+        Orchestrator -- "Sendet Daten an" --> Reporting
+    end
+
+    subgraph "Externe Systeme"
+        direction TB
+        Jira["Ticketing-System<br/>(Jira)"]
+        Zephyr["Testmanagement-System<br/>(Zephyr)"]
+    end
+
+    %% Interaktionen der Agenten mit externen Systemen
+    ReqReview -- "Nutzt MCP für Zugriff & Kommentare in" --> Jira
+    Generation -- "Nutzt MCP für Zugriff auf" --> Jira
+    CaseReview -- "Nutzt MCP für Zugriff auf" --> Jira
+
+    Classification -- "Fügt Labels zu Testfällen hinzu in" --> Zephyr
+    Generation -- "Erstellt/Holt Testfälle in" --> Zephyr
+    CaseReview -- "Fügt Review-Feedback hinzu in" --> Zephyr
+            </div>
+        </div>
+    </div>
+
+    <script type="module">
+        import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
+        mermaid.initialize({ startOnLoad: true });
+    </script>
+</body>
+</html>

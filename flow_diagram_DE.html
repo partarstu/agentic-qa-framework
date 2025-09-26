@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ausführungsflussdiagramm</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f3f4f6;
+        }
+        .mermaid {
+            width: 100%;
+            height: auto;
+        }
+        /* Mermaid Theme Customization */
+        .cluster {
+            fill: #f9fafb;
+            stroke: #9ca3af;
+            stroke-width: 2px;
+            rx: 8px;
+        }
+        .node rect, .node circle, .node ellipse, .node polygon, .node path {
+            fill: #e5e7eb;
+            stroke: #6b7280;
+            stroke-width: 2px;
+        }
+        .node .label {
+            font-family: 'Inter', sans-serif;
+            font-weight: 600;
+            color: #1f2937;
+        }
+        .edgePath .path {
+            stroke: #4b5563;
+            stroke-width: 2px;
+        }
+        .arrowhead {
+            fill: #4b5563;
+        }
+        .cluster-title .label {
+            font-size: 1.25rem;
+            font-weight: 700;
+            fill: #111827;
+        }
+    </style>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+</head>
+<body class="bg-gray-100 p-4 sm:p-6 md:p-8">
+    <div class="max-w-7xl mx-auto bg-white rounded-xl shadow-lg p-6">
+        <h1 class="text-2xl sm:text-3xl font-bold text-gray-800 mb-2 text-center">Agentic QA Framework: Orchestrierungsfluss</h1>
+        <div class="mermaid-container overflow-x-auto">
+            <div class="mermaid">
+graph TD
+    subgraph "Arbeitsablauf 3: Testausführung & Berichterstattung"
+        TE1[API-Aufruf<br>/execute-tests] --> TE2[Abrufen der zur autom. Ausführung bereiten Testfälle <br>aus dem Test-Management-System];
+        TE2 --> TE3[Gruppieren der Testfälle nach Typ];
+        TE3 --> TE4[Für jeden Testtyp, ALLE<br>geeigneten Ausführungs-Agenten auswählen];
+        TE4 --> TE5[Testfälle parallel auf Agenten verteilen];
+        TE5 --> TE6[Ausführungsaufgaben parallel an jeden<br>ausgewählten Agenten senden];
+        TE6 --> TE7[Ausführungsergebnisse warten & sammeln];
+        TE7 --> TE8{Agenten-Antworten analysieren};
+        TE8 --> TE9[Testausführungsergebnisse im<br>Test-Management-System erstellen];
+        TE9 --> TE10[Testausführungsberichte generieren];
+        TE10 --> TE11((Ende));
+    end
+
+    subgraph "Arbeitsablauf 2: Testfallerstellung, -prüfung und -klassifizierung"
+        TCG1[Jira Webhook<br>/story-ready-for-test-case-generation] --> TCG2[User Story ID extrahieren];
+        TCG2 --> TCG3[Agenten für<br>'Testfälle generieren' auswählen];
+        TCG3 --> TCG4[Generierungsaufgabe senden];
+        TCG4 --> TCG5[Auf die generierten Testfälle warten & sie Empfangen];
+        TCG5 --> TCG6[Agenten für<br>'Testfälle klassifizieren' auswählen];
+        TCG6 --> TCG7[Klassifizierungsaufgabe senden];
+        TCG7 --> TCG8[Auf Abschluss warten];
+        TCG8 --> TCG9[Agenten für<br>'Testfälle reviewen' auswählen];
+        TCG9 --> TCG10[Prüfungsaufgabe senden];
+        TCG10 --> TCG11[Auf Abschluss warten];
+        TCG11 --> TCG12((Ende));
+    end
+
+    subgraph "Arbeitsablauf 1: Anforderungsprüfung"
+        J1[Jira Webhook<br>/new-requirements-available] --> J2[User Story ID extrahieren];
+        J2 --> J3[Agenten für<br>'Jira User Story prüfen' auswählen];
+        J3 --> J4[Prüfungsaufgabe an Agenten senden];
+        J4 --> J5[Auf Abschluss der Aufgabe warten];
+        J5 --> J6((Ende));
+    end
+
+    subgraph "Systemstart & Agenten-Erkennung"
+        A[Orchestrator startet] --> B{Periodische Agenten-Erkennung};
+        B --> C[Konfigurierte Agenten-URLs scannen];
+        C --> D{Agenten-Karten abrufen};
+        D -- Erfolg --> E[Agenten in Registry hinzufügen/aktualisieren];
+    end
+            </div>
+        </div>
+    </div>
+
+    <script type="module">
+        import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
+        mermaid.initialize({
+            startOnLoad: true,
+            theme: 'base',
+            themeVariables: {
+                primaryColor: '#f9fafb',
+                primaryTextColor: '#1f2937',
+                primaryBorderColor: '#9ca3af',
+                lineColor: '#4b5563',
+                secondaryColor: '#e5e7eb',
+                tertiaryColor: '#d1d5db'
+            }
+        });
+    </script>
+</body>
+</html>

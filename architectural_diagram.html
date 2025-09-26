@@ -29,10 +29,8 @@
         </header>
 
         <div class="bg-white p-6 rounded-2xl shadow-lg border border-slate-200">
-            <h2 class="text-2xl font-semibold mb-4 text-center">A visual overview of the components and communication flows</h2>
-            <!-- Mermaid Diagram Container -->
             <div class="mermaid w-full overflow-auto">
-graph TD
+graph LR
     subgraph "System Boundary"
         direction TB
         UserRequest["User Request / Trigger"] --> Orchestrator
@@ -49,6 +47,7 @@ graph TD
                 Classification["2. Test Case Classification"]
                 Generation["3. Test Case Generation"]
                 CaseReview["4. Test Case Review"]
+                UITest["5. UI Test Execution"]
             end
         end
 
@@ -57,11 +56,10 @@ graph TD
         A2A -- "Sends Request / Receives Result" <--> Classification
         A2A -- "Sends Request / Receives Result" <--> Generation
         A2A -- "Sends Request / Receives Result" <--> CaseReview
+        A2A -- "Sends Request / Receives Result" <--> UITest
 
-        subgraph "External Services & Core Dependencies"
+        subgraph "Core Dependencies"
             LLM["Large Language Model (LLM)"]
-            Jira["Ticketing System<br/>(Jira)"]
-            Zephyr["Test Management System<br/>(Zephyr)"]
             Reporting["Reporting Service<br/>(Allure)"]
             MCP["<b>Model Context Protocol (MCP)</b><br/>Protocol for Jira Access"]
         end
@@ -70,23 +68,35 @@ graph TD
         style MCP fill:#eef2ff,stroke:#4f46e5,stroke-width:2px,stroke-dasharray: 5 5
         style A2A fill:#dcfce7,stroke:#16a34a,stroke-width:2px
 
-        %% Agent interactions with external services
+        %% Agent interactions with internal dependencies
         ReqReview -- "Interacts with" --> LLM
         Classification -- "Interacts with" --> LLM
         Generation -- "Interacts with" --> LLM
         CaseReview -- "Interacts with" --> LLM
+        UITest -- "Interacts with" --> LLM
 
-        Generation -- "Uses MCP to access" --> Jira
-        CaseReview -- "Uses MCP to access" --> Jira
-        Generation -- "Creates/Fetches Test Cases in" --> Zephyr
-        CaseReview -- "Creates/Fetches Test Cases in" --> Zephyr
-        CaseReview -- "Sends Data" --> Reporting
+        %% Orchestrator interaction with Reporting
+        Orchestrator -- "Sends Data" --> Reporting
     end
+
+    subgraph "External Systems"
+        direction TB
+        Jira["Ticketing System<br/>(Jira)"]
+        Zephyr["Test Management System<br/>(Zephyr)"]
+    end
+
+    %% Agent interactions with external systems
+    ReqReview -- "Uses MCP to access & comment on" --> Jira
+    Generation -- "Uses MCP to access" --> Jira
+    CaseReview -- "Uses MCP to access" --> Jira
+
+    Classification -- "Adds Labels to Test Cases in" --> Zephyr
+    Generation -- "Creates/Fetches Test Cases in" --> Zephyr
+    CaseReview -- "Adds review feedback to" --> Zephyr
             </div>
         </div>
     </div>
 
-    <!-- Mermaid.js Script -->
     <script type="module">
         import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
         mermaid.initialize({ startOnLoad: true });

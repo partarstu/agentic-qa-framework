@@ -399,7 +399,7 @@ class ZephyrClient(TestManagementClientBase):
             ))
         logger.debug(f"Parsed test case {tc.get('key')} with {len(steps)} steps.")
         return TestCase(
-            id=tc.get('key'),
+            key=tc.get('key'),
             name=tc.get('name', ''),
             summary=tc.get('objective', ''),
             preconditions=tc.get('precondition'),

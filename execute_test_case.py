@@ -40,7 +40,7 @@ async def send_test_case_to_agent(agent_port: int, test_case: TestCase):
     Sends the loaded test case to a locally running agent.
     """
     agent_base_url = f"{config.AGENT_BASE_URL}:{agent_port}"
-    task_description = f"Execution of test case {test_case.id}"
+    task_description = f"Execution of test case {test_case.key}"
 
     try:
         async with httpx.AsyncClient(timeout=5000) as client:
@@ -51,7 +51,7 @@ async def send_test_case_to_agent(agent_port: int, test_case: TestCase):
             )
 
             response = await a2a_client.send_message(request)
-            logger.info(f"Successfully sent task for test case {test_case.id} to agent on port {agent_port}.")
+            logger.info(f"Successfully sent task for test case {test_case.key} to agent on port {agent_port}.")
 
             logger.info("Retrieving agent's response.")
             result = response.root
@@ -64,7 +64,7 @@ async def send_test_case_to_agent(agent_port: int, test_case: TestCase):
                 for part in (results[0] or []).parts or []:
                     if isinstance(part.root, TextPart):
                         text_parts.append(part.root.text)
-                logger.info(f"Successfully sent task for test case {test_case.id} to agent on port {agent_port}.")
+                logger.info(f"Successfully sent task for test case {test_case.key} to agent on port {agent_port}.")
 
                 for text_part in text_parts:
                     try:

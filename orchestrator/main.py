@@ -28,7 +28,7 @@ from pydantic_ai.settings import ModelSettings
 import config
 from common import utils
 from common.models import SelectedAgent, GeneratedTestCases, TestCase, ProjectExecutionRequest, TestExecutionResult, \
-    TestExecutionRequest, AggregatedTestResults, SelectedAgents, JsonSerializableModel
+    TestExecutionRequest, SelectedAgents, JsonSerializableModel
 from common.services.test_management_system_client_provider import get_test_management_client
 from common.services.test_reporting_client_base_provider import get_test_reporting_client
 
@@ -151,10 +151,10 @@ async def review_jira_requirements(request: Request, api_key: str = Depends(_val
     logger.info("Received an event from Jira, requesting requirements review from an agent.")
     user_story_id = await _get_jira_issue_key_from_request(request)
     task_description = "Review the Jira user story"
-    agent_name = await _choose_agent_name(task_description)
-    task_submit_result = await _send_task_to_agent(agent_name, f"Jira user story with key {user_story_id}",
+    agent_id = await _choose_agent_id(task_description)
+    task_submit_result = await _send_task_to_agent(agent_id, f"Jira user story with key {user_story_id}",
                                                    task_description)
-    await _wait_for_task_successful_completion(agent_name, task_submit_result,
+    await _wait_for_task_successful_completion(agent_id, task_submit_result,
                                                f"Review of the user story {user_story_id}")
     logger.info("Received response from an agent, requirements review seems to be complete.")
     return {"message": f"Review of the requirements for Jira user story {user_story_id} completed."}
@@ -232,12 +232,12 @@ async def _generate_test_report(all_execution_results, project_key, test_managem
 
 
 async def _request_all_test_cases_execution(grouped_test_cases):
-    label_to_agents_map = await _select_execution_agents(list(grouped_test_cases.keys()))
+    label_to_agents_map = await _select_execution_agents_for_each_test_label(list(grouped_test_cases.keys()))
     execution_tasks = []
     for label, test_cases in grouped_test_cases.items():
-        agent_names = label_to_agents_map.get(label)
-        if agent_names:
-            execution_tasks.append(_execute_test_group(label, test_cases, agent_names))
+        agent_ids = label_to_agents_map.get(label)
+        if agent_ids:
+            execution_tasks.append(_execute_test_group(label, test_cases, agent_ids))
         else:
             logger.warning(f"Skipping execution of test cases for label '{label}' as no suitable agents were found.")
     execution_results_nested = await asyncio.gather(*execution_tasks)
@@ -254,12 +254,12 @@ async def _group_test_cases_by_labels(automated_test_cases):
     return grouped_test_cases
 
 
-async def _select_execution_agents(labels: List[str]) -> Dict[str, List[str]]:
+async def _select_execution_agents_for_each_test_label(labels: List[str]) -> Dict[str, List[str]]:
     if not agent_registry:
         logger.warning("Agent registry is empty. Cannot select any execution agents.")
         return {label: [] for label in labels}
 
-    tasks = [_select_all_suitable_agents(f"Execute tests having the following label: {label}") for label in labels]
+    tasks = [_select_all_suitable_agent_ids(f"Execute tests having the following label: {label}") for label in labels]
     results = await asyncio.gather(*tasks, return_exceptions=True)
     label_agent_mapping = {}
     for label, result in zip(labels, results):
@@ -276,42 +276,43 @@ async def _select_execution_agents(labels: List[str]) -> Dict[str, List[str]]:
 
 
 async def _execute_test_group(test_type: str, test_cases: List[TestCase],
-                              agent_names: List[str]) -> List[TestExecutionResult]:
-    logger.info(f"Starting execution of {len(test_cases)} tests for type: '{test_type}' using agents: {agent_names}")
-    if not agent_names:
+                              agent_ids: List[str]) -> List[TestExecutionResult]:
+    logger.info(f"Starting execution of {len(test_cases)} tests for type: '{test_type}' using agents: {[agent_registry[agent_id].name for agent_id in agent_ids]}")
+    if not agent_ids:
         return []
 
-    num_agents = len(agent_names)
+    num_agents = len(agent_ids)
     tasks = []
     for i, test_case in enumerate(test_cases):
-        agent_name_for_task = agent_names[i % num_agents]
-        logger.debug(f"Assigning test case {test_case.id} to agent {agent_name_for_task}")
-        tasks.append(_execute_single_test(agent_name_for_task, test_case, test_type))
+        agent_id_for_task = agent_ids[i % num_agents]
+        agent_name_for_task = agent_registry[agent_id_for_task].name
+        logger.debug(f"Assigning test case {test_case.key} to agent {agent_name_for_task} (ID: {agent_id_for_task})")
+        tasks.append(_execute_single_test(agent_id_for_task, test_case, test_type))
 
     results = await asyncio.gather(*tasks)
     return [res for res in results if res is not None]
 
 
-async def _execute_single_test(agent_name: str, test_case: TestCase,
+async def _execute_single_test(agent_id: str, test_case: TestCase,
                                test_type: str) -> TestExecutionResult | None:
-    task_description = f"Execution of test case {test_case.id} (type: {test_type})"
+    task_description = f"Execution of test case {test_case.key} (type: {test_type})"
     execution_request = TestExecutionRequest(test_case=test_case)
     artifacts = []
     start_timestamp = datetime.now()
     try:
-        task_submit_result = await _send_task_to_agent(agent_name, execution_request.model_dump_json(),
+        task_submit_result = await _send_task_to_agent(agent_id, execution_request.model_dump_json(),
                                                        task_description)
-        artifacts = await _get_task_execution_artifacts(agent_name, task_description, task_submit_result)
+        artifacts = await _get_task_execution_artifacts(agent_id, task_description, task_submit_result)
     except Exception as e:
-        _handle_exception(f"Failed to execute test case {test_case.id}. Error: {e}", 500)
+        _handle_exception(f"Failed to execute test case {test_case.key}. Error: {e}", 500)
     finally:
         end_timestamp = datetime.now()
 
     if not artifacts:
-        _handle_exception(f"No test case execution results received from agent {agent_name}", 500)
+        _handle_exception(f"No test case execution results received from agent {agent_registry[agent_id].name}", 500)
     text_results = _get_text_content_from_artifacts(artifacts, task_description)
     if not text_results:
-        _handle_exception(f"No test case execution information received from agent {agent_name}", 500)
+        _handle_exception(f"No test case execution information received from agent {agent_registry[agent_id].name}", 500)
     user_prompt = f"""
             Your input are the following test case execution results:\n```\n{text_results}\n```
                         
@@ -324,7 +325,7 @@ async def _execute_single_test(agent_name: str, test_case: TestCase,
     if not test_execution_result:
         _handle_exception("Couldn't map the test execution results received from the agent to the expected format.")
 
-    test_execution_result.testCaseKey = test_case.id
+    test_execution_result.testCaseKey = test_case.key
     if not test_execution_result.start_timestamp:
         test_execution_result.start_timestamp = start_timestamp.isoformat()
     if not test_execution_result.end_timestamp:
@@ -332,27 +333,17 @@ async def _execute_single_test(agent_name: str, test_case: TestCase,
     file_artifacts = _get_file_contents_from_artifacts(artifacts)
     test_execution_result.artifacts = file_artifacts
 
-    logger.info(f"Executed test case {test_case.id}. Status: {test_execution_result.testExecutionStatus}")
+    logger.info(f"Executed test case {test_case.key}. Status: {test_execution_result.testExecutionStatus}")
     return test_execution_result
 
 
-async def _process_execution_results(results: List[TestExecutionResult]):
-    logger.info(f"Sending {len(results)} aggregated results to Test Results Processing Agent.")
-    try:
-        task_description = "Process test execution results"
-        agent_name = await _choose_agent_name(task_description)
-        payload = AggregatedTestResults(results=results)
-        task_submit_result = await _send_task_to_agent(agent_name, payload.model_dump_json(), task_description)
-        await _wait_for_task_successful_completion(agent_name, task_submit_result, "Processing of all test results")
-        logger.info("Successfully sent all test results for processing.")
-    except Exception as e:
-        _handle_exception(f"Failed to send results to the processing agent: {e}")
+
 
 
 async def _request_test_cases_generation(user_story_id) -> GeneratedTestCases:
     task_description = "Generate test cases"
-    agent_name = await _choose_agent_name(task_description)
-    task_submit_result: tuple[str, Task] = await _send_task_to_agent(agent_name,
+    agent_id = await _choose_agent_id(task_description)
+    task_submit_result: tuple[str, Task] = await _send_task_to_agent(agent_id,
                                                                      f"Jira user story with key {user_story_id}",
                                                                      task_description)
     task = task_submit_result[1]
@@ -360,14 +351,14 @@ async def _request_test_cases_generation(user_story_id) -> GeneratedTestCases:
         text_content = _get_text_content_from_artifacts(task.artifacts, task_description)
     else:
         task_description = f"Generation of test cases for the user story {user_story_id}"
-        received_artifacts = await _get_task_execution_artifacts(agent_name, task_description, task_submit_result)
+        received_artifacts = await _get_task_execution_artifacts(agent_id, task_description, task_submit_result)
         text_content = _get_text_content_from_artifacts(received_artifacts, task_description)
     return GeneratedTestCases.model_validate_json(text_content)
 
 
-async def _get_task_execution_artifacts(agent_name: str, task_description: str,
+async def _get_task_execution_artifacts(agent_id: str, task_description: str,
                                         task_submit_result: tuple[str, Task]) -> list[Artifact]:
-    completed_task = await _wait_and_get_completed_task(agent_name, task_submit_result, task_description)
+    completed_task = await _wait_and_get_completed_task(agent_id, task_submit_result, task_description)
     _validate_task_status(completed_task, task_description)
     results: list[Artifact] = completed_task.artifacts
     if not results:
@@ -377,19 +368,19 @@ async def _get_task_execution_artifacts(agent_name: str, task_description: str,
 
 async def _request_test_cases_classification(test_cases: List[TestCase], user_story_id: str) -> list[Artifact]:
     task_description = "Classify test cases"
-    agent_name = await _choose_agent_name(task_description)
-    task_submit_result = await _send_task_to_agent(agent_name,
+    agent_id = await _choose_agent_id(task_description)
+    task_submit_result = await _send_task_to_agent(agent_id,
                                                    f"Test cases:\n{test_cases}", task_description)
-    return await _get_task_execution_artifacts(agent_name,
+    return await _get_task_execution_artifacts(agent_id,
                                                f"Classification of test cases for the user story {user_story_id}",
                                                task_submit_result)
 
 
 async def _request_test_cases_review(test_cases: List[TestCase]) -> list[Artifact]:
     task_description = "Review test cases"
-    agent_name = await _choose_agent_name(task_description)
-    task_submit_result = await _send_task_to_agent(agent_name, f"Test cases:\n{test_cases}", task_description)
-    return await _get_task_execution_artifacts(agent_name, "Review of test cases", task_submit_result)
+    agent_id = await _choose_agent_id(task_description)
+    task_submit_result = await _send_task_to_agent(agent_id, f"Test cases:\n{test_cases}", task_description)
+    return await _get_task_execution_artifacts(agent_id, "Review of test cases", task_submit_result)
 
 
 async def _extract_generated_test_case_issue_keys_from_agent_response(results: list[Artifact], task_description: str) -> \
@@ -428,10 +419,10 @@ def _get_file_contents_from_artifacts(artifacts: list[Artifact]) -> List[FileWit
     return file_parts
 
 
-async def _send_task_to_agent(agent_name: str, input_data: str, task_description: str) -> tuple[str, Task]:
-    agent_card = agent_registry.get(agent_name, None)
+async def _send_task_to_agent(agent_id: str, input_data: str, task_description: str) -> tuple[str, Task]:
+    agent_card = agent_registry.get(agent_id, None)
     if not agent_card:
-        raise ValueError(f"Agent '{agent_name}' is not yet registered with his card")
+        raise ValueError(f"Agent with ID '{agent_id}' is not yet registered with his card")
 
     async with (httpx.AsyncClient(timeout=config.OrchestratorConfig.TASK_EXECUTION_TIMEOUT) as client):
         request = SendMessageRequest(
@@ -445,13 +436,14 @@ async def _send_task_to_agent(agent_name: str, input_data: str, task_description
         return result.id, result.result
 
 
-async def _choose_agent_name(agent_task_description):
+async def _choose_agent_id(agent_task_description):
     if not agent_registry:
         _handle_exception("Orchestrator has currently no registered agents.", 404)
-    agent_name = await _select_agent(agent_task_description)
-    if not agent_name:
+    agent_id = await _select_agent(agent_task_description)
+    if not agent_id:
         _handle_exception(f"No agent found to handle the task '{agent_task_description}'.", 404)
-    return agent_name
+    logger.info(f"Selected agent '{agent_registry[agent_id].name}' (ID: {agent_id}) for task '{agent_task_description}'.")
+    return agent_id
 
 
 async def _get_jira_issue_key_from_request(request):
@@ -462,11 +454,11 @@ async def _get_jira_issue_key_from_request(request):
     return user_story_id
 
 
-async def _wait_for_task_successful_completion(agent_name: str, task_submit_result: tuple[str, Task],
+async def _wait_for_task_successful_completion(agent_id: str, task_submit_result: tuple[str, Task],
                                                task_description: str):
-    task = await _wait_and_get_completed_task(agent_name, task_submit_result, task_description)
+    task = await _wait_and_get_completed_task(agent_id, task_submit_result, task_description)
     _validate_task_status(task, task_description)
-    logger.info(f"Task for {task_description} completed.")
+    logger.info(f"Task for {task_description} completed by agent '{agent_registry[agent_id].name}' (ID: {agent_id}).")
 
 
 def _validate_task_status(task: Task, task_description: str):
@@ -478,11 +470,11 @@ def _validate_task_status(task: Task, task_description: str):
                           f"Root cause: {get_message_text(task.status.message)}")
 
 
-async def _wait_and_get_completed_task(agent_name: str, task_submit_result: tuple[str, Task],
+async def _wait_and_get_completed_task(agent_id: str, task_submit_result: tuple[str, Task],
                                        task_description: str) -> Task | None:
-    agent_card = agent_registry.get(agent_name, None)
+    agent_card = agent_registry.get(agent_id, None)
     if not agent_card:
-        raise ValueError(f"Agent '{agent_name}' is not yet registered with his card")
+        raise ValueError(f"Agent with ID '{agent_id}' is not yet registered with his card")
     start_time = time.time()
     task_id = task_submit_result[1].id
     task_state = None
@@ -506,7 +498,7 @@ async def _wait_and_get_completed_task(agent_name: str, task_submit_result: tupl
                     task_state = task.status.state
                 if _is_task_still_running(task_state):
                     logger.debug(f"Task for {task_description} is still in '{task_state}' state. Waiting for its "
-                                 f"completion")
+                                 f"completion. Agent: '{agent_card.name}' (ID: {agent_id})")
                     time.sleep(1)
                     continue
                 else:
@@ -535,7 +527,7 @@ def _get_time_left_for_task_completion_waiting(start_time):
     return config.OrchestratorConfig.TASK_EXECUTION_TIMEOUT - (time.time() - start_time)
 
 
-async def _select_all_suitable_agents(task_description: str) -> List[str]:
+async def _select_all_suitable_agent_ids(task_description: str) -> List[str]:
     """Selects all suitable agents from the registry for a given task."""
     agents_info = await _get_agents_info()
     user_prompt = f"""
@@ -545,13 +537,21 @@ async def _select_all_suitable_agents(task_description: str) -> List[str]:
     """
 
     result = await multi_discovery_agent.run(user_prompt)
-    return result.output.names or []
+    selected_agent_names = result.output.names or []
+    selected_agent_ids = []
+    for agent_name in selected_agent_names:
+        for agent_id, agent_card in agent_registry.items():
+            if agent_card.name == agent_name:
+                selected_agent_ids.append(agent_id)
+                logger.info(f"Selected agent '{agent_name}' with ID '{agent_id}' for task '{task_description}'.")
+                break
+    return selected_agent_ids
 
 
 async def _get_agents_info():
     agents_info = ""
     for agent_id, card in agent_registry.items():
-        agents_info += (f"- Name: {card.name}, Description: {card.description}, Skills: "
+        agents_info += (f"- Name: {card.name}, ID: {agent_id}, Description: {card.description}, Skills: "
                         f"{"; ".join(skill.description for skill in card.skills)}\n")
     return agents_info
 
@@ -565,10 +565,15 @@ async def _select_agent(task_description: str) -> str:
     The list of all registered with you agents:\n{agents_info}
     """
     result = await discovery_agent.run(user_prompt)
-    return result.output.name or None
+    selected_agent_name = result.output.name or None
+    if selected_agent_name:
+        for agent_id, agent_card in agent_registry.items():
+            if agent_card.name == selected_agent_name:
+                return agent_id
+    return None
 
 
-async def _fetch_agent_card(agent_base_url: str, agent_name=None) -> AgentCard | None:
+async def _fetch_agent_card(agent_base_url: str) -> AgentCard | None:
     agent_card_url = f"{agent_base_url}/.well-known/agent.json"
     try:
         logger.info(f"Attempting to retrieve agent card from {agent_card_url}")
@@ -578,10 +583,6 @@ async def _fetch_agent_card(agent_base_url: str, agent_name=None) -> AgentCard |
             response.raise_for_status()
             agent_card = AgentCard(**response.json())
             actual_agent_name = agent_card.name
-            if agent_name and (actual_agent_name != agent_name):
-                logger.warning(f"Agent name mismatch for {agent_base_url}. "
-                               f"Registered as '{agent_name}', but card says '{actual_agent_name}'. "
-                               f"Using registered name '{agent_name}' as the key.")
             logger.info(f"Successfully retrieved and registered the agent card for '{actual_agent_name}'.")
             return agent_card
     except Exception as exc:
@@ -623,8 +624,17 @@ async def _discover_agents():
     found_urls = []
     for agent_card in await asyncio.gather(*tasks):
         if agent_card:
-            agent_registry[agent_card.name] = agent_card
-            found_urls.append(agent_card.url)
+            # Check if an agent with this URL is already registered
+            already_registered = False
+            for agent_id, existing_card in agent_registry.items():
+                if existing_card.url == agent_card.url:
+                    logger.info(f"Agent with URL {agent_card.url} is already registered with ID {agent_id}. Skipping.")
+                    already_registered = True
+                    break
+            if not already_registered:
+                agent_id = str(uuid4())
+                agent_registry[agent_id] = agent_card
+                found_urls.append(agent_card.url)
 
     if found_urls:
         logger.info(f"Discovered and pre-registered agents with following URLs: {', '.join(found_urls)}")

@@ -16,7 +16,7 @@ class JsonSerializableModel(BaseModel):
 
 
 class JiraUserStory(JsonSerializableModel):
-    id: str
+    key: str
     key: str
     summary: str
     description: str
@@ -28,10 +28,6 @@ class RequirementsReviewFeedback(JsonSerializableModel):
     suggested_improvements: List[str] = Field(description="List of improvements suggested by the review")
 
 
-class SelectedAgent(JsonSerializableModel):
-    name: str
-
-
 class TestStep(JsonSerializableModel):
     action: str = Field(
         description="The description of the action which needs to be executed in the scope of this test step")
@@ -40,7 +36,7 @@ class TestStep(JsonSerializableModel):
 
 
 class TestCase(JsonSerializableModel):
-    id: Optional[str] = Field(description="The ID or key of the generated test case")
+    key: Optional[str] = Field(description="The ID or key of the generated test case")
     labels: list[str] = Field(description="The list of the labels which were assigned to this test case, should "
                                           "be empty for a newly created test case")
     name: str = Field(description="The name of this test case")
@@ -129,5 +125,9 @@ class AggregatedTestResults(JsonSerializableModel):
     results: List[TestExecutionResult]
 
 
+class SelectedAgent:
+    id: str
+
+
 class SelectedAgents(BaseModel):
-    names: List[str] = Field(..., description="The names of all agents that are suitable for the task.")
+        ids: List[str] = Field(..., description="The IDs of all agents that are suitable for the task.")
