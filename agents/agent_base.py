@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import base64
-import json
 from abc import ABC, abstractmethod
 from contextlib import asynccontextmanager
 from typing import Type, List, Sequence
@@ -20,9 +19,7 @@ from pydantic import BaseModel
 from pydantic_ai import Agent, Tool
 from pydantic_ai.agent import AgentRunResult
 from pydantic_ai.mcp import MCPServerSSE
-from pydantic_ai.messages import ModelMessage, ModelResponse, ToolCallPart, ThinkingPart, TextPart, ModelRequest, \
-    ToolReturnPart, UserPromptPart, SystemPromptPart, RetryPromptPart, BinaryContent, AudioMediaType, ImageMediaType, \
-    UserContent
+from pydantic_ai.messages import BinaryContent, AudioMediaType, ImageMediaType, UserContent
 from pydantic_ai.models.google import GoogleModelSettings
 from pydantic_ai.models.groq import GroqModelSettings
 from pydantic_ai.settings import ModelSettings
@@ -32,6 +29,7 @@ from pydantic_ai.usage import UsageLimits
 import config
 from agents.agent_executor import DefaultAgentExecutor
 from common import utils
+from common.custom_llm_wrapper import CustomLlmWrapper
 from common.models import JsonSerializableModel
 
 REGISTRATION_PATH = f"{config.ORCHESTRATOR_URL}/register"
@@ -71,7 +69,6 @@ class AgentBase(ABC):
         self.model_settings = model_settings if model_settings else self.get_default_model_settings(model_name)
         self.mcp_servers = mcp_servers or []
         self.tools = tools
-        self.messages: List[ModelMessage] = []
         self.agent = self._create_agent()
         self.a2a_server = self._get_server()
 
@@ -93,59 +90,16 @@ class AgentBase(ABC):
         else:
             return ModelSettings(top_p=config.TOP_P, temperature=config.TEMPERATURE)
 
-    def _log_model_messages(self):
-        """
-        Logs all model messages in order to provide the call stack info for debugging purposes.
-        """
-        for message in self.messages:
-            if isinstance(message, ModelResponse):
-                timestamp = message.timestamp.strftime('%Y-%m-%d %H:%M:%S')
-                for part in message.parts:
-                    if isinstance(part, ToolCallPart):
-                        logger.debug(f"[{timestamp}] Model is calling the tool: '{part.tool_name}' with arguments: "
-                                     f"{json.dumps(part.args, indent=2)}")
-                    elif isinstance(part, ThinkingPart):
-                        logger.debug(f"[{timestamp}] Model is thinking the following:\n{part.content}")
-                    elif isinstance(part, TextPart):
-                        logger.debug(f"[{timestamp}] Model is responding with the plain text: {part.content}")
-            if isinstance(message, ModelRequest):
-                for part in message.parts:
-                    if isinstance(part, ToolReturnPart):
-                        timestamp = part.timestamp.strftime('%Y-%m-%d %H:%M:%S')
-                        logger.debug(f"[{timestamp}] Agent is responding with the execution result of tool: "
-                                     f"'{part.tool_name}' with result: {json.dumps(part.content, indent=2)}")
-                    elif isinstance(part, UserPromptPart):
-                        timestamp = part.timestamp.strftime('%Y-%m-%d %H:%M:%S')
-                        if isinstance(part.content, str):
-                            content_to_log = part.content
-                        elif isinstance(part.content, Sequence) and all(isinstance(x, str) for x in part.content):
-                            content_to_log = "".join(part.content)
-                        else:
-                            content_to_log = f'<{type(part.content).__name__}>'
-                        logger.debug(f"[{timestamp}] Agent is primarily prompting the model with user "
-                                     f"input: {content_to_log}")
-                    elif isinstance(part, SystemPromptPart):
-                        timestamp = part.timestamp.strftime('%Y-%m-%d %H:%M:%S')
-                        logger.debug(f"[{timestamp}] Agent is using system prompt: {part.content}")
-                    elif isinstance(part, RetryPromptPart):
-                        timestamp = part.timestamp.strftime('%Y-%m-%d %H:%M:%S')
-                        logger.debug(f"[{timestamp}] Agent is retrying prompting the model, the root "
-                                     f"cause: {part.content}")
-
-    def _register_messages(self, messages: List[ModelMessage])->List[ModelMessage]:
-        self.messages.extend(messages)
-        return messages
-
     def _create_agent(self) -> Agent:
         logger.info(f"""Creating agent '{self.agent_name}' with the following configuration:
         - Model: {self.model_name}
         - Output Type: {self.output_type.__name__}
         - Model Settings: {self.model_settings}
         - MCP Servers: {[server.url for server in self.mcp_servers]}
-        - Tools: {[tool.fn.__name__ for tool in self.tools]}""")
+        - Tools: {[tool.__name__ for tool in self.tools]}""")
 
         return Agent(
-            model=self.model_name,
+            model=CustomLlmWrapper(wrapped=self.model_name),
             deps_type=self.deps_type,
             output_type=self.output_type,
             instructions=self.instructions,
@@ -153,20 +107,18 @@ class AgentBase(ABC):
             model_settings=self.model_settings,
             mcp_servers=self.mcp_servers,
             output_retries=0,
-            history_processors=[self._register_messages],
             tools=self.tools
         )
 
     async def _get_agent_execution_result(self, received_request: List[UserContent]) -> AgentRunResult:
-        async with UsageLimits(request_limit=self.get_max_requests_per_task()):
-            async with self.agent.run_mcp_servers():
-                return await self.agent.run(received_request)
+        usage_limits = UsageLimits(tool_calls_limit=self.get_max_requests_per_task())
+        async with self.agent:
+            return await self.agent.run(received_request, usage_limits=usage_limits)
 
     async def run(self, received_message: Message) -> Message:
         received_request = self._get_all_received_contents(received_message)
         logger.info("Got a task to execute, starting execution.")
         result = await self._get_agent_execution_result(received_request)
-        self._log_model_messages()
         logger.info("Completed execution of the task.")
         return self._get_text_message_from_results(result)
 
@@ -206,8 +158,8 @@ class AgentBase(ABC):
             description=self.description,
             url=self.url,
             version='1.0.0',
-            defaultInputModes=['text'],
-            defaultOutputModes=['text', 'image'],
+            default_input_modes=['text'],
+            default_output_modes=['text', 'image'],
             capabilities=AgentCapabilities(streaming=False),
             skills=[],
         )
@@ -250,7 +202,7 @@ class AgentBase(ABC):
                         files_content.append(BinaryContent(data=content, media_type=AudioMediaType))
                     elif mime_type.startswith("image"):
                         files_content.append(BinaryContent(data=content, media_type=ImageMediaType))
-        all_contents: list[UserContent] = [text_content, *files_content]
+        all_contents: List[UserContent] = [text_content, *files_content]
         return all_contents
 
     @staticmethod

@@ -5,7 +5,7 @@
 from collections import defaultdict
 from typing import List, Dict
 
-import dateutil
+from dateutil import parser
 import httpx
 
 import config
@@ -421,7 +421,7 @@ class ZephyrClient(TestManagementClientBase):
     @staticmethod
     def _parse_timestamp(timestamp_str: str) -> str:
         try:
-            timestamp = dateutil.parser.parse(timestamp_str)
+            timestamp = parser.parse(timestamp_str)
             return timestamp.strftime("%Y-%m-%dT%H:%M:%SZ")
         except ValueError as e:
             logger.error(f"Could not parse timestamp '{timestamp_str}': {e}")

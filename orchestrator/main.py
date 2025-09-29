@@ -27,6 +27,7 @@ from pydantic_ai.settings import ModelSettings
 
 import config
 from common import utils
+from common.custom_llm_wrapper import CustomLlmWrapper
 from common.models import SelectedAgent, GeneratedTestCases, TestCase, ProjectExecutionRequest, TestExecutionResult, \
     TestExecutionRequest, SelectedAgents, JsonSerializableModel
 from common.services.test_management_system_client_provider import get_test_management_client
@@ -89,7 +90,7 @@ def with_exclusive_lock(func):
 
 # --- For selecting the single best for the task agent ---
 discovery_agent = Agent(
-    model=config.OrchestratorConfig.MODEL_NAME,
+    model=CustomLlmWrapper(wrapped=config.OrchestratorConfig.MODEL_NAME),
     output_type=SelectedAgent,
     instructions="You are an intelligent orchestrator specialized on routing the target task to one of the agents "
                  "which are registered with you. Your task is to select one agent to handle the target "
@@ -102,7 +103,7 @@ discovery_agent = Agent(
 
 # --- For selecting ALL suitable for the task agents ---
 multi_discovery_agent = Agent(
-    model=config.OrchestratorConfig.MODEL_NAME,
+    model=CustomLlmWrapper(wrapped=config.OrchestratorConfig.MODEL_NAME),
     output_type=SelectedAgents,
     instructions="You are an intelligent orchestrator specialized on routing tasks. Your task is to select all agents "
                  "that can handle the target task based on the task's description and a list of available agents. "
@@ -115,7 +116,7 @@ multi_discovery_agent = Agent(
 # --- For mapping between input in unknown format and output in structured format ---
 def _get_results_extractor_agent(output_type: type[JsonSerializableModel] | type[str]):
     return Agent(
-        model=config.OrchestratorConfig.MODEL_NAME,
+        model=CustomLlmWrapper(wrapped=config.OrchestratorConfig.MODEL_NAME),
         output_type=output_type,
         instructions="You are an intelligent agent specialized on extracting the structured information based on the input "
                      "provided to you. Your task is to analyze the provided to you input, identify the requested "
@@ -142,6 +143,7 @@ async def periodic_agent_discovery():
             await asyncio.sleep(config.OrchestratorConfig.AGENTS_DISCOVERY_INTERVAL_SECONDS)
 
 
+# noinspection PyUnusedLocal
 @orchestrator_app.post("/new-requirements-available")
 @with_exclusive_lock
 async def review_jira_requirements(request: Request, api_key: str = Depends(_validate_api_key)):
@@ -160,6 +162,7 @@ async def review_jira_requirements(request: Request, api_key: str = Depends(_val
     return {"message": f"Review of the requirements for Jira user story {user_story_id} completed."}
 
 
+# noinspection PyUnusedLocal
 @orchestrator_app.post("/story-ready-for-test-case-generation")
 @with_exclusive_lock
 async def trigger_test_case_generation_workflow(request: Request, api_key: str = Depends(_validate_api_key)):
@@ -187,6 +190,7 @@ async def trigger_test_case_generation_workflow(request: Request, api_key: str =
     }
 
 
+# noinspection PyUnusedLocal
 @orchestrator_app.post("/execute-tests")
 @with_exclusive_lock
 async def execute_tests(request: ProjectExecutionRequest, api_key: str = Depends(_validate_api_key)):
@@ -277,7 +281,8 @@ async def _select_execution_agents_for_each_test_label(labels: List[str]) -> Dic
 
 async def _execute_test_group(test_type: str, test_cases: List[TestCase],
                               agent_ids: List[str]) -> List[TestExecutionResult]:
-    logger.info(f"Starting execution of {len(test_cases)} tests for type: '{test_type}' using agents: {[agent_registry[agent_id].name for agent_id in agent_ids]}")
+    logger.info(
+        f"Starting execution of {len(test_cases)} tests for type: '{test_type}' using agents: {[agent_registry[agent_id].name for agent_id in agent_ids]}")
     if not agent_ids:
         return []
 
@@ -312,14 +317,15 @@ async def _execute_single_test(agent_id: str, test_case: TestCase,
         _handle_exception(f"No test case execution results received from agent {agent_registry[agent_id].name}", 500)
     text_results = _get_text_content_from_artifacts(artifacts, task_description)
     if not text_results:
-        _handle_exception(f"No test case execution information received from agent {agent_registry[agent_id].name}", 500)
+        _handle_exception(f"No test case execution information received from agent {agent_registry[agent_id].name}",
+                          500)
     user_prompt = f"""
-            Your input are the following test case execution results:\n```\n{text_results}\n```
-                        
-            Information you need to find: all data of the requested output JSON object.            
-            
-            Result format is a JSON.
-            """
+Your input are the following test case execution results:\n```\n{text_results}\n```
+
+Information you need to find: all data of the requested output JSON object.
+
+Result format is a JSON.
+"""
     result = await _get_results_extractor_agent(TestExecutionResult).run(user_prompt)
     test_execution_result: TestExecutionResult = result.output
     if not test_execution_result:
@@ -335,9 +341,6 @@ async def _execute_single_test(agent_id: str, test_case: TestCase,
 
     logger.info(f"Executed test case {test_case.key}. Status: {test_execution_result.testExecutionStatus}")
     return test_execution_result
-
-
-
 
 
 async def _request_test_cases_generation(user_story_id) -> GeneratedTestCases:
@@ -387,12 +390,12 @@ async def _extract_generated_test_case_issue_keys_from_agent_response(results: l
         list[str]:
     test_case_generation_results = _get_text_content_from_artifacts(results, task_description)
     user_prompt = f"""
-    Your input:\n"{test_case_generation_results}".
+Your input:\n"{test_case_generation_results}".
 
-    The information inside the input you need to find: the Jira issue key of each test case.
+The information inside the input you need to find: the Jira issue key of each test case.
 
-    Result format: a list of all found test case issue keys as a lift of strings.
-    """
+Result format: a list of all found test case issue keys as a lift of strings.
+"""
     result = await _get_results_extractor_agent(str).run(user_prompt)
     issue_keys: list[str] = result.output or []
     logger.info(f"Extracted issue keys of {len(issue_keys)} test cases from test case generation agent's "
@@ -442,7 +445,8 @@ async def _choose_agent_id(agent_task_description):
     agent_id = await _select_agent(agent_task_description)
     if not agent_id:
         _handle_exception(f"No agent found to handle the task '{agent_task_description}'.", 404)
-    logger.info(f"Selected agent '{agent_registry[agent_id].name}' (ID: {agent_id}) for task '{agent_task_description}'.")
+    logger.info(
+        f"Selected agent '{agent_registry[agent_id].name}' (ID: {agent_id}) for task '{agent_task_description}'.")
     return agent_id
 
 
@@ -531,21 +535,18 @@ async def _select_all_suitable_agent_ids(task_description: str) -> List[str]:
     """Selects all suitable agents from the registry for a given task."""
     agents_info = await _get_agents_info()
     user_prompt = f"""
-    Target task description: "{task_description}".
+Target task description: "{task_description}".
 
-    The list of all registered with you agents:\n{agents_info}
-    """
+The list of all registered with you agents:\n{agents_info}
+"""
 
     result = await multi_discovery_agent.run(user_prompt)
-    selected_agent_names = result.output.names or []
-    selected_agent_ids = []
-    for agent_name in selected_agent_names:
-        for agent_id, agent_card in agent_registry.items():
-            if agent_card.name == agent_name:
-                selected_agent_ids.append(agent_id)
-                logger.info(f"Selected agent '{agent_name}' with ID '{agent_id}' for task '{task_description}'.")
-                break
-    return selected_agent_ids
+    selected_agent_ids = result.output.ids or []
+    valid_agent_ids = [agent_id for agent_id in selected_agent_ids if agent_id in agent_registry]
+    for agent_id in valid_agent_ids:
+        agent_name = agent_registry[agent_id].name
+        logger.info(f"Selected agent '{agent_name}' with ID '{agent_id}' for task '{task_description}'.")
+    return valid_agent_ids
 
 
 async def _get_agents_info():
@@ -556,25 +557,23 @@ async def _get_agents_info():
     return agents_info
 
 
-async def _select_agent(task_description: str) -> str:
-    """Selects the best agent from the registry to handle a given task and returns its name"""
+async def _select_agent(task_description: str) -> str | None:
+    """Selects the best agent from the registry to handle a given task and returns its ID"""
     agents_info = await _get_agents_info()
     user_prompt = f"""
-    Target task description: "{task_description}".
+Target task description: "{task_description}".
 
-    The list of all registered with you agents:\n{agents_info}
-    """
+The list of all registered with you agents:\n{agents_info}
+"""
     result = await discovery_agent.run(user_prompt)
-    selected_agent_name = result.output.name or None
-    if selected_agent_name:
-        for agent_id, agent_card in agent_registry.items():
-            if agent_card.name == selected_agent_name:
-                return agent_id
+    selected_agent_id = result.output.id or None
+    if selected_agent_id and selected_agent_id in agent_registry:
+        return selected_agent_id
     return None
 
 
 async def _fetch_agent_card(agent_base_url: str) -> AgentCard | None:
-    agent_card_url = f"{agent_base_url}/.well-known/agent.json"
+    agent_card_url = f"{agent_base_url}/.well-known/agent-card.json"
     try:
         logger.info(f"Attempting to retrieve agent card from {agent_card_url}")
         async with httpx.AsyncClient() as client:

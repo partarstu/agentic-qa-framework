@@ -36,8 +36,8 @@ class DefaultAgentExecutor(AgentExecutor):
 
             result:Message = await self.agent.run(received_message)
             event = TaskArtifactUpdateEvent(
-                contextId=context.context_id,
-                taskId=task_id,
+                context_id=context.context_id,
+                task_id=task_id,
                 artifact=new_artifact(
                     name='agent_execution_result',
                     parts=result.parts
@@ -49,7 +49,7 @@ class DefaultAgentExecutor(AgentExecutor):
             logger.info(f"Task {task_id} completed successfully.")
 
         except Exception as e:
-            logger.exception(f"Error executing task {task_id}: {e}")
+            logger.exception(f"Error executing task {task_id}: {e}", exc_info=e)
             error_message = f"An error occurred: {str(e)}"
             await self._update_task_status(context, event_queue, TaskState.failed,
                                            final=True, message=error_message)
@@ -61,8 +61,8 @@ class DefaultAgentExecutor(AgentExecutor):
         if message:
             status.message = new_agent_text_message(message)
         event = TaskStatusUpdateEvent(
-            contextId=context.context_id,
-            taskId=context.task_id,
+            context_id=context.context_id,
+            task_id=context.task_id,
             status=status,
             final=final
         )
