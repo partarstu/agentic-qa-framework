@@ -32,9 +32,11 @@ from common import utils
 from common.custom_llm_wrapper import CustomLlmWrapper
 from common.models import JsonSerializableModel
 
+MAX_RETRIES = 3
 REGISTRATION_PATH = f"{config.ORCHESTRATOR_URL}/register"
 MCP_SERVER_ATTACHMENTS_FOLDER_PATH = config.MCP_SERVER_ATTACHMENTS_FOLDER_PATH
 ATTACHMENTS_DESTINATION_FOLDER_PATH = config.ATTACHMENTS_DESTINATION_FOLDER_PATH
+
 logger = utils.get_logger("agent_base")
 
 
@@ -107,7 +109,8 @@ class AgentBase(ABC):
             model_settings=self.model_settings,
             mcp_servers=self.mcp_servers,
             output_retries=0,
-            tools=self.tools
+            tools=self.tools,
+            retries=MAX_RETRIES
         )
 
     async def _get_agent_execution_result(self, received_request: List[UserContent]) -> AgentRunResult:

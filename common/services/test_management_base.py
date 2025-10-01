@@ -14,15 +14,11 @@ class TestManagementClientBase(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def fetch_test_cases_by_jira_issue(self, issue_key: str) -> List[TestCase]:
-        raise NotImplementedError
-
-    @abstractmethod
     def add_labels_to_test_case(self, test_case_id: str, labels: List[str]) -> None:
         raise NotImplementedError
 
     @abstractmethod
-    def fetch_test_cases_by_labels(self, project_key: str, target_labels: List[str], max_results=100) -> Dict[
+    def fetch_ready_for_execution_test_cases_by_labels(self, project_key: str, target_labels: List[str], max_results=100) -> Dict[
         str, List[TestCase]]:
         raise NotImplementedError
 

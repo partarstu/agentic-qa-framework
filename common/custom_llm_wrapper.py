@@ -98,16 +98,17 @@ class CustomLlmWrapper(WrapperModel):
     @staticmethod
     def _log_model_request(message):
         for part in message.parts:
+            separator = '-' * 80
             if isinstance(part, ToolReturnPart):
                 timestamp = part.timestamp.strftime('%Y-%m-%d %H:%M:%S')
                 logger.debug(f"[{timestamp}] Agent is responding with the execution result of tool: "
-                             f"'{part.tool_name}' with result: \n{json.dumps(part.content, indent=2)}")
+                             f"'{part.tool_name}' with result: \n{separator}\n{json.dumps(part.content, indent=2)}\n{separator}")
             elif isinstance(part, UserPromptPart):
                 timestamp = part.timestamp.strftime('%Y-%m-%d %H:%M:%S')
                 if isinstance(part.content, str):
                     content_to_log = part.content
                 elif isinstance(part.content, Sequence):
-                    contents=[]
+                    contents = []
                     for c in part.content:
                         if isinstance(c, str):
                             contents.append(c)
@@ -116,10 +117,11 @@ class CustomLlmWrapper(WrapperModel):
                     content_to_log = "\n".join(contents)
                 else:
                     content_to_log = f'<{type(part.content).__name__}>'
-                logger.debug(f"[{timestamp}] Agent is prompting the model with user input: \n{content_to_log}")
+                logger.debug(f"[{timestamp}] Agent is prompting the model with user input: "
+                             f"\n{separator}\n{content_to_log}\n{separator}")
             elif isinstance(part, SystemPromptPart):
                 timestamp = part.timestamp.strftime('%Y-%m-%d %H:%M:%S')
-                logger.debug(f"[{timestamp}] Agent is using system prompt: \n{part.content}")
+                logger.debug(f"[{timestamp}] Agent is using system prompt: \n{separator}\n{part.content}\n{separator}")
             elif isinstance(part, RetryPromptPart):
                 timestamp = part.timestamp.strftime('%Y-%m-%d %H:%M:%S')
                 logger.debug(f"[{timestamp}] Agent is retrying prompting the model, the root "
@@ -128,11 +130,15 @@ class CustomLlmWrapper(WrapperModel):
     @staticmethod
     def _log_model_response(message):
         timestamp = message.timestamp.strftime('%Y-%m-%d %H:%M:%S')
+        separator = '-' * 80
         for part in message.parts:
             if isinstance(part, ToolCallPart):
                 logger.debug(f"[{timestamp}] Model is calling the tool: '{part.tool_name}' with arguments: "
-                             f"{json.dumps(part.args, indent=2)}")
-            elif isinstance(part, ThinkingPart):
-                logger.debug(f"[{timestamp}] Model is thinking the following:\n{part.content}")
-            elif isinstance(part, TextPart):
-                logger.debug(f"[{timestamp}] Model is responding with the plain text:\n{part.content}")
+                             f"\n{separator}\n{json.dumps(part.args, indent=2)}\n{separator}")
+            elif isinstance(part, ThinkingPart) and part.content:
+                logger.debug(
+                    f"[{timestamp}] Model is thinking the "
+                    f"following:\n{separator}\n{part.content}\n{separator}")
+            elif isinstance(part, TextPart) and part.content:
+                logger.debug(f"[{timestamp}] Model is responding with the plain "
+                             f"text:\n{separator}\n{part.content}\n{separator}")

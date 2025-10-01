@@ -120,8 +120,8 @@ class XrayClient(TestManagementClientBase):
         payload = {"update": {"labels": [{"add": label} for label in labels]}}
         self._execute_jira_request("PUT", endpoint, json=payload)
 
-    def fetch_test_cases_by_labels(self, project_key: str, target_labels: List[str],
-                                   max_results=100) -> Dict[str, List[TestCase]]:
+    def fetch_ready_for_execution_test_cases_by_labels(self, project_key: str, target_labels: List[str],
+                                                       max_results=100) -> Dict[str, List[TestCase]]:
         jql = f"project = {project_key} AND labels in ({', '.join(f'"{label}"' for label in target_labels)})"
         test_cases = self._fetch_test_cases_by_jql(jql)
         test_cases_by_label = defaultdict(list)

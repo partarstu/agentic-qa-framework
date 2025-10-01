@@ -14,11 +14,9 @@ from uuid import uuid4
 
 import httpx
 import uvicorn
-from a2a.client import A2AClient
-from a2a.types import TaskState, AgentCard, Artifact, Task, SendMessageRequest, \
-    MessageSendParams, SendMessageResponse, GetTaskRequest, TaskQueryParams, JSONRPCErrorResponse, GetTaskResponse, \
-    TextPart, \
-    FilePart, FileWithBytes
+from a2a.client import ClientFactory, ClientConfig
+from a2a.types import TaskState, AgentCard, Artifact, Task, JSONRPCErrorResponse, TextPart, FilePart, FileWithBytes, \
+    Message
 from a2a.utils import new_agent_text_message, get_message_text
 from fastapi import FastAPI, Request, HTTPException, Security, Depends
 from fastapi.security import APIKeyHeader
@@ -32,6 +30,8 @@ from common.models import SelectedAgent, GeneratedTestCases, TestCase, ProjectEx
     TestExecutionRequest, SelectedAgents, JsonSerializableModel
 from common.services.test_management_system_client_provider import get_test_management_client
 from common.services.test_reporting_client_base_provider import get_test_reporting_client
+
+MAX_RETRIES = 3
 
 MODEL_SETTINGS = ModelSettings(top_p=config.TOP_P, temperature=config.TEMPERATURE)
 
@@ -98,7 +98,8 @@ discovery_agent = Agent(
                  " (this list has the info about the capabilities of each agent). If there is no agent that can "
                  "execute the target task, return an empty string.",
     name="Discovery Agent",
-    model_settings=MODEL_SETTINGS
+    model_settings=MODEL_SETTINGS,
+    retries=MAX_RETRIES
 )
 
 # --- For selecting ALL suitable for the task agents ---
@@ -109,7 +110,8 @@ multi_discovery_agent = Agent(
                  "that can handle the target task based on the task's description and a list of available agents. "
                  "If no agents can execute the task, return an empty list.",
     name="Multi-Discovery Agent",
-    model_settings=MODEL_SETTINGS
+    model_settings=MODEL_SETTINGS,
+    retries=MAX_RETRIES
 )
 
 
@@ -123,7 +125,8 @@ def _get_results_extractor_agent(output_type: type[JsonSerializableModel] | type
                      "information inside of this input and return it in a format which is requested by the user. If you've "
                      "identified no matching information inside of the provided to you input, return an empty result.",
         name="Results Extractor Agent",
-        model_settings=MODEL_SETTINGS
+        model_settings=MODEL_SETTINGS,
+        retries=MAX_RETRIES
     )
 
 
@@ -154,10 +157,9 @@ async def review_jira_requirements(request: Request, api_key: str = Depends(_val
     user_story_id = await _get_jira_issue_key_from_request(request)
     task_description = "Review the Jira user story"
     agent_id = await _choose_agent_id(task_description)
-    task_submit_result = await _send_task_to_agent(agent_id, f"Jira user story with key {user_story_id}",
-                                                   task_description)
-    await _wait_for_task_successful_completion(agent_id, task_submit_result,
-                                               f"Review of the user story {user_story_id}")
+    completed_task = await _send_task_to_agent(agent_id, f"Jira user story with key {user_story_id}",
+                                               task_description)
+    _validate_task_status(completed_task, f"Review of the user story {user_story_id}")
     logger.info("Received response from an agent, requirements review seems to be complete.")
     return {"message": f"Review of the requirements for Jira user story {user_story_id} completed."}
 
@@ -200,12 +202,12 @@ async def execute_tests(request: ProjectExecutionRequest, api_key: str = Depends
     test_management_client = get_test_management_client()
     automated_test_cases = []
     try:
-        automated_tests_dict = test_management_client.fetch_test_cases_by_labels(project_key,
-                                                                                 [config.OrchestratorConfig.AUTOMATED_TC_LABEL])
+        automated_tests_dict = test_management_client.fetch_ready_for_execution_test_cases_by_labels(project_key,
+                                                                                                     [config.OrchestratorConfig.AUTOMATED_TC_LABEL])
         automated_test_cases = automated_tests_dict.get(config.OrchestratorConfig.AUTOMATED_TC_LABEL, [])
         if not automated_test_cases:
-            logger.info(f"No automated test cases found for project {project_key}.")
-            return {"message": "No automated test cases found to execute."}
+            logger.info(f"No test cases ready for execution found for project {project_key}.")
+            return {"message": "No test cases found to execute."}
     except Exception as e:
         _handle_exception(f"Failed to fetch test cases for project {project_key}: {e}")
 
@@ -282,20 +284,60 @@ async def _select_execution_agents_for_each_test_label(labels: List[str]) -> Dic
 async def _execute_test_group(test_type: str, test_cases: List[TestCase],
                               agent_ids: List[str]) -> List[TestExecutionResult]:
     logger.info(
-        f"Starting execution of {len(test_cases)} tests for type: '{test_type}' using agents: {[agent_registry[agent_id].name for agent_id in agent_ids]}")
+        f"Starting execution of {len(test_cases)} tests for type: '{test_type}' using agents: {[agent_registry[agent_id].name for agent_id in agent_ids if agent_id in agent_registry]}")
+
     if not agent_ids:
+        logger.warning(f"No agents available for test type '{test_type}', skipping execution.")
         return []
 
-    num_agents = len(agent_ids)
-    tasks = []
-    for i, test_case in enumerate(test_cases):
-        agent_id_for_task = agent_ids[i % num_agents]
-        agent_name_for_task = agent_registry[agent_id_for_task].name
-        logger.debug(f"Assigning test case {test_case.key} to agent {agent_name_for_task} (ID: {agent_id_for_task})")
-        tasks.append(_execute_single_test(agent_id_for_task, test_case, test_type))
+    tests_to_run = test_cases.copy()
+    available_agent_ids = agent_ids.copy()
+    final_results = []
 
-    results = await asyncio.gather(*tasks)
-    return [res for res in results if res is not None]
+    while tests_to_run and available_agent_ids:
+        tasks = []
+        task_mapping = {}
+        batch_size = min(len(available_agent_ids), len(tests_to_run))
+        current_batch_tests = [tests_to_run.pop(0) for _ in range(batch_size)]
+        agents_for_batch = available_agent_ids[:batch_size]
+
+        for i, test_case in enumerate(current_batch_tests):
+            agent_id = agents_for_batch[i]
+            agent_name = agent_registry[agent_id].name
+            logger.debug(f"Assigning test case {test_case.key} to agent {agent_name} (ID: {agent_id})")
+            tasks.append(_execute_single_test(agent_id, test_case, test_type))
+            task_mapping[i] = (agent_id, test_case)
+
+        if not tasks:
+            break
+
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        failed_agent_ids = set()
+        for i, res in enumerate(results):
+            agent_id, test_case = task_mapping[i]
+            if isinstance(res, Exception):
+                agent_name = agent_registry.get(agent_id).name if agent_registry.get(agent_id) else agent_id
+                logger.error(f"Agent {agent_name} failed to execute test case {test_case.key}. Error: {res}. "
+                             f"Re-queueing test.")
+                tests_to_run.append(test_case)
+                failed_agent_ids.add(agent_id)
+            elif res:
+                final_results.append(res)
+
+        if failed_agent_ids:
+            available_agent_ids = [aid for aid in available_agent_ids if aid not in failed_agent_ids]
+            for agent_id in failed_agent_ids:
+                if agent_id in agent_registry:
+                    logger.warning(f"Removing agent {agent_registry[agent_id].name} (ID: {agent_id}) from registry "
+                                   f"due to execution failure.")
+                    del agent_registry[agent_id]
+
+    if tests_to_run:
+        logger.warning(
+            f"Could not execute the following test cases due to lack of available agents: {[tc.key for tc in tests_to_run]}")
+
+    return final_results
 
 
 async def _execute_single_test(agent_id: str, test_case: TestCase,
@@ -305,9 +347,9 @@ async def _execute_single_test(agent_id: str, test_case: TestCase,
     artifacts = []
     start_timestamp = datetime.now()
     try:
-        task_submit_result = await _send_task_to_agent(agent_id, execution_request.model_dump_json(),
-                                                       task_description)
-        artifacts = await _get_task_execution_artifacts(agent_id, task_description, task_submit_result)
+        completed_task = await _send_task_to_agent(agent_id, execution_request.model_dump_json(),
+                                                   task_description)
+        artifacts = _get_artifacts_from_task(completed_task, task_description)
     except Exception as e:
         _handle_exception(f"Failed to execute test case {test_case.key}. Error: {e}", 500)
     finally:
@@ -346,24 +388,18 @@ Result format is a JSON.
 async def _request_test_cases_generation(user_story_id) -> GeneratedTestCases:
     task_description = "Generate test cases"
     agent_id = await _choose_agent_id(task_description)
-    task_submit_result: tuple[str, Task] = await _send_task_to_agent(agent_id,
-                                                                     f"Jira user story with key {user_story_id}",
-                                                                     task_description)
-    task = task_submit_result[1]
-    if task.status.state == TaskState.completed and task.artifacts:
-        text_content = _get_text_content_from_artifacts(task.artifacts, task_description)
-    else:
-        task_description = f"Generation of test cases for the user story {user_story_id}"
-        received_artifacts = await _get_task_execution_artifacts(agent_id, task_description, task_submit_result)
-        text_content = _get_text_content_from_artifacts(received_artifacts, task_description)
+    completed_task = await _send_task_to_agent(agent_id,
+                                               f"Jira user story with key {user_story_id}",
+                                               task_description)
+    task_description = f"Generation of test cases for the user story {user_story_id}"
+    received_artifacts = _get_artifacts_from_task(completed_task, task_description)
+    text_content = _get_text_content_from_artifacts(received_artifacts, task_description)
     return GeneratedTestCases.model_validate_json(text_content)
 
 
-async def _get_task_execution_artifacts(agent_id: str, task_description: str,
-                                        task_submit_result: tuple[str, Task]) -> list[Artifact]:
-    completed_task = await _wait_and_get_completed_task(agent_id, task_submit_result, task_description)
-    _validate_task_status(completed_task, task_description)
-    results: list[Artifact] = completed_task.artifacts
+def _get_artifacts_from_task(task: Task, task_description: str) -> list[Artifact]:
+    _validate_task_status(task, task_description)
+    results: list[Artifact] = task.artifacts
     if not results:
         _handle_exception(f"Received no execution results from the agent after it executed {task_description}.")
     return results
@@ -372,18 +408,17 @@ async def _get_task_execution_artifacts(agent_id: str, task_description: str,
 async def _request_test_cases_classification(test_cases: List[TestCase], user_story_id: str) -> list[Artifact]:
     task_description = "Classify test cases"
     agent_id = await _choose_agent_id(task_description)
-    task_submit_result = await _send_task_to_agent(agent_id,
-                                                   f"Test cases:\n{test_cases}", task_description)
-    return await _get_task_execution_artifacts(agent_id,
-                                               f"Classification of test cases for the user story {user_story_id}",
-                                               task_submit_result)
+    completed_task = await _send_task_to_agent(agent_id,
+                                               f"Test cases:\n{test_cases}", task_description)
+    return _get_artifacts_from_task(completed_task,
+                                    f"Classification of test cases for the user story {user_story_id}")
 
 
 async def _request_test_cases_review(test_cases: List[TestCase]) -> list[Artifact]:
     task_description = "Review test cases"
     agent_id = await _choose_agent_id(task_description)
-    task_submit_result = await _send_task_to_agent(agent_id, f"Test cases:\n{test_cases}", task_description)
-    return await _get_task_execution_artifacts(agent_id, "Review of test cases", task_submit_result)
+    completed_task = await _send_task_to_agent(agent_id, f"Test cases:\n{test_cases}", task_description)
+    return _get_artifacts_from_task(completed_task, "Review of test cases")
 
 
 async def _extract_generated_test_case_issue_keys_from_agent_response(results: list[Artifact], task_description: str) -> \
@@ -422,21 +457,49 @@ def _get_file_contents_from_artifacts(artifacts: list[Artifact]) -> List[FileWit
     return file_parts
 
 
-async def _send_task_to_agent(agent_id: str, input_data: str, task_description: str) -> tuple[str, Task]:
+async def _send_task_to_agent(agent_id: str, input_data: str, task_description: str) -> Task | None:
     agent_card = agent_registry.get(agent_id, None)
     if not agent_card:
         raise ValueError(f"Agent with ID '{agent_id}' is not yet registered with his card")
 
-    async with (httpx.AsyncClient(timeout=config.OrchestratorConfig.TASK_EXECUTION_TIMEOUT) as client):
-        request = SendMessageRequest(
-            id=uuid4().hex,
-            params=MessageSendParams(message=new_agent_text_message(input_data)))
-        a2a_client = A2AClient(httpx_client=client, agent_card=agent_card)
-        response: SendMessageResponse = await a2a_client.send_message(request)
-        result = response.root
-        if isinstance(result, JSONRPCErrorResponse):
-            _handle_exception(f"Couldn't execute the task '{task_description}'. Root cause: {result.error}")
-        return result.id, result.result
+    async with httpx.AsyncClient(timeout=config.OrchestratorConfig.TASK_EXECUTION_TIMEOUT) as client:
+        client_config = ClientConfig(httpx_client=client)
+        client_factory = ClientFactory(config=client_config)
+        a2a_client = client_factory.create(card=agent_card)
+
+        response_iterator = a2a_client.send_message(new_agent_text_message(input_data))
+        start_time = time.time()
+        last_task = None
+        while (time_left := _get_time_left_for_task_completion_waiting(start_time)) > 0:
+            try:
+                response = await asyncio.wait_for(response_iterator.__anext__(), timeout=time_left)
+            except StopAsyncIteration:
+                if last_task and last_task.status.state in (TaskState.completed, TaskState.failed, TaskState.rejected):
+                    return last_task
+                _handle_exception(f"Task '{task_description}' iterator finished before completion.", 500)
+            except asyncio.TimeoutError:
+                _handle_exception(f"Task '{task_description}' timed out while waiting for completion.", 408)
+
+            if isinstance(response, JSONRPCErrorResponse):
+                _handle_exception(f"Couldn't execute the task '{task_description}'. Root cause: {response.error}")
+
+            if isinstance(response, tuple):
+                task, _ = response
+                last_task = task
+                if task.status.state in (TaskState.completed, TaskState.failed, TaskState.rejected):
+                    logger.info(f"Task '{task_description}' was completed with status '{str(task.status.state)}'.")
+                    return task
+                else:
+                    logger.debug(
+                        f"Task for {task_description} is still in '{task.status.state}' state. Waiting for its "
+                        f"completion. Agent: '{agent_card.name}' (ID: {agent_id})")
+            elif isinstance(response, Message):
+                logger.info(
+                    f"Received a message from agent in the scope of the "
+                    f"task '{task_description}': {get_message_text(response)}")
+
+        _handle_exception(f"Task for {task_description} wasn't complete within timeout.", 408)
+        return None
 
 
 async def _choose_agent_id(agent_task_description):
@@ -458,11 +521,13 @@ async def _get_jira_issue_key_from_request(request):
     return user_story_id
 
 
-async def _wait_for_task_successful_completion(agent_id: str, task_submit_result: tuple[str, Task],
-                                               task_description: str):
-    task = await _wait_and_get_completed_task(agent_id, task_submit_result, task_description)
-    _validate_task_status(task, task_description)
-    logger.info(f"Task for {task_description} completed by agent '{agent_registry[agent_id].name}' (ID: {agent_id}).")
+def _handle_exception(message: str, status_code: int = 500) -> HTTPException:
+    logger.exception(message)
+    raise HTTPException(status_code=status_code, detail=message)
+
+
+def _is_task_still_running(task_state: TaskState) -> bool:
+    return task_state in (TaskState.submitted, TaskState.working)
 
 
 def _validate_task_status(task: Task, task_description: str):
@@ -472,59 +537,6 @@ def _validate_task_status(task: Task, task_description: str):
     if task_state != TaskState.completed:
         _handle_exception(f"Task for {task_description} has an unexpected status '{str(task_state)}'. "
                           f"Root cause: {get_message_text(task.status.message)}")
-
-
-async def _wait_and_get_completed_task(agent_id: str, task_submit_result: tuple[str, Task],
-                                       task_description: str) -> Task | None:
-    agent_card = agent_registry.get(agent_id, None)
-    if not agent_card:
-        raise ValueError(f"Agent with ID '{agent_id}' is not yet registered with his card")
-    start_time = time.time()
-    task_id = task_submit_result[1].id
-    task_state = None
-    request = GetTaskRequest(id=task_submit_result[0], params=TaskQueryParams(id=task_id))
-    logger.info(f"Starting the polling of the task '{task_description}' until it's complete.")
-
-    try:
-        async with httpx.AsyncClient() as client:
-            a2a_client = A2AClient(client, agent_card)
-            while _get_time_left_for_task_completion_waiting(start_time) > 0:
-                task_response: GetTaskResponse = await asyncio.wait_for(
-                    a2a_client.get_task(request),
-                    timeout=_get_time_left_for_task_completion_waiting(start_time)
-                )
-                result = task_response.root
-                if isinstance(result, JSONRPCErrorResponse):
-                    _handle_exception(f"Couldn't get the status of the task for '{task_description}'. "
-                                      f"Root cause: {result.error}")
-                else:
-                    task = result.result
-                    task_state = task.status.state
-                if _is_task_still_running(task_state):
-                    logger.debug(f"Task for {task_description} is still in '{task_state}' state. Waiting for its "
-                                 f"completion. Agent: '{agent_card.name}' (ID: {agent_id})")
-                    time.sleep(1)
-                    continue
-                else:
-                    logger.info(f"Polling completed, the status of the task for '{task_description}' "
-                                f"is '{task_state}'.")
-                    return task
-    except asyncio.TimeoutError:
-        _handle_exception(f"Fetching status of the task for {task_description} timed out.", 408)
-
-    if _is_task_still_running(task_state):
-        _handle_exception(f"Task for {task_description} wasn't complete within "
-                          f"{config.OrchestratorConfig.TASK_EXECUTION_TIMEOUT} seconds.", 408)
-    return None
-
-
-def _handle_exception(message: str, status_code: int = 500) -> HTTPException:
-    logger.exception(message)
-    raise HTTPException(status_code=status_code, detail=message)
-
-
-def _is_task_still_running(task_state: TaskState) -> bool:
-    return task_state in (TaskState.submitted, TaskState.working)
 
 
 def _get_time_left_for_task_completion_waiting(start_time):
