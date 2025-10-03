@@ -6,10 +6,11 @@ import torch
 from transformers import AutoTokenizer, AutoModelForSequenceClassification, pipeline
 
 from common import utils
+from config import PROMPT_INJECTION_DETECTION_MODEL_PATH
 
 SLIDING_WINDOW_SIZE = 128
 MAX_TOKEN_LENGTH = 512
-MODEL_NAME = "ProtectAI/deberta-v3-base-prompt-injection-v2"
+
 
 logger = utils.get_logger("prompt_guard")
 
@@ -66,10 +67,12 @@ class ProtectAiPromptGuard(PromptGuard):
             raise RuntimeError("Use get_instance() to get the instance of this class.")
         try:
             self._initialized = True
-            self.tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+            # Load the tokenizer from the local path where it was pre-downloaded
+            self.tokenizer = AutoTokenizer.from_pretrained(PROMPT_INJECTION_DETECTION_MODEL_PATH)
             self.classifier = pipeline(
                 "text-classification",
-                model=AutoModelForSequenceClassification.from_pretrained(MODEL_NAME),
+                # Load the model from the local path where it was pre-downloaded
+                model=AutoModelForSequenceClassification.from_pretrained(PROMPT_INJECTION_DETECTION_MODEL_PATH),
                 tokenizer=self.tokenizer,
                 device=torch.device("cuda" if torch.cuda.is_available() else "cpu"),
             )

@@ -9,3 +9,4 @@ mcp/jira/.env
  GEMINI.md
 /.gemini
 substitutions.yaml
+/prompt_detection_model/

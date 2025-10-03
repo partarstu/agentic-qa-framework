@@ -10,5 +10,10 @@ COPY requirements.txt .
 # Install any needed packages specified in requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Copy and run script to pre-download the prompt injection detection model
+COPY config.py /app/scripts/config.py
+COPY scripts/download_model.py /app/scripts/download_model.py
+RUN python /app/scripts/download_model.py
+
 # Keep the image clean
 RUN rm -rf /var/lib/apt/lists/*

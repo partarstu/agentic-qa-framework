@@ -72,6 +72,8 @@ TEMPERATURE = 0.0
 PROMPT_INJECTION_CHECK_ENABLED = os.environ.get("PROMPT_INJECTION_CHECK_ENABLED", "False").lower() in ("true", "1", "t")
 PROMPT_GUARD_PROVIDER = os.environ.get("PROMPT_GUARD_PROVIDER", "protect_ai")
 PROMPT_INJECTION_MIN_SCORE = float(os.environ.get("PROMPT_INJECTION_MIN_SCORE", "0.8"))
+PROMPT_INJECTION_DETECTION_MODEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "prompt_detection_model")
+PROMPT_INJECTION_DETECTION_MODEL_NAME = os.environ.get("PROMPT_INJECTION_MODEL_NAME", "ProtectAI/deberta-v3-base-prompt-injection-v2")
 
 
 # Orchestrator
