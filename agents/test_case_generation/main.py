@@ -5,7 +5,7 @@
 from pydantic_ai.mcp import MCPServerSSE
 
 import config
-from agents.agent_base import AgentBase, MCP_SERVER_ATTACHMENTS_FOLDER_PATH
+from common.agent_base import AgentBase, MCP_SERVER_ATTACHMENTS_FOLDER_PATH
 from agents.test_case_generation.prompt import TestCaseGenerationSystemPrompt
 from common import utils
 from common.models import JiraUserStory, GeneratedTestCases

@@ -1,6 +1,6 @@
+import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-import json
 from typing import List, Sequence, Optional
 
 from fastapi import HTTPException
@@ -18,7 +18,7 @@ from pydantic_ai.models.wrapper import WrapperModel
 
 import config
 from common import utils
-from common.prompt_injection.guard import PromptGuardFactory, GuardPrompt
+from common.prompt_injection.guard import GuardPrompt, PromptGuardFactory
 
 logger = utils.get_logger("llm_wrapper")
 
@@ -26,7 +26,6 @@ logger = utils.get_logger("llm_wrapper")
 class CustomLlmWrapper(WrapperModel):
     def __init__(self, wrapped: Model | KnownModelName):
         super().__init__(wrapped)
-        self.prompt_guard = PromptGuardFactory.create_prompt_guard(config.PROMPT_GUARD_PROVIDER)
 
     async def request(
             self,
@@ -91,7 +90,8 @@ class CustomLlmWrapper(WrapperModel):
 
     def _validate_for_prompt_injection(self, messages):
         guard_prompt = self._get_prompt_from_messages(messages)
-        if guard_prompt and self.prompt_guard.is_injection(guard_prompt, config.PROMPT_INJECTION_MIN_SCORE):
+        prompt_guard = PromptGuardFactory.get_prompt_guard(config.PROMPT_GUARD_PROVIDER)
+        if guard_prompt and prompt_guard.is_injection(guard_prompt, config.PROMPT_INJECTION_MIN_SCORE):
             logger.error(f"Prompt injection attack detected for the following prompt: \n{guard_prompt.prompt}")
             raise HTTPException(status_code=400, detail="Prompt injection attack detected.")
 

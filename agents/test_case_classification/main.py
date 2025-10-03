@@ -5,7 +5,7 @@
 from pydantic_ai.mcp import MCPServerSSE
 
 import config
-from agents.agent_base import AgentBase
+from common.agent_base import AgentBase
 from agents.test_case_classification.prompt import TestCaseClassificationSystemPrompt
 from common import utils
 from common.models import ClassifiedTestCases, TestCaseKeys

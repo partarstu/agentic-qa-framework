@@ -99,7 +99,8 @@ discovery_agent = Agent(
                  "execute the target task, return an empty string.",
     name="Discovery Agent",
     model_settings=MODEL_SETTINGS,
-    retries=MAX_RETRIES
+    retries=MAX_RETRIES,
+    output_retries=MAX_RETRIES
 )
 
 # --- For selecting ALL suitable for the task agents ---
@@ -111,7 +112,8 @@ multi_discovery_agent = Agent(
                  "If no agents can execute the task, return an empty list.",
     name="Multi-Discovery Agent",
     model_settings=MODEL_SETTINGS,
-    retries=MAX_RETRIES
+    retries=MAX_RETRIES,
+    output_retries=MAX_RETRIES
 )
 
 
@@ -126,7 +128,8 @@ def _get_results_extractor_agent(output_type: type[JsonSerializableModel] | type
                      "identified no matching information inside of the provided to you input, return an empty result.",
         name="Results Extractor Agent",
         model_settings=MODEL_SETTINGS,
-        retries=MAX_RETRIES
+        retries=MAX_RETRIES,
+        output_retries=MAX_RETRIES
     )
 
 

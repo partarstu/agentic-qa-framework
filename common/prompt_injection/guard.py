@@ -131,7 +131,7 @@ class PromptGuardFactory:
     """
 
     @staticmethod
-    def create_prompt_guard(provider_name: str) -> PromptGuard:
+    def get_prompt_guard(provider_name: str) -> PromptGuard:
         """
         Creates a prompt guard instance based on the provider name.
 

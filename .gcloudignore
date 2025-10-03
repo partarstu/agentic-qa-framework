@@ -1,5 +1,6 @@
 .git
 .gitignore
+*.html
 
 # Python
 __pycache__/
@@ -21,6 +22,7 @@ dist/
 coverage/
 allure-report/
 allure-results/
+test_main.py
 
 # Secrets
 credentials.json

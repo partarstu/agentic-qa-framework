@@ -27,7 +27,7 @@ from pydantic_ai.tools import AgentDepsT, ToolFuncEither
 from pydantic_ai.usage import UsageLimits
 
 import config
-from agents.agent_executor import DefaultAgentExecutor
+from common.agent_executor import DefaultAgentExecutor
 from common import utils
 from common.custom_llm_wrapper import CustomLlmWrapper
 from common.models import JsonSerializableModel
@@ -108,9 +108,9 @@ class AgentBase(ABC):
             name=self.agent_name,
             model_settings=self.model_settings,
             mcp_servers=self.mcp_servers,
-            output_retries=0,
             tools=self.tools,
-            retries=MAX_RETRIES
+            retries=MAX_RETRIES,
+            output_retries=MAX_RETRIES
         )
 
     async def _get_agent_execution_result(self, received_request: List[UserContent]) -> AgentRunResult:

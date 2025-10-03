@@ -69,7 +69,7 @@ TOP_P = 1.0
 TEMPERATURE = 0.0
 
 # Prompt injection detection config
-PROMPT_INJECTION_CHECK_ENABLED = os.environ.get("PROMPT_INJECTION_CHECK_ENABLED", "True").lower() in ("true", "1", "t")
+PROMPT_INJECTION_CHECK_ENABLED = os.environ.get("PROMPT_INJECTION_CHECK_ENABLED", "False").lower() in ("true", "1", "t")
 PROMPT_GUARD_PROVIDER = os.environ.get("PROMPT_GUARD_PROVIDER", "protect_ai")
 PROMPT_INJECTION_MIN_SCORE = float(os.environ.get("PROMPT_INJECTION_MIN_SCORE", "0.8"))
 
@@ -79,7 +79,7 @@ class OrchestratorConfig:
     AUTOMATED_TC_LABEL = "automated"
     AGENTS_DISCOVERY_INTERVAL_SECONDS = 300
     TASK_EXECUTION_TIMEOUT = 500.0
-    AGENT_DISCOVERY_TIMEOUT_SECONDS = 30
+    AGENT_DISCOVERY_TIMEOUT_SECONDS = 120
     INCOMING_REQUEST_WAIT_TIMEOUT = AGENT_DISCOVERY_TIMEOUT_SECONDS + 5
     MODEL_NAME = "google-gla:gemini-2.5-flash"
     API_KEY = os.environ.get("ORCHESTRATOR_API_KEY")
