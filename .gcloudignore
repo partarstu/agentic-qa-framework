@@ -1,0 +1,29 @@
+.git
+.gitignore
+*.html
+
+# Python
+__pycache__/
+.venv/
+.pytest_cache/
+
+# IDEs and editors
+.idea/
+.vscode/
+*.sublime-workspace
+
+# OS-specific
+.DS_Store
+Thumbs.db
+
+# Logs and artifacts
+*.log
+dist/
+coverage/
+allure-report/
+allure-results/
+test_main.py
+
+# Secrets
+credentials.json
+.env

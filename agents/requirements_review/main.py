@@ -5,7 +5,7 @@
 from pydantic_ai.mcp import MCPServerSSE
 
 import config
-from agents.agent_base import AgentBase, MCP_SERVER_ATTACHMENTS_FOLDER_PATH
+from common.agent_base import AgentBase, MCP_SERVER_ATTACHMENTS_FOLDER_PATH
 from agents.requirements_review.prompt import RequirementsReviewSystemPrompt
 from common import utils
 from common.models import JiraUserStory, RequirementsReviewFeedback
@@ -22,7 +22,7 @@ class RequirementsReviewAgent(AgentBase):
         )
         super().__init__(
             agent_name=config.RequirementsReviewAgentConfig.OWN_NAME,
-            host=config.AGENT_BASE_URL,
+            base_url=config.AGENT_BASE_URL,
             port=config.RequirementsReviewAgentConfig.PORT,
             external_port=config.RequirementsReviewAgentConfig.EXTERNAL_PORT,
             protocol=config.RequirementsReviewAgentConfig.PROTOCOL,
@@ -37,6 +37,9 @@ class RequirementsReviewAgent(AgentBase):
 
     def get_thinking_budget(self) -> int:
         return config.RequirementsReviewAgentConfig.THINKING_BUDGET
+
+    def get_max_requests_per_task(self) -> int:
+        return config.RequirementsReviewAgentConfig.MAX_REQUESTS_PER_TASK
 
 
 agent = RequirementsReviewAgent()

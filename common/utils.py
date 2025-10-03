@@ -5,6 +5,7 @@
 import logging
 import os
 import mimetypes
+import sys
 from pathlib import Path
 from pydantic_ai import BinaryContent
 import config
@@ -18,7 +19,7 @@ def _initialize_logging():
         client = google.cloud.logging.Client()
         client.setup_logging()
     else:
-        logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        logging.basicConfig(stream=sys.stdout, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     logging_initialized=True
 
 def get_logger(name):

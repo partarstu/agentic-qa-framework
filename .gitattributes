@@ -1,0 +1,23 @@
+# Auto-detect text files and normalize line endings
+* text=auto
+
+# Explicitly set line endings for common script types
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.sh text eol=lf
+
+# Mark common binary files
+*.png binary
+*.jpg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.zip binary
+*.jar binary
+*.class binary
+*.exe binary
+*.dll binary
+
+# Ensure YAML files are treated as text with LF line endings
+*.yaml text eol=lf
+*.yml text eol=lf

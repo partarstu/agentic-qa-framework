@@ -5,13 +5,15 @@
 from collections import defaultdict
 from typing import List, Dict
 
-import dateutil
+from dateutil import parser
 import httpx
 
 import config
 from common import utils
 from common.models import TestCase, TestStep, TestExecutionResult
 from common.services.test_management_base import TestManagementClientBase
+
+TEST_FOR_EXECUTION_READY_STATUS_NAME = "Approved"
 
 CLIENT_TIMEOUT = config.ZEPHYR_CLIENT_TIMEOUT_SECONDS
 COMMENTS_CUSTOM_FIELD_NAME = config.ZEPHYR_COMMENTS_CUSTOM_FIELD_NAME
@@ -130,32 +132,6 @@ class ZephyrClient(TestManagementClientBase):
                     logger.info(f"Successfully linked test case {tc_key} to Jira issue {user_story_id}")
         return created_test_case_keys
 
-    def fetch_test_cases_by_jira_issue(self, issue_key: str) -> List[TestCase]:
-        """
-        Fetches test cases linked to a specific Jira issue.
-
-        Args:
-            issue_key: The key of the Jira issue.
-
-        Returns:
-            A list of TestCase objects.
-        """
-        url = f"{self.base_url}/issuelinks/{issue_key}/testcases"
-        logger.info(f"Fetching test cases linked to Jira issue: {issue_key} from {url}")
-        with httpx.Client() as client:
-            response = client.get(url, headers=self.headers)
-            logger.debug(f"Zephyr API response status for fetching linked test cases: {response.status_code}")
-            response.raise_for_status()
-            test_case_keys = [response_object['key'] for response_object in response.json()]
-            logger.info(f"Found {len(test_case_keys)} test cases linked to {issue_key}: {test_case_keys}")
-            test_case_jsons = []
-            for test_case_key in test_case_keys:
-                url = self._get_test_case_url(test_case_key)
-                logger.debug(f"Fetching details for test case: {test_case_key} from {url}")
-                test_case_jsons.append(self._get_test_case_data(client, url))
-            logger.info(f"Successfully fetched details for all linked test cases for {issue_key}.")
-            return [self._parse_tc_json(client, issue_key, tc) for tc in test_case_jsons]
-
     def add_labels_to_test_case(self, test_case_key: str, labels: List[str]) -> None:
         """
         Adds labels to an existing test case.
@@ -176,10 +152,10 @@ class ZephyrClient(TestManagementClientBase):
             self._update_test_case(client, tc_url, test_case_data)
             logger.info(f"Successfully added labels to test case {test_case_key}.")
 
-    def fetch_test_cases_by_labels(self, project_key: str, target_labels: List[str],
-                                   max_results=100) -> Dict[str, List[TestCase]]:
+    def fetch_ready_for_execution_test_cases_by_labels(self, project_key: str, target_labels: List[str],
+                                                       max_results=100) -> Dict[str, List[TestCase]]:
         """
-        Fetches test cases that have specific labels.
+        Fetches test cases with status 'Approved' that have specific labels.
 
         Args:
             project_key: A Jira project key.
@@ -193,37 +169,39 @@ class ZephyrClient(TestManagementClientBase):
         test_cases_by_label = defaultdict(list)
         logger.info(f"Fetching test cases with labels {target_labels} for project {project_key}")
         start_at = 0
-        while True:
-            params = {
-                "projectKey": project_key,
-                "maxResults": max_results,
-                "startAt": start_at
-            }
-
-            logger.debug(f"Fetching test cases with params: {params}")
-            with httpx.Client() as client:
-                response = client.get(search_url, headers=self.headers, params=params)
-                logger.debug(f"Zephyr API response status for fetching by labels: {response.status_code}")
-                response.raise_for_status()
-                data = response.json()
-                if data['maxResults']:
-                    max_results = data['maxResults']
-                for tc in data.get('values', []):
+        params = {
+            "projectKey": project_key,
+            "maxResults": max_results,
+            "startAt": start_at
+        }
+        with httpx.Client() as client:
+           target_status_id = self._get_test_case_status_id_by_name(client, TEST_FOR_EXECUTION_READY_STATUS_NAME,
+                                                                    params)
+           while True:
+              logger.debug(f"Fetching test cases with params: {params}")
+              response = client.get(search_url, headers=self.headers, params=params)
+              logger.debug(f"Zephyr API response status for fetching by labels: {response.status_code}")
+              response.raise_for_status()
+              data = response.json()
+              if data['maxResults']:
+                  max_results = data['maxResults']
+              for tc in data.get('values', []):
+                 if tc.get('status', {}).get('id') == target_status_id:
                     labels = tc.get("labels", [])
                     logger.debug(f"Test case {tc.get('key')} has labels: {labels}")
                     for target_label in target_labels:
-                        if target_label in labels:
-                            logger.debug(f"Test case {tc.get('key')} matches target label: {target_label}")
-                            test_cases_by_label[target_label].append(self._parse_tc_json(client, None, tc))
-                if data.get('isLast', True):
-                    logger.debug("Reached the last page of results when fetching by labels.")
-                    break
-                else:
-                    logger.debug(f"Fetched {len(data.get('values', []))} test cases, total so far: "
+                       if target_label in labels:
+                          logger.debug(f"Test case {tc.get('key')} matches target label: {target_label}")
+                          test_cases_by_label[target_label].append(self._parse_tc_json(client, None, tc))
+              if data.get('isLast', True):
+                 logger.debug("Reached the last page of results when fetching by labels.")
+                 break
+              else:
+                 logger.debug(f"Fetched {len(data.get('values', []))} test cases, total so far: "
                                  f"{sum(len(item_list) for item_list in test_cases_by_label.values())}")
-                start_at += max_results
-        logger.info(f"Fetched {len(data.get('values', []))} test cases.")
-        return dict(test_cases_by_label)
+                 start_at += max_results
+           logger.info(f"Fetched {len(data.get('values', []))} test cases.")
+           return dict(test_cases_by_label)
 
     def change_test_case_status(self, project_key: str, test_case_key: str, new_status_name: str) -> None:
         """
@@ -250,28 +228,30 @@ class ZephyrClient(TestManagementClientBase):
             "startAt": 0
         }
         with httpx.Client() as client:
-            statuses_url = f"{self.base_url}/statuses?maxResults=100&statusType=TEST_CASE"
-            logger.debug(f"Fetching statuses from {statuses_url}")
-            statuses_response = client.get(statuses_url, headers=self.headers, params=params)
-            statuses_response.raise_for_status()
-            response_json = statuses_response.json()
-            logger.debug(f"Zephyr API response for fetching statuses: {response_json}")
-
-            statuses = response_json.get("values", [])
-            logger.debug(f"Found {len(statuses)} statuses")
-            target_status_id = next(
-                (status.get("id") for status in statuses if status.get("name", "").lower() == new_status_name.lower()),
-                None)
-            if not target_status_id:
-                logger.error(f"Test case status '{new_status_name}' not found.")
-                raise ValueError(f"Status '{new_status_name}' is not a valid test case status.")
-            logger.info(f"Found status ID '{target_status_id}' for status name '{new_status_name}'.")
-
+            target_status_id = self._get_test_case_status_id_by_name(client, new_status_name, params)
             tc_url = self._get_test_case_url(test_case_key)
             test_case_data = self._get_test_case_data(client, tc_url)
             test_case_data["status"] = {"id": target_status_id}
             self._update_test_case(client, tc_url, test_case_data)
             logger.info(f"Successfully changed status of test case {test_case_key} to '{new_status_name}'.")
+
+    def _get_test_case_status_id_by_name(self, client, status_name:str, params):
+        statuses_url = f"{self.base_url}/statuses?maxResults=100&statusType=TEST_CASE"
+        logger.debug(f"Fetching statuses from {statuses_url}")
+        statuses_response = client.get(statuses_url, headers=self.headers, params=params)
+        statuses_response.raise_for_status()
+        response_json = statuses_response.json()
+        logger.debug(f"Zephyr API response for fetching statuses: {response_json}")
+        statuses = response_json.get("values", [])
+        logger.debug(f"Found {len(statuses)} statuses")
+        target_status_id = next(
+            (status.get("id") for status in statuses if status.get("name", "").lower() == status_name.lower() and status.get("archived") == False),
+            None)
+        if not target_status_id:
+            logger.error(f"Test case status '{status_name}' not found.")
+            raise ValueError(f"Status '{status_name}' is not a valid test case status.")
+        logger.info(f"Found status ID '{target_status_id}' for status name '{status_name}'.")
+        return target_status_id
 
     def create_test_execution(self, test_execution_results: List[TestExecutionResult], project_key: str,
                               test_cycle_key: str, version_id: str = None) -> None:
@@ -399,7 +379,7 @@ class ZephyrClient(TestManagementClientBase):
             ))
         logger.debug(f"Parsed test case {tc.get('key')} with {len(steps)} steps.")
         return TestCase(
-            id=tc.get('key'),
+            key=tc.get('key'),
             name=tc.get('name', ''),
             summary=tc.get('objective', ''),
             preconditions=tc.get('precondition'),
@@ -421,7 +401,7 @@ class ZephyrClient(TestManagementClientBase):
     @staticmethod
     def _parse_timestamp(timestamp_str: str) -> str:
         try:
-            timestamp = dateutil.parser.parse(timestamp_str)
+            timestamp = parser.parse(timestamp_str)
             return timestamp.strftime("%Y-%m-%dT%H:%M:%SZ")
         except ValueError as e:
             logger.error(f"Could not parse timestamp '{timestamp_str}': {e}")

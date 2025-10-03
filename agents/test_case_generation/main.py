@@ -5,7 +5,7 @@
 from pydantic_ai.mcp import MCPServerSSE
 
 import config
-from agents.agent_base import AgentBase, MCP_SERVER_ATTACHMENTS_FOLDER_PATH
+from common.agent_base import AgentBase, MCP_SERVER_ATTACHMENTS_FOLDER_PATH
 from agents.test_case_generation.prompt import TestCaseGenerationSystemPrompt
 from common import utils
 from common.models import JiraUserStory, GeneratedTestCases
@@ -21,7 +21,7 @@ class TestCaseGenerationAgent(AgentBase):
             attachments_remote_folder_path=MCP_SERVER_ATTACHMENTS_FOLDER_PATH)
         super().__init__(
             agent_name=config.TestCaseGenerationAgentConfig.OWN_NAME,
-            host=config.AGENT_BASE_URL,
+            base_url=config.AGENT_BASE_URL,
             port=config.TestCaseGenerationAgentConfig.PORT,
             external_port=config.TestCaseGenerationAgentConfig.EXTERNAL_PORT,
             protocol=config.TestCaseGenerationAgentConfig.PROTOCOL,
@@ -36,6 +36,9 @@ class TestCaseGenerationAgent(AgentBase):
 
     def get_thinking_budget(self) -> int:
         return config.TestCaseGenerationAgentConfig.THINKING_BUDGET
+
+    def get_max_requests_per_task(self) -> int:
+        return config.TestCaseGenerationAgentConfig.MAX_REQUESTS_PER_TASK
 
     @staticmethod
     def _create_test_cases(test_cases: GeneratedTestCases, project_key: str, user_story_id: int) -> str:

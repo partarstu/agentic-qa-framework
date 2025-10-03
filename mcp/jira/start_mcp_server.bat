@@ -1,1 +1,1 @@
-docker run --rm -p 9000:9000 --env-file .env -v D:\temp:/tmp ghcr.io/sooperset/mcp-atlassian:latest --transport sse --port 9000 -vv
+docker run --rm -p 9000:9000 --env-file .env -v D:\temp:/tmp ghcr.io/sooperset/mcp-atlassian:0.11.6 --transport sse --port 9000 -vv

@@ -4,7 +4,7 @@
 
 from pathlib import Path
 
-from agents.prompt_base import PromptBase
+from common.prompt_base import PromptBase
 from common import utils
 
 logger = utils.get_logger("reviewer.agent")

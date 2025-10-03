@@ -3,10 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import base64
-import json
 from abc import ABC, abstractmethod
 from contextlib import asynccontextmanager
 from typing import Type, List, Sequence
+from urllib.parse import urlparse
 
 import uvicorn
 from a2a.server.apps import A2AFastAPIApplication
@@ -19,22 +19,24 @@ from pydantic import BaseModel
 from pydantic_ai import Agent, Tool
 from pydantic_ai.agent import AgentRunResult
 from pydantic_ai.mcp import MCPServerSSE
-from pydantic_ai.messages import ModelMessage, ModelResponse, ToolCallPart, ThinkingPart, TextPart, ModelRequest, \
-    ToolReturnPart, UserPromptPart, SystemPromptPart, RetryPromptPart, BinaryContent, AudioMediaType, ImageMediaType, \
-    UserContent
+from pydantic_ai.messages import BinaryContent, AudioMediaType, ImageMediaType, UserContent
 from pydantic_ai.models.google import GoogleModelSettings
 from pydantic_ai.models.groq import GroqModelSettings
 from pydantic_ai.settings import ModelSettings
 from pydantic_ai.tools import AgentDepsT, ToolFuncEither
+from pydantic_ai.usage import UsageLimits
 
 import config
-from agents.agent_executor import DefaultAgentExecutor
+from common.agent_executor import DefaultAgentExecutor
 from common import utils
+from common.custom_llm_wrapper import CustomLlmWrapper
 from common.models import JsonSerializableModel
 
+MAX_RETRIES = 3
 REGISTRATION_PATH = f"{config.ORCHESTRATOR_URL}/register"
 MCP_SERVER_ATTACHMENTS_FOLDER_PATH = config.MCP_SERVER_ATTACHMENTS_FOLDER_PATH
 ATTACHMENTS_DESTINATION_FOLDER_PATH = config.ATTACHMENTS_DESTINATION_FOLDER_PATH
+
 logger = utils.get_logger("agent_base")
 
 
@@ -42,7 +44,7 @@ class AgentBase(ABC):
     def __init__(
             self,
             agent_name: str,
-            host: str,
+            base_url: str,
             protocol: str,
             port: int,
             external_port: int,
@@ -56,11 +58,11 @@ class AgentBase(ABC):
             tools: Sequence[Tool[AgentDepsT] | ToolFuncEither[AgentDepsT, ...]] = (),
     ):
         self.agent_name = agent_name
-        self.host = host
+        self.base_url = base_url
         self.port = port
         self.external_port = external_port
         self.protocol = protocol
-        self.url = f"{self.host}:{self.external_port}"
+        self.url = f"{self.base_url}:{self.external_port}"
         self.model_name = model_name
         self.output_type = output_type
         self.instructions = instructions
@@ -76,6 +78,10 @@ class AgentBase(ABC):
     def get_thinking_budget(self) -> int:
         pass
 
+    @abstractmethod
+    def get_max_requests_per_task(self) -> int:
+        pass
+
     def get_default_model_settings(self, model_name: str) -> ModelSettings:
         if model_name.startswith("google"):
             return GoogleModelSettings(top_p=config.TOP_P, temperature=config.TEMPERATURE,
@@ -86,59 +92,36 @@ class AgentBase(ABC):
         else:
             return ModelSettings(top_p=config.TOP_P, temperature=config.TEMPERATURE)
 
-    @staticmethod
-    def _log_model_messages(messages: List[ModelMessage]):
-        """
-        Logs all model messages in order to provide the call stack info for debugging purposes.
-        """
-        for message in messages:
-            if isinstance(message, ModelResponse):
-                timestamp = message.timestamp.strftime('%Y-%m-%d %H:%M:%S')
-                for part in message.parts:
-                    if isinstance(part, ToolCallPart):
-                        logger.debug(f"[{timestamp}] Model is calling the tool: '{part.tool_name}' with arguments: "
-                                     f"{json.dumps(part.args, indent=2)}")
-                    elif isinstance(part, ThinkingPart):
-                        logger.debug(f"[{timestamp}] Model is thinking the following:\n{part.content}")
-                    elif isinstance(part, TextPart):
-                        logger.debug(f"[{timestamp}] Model is responding with the plain text: {part.content}")
-            if isinstance(message, ModelRequest):
-                for part in message.parts:
-                    if isinstance(part, ToolReturnPart):
-                        timestamp = part.timestamp.strftime('%Y-%m-%d %H:%M:%S')
-                        logger.debug(f"[{timestamp}] Agent is responding with the execution result of tool: "
-                                     f"'{part.tool_name}' with result: {json.dumps(part.content, indent=2)}")
-                    elif isinstance(part, UserPromptPart):
-                        timestamp = part.timestamp.strftime('%Y-%m-%d %H:%M:%S')
-                        logger.debug(f"[{timestamp}] Agent is primarily prompting the model with user "
-                                     f"input: {part.content}")
-                    elif isinstance(part, SystemPromptPart):
-                        timestamp = part.timestamp.strftime('%Y-%m-%d %H:%M:%S')
-                        logger.debug(f"[{timestamp}] Agent is using system prompt: {part.content}")
-                    elif isinstance(part, RetryPromptPart):
-                        timestamp = part.timestamp.strftime('%Y-%m-%d %H:%M:%S')
-                        logger.debug(f"[{timestamp}] Agent is retrying prompting the model, the root "
-                                     f"cause: {part.content}")
-
     def _create_agent(self) -> Agent:
+        logger.info(f"""Creating agent '{self.agent_name}' with the following configuration:
+        - Model: {self.model_name}
+        - Output Type: {self.output_type.__name__}
+        - Model Settings: {self.model_settings}
+        - MCP Servers: {[server.url for server in self.mcp_servers]}
+        - Tools: {[tool.__name__ for tool in self.tools]}""")
+
         return Agent(
-            model=self.model_name,
+            model=CustomLlmWrapper(wrapped=self.model_name),
             deps_type=self.deps_type,
             output_type=self.output_type,
             instructions=self.instructions,
             name=self.agent_name,
             model_settings=self.model_settings,
             mcp_servers=self.mcp_servers,
-            retries=0,
-            tools=self.tools
+            tools=self.tools,
+            retries=MAX_RETRIES,
+            output_retries=MAX_RETRIES
         )
+
+    async def _get_agent_execution_result(self, received_request: List[UserContent]) -> AgentRunResult:
+        usage_limits = UsageLimits(tool_calls_limit=self.get_max_requests_per_task())
+        async with self.agent:
+            return await self.agent.run(received_request, usage_limits=usage_limits)
 
     async def run(self, received_message: Message) -> Message:
         received_request = self._get_all_received_contents(received_message)
         logger.info("Got a task to execute, starting execution.")
-        async with self.agent.run_mcp_servers():
-            result = await self.agent.run(received_request)
-        self._log_model_messages(result.new_messages())
+        result = await self._get_agent_execution_result(received_request)
         logger.info("Completed execution of the task.")
         return self._get_text_message_from_results(result)
 
@@ -178,8 +161,8 @@ class AgentBase(ABC):
             description=self.description,
             url=self.url,
             version='1.0.0',
-            defaultInputModes=['text'],
-            defaultOutputModes=['text', 'image'],
+            default_input_modes=['text'],
+            default_output_modes=['text', 'image'],
             capabilities=AgentCapabilities(streaming=False),
             skills=[],
         )
@@ -204,10 +187,12 @@ class AgentBase(ABC):
         return a2a_app
 
     def start_as_server(self):
-        uvicorn.run(self.a2a_server, host=self.host, port=self.port)
+        parsed_url = urlparse(self.base_url)
+        host = parsed_url.hostname
+        uvicorn.run(self.a2a_server, host=host, port=self.port)
 
     @staticmethod
-    def _get_all_received_contents(received_message):
+    def _get_all_received_contents(received_message) -> List[UserContent]:
         text_content: str = get_message_text(received_message)
         files_content: List[BinaryContent] = []
         for part in received_message.parts:
@@ -220,7 +205,7 @@ class AgentBase(ABC):
                         files_content.append(BinaryContent(data=content, media_type=AudioMediaType))
                     elif mime_type.startswith("image"):
                         files_content.append(BinaryContent(data=content, media_type=ImageMediaType))
-        all_contents: list[UserContent] = [text_content, *files_content]
+        all_contents: List[UserContent] = [text_content, *files_content]
         return all_contents
 
     @staticmethod

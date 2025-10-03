@@ -75,13 +75,13 @@ class AllureClient(TestReportingClientBase):
             for artifact in test_execution_result.artifacts:
                 if artifact.bytes:
                     decoded_bytes = base64.b64decode(artifact.bytes)
-                    extension = artifact.mimeType.split('/')[-1] if artifact.mimeType else 'bin'
+                    extension = artifact.mime_type.split('/')[-1] if artifact.mime_type else 'bin'
                     unique_filename = f"{uuid.uuid4()}-attachment.{extension}"
                     attachment_file_path = self.results_dir / unique_filename
                     with open(attachment_file_path, 'wb') as f:
                         f.write(decoded_bytes)
                     test_result.attachments.append(
-                        Attachment(name=artifact.name, source=unique_filename, type=artifact.mimeType))
+                        Attachment(name=artifact.name, source=unique_filename, type=artifact.mime_type))
         self.file_logger.report_result(test_result)
 
     def _generate_html(self):

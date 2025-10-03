@@ -19,6 +19,8 @@ Watch a demo of the project in action:
     * Test Case Generation
     * Test Case Classification
     * Test Case Review
+    * UI Test Execution
+* **Prompt Injection Protection:** Built-in safeguards to detect and prevent prompt injection attacks.
 * **A2A and MCP - compliant:** Adheres to the specifications of Agent2Agent and Model Context protocols.
 * **Orchestration Layer:** A central orchestrator manages agent registration, task routing, and workflow execution.
 * **Integration with External Systems:** Supports integration with Jira by utilizing its MCP server.
@@ -42,14 +44,15 @@ When an event occurs (e.g., a Jira webhook indicating new requirements), the orc
 
 For a visual representation of the system's architecture and data flow, please refer to the following diagrams:
 
-* [Architectural Diagram](architectural_diagram.html)
-* [Flow Diagram](flow_diagram.html)
+* [Architectural Diagram](architectural_diagram.html) ([German Version](architectural_diagram_DE.html))
+* [Flow Diagram](flow_diagram.html) ([German Version](flow_diagram_DE.html))
 
 ## Getting Started
 
 ### Prerequisites
 
 * Python 3.13+
+* Docker
 * `pip` (Python package installer)
 * `virtualenv` (or `conda` for environment management)
 
@@ -74,8 +77,7 @@ For a visual representation of the system's architecture and data flow, please r
 
 ### Docker Images
 
-The project utilizes Docker for containerization of the orchestrator and agent services. All services are built upon the
-`python:3.13-slim` base image.
+The project utilizes Docker for containerization of the orchestrator and agent services. A common base image, `agentic-qa-base:latest`, is built from `Dockerfile.base` to ensure consistency and reduce build times.
 
 Each service runs using `gunicorn` as the WSGI server. The command for agents is
 `gunicorn -w 1 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT agents.<agent_name>.main:app`, and for the
@@ -109,11 +111,11 @@ ZEPHYR_API_TOKEN=YOUR_ZEPHYR_API_TOKEN # Required. API token for Zephyr authenti
 # Agent Configuration
 AGENT_BASE_URL=http://localhost # Default: http://localhost. Base URL for agents.
 PORT=8001 # Default: 8001. The internal port an agent listens on.
-EXTERNAL_PORT=443 # Default: 443. The externally accessible port for the agent (e.g., for cloud deployments).
+EXTERNAL_PORT=8001 # Default: 8001. The externally accessible port for the agent.
 
 # Agent Discovery (for remote agents)
 REMOTE_EXECUTION_AGENT_HOSTS=http://localhost # Default: http://localhost. Comma-separated URLs of remote agent hosts.
-AGENT_DISCOVERY_PORTS=8001-8005 # Default: 8001-8005. Port range for agent discovery.
+AGENT_DISCOVERY_PORTS=8001-8006 # Default: 8001-8006. Port range for agent discovery.
 
 # Google Cloud Storage (for attachments)
 USE_GOOGLE_CLOUD_STORAGE=False # Default: False. Is set to "True" if running in the Google Cloud.
@@ -136,6 +138,14 @@ ALLURE_REPORT_DIR=allure-report # Default: allure-report. Directory for generate
 TOP_P=1.0 # Default: 1.0. Top-p sampling parameter for models.
 TEMPERATURE=0.0 # Default: 0.0. Temperature parameter for models.
 
+# Prompt Injection Detection
+PROMPT_INJECTION_CHECK_ENABLED=False # Default: False. Set to "True" to enable prompt injection detection.
+PROMPT_GUARD_PROVIDER=protect_ai # Default: protect_ai. The provider for prompt injection detection.
+PROMPT_INJECTION_MIN_SCORE=0.8 # Default: 0.8. The minimum score for a prompt to be considered an injection.
+PROMPT_INJECTION_MODEL_NAME=ProtectAI/deberta-v3-base-prompt-injection-v2 # Default: ProtectAI/deberta-v3-base-prompt-injection-v2. The name of the model used for prompt injection detection.
+
+**Note on Prompt Injection Model Download:**
+If `PROMPT_INJECTION_CHECK_ENABLED` is set to `True` and you are running the orchestrator or agents locally (not in a Docker container deployed to the cloud), you must manually download the prompt injection detection model. This is done by running the `scripts/download_model.py` script. When deploying to cloud environments via Docker, the model download is handled automatically as part of the Docker image build process.
 # Specific Agent Model Names (example values, adjust as needed)
 # These specify the AI model to be used by each component.
 # Refer to your model provider's documentation for available model names.

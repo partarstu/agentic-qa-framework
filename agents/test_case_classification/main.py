@@ -5,7 +5,7 @@
 from pydantic_ai.mcp import MCPServerSSE
 
 import config
-from agents.agent_base import AgentBase
+from common.agent_base import AgentBase
 from agents.test_case_classification.prompt import TestCaseClassificationSystemPrompt
 from common import utils
 from common.models import ClassifiedTestCases, TestCaseKeys
@@ -20,7 +20,7 @@ class TestCaseClassificationAgent(AgentBase):
         instruction_prompt = TestCaseClassificationSystemPrompt()
         super().__init__(
             agent_name=config.TestCaseClassificationAgentConfig.OWN_NAME,
-            host=config.AGENT_BASE_URL,
+            base_url=config.AGENT_BASE_URL,
             port=config.TestCaseClassificationAgentConfig.PORT,
             external_port=config.TestCaseClassificationAgentConfig.EXTERNAL_PORT,
             protocol=config.TestCaseClassificationAgentConfig.PROTOCOL,
@@ -35,6 +35,9 @@ class TestCaseClassificationAgent(AgentBase):
 
     def get_thinking_budget(self) -> int:
         return config.TestCaseClassificationAgentConfig.THINKING_BUDGET
+
+    def get_max_requests_per_task(self) -> int:
+        return config.TestCaseClassificationAgentConfig.MAX_REQUESTS_PER_TASK
 
     @staticmethod
     def add_labels_to_test_case(test_case_key: str, labels: list[str]) -> str:

@@ -5,7 +5,7 @@
 from pydantic_ai.mcp import MCPServerSSE
 
 import config
-from agents.agent_base import AgentBase
+from common.agent_base import AgentBase
 from agents.test_case_review.prompt import TestCaseReviewSystemPrompt
 from common import utils
 from common.models import TestCaseReviewRequest, TestCaseReviewFeedbacks
@@ -20,7 +20,7 @@ class TestCaseReviewAgent(AgentBase):
         instruction_prompt = TestCaseReviewSystemPrompt()
         super().__init__(
             agent_name=config.TestCaseReviewAgentConfig.OWN_NAME,
-            host=config.AGENT_BASE_URL,
+            base_url=config.AGENT_BASE_URL,
             port=config.TestCaseReviewAgentConfig.PORT,
             external_port=config.TestCaseReviewAgentConfig.EXTERNAL_PORT,
             protocol=config.TestCaseReviewAgentConfig.PROTOCOL,
@@ -35,6 +35,9 @@ class TestCaseReviewAgent(AgentBase):
 
     def get_thinking_budget(self) -> int:
         return config.TestCaseReviewAgentConfig.THINKING_BUDGET
+
+    def get_max_requests_per_task(self) -> int:
+        return config.TestCaseReviewAgentConfig.MAX_REQUESTS_PER_TASK
 
     @staticmethod
     def add_review_feedback(test_case_key: str, feedback: str) -> str:

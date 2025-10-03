@@ -43,8 +43,8 @@ XRAY_PRECONDITIONS_FIELD_ID = os.environ.get("XRAY_PRECONDITIONS_FIELD_ID", "Pre
 AGENT_BASE_URL = os.environ.get("AGENT_BASE_URL", "http://localhost")
 MCP_SERVER_ATTACHMENTS_FOLDER_PATH = "/tmp"
 ATTACHMENTS_DESTINATION_FOLDER_PATH = "D://temp"
-REMOTE_EXECUTION_AGENT_HOSTS = os.environ.get("REMOTE_EXECUTION_AGENT_HOSTS")
-AGENT_DISCOVERY_PORTS = os.environ.get("AGENT_DISCOVERY_PORTS")
+REMOTE_EXECUTION_AGENT_HOSTS = os.environ.get("REMOTE_EXECUTION_AGENT_HOSTS", AGENT_BASE_URL)
+AGENT_DISCOVERY_PORTS = os.environ.get("AGENT_DISCOVERY_PORTS", "8001-8006")
 USE_GOOGLE_CLOUD_STORAGE = os.environ.get("USE_CLOUD_STORAGE", "False").lower() in ("true", "1", "t")
 GOOGLE_CLOUD_STORAGE_BUCKET_NAME = os.environ.get("CLOUD_STORAGE_BUCKET_NAME")
 JIRA_ATTACHMENTS_CLOUD_STORAGE_FOLDER = os.environ.get("JIRA_ATTACHMENTS_CLOUD_STORAGE_FOLDER", "jira")
@@ -68,13 +68,20 @@ OPEN_TELEMETRY_URL = os.environ.get('OTEL_EXPORTER_OTLP_ENDPOINT')
 TOP_P = 1.0
 TEMPERATURE = 0.0
 
+# Prompt injection detection config
+PROMPT_INJECTION_CHECK_ENABLED = os.environ.get("PROMPT_INJECTION_CHECK_ENABLED", "False").lower() in ("true", "1", "t")
+PROMPT_GUARD_PROVIDER = os.environ.get("PROMPT_GUARD_PROVIDER", "protect_ai")
+PROMPT_INJECTION_MIN_SCORE = float(os.environ.get("PROMPT_INJECTION_MIN_SCORE", "0.8"))
+PROMPT_INJECTION_DETECTION_MODEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "prompt_detection_model")
+PROMPT_INJECTION_DETECTION_MODEL_NAME = os.environ.get("PROMPT_INJECTION_MODEL_NAME", "ProtectAI/deberta-v3-base-prompt-injection-v2")
+
 
 # Orchestrator
 class OrchestratorConfig:
     AUTOMATED_TC_LABEL = "automated"
     AGENTS_DISCOVERY_INTERVAL_SECONDS = 300
     TASK_EXECUTION_TIMEOUT = 500.0
-    AGENT_DISCOVERY_TIMEOUT_SECONDS = 30
+    AGENT_DISCOVERY_TIMEOUT_SECONDS = 120
     INCOMING_REQUEST_WAIT_TIMEOUT = AGENT_DISCOVERY_TIMEOUT_SECONDS + 5
     MODEL_NAME = "google-gla:gemini-2.5-flash"
     API_KEY = os.environ.get("ORCHESTRATOR_API_KEY")
@@ -85,9 +92,10 @@ class RequirementsReviewAgentConfig:
     THINKING_BUDGET = 10000
     OWN_NAME = "Jira Requirements Reviewer"
     PORT = int(os.environ.get("PORT", "8001"))
-    EXTERNAL_PORT = int(os.environ.get("EXTERNAL_PORT", "443"))
+    EXTERNAL_PORT = int(os.environ.get("EXTERNAL_PORT", PORT))
     PROTOCOL = "http"
     MODEL_NAME = "google-gla:gemini-2.5-pro"
+    MAX_REQUESTS_PER_TASK = 10
 
 
 # Test Case Classification Agent
@@ -95,9 +103,10 @@ class TestCaseClassificationAgentConfig:
     THINKING_BUDGET = 2000
     OWN_NAME = "Test Case Classification Agent"
     PORT = int(os.environ.get("PORT", "8003"))
-    EXTERNAL_PORT = int(os.environ.get("EXTERNAL_PORT", "443"))
+    EXTERNAL_PORT = int(os.environ.get("EXTERNAL_PORT", PORT))
     PROTOCOL = "http"
     MODEL_NAME = "google-gla:gemini-2.5-flash"
+    MAX_REQUESTS_PER_TASK = 5
 
 
 # Test Case Generation Agent
@@ -105,9 +114,10 @@ class TestCaseGenerationAgentConfig:
     THINKING_BUDGET = 0
     OWN_NAME = "Test Case Generation Agent"
     PORT = int(os.environ.get("PORT", "8002"))
-    EXTERNAL_PORT = int(os.environ.get("EXTERNAL_PORT", "443"))
+    EXTERNAL_PORT = int(os.environ.get("EXTERNAL_PORT", PORT))
     PROTOCOL = "http"
     MODEL_NAME = "google-gla:gemini-2.5-flash"
+    MAX_REQUESTS_PER_TASK = 10
 
 
 # Test Case Review Agent
@@ -116,6 +126,7 @@ class TestCaseReviewAgentConfig:
     REVIEW_COMPLETE_STATUS_NAME = "Review Complete"
     OWN_NAME = "Test Case Review Agent"
     PORT = int(os.environ.get("PORT", "8004"))
-    EXTERNAL_PORT = int(os.environ.get("EXTERNAL_PORT", "443"))
+    EXTERNAL_PORT = int(os.environ.get("EXTERNAL_PORT", PORT))
     PROTOCOL = "http"
     MODEL_NAME = "google-gla:gemini-2.5-pro"
+    MAX_REQUESTS_PER_TASK = 5
