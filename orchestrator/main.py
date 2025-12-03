@@ -187,7 +187,7 @@ async def trigger_test_case_generation_workflow(request: Request, api_key: str =
     logger.info("Received response from an agent, test case classification seems to be complete.")
 
     logger.info("Requesting review of all generated test cases.")
-    await _request_test_cases_review(generated_test_cases.test_cases)
+    await _request_test_cases_review(generated_test_cases.test_cases, user_story_id)
     logger.info("Received response from an agent, test case review seems to be complete.")
 
     return {
@@ -417,10 +417,10 @@ async def _request_test_cases_classification(test_cases: List[TestCase], user_st
                                     f"Classification of test cases for the user story {user_story_id}")
 
 
-async def _request_test_cases_review(test_cases: List[TestCase]) -> list[Artifact]:
+async def _request_test_cases_review(test_cases: List[TestCase], user_story_id: str) -> list[Artifact]:
     task_description = "Review test cases"
     agent_id = await _choose_agent_id(task_description)
-    completed_task = await _send_task_to_agent(agent_id, f"Test cases:\n{test_cases}", task_description)
+    completed_task = await _send_task_to_agent(agent_id, f"Test cases:\n{test_cases}\nUser Story ID: {user_story_id}", task_description)
     return _get_artifacts_from_task(completed_task, "Review of test cases")
 
 

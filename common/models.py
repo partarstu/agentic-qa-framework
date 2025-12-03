@@ -17,7 +17,6 @@ class JsonSerializableModel(BaseModel):
 
 class JiraUserStory(JsonSerializableModel):
     key: str
-    key: str
     summary: str
     description: str
     acceptance_criteria: str
