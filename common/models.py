@@ -16,6 +16,7 @@ class JsonSerializableModel(BaseModel):
 
 
 class JiraUserStory(JsonSerializableModel):
+    id: int
     key: str
     summary: str
     description: str
@@ -27,11 +28,25 @@ class RequirementsReviewFeedback(JsonSerializableModel):
     suggested_improvements: List[str] = Field(description="List of improvements suggested by the review")
 
 
+class AcceptanceCriteriaItem(JsonSerializableModel):
+    id: str = Field(description="The ID of the acceptance criterion (e.g., 'AC-1')")
+    text: str = Field(description="The text of the acceptance criterion")
+
+
+class AcceptanceCriteriaList(JsonSerializableModel):
+    items: List[AcceptanceCriteriaItem] = Field(description="List of extracted acceptance criteria")
+
+
 class TestStep(JsonSerializableModel):
     action: str = Field(
         description="The description of the action which needs to be executed in the scope of this test step")
     expected_results: str = Field(description="Results expected after the test step action is executed")
     test_data: list[str] = Field(description="The list of test data items which belong to this test step")
+
+
+class TestStepsSequence(JsonSerializableModel):
+    ac_id: str = Field(description="The ID of the acceptance criterion these steps cover")
+    steps: List[TestStep] = Field(description="Sequence of test steps")
 
 
 class TestCase(JsonSerializableModel):
@@ -130,3 +145,8 @@ class SelectedAgent(JsonSerializableModel):
 
 class SelectedAgents(JsonSerializableModel):
     ids: List[str] = Field(description="The IDs of all agents that are suitable for the task execution.")
+
+
+class StoryAndACs(JsonSerializableModel):
+    story: JiraUserStory
+    acs: AcceptanceCriteriaList
