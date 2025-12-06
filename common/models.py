@@ -31,6 +31,8 @@ class RequirementsReviewFeedback(JsonSerializableModel):
 class AcceptanceCriteriaItem(JsonSerializableModel):
     id: str = Field(description="The ID of the acceptance criterion (e.g., 'AC-1')")
     text: str = Field(description="The text of the acceptance criterion")
+    attachment_info: str = Field(description="All information extracted from the attachments which might be relevant "
+                                             "to this acceptance criteria item")
 
 
 class AcceptanceCriteriaList(JsonSerializableModel):
@@ -45,8 +47,12 @@ class TestStep(JsonSerializableModel):
 
 
 class TestStepsSequence(JsonSerializableModel):
-    ac_id: str = Field(description="The ID of the acceptance criterion these steps cover")
-    steps: List[TestStep] = Field(description="Sequence of test steps")
+    ac_id: str = Field(description="The ID of the acceptance criteria item which these steps cover")
+    steps: List[TestStep] = Field(description="List of test steps ordered in the logical execution sequence")
+
+
+class TestStepsSequenceList(JsonSerializableModel):
+    items: List[TestStepsSequence] = Field(description="List of test step sequences for multiple acceptance criteria.")
 
 
 class TestCase(JsonSerializableModel):
@@ -128,10 +134,9 @@ class ClassifiedTestCases(JsonSerializableModel):
     test_cases: List[ClassifiedTestCase]
 
 
-# New models to be added:
 class ProjectExecutionRequest(JsonSerializableModel):
     """Request to trigger test execution for a project."""
-    project_key: str
+    project_key: str = Field(description="The key of the project for which all tests should be executed.")
 
 
 class AggregatedTestResults(JsonSerializableModel):
@@ -145,8 +150,3 @@ class SelectedAgent(JsonSerializableModel):
 
 class SelectedAgents(JsonSerializableModel):
     ids: List[str] = Field(description="The IDs of all agents that are suitable for the task execution.")
-
-
-class StoryAndACs(JsonSerializableModel):
-    story: JiraUserStory
-    acs: AcceptanceCriteriaList

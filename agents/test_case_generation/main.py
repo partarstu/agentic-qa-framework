@@ -2,19 +2,13 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-import re
-from typing import List
-
 from pydantic_ai import Agent
-from pydantic_ai.agent import AgentRunResult
 from pydantic_ai.mcp import MCPServerSSE
-from pydantic_ai.messages import UserContent
-from pydantic_ai.usage import Usage
 
 import config
 from agents.test_case_generation.prompt import (
     TestCaseGenerationSystemPrompt,
-    ACExtractionPrompt,
+    AcExtractionPrompt,
     StepsGenerationPrompt,
     TestCaseCreationPrompt,
 )
@@ -24,9 +18,7 @@ from common.custom_llm_wrapper import CustomLlmWrapper
 from common.models import (
     JiraUserStory,
     GeneratedTestCases,
-    StoryAndACs,
-    TestStepsSequence,
-    TestCase,
+    AcceptanceCriteriaList, TestStepsSequenceList,
 )
 from common.services.test_management_system_client_provider import get_test_management_client
 
@@ -37,7 +29,7 @@ jira_mcp_server = MCPServerSSE(url=config.JIRA_MCP_SERVER_URL, timeout=config.MC
 class TestCaseGenerationAgent(AgentBase):
     def __init__(self):
         # Initialize sub-agent prompts
-        self.ac_extraction_prompt = ACExtractionPrompt()
+        self.ac_extraction_prompt = AcExtractionPrompt()
         self.steps_generation_prompt = StepsGenerationPrompt()
         self.test_case_creation_prompt = TestCaseCreationPrompt()
 
@@ -46,7 +38,7 @@ class TestCaseGenerationAgent(AgentBase):
 
         self.ac_extractor_agent = Agent(
             model=CustomLlmWrapper(wrapped=model_name),
-            output_type=StoryAndACs,
+            output_type=AcceptanceCriteriaList,
             system_prompt=self.ac_extraction_prompt.get_prompt(),
             mcp_servers=[jira_mcp_server],
             name="ac_extractor",
@@ -54,14 +46,14 @@ class TestCaseGenerationAgent(AgentBase):
 
         self.steps_generator_agent = Agent(
             model=CustomLlmWrapper(wrapped=model_name),
-            output_type=TestStepsSequence,
+            output_type=TestStepsSequenceList,
             system_prompt=self.steps_generation_prompt.get_prompt(),
             name="steps_generator",
         )
 
         self.test_case_creator_agent = Agent(
             model=CustomLlmWrapper(wrapped=model_name),
-            output_type=TestCase,
+            output_type=GeneratedTestCases,
             system_prompt=self.test_case_creation_prompt.get_prompt(),
             name="test_case_creator",
         )
@@ -78,12 +70,12 @@ class TestCaseGenerationAgent(AgentBase):
             external_port=config.TestCaseGenerationAgentConfig.EXTERNAL_PORT,
             protocol=config.TestCaseGenerationAgentConfig.PROTOCOL,
             model_name=config.TestCaseGenerationAgentConfig.MODEL_NAME,
-            output_type=str,
+            output_type=GeneratedTestCases,
             instructions=instruction_prompt.get_prompt(),  # Kept for compatibility/fallback
             mcp_servers=[jira_mcp_server],
             deps_type=JiraUserStory,
             description="Agent which generates test cases based on Jira user stories.",
-            tools=[self._create_test_cases],
+            tools=[self._upload_test_cases_into_test_management_system, self._generate_test_cases],
         )
 
     def get_thinking_budget(self) -> int:
@@ -92,81 +84,78 @@ class TestCaseGenerationAgent(AgentBase):
     def get_max_requests_per_task(self) -> int:
         return config.TestCaseGenerationAgentConfig.MAX_REQUESTS_PER_TASK
 
-    async def _get_agent_execution_result(self, received_request: List[UserContent]) -> AgentRunResult:
+    def _generate_test_cases(self, jira_issue_content: str, attachments_content: str) -> GeneratedTestCases:
         """
-        Orchestrates the multi-agent workflow.
-        """
-        logger.info("Starting multi-agent test case generation workflow.")
+        Generates test cases based on the Jira issue content and attachments.
 
-        # Extract issue key from the request (assuming it's text)
-        request_text = ""
-        for content in received_request:
-            if isinstance(content, str):
-                request_text += content + " "
-        
-        # Simple regex to find potential issue key like PROJ-123
-        match = re.search(r"([A-Z][A-Z0-9]+-\d+)", request_text)
-        issue_key = match.group(1) if match else request_text.strip()
+       Args:
+           jira_issue_content: The whole content of the Jira issue.
+           attachments_content: The content of all relevant for this Jira issue attachments.
 
-        # 1 & 2. Fetch Story & Extract ACs (Combined)
-        logger.info(f"Step 1 & 2: Fetching Story and Extracting ACs for key: {issue_key}")
-        ac_result = await self.ac_extractor_agent.run(f"Jira Issue Key: {issue_key}")
-        story_and_acs = ac_result.data
-        story = story_and_acs.story
-        acs = story_and_acs.acs
-        
-        logger.info(f"Fetched story: {story.key} (ID: {story.id})")
-        logger.info(f"Extracted {len(acs.items)} ACs.")
+       Returns:
+           Generated test cases.
+       """
 
-        test_cases_list = []
+        extracted_acceptance_criteria = self.extract_acceptance_criteria(attachments_content, jira_issue_content)
+        test_steps_sequences = self.generate_test_steps(extracted_acceptance_criteria)
+        generated_test_cases = self.generate_test_cases(extracted_acceptance_criteria, jira_issue_content,
+                                                        test_steps_sequences)
+        return generated_test_cases
 
-        # 3 & 4. Generate Steps and Create Test Cases
-        logger.info("Step 3 & 4: Generating Steps and Test Cases for each AC...")
-        for ac in acs.items:
-            logger.info(f"Processing AC: {ac.id}")
-            
-            # Step Generation
-            steps_result = await self.steps_generator_agent.run(
-                f"Acceptance Criterion: {ac.model_dump_json()}\nUser Story Context: {story.model_dump_json()}"
-            )
-            steps_seq = steps_result.data
+    def generate_test_cases(self, extracted_acceptance_criteria: AcceptanceCriteriaList, jira_issue_content: str,
+                            test_steps_sequences: TestStepsSequenceList) -> GeneratedTestCases:
+        logger.info("Generating Test Cases for all step sequences")
+        user_message = f"""
+Jira Issue content:
+{jira_issue_content}
 
-            # Test Case Creation
-            tc_result = await self.test_case_creator_agent.run(
-                f"Steps: {steps_seq.model_dump_json()}\nAC: {ac.model_dump_json()}\nStory: {story.model_dump_json()}"
-            )
-            test_cases_list.append(tc_result.data)
 
-        logger.info(f"Generated {len(test_cases_list)} test cases.")
+Acceptance Criteria Items:
+{extracted_acceptance_criteria.model_dump_json()}
 
-        # 5. Finalize & Save
-        generated_test_cases = GeneratedTestCases(test_cases=test_cases_list)
-        
-        # Extract project key from story key (e.g., "PROJ-123" -> "PROJ")
-        project_key = story.key.split('-')[0]
-        
-        logger.info(f"Creating test cases in system for Project: {project_key}, Story ID: {story.id}")
-        confirmation_msg = self._create_test_cases(generated_test_cases, project_key, story.id)
-        
-        return AgentRunResult(
-            data=confirmation_msg,
-            usage=Usage(), # Usage tracking not implemented for aggregate
-            messages=[]
-        )
+
+Test Step Sequences:
+{test_steps_sequences.model_dump_json()}
+"""
+        generated_test_cases: GeneratedTestCases = self.test_case_creator_agent.run_sync(user_message).output
+        logger.info(f"Generated {len(generated_test_cases.test_cases)} test cases.")
+        return generated_test_cases
+
+    def generate_test_steps(self, extracted_acceptance_criteria: AcceptanceCriteriaList) -> TestStepsSequenceList:
+        logger.info("Generating Steps for all ACs")
+        user_message = f"Acceptance Criteria Items:\n{extracted_acceptance_criteria.model_dump_json()}"
+        test_steps_sequences: TestStepsSequenceList = self.steps_generator_agent.run_sync(user_message).output
+        logger.info(f"Generated {len(test_steps_sequences.items)} test step sequences with total "
+                    f"of {sum(len(s.steps) for s in test_steps_sequences.items)} steps.")
+        return test_steps_sequences
+
+    def extract_acceptance_criteria(self, attachments_content: str, jira_issue_content: str) -> AcceptanceCriteriaList:
+        user_message = f"""
+Jira Issue content:
+{jira_issue_content}
+
+Content of all relevant attachments:
+{attachments_content}
+"""
+        logger.info("Starting AC extraction")
+        extracted_acceptance_criteria: AcceptanceCriteriaList = self.ac_extractor_agent.run_sync(user_message).output
+        logger.info(f"Extracted {len(extracted_acceptance_criteria.items)} ACs")
+        return extracted_acceptance_criteria
 
     @staticmethod
-    def _create_test_cases(test_cases: GeneratedTestCases, project_key: str, user_story_id: int) -> str:
+    def _upload_test_cases_into_test_management_system(test_cases: GeneratedTestCases, project_key: str,
+                                                       user_story_id: int) -> str:
         """
-        Creates the generated test cases in the configured test management system.
+        Uploads the provided test cases in the configured test management system.
 
         Args:
-            test_cases: The list of test cases to be created.
-            project_key: The key of the Jira project to which the Jira issue belongs.
-            user_story_id: ID of the Jira user story (not its key), e.g. 120.
+        test_cases: The list of test cases to be created.
+        project_key: The key of the Jira project to which the Jira issue belongs.
+        user_story_id: ID of the Jira user story (not its key), e.g. 120.
 
-        Returns:
-            A confirmation message with the keys (IDs) of the created test cases.
-        """
+    Returns:
+        A confirmation message with the keys (IDs) of the created test cases.
+    """
 
         client = get_test_management_client()
         created_test_case_ids = client.create_test_cases(test_cases.test_cases, project_key, user_story_id)

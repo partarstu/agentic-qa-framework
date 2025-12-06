@@ -18,6 +18,7 @@ from pydantic_ai.models.wrapper import WrapperModel
 
 import config
 from common import utils
+from common.models import JsonSerializableModel
 from common.prompt_injection.guard import GuardPrompt, PromptGuardFactory
 
 logger = utils.get_logger("llm_wrapper")
@@ -101,8 +102,10 @@ class CustomLlmWrapper(WrapperModel):
             separator = '-' * 80
             if isinstance(part, ToolReturnPart):
                 timestamp = part.timestamp.strftime('%Y-%m-%d %H:%M:%S')
+                payload = part.content.model_dump_json(indent=2) if isinstance(part.content, JsonSerializableModel) \
+                    else json.dumps(part.content, indent=2)
                 logger.debug(f"[{timestamp}] Agent is responding with the execution result of tool: "
-                             f"'{part.tool_name}' with result: \n{separator}\n{json.dumps(part.content, indent=2)}\n{separator}")
+                             f"'{part.tool_name}' with result: \n{separator}\n{payload}\n{separator}")
             elif isinstance(part, UserPromptPart):
                 timestamp = part.timestamp.strftime('%Y-%m-%d %H:%M:%S')
                 if isinstance(part.content, str):
