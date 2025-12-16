@@ -124,6 +124,10 @@ class TestExecutionResult(JsonSerializableModel):
                                   "reports, stack traces etc.)")
     start_timestamp: str = Field(description="Timestamp when the test execution started")
     end_timestamp: str = Field(description="Timestamp when the test execution ended")
+    system_description: Optional[str] = Field(default=None, description="Description of the system on which the agent "
+                                                                        "executed the test case.")
+    incident_creation_result: Optional["IncidentCreationResult"] = Field(
+        default=None, description="Result of the incident creation process if the test failed.")
 
 
 class TestCaseKeys(JsonSerializableModel):
@@ -150,3 +154,23 @@ class SelectedAgent(JsonSerializableModel):
 
 class SelectedAgents(JsonSerializableModel):
     ids: List[str] = Field(description="The IDs of all agents that are suitable for the task execution.")
+
+
+class IncidentCreationInput(JsonSerializableModel):
+    test_case_key: str
+    test_execution_result: str
+    agent_execution_logs: Optional[str] = None
+    system_description: str
+    available_artefacts: List[FileWithBytes]
+
+
+class DuplicateDetectionResult(JsonSerializableModel):
+    issue_key: str = Field(description="The key of existing incident Jira issue, which is a candidate for duplicate")
+    is_duplicate: bool = Field(description="True if the candidate is indeed a duplicate")
+    message: str = Field(description="Elaborate Justification of the decision about being or not being a duplicate")
+
+
+class IncidentCreationResult(JsonSerializableModel):
+    incident_key: Optional[str] = Field(description="The key of the created incident, may be null if duplicates are detected")
+    duplicates: List[DuplicateDetectionResult] = Field(
+        description="All identified positive duplicate incident detection results, may be empty")

@@ -10,3 +10,4 @@ mcp/jira/.env
 /.gemini
 substitutions.yaml
 /prompt_detection_model/
+test_main.py

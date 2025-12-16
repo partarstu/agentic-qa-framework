@@ -185,7 +185,14 @@ class XrayClient(TestManagementClientBase):
                               result.artifacts] if result.artifacts else []
             }
             if result.testExecutionStatus.lower() in ["failed", "error"]:
-                test_data["comment"] = result.generalErrorMessage
+                comment = result.generalErrorMessage
+                if result.incident_creation_result:
+                    if result.incident_creation_result.incident_key:
+                        comment += f"\n\nIncident created: {result.incident_creation_result.incident_key}"
+                    if result.incident_creation_result.duplicates:
+                        duplicates = ", ".join([d.issue_key for d in result.incident_creation_result.duplicates])
+                        comment += f"\n\nPotential duplicates found: {duplicates}"
+                test_data["comment"] = comment
             tests.append(test_data)
 
         payload = {

@@ -296,6 +296,13 @@ class ZephyrClient(TestManagementClientBase):
                 actual_end_date = self._parse_timestamp(result.end_timestamp)
                 overall_status = "Pass" if result.testExecutionStatus == 'passed' else "Fail"
                 comment = result.generalErrorMessage if result.testExecutionStatus != 'passed' else ""
+                if result.incident_creation_result:
+                    if result.incident_creation_result.incident_key:
+                        comment += f"\n\nIncident created: {result.incident_creation_result.incident_key}"
+                    if result.incident_creation_result.duplicates:
+                        duplicates = ", ".join([d.issue_key for d in result.incident_creation_result.duplicates])
+                        comment += f"\n\nPotential duplicates found: {duplicates}"
+
                 payload = {
                     "projectKey": project_key,
                     "testCaseKey": test_case_key,

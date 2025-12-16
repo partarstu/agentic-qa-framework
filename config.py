@@ -130,3 +130,26 @@ class TestCaseReviewAgentConfig:
     PROTOCOL = "http"
     MODEL_NAME = "google-gla:gemini-2.5-pro"
     MAX_REQUESTS_PER_TASK = 5
+
+
+# Incident Creation Agent
+class IncidentCreationAgentConfig:
+    THINKING_BUDGET = 16000
+    OWN_NAME = "Incident Creation Agent"
+    PORT = int(os.environ.get("PORT", "8005"))
+    EXTERNAL_PORT = int(os.environ.get("EXTERNAL_PORT", PORT))
+    PROTOCOL = "http"
+    MODEL_NAME = "google-gla:gemini-2.5-flash"
+    MAX_REQUESTS_PER_TASK = 10
+
+
+class RAGConfig:
+    POSTGRES_URL = os.environ.get("RAG_POSTGRES_URL", "localhost")
+    POSTGRES_USER = os.environ.get("RAG_POSTGRES_USER", "postgres")
+    POSTGRES_PASSWORD = os.environ.get("RAG_POSTGRES_PASSWORD", "postgres")
+    POSTGRES_DB = os.environ.get("RAG_POSTGRES_DB", "rag_db")
+    POSTGRES_PORT = int(os.environ.get("RAG_POSTGRES_PORT", "5432"))
+    RAG_TABLE_NAME = os.environ.get("RAG_TABLE_NAME", "jira_issues_embeddings")
+    MIN_SIMILARITY_SCORE = float(os.environ.get("RAG_MIN_SIMILARITY_SCORE", "0.7"))
+    MAX_RESULTS = int(os.environ.get("RAG_MAX_RESULTS", "5"))
+    EMBEDDING_MODEL = os.environ.get("RAG_EMBEDDING_MODEL", "models/embedding-001")

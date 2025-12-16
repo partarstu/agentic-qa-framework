@@ -27,7 +27,7 @@ import config
 from common import utils
 from common.custom_llm_wrapper import CustomLlmWrapper
 from common.models import SelectedAgent, GeneratedTestCases, TestCase, ProjectExecutionRequest, TestExecutionResult, \
-    TestExecutionRequest, SelectedAgents, JsonSerializableModel
+    TestExecutionRequest, SelectedAgents, JsonSerializableModel, IncidentCreationInput, IncidentCreationResult
 from common.services.test_management_system_client_provider import get_test_management_client
 from common.services.test_reporting_client_base_provider import get_test_reporting_client
 
@@ -506,9 +506,39 @@ Result format is a JSON.
         test_execution_result.end_timestamp = end_timestamp.isoformat()
     file_artifacts = _get_file_contents_from_artifacts(artifacts)
     test_execution_result.artifacts = file_artifacts
+    # TODO: Get real system description from agent
+    test_execution_result.system_description = f"Agent: {agent_name}, Environment: Standard Test Environment"
+
+    if test_execution_result.testExecutionStatus in ["failed", "error"]:
+        logger.info(f"Test case {test_case.key} failed. Initiating incident creation.")
+        try:
+            incident_input = IncidentCreationInput(
+                test_case_key=test_case.key,
+                test_execution_result=str(test_execution_result),
+                agent_execution_logs=test_execution_result.logs,
+                system_description=test_execution_result.system_description,
+                available_artefacts=file_artifacts or []
+            )
+            incident_result = await _request_incident_creation(incident_input)
+            test_execution_result.incident_creation_result = incident_result
+        except Exception as e:
+            logger.error(f"Failed to create incident for test case {test_case.key}: {e}")
 
     logger.info(f"Executed test case {test_case.key}. Status: {test_execution_result.testExecutionStatus}")
     return test_execution_result
+
+
+async def _request_incident_creation(incident_input: IncidentCreationInput) -> IncidentCreationResult:
+    task_description = "Create incident report"
+    agent_id = await _choose_agent_id(task_description)
+    completed_task = await _send_task_to_agent(agent_id,
+                                               incident_input.model_dump_json(),
+                                               task_description)
+    
+    task_description = f"Incident creation for test case {incident_input.test_case_key}"
+    received_artifacts = _get_artifacts_from_task(completed_task, task_description)
+    text_content = _get_text_content_from_artifacts(received_artifacts, task_description)
+    return IncidentCreationResult.model_validate_json(text_content)
 
 
 async def _request_test_cases_generation(user_story_id) -> GeneratedTestCases:
