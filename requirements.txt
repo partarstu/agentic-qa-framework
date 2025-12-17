@@ -13,3 +13,6 @@ python-dateutil~=2.9.0.post0
 requests~=2.32.5
 asyncpg
 google-generativeai
+pytest
+pytest-cov
+pytest-asyncio
