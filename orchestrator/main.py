@@ -25,17 +25,23 @@ from pydantic_ai.settings import ModelSettings
 
 import config
 from common import utils
+from common.agent_base import VectorDbService
 from common.custom_llm_wrapper import CustomLlmWrapper
 from common.models import SelectedAgent, GeneratedTestCases, TestCase, ProjectExecutionRequest, TestExecutionResult, \
     TestExecutionRequest, SelectedAgents, JsonSerializableModel, IncidentCreationInput, IncidentCreationResult
 from common.services.test_management_system_client_provider import get_test_management_client
 from common.services.test_reporting_client_base_provider import get_test_reporting_client
+from orchestrator.rag_update_agent import rag_update_agent, RagUpdateDeps
 
 MAX_RETRIES = 3
 
 MODEL_SETTINGS = ModelSettings(top_p=config.TOP_P, temperature=config.TEMPERATURE)
 
 logger = utils.get_logger("orchestrator")
+
+# Initialize Vector DB Service for Orchestrator
+vector_db_service = VectorDbService(getattr(config.QdrantConfig, "COLLECTION_NAME", "jira_issues"))
+rag_update_lock = asyncio.Lock()
 
 
 class AgentStatus(str, Enum):
@@ -250,7 +256,7 @@ async def review_jira_requirements(request: Request, api_key: str = Depends(_val
     user_story_id = await _get_jira_issue_key_from_request(request)
     task_description = "Review the Jira user story"
     agent_id = await _choose_agent_id(task_description)
-    completed_task = await _send_task_to_agent(agent_id, f"Jira user story with key {user_story_id}",
+    completed_task, _ = await _send_task_to_agent(agent_id, f"Jira user story with key {user_story_id}",
                                                task_description)
     _validate_task_status(completed_task, f"Review of the user story {user_story_id}")
     logger.info("Received response from an agent, requirements review seems to be complete.")
@@ -282,6 +288,27 @@ async def trigger_test_case_generation_workflow(request: Request, api_key: str =
     return {
         "message": f"Test case generation and classification for Jira user story {user_story_id} completed."
     }
+
+
+# noinspection PyUnusedLocal
+@orchestrator_app.post("/update-rag-db")
+async def update_rag_db(request: ProjectExecutionRequest, api_key: str = Depends(_validate_api_key)):
+    """
+    Triggers the RAG Vector DB update for the given project.
+    """
+    if rag_update_lock.locked():
+        return {"message": "RAG update already in progress. Please try again later.", "status": "skipped"}
+
+    async with rag_update_lock:
+        project_key = request.project_key
+        logger.info(f"Starting RAG update for project {project_key}")
+        try:
+            deps = RagUpdateDeps(project_key=project_key)
+            result = await rag_update_agent.run(f"Sync Jira bugs for project {project_key}", deps=deps)
+            logger.info(f"RAG update completed: {result.output}")
+            return {"message": "RAG update completed.", "details": result.output.model_dump()}
+        except Exception as e:
+            _handle_exception(f"RAG update failed: {e}")
 
 
 # noinspection PyUnusedLocal
@@ -470,9 +497,10 @@ async def _execute_single_test(agent_id: str, test_case: TestCase,
     task_description = f"Execution of test case {test_case.key} (type: {test_type})"
     execution_request = TestExecutionRequest(test_case=test_case)
     artifacts = []
+    logs = ""
     start_timestamp = datetime.now()
     try:
-        completed_task = await _send_task_to_agent(agent_id, execution_request.model_dump_json(),
+        completed_task, logs = await _send_task_to_agent(agent_id, execution_request.model_dump_json(),
                                                    task_description)
         artifacts = _get_artifacts_from_task(completed_task, task_description)
     except Exception as e:
@@ -500,14 +528,16 @@ Result format is a JSON.
         _handle_exception("Couldn't map the test execution results received from the agent to the expected format.")
 
     test_execution_result.testCaseKey = test_case.key
+    test_execution_result.logs = logs
     if not test_execution_result.start_timestamp:
         test_execution_result.start_timestamp = start_timestamp.isoformat()
     if not test_execution_result.end_timestamp:
         test_execution_result.end_timestamp = end_timestamp.isoformat()
     file_artifacts = _get_file_contents_from_artifacts(artifacts)
     test_execution_result.artifacts = file_artifacts
-    # TODO: Get real system description from agent
-    test_execution_result.system_description = f"Agent: {agent_name}, Environment: Standard Test Environment"
+    
+    if not test_execution_result.system_description:
+        test_execution_result.system_description = f"Agent: {agent_name}, Environment: Standard Test Environment"
 
     if test_execution_result.testExecutionStatus in ["failed", "error"]:
         logger.info(f"Test case {test_case.key} failed. Initiating incident creation.")
@@ -531,20 +561,36 @@ Result format is a JSON.
 async def _request_incident_creation(incident_input: IncidentCreationInput) -> IncidentCreationResult:
     task_description = "Create incident report"
     agent_id = await _choose_agent_id(task_description)
-    completed_task = await _send_task_to_agent(agent_id,
+    completed_task, _ = await _send_task_to_agent(agent_id,
                                                incident_input.model_dump_json(),
                                                task_description)
     
     task_description = f"Incident creation for test case {incident_input.test_case_key}"
     received_artifacts = _get_artifacts_from_task(completed_task, task_description)
     text_content = _get_text_content_from_artifacts(received_artifacts, task_description)
-    return IncidentCreationResult.model_validate_json(text_content)
+    result = IncidentCreationResult.model_validate_json(text_content)
+
+    if result.incident_key:
+        try:
+            content_to_index = f"{incident_input.test_execution_result}\n{incident_input.system_description}"
+            if incident_input.agent_execution_logs:
+                content_to_index += f"\nLogs: {incident_input.agent_execution_logs[:500]}..."
+
+            await vector_db_service.upsert(
+                text=content_to_index,
+                metadata={"issue_key": result.incident_key, "source": "incident_creation"},
+                point_id=result.incident_key
+            )
+        except Exception as e:
+            logger.error(f"Failed to index created incident {result.incident_key}: {e}")
+
+    return result
 
 
 async def _request_test_cases_generation(user_story_id) -> GeneratedTestCases:
     task_description = "Generate test cases"
     agent_id = await _choose_agent_id(task_description)
-    completed_task = await _send_task_to_agent(agent_id,
+    completed_task, _ = await _send_task_to_agent(agent_id,
                                                f"Jira user story with key {user_story_id}",
                                                task_description)
     task_description = f"Generation of test cases for the user story {user_story_id}"
@@ -564,7 +610,7 @@ def _get_artifacts_from_task(task: Task, task_description: str) -> list[Artifact
 async def _request_test_cases_classification(test_cases: List[TestCase], user_story_id: str) -> list[Artifact]:
     task_description = "Classify test cases"
     agent_id = await _choose_agent_id(task_description)
-    completed_task = await _send_task_to_agent(agent_id,
+    completed_task, _ = await _send_task_to_agent(agent_id,
                                                f"Test cases:\n{test_cases}", task_description)
     return _get_artifacts_from_task(completed_task,
                                     f"Classification of test cases for the user story {user_story_id}")
@@ -573,7 +619,7 @@ async def _request_test_cases_classification(test_cases: List[TestCase], user_st
 async def _request_test_cases_review(test_cases: List[TestCase], user_story_id: str) -> list[Artifact]:
     task_description = "Review test cases"
     agent_id = await _choose_agent_id(task_description)
-    completed_task = await _send_task_to_agent(agent_id, f"Test cases:\n{test_cases}\nUser Story ID: {user_story_id}", task_description)
+    completed_task, _ = await _send_task_to_agent(agent_id, f"Test cases:\n{test_cases}\nUser Story ID: {user_story_id}", task_description)
     return _get_artifacts_from_task(completed_task, "Review of test cases")
 
 
@@ -613,7 +659,7 @@ def _get_file_contents_from_artifacts(artifacts: list[Artifact]) -> List[FileWit
     return file_parts
 
 
-async def _send_task_to_agent(agent_id: str, input_data: str, task_description: str) -> Task | None:
+async def _send_task_to_agent(agent_id: str, input_data: str, task_description: str) -> tuple[Task | None, str]:
     # Updated for Step 3.1: Self-Healing Task Distribution
     agent_card = await agent_registry.get_card(agent_id)
     if not agent_card:
@@ -621,6 +667,8 @@ async def _send_task_to_agent(agent_id: str, input_data: str, task_description: 
 
     # Set BUSY status
     await agent_registry.update_status(agent_id, AgentStatus.BUSY)
+
+    execution_logs = []
 
     try:
         async with httpx.AsyncClient(timeout=config.OrchestratorConfig.TASK_EXECUTION_TIMEOUT) as client:
@@ -642,7 +690,7 @@ async def _send_task_to_agent(agent_id: str, input_data: str, task_description: 
                 except StopAsyncIteration:
                     if last_task and last_task.status.state in (TaskState.completed, TaskState.failed, TaskState.rejected):
                         await agent_registry.update_status(agent_id, AgentStatus.AVAILABLE)
-                        return last_task
+                        return last_task, "\n".join(execution_logs)
                     _handle_exception(f"Task '{task_description}' iterator finished before completion.", 500)
                 except asyncio.TimeoutError:
                     # Handle Timeout (Step 3.1)
@@ -666,18 +714,20 @@ async def _send_task_to_agent(agent_id: str, input_data: str, task_description: 
                     if task.status.state in (TaskState.completed, TaskState.failed, TaskState.rejected):
                         logger.info(f"Task '{task_description}' was completed with status '{str(task.status.state)}'.")
                         await agent_registry.update_status(agent_id, AgentStatus.AVAILABLE)
-                        return task
+                        return task, "\n".join(execution_logs)
                     else:
                         logger.debug(
                             f"Task for {task_description} is still in '{task.status.state}' state. Waiting for its "
                             f"completion. Agent: '{agent_card.name}' (ID: {agent_id})")
                 elif isinstance(response, Message):
+                    msg_text = get_message_text(response)
+                    execution_logs.append(f"[{datetime.now().isoformat()}] {msg_text}")
                     logger.info(
                         f"Received a message from agent in the scope of the "
-                        f"task '{task_description}': {get_message_text(response)}")
+                        f"task '{task_description}': {msg_text}")
 
             _handle_exception(f"Task for {task_description} wasn't complete within timeout.", 408)
-            return None
+            return None, "\n".join(execution_logs)
 
     except Exception as e:
         # Handle General Exception (Step 3.1)

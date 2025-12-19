@@ -141,15 +141,20 @@ class IncidentCreationAgentConfig:
     PROTOCOL = "http"
     MODEL_NAME = "google-gla:gemini-2.5-flash"
     MAX_REQUESTS_PER_TASK = 10
+    COLLECTION_NAME = os.environ.get("INCIDENT_AGENT_COLLECTION_NAME", "incident_issues")
+    MIN_SIMILARITY_SCORE = float(os.environ.get("INCIDENT_AGENT_MIN_SIMILARITY_SCORE", "0.7"))
 
 
-class RAGConfig:
-    POSTGRES_URL = os.environ.get("RAG_POSTGRES_URL", "localhost")
-    POSTGRES_USER = os.environ.get("RAG_POSTGRES_USER", "postgres")
-    POSTGRES_PASSWORD = os.environ.get("RAG_POSTGRES_PASSWORD", "postgres")
-    POSTGRES_DB = os.environ.get("RAG_POSTGRES_DB", "rag_db")
-    POSTGRES_PORT = int(os.environ.get("RAG_POSTGRES_PORT", "5432"))
-    RAG_TABLE_NAME = os.environ.get("RAG_TABLE_NAME", "jira_issues_embeddings")
+class QdrantConfig:
+    URL = os.environ.get("QDRANT_URL", "http://localhost:6333")
+    API_KEY = os.environ.get("QDRANT_API_KEY")
+    COLLECTION_NAME = os.environ.get("QDRANT_COLLECTION_NAME", "jira_issues")
+    METADATA_COLLECTION_NAME = os.environ.get("QDRANT_METADATA_COLLECTION_NAME", "rag_metadata")
     MIN_SIMILARITY_SCORE = float(os.environ.get("RAG_MIN_SIMILARITY_SCORE", "0.7"))
     MAX_RESULTS = int(os.environ.get("RAG_MAX_RESULTS", "5"))
-    EMBEDDING_MODEL = os.environ.get("RAG_EMBEDDING_MODEL", "models/embedding-001")
+    # Qwen3-Embedding-0.6B: 600M params, 32K context, 100+ languages, MTEB score: 64.33
+    # Supports Matryoshka dimensions (32-1024), default output: 1024 dimensions
+    # Using quantized ONNX version for FastEmbed compatibility
+    EMBEDDING_MODEL = os.environ.get("RAG_EMBEDDING_MODEL", "Qwen/Qwen3-Embedding-0.6B")
+    VALID_STATUSES = os.environ.get("JIRA_VALID_STATUSES", "To Do,In Progress,Done").split(",")
+    BUG_ISSUE_TYPE = os.environ.get("JIRA_BUG_ISSUE_TYPE", "Bug")

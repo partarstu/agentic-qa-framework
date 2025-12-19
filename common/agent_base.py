@@ -3,9 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import base64
+import uuid
 from abc import ABC, abstractmethod
 from contextlib import asynccontextmanager
-from typing import Type, List, Sequence
+from typing import Type, List, Sequence, Optional, Dict, Any
 from urllib.parse import urlparse
 
 import uvicorn
@@ -25,6 +26,8 @@ from pydantic_ai.models.groq import GroqModelSettings
 from pydantic_ai.settings import ModelSettings
 from pydantic_ai.tools import AgentDepsT, ToolFuncEither
 from pydantic_ai.usage import UsageLimits
+from qdrant_client import AsyncQdrantClient, models
+from fastembed import TextEmbedding
 
 import config
 from common.agent_executor import DefaultAgentExecutor
@@ -38,6 +41,80 @@ MCP_SERVER_ATTACHMENTS_FOLDER_PATH = config.MCP_SERVER_ATTACHMENTS_FOLDER_PATH
 ATTACHMENTS_DESTINATION_FOLDER_PATH = config.ATTACHMENTS_DESTINATION_FOLDER_PATH
 
 logger = utils.get_logger("agent_base")
+
+
+class VectorDbService:
+    def __init__(self, collection_name: str):
+        self.collection_name = collection_name
+        self.client = AsyncQdrantClient(
+            url=getattr(config.QdrantConfig, "URL", "http://localhost:6333"),
+            api_key=getattr(config.QdrantConfig, "API_KEY", None),
+        )
+        # Qwen3-Embedding-0.6B: High-performance multilingual model (MTEB: 64.33)
+        # 32K context, 100+ languages, Matryoshka dimensions (32-1024)
+        self.embedding_model = TextEmbedding(model_name=getattr(config.QdrantConfig, "EMBEDDING_MODEL", "Qwen/Qwen3-Embedding-0.6B"))
+
+    async def _ensure_collection(self):
+        if not await self.client.collection_exists(self.collection_name):
+            # Qwen3-Embedding-0.6B defaults to 1024 dimensions
+            # We dynamically detect the vector size by embedding a dummy string
+            dummy_vec = list(self.embedding_model.embed(["test"]))[0]
+            vector_size = len(dummy_vec)
+            
+            await self.client.create_collection(
+                collection_name=self.collection_name,
+                vectors_config=models.VectorParams(size=vector_size, distance=models.Distance.COSINE)
+            )
+
+    async def search(self, query_text: str, limit: int = 5, score_threshold: float = 0.7) -> List[models.ScoredPoint]:
+        try:
+            embedding = list(self.embedding_model.embed([query_text]))[0]
+            # Ensure collection exists before search (optional, or assume it exists)
+            # await self._ensure_collection() 
+            
+            hits = await self.client.search(
+                collection_name=self.collection_name,
+                query_vector=embedding,
+                limit=limit,
+                score_threshold=score_threshold
+            )
+            return hits
+        except Exception as e:
+            logger.error(f"Error querying Vector DB: {e}")
+            return []
+
+    async def upsert(self, text: str, metadata: Dict[str, Any], point_id: str = None):
+        try:
+            await self._ensure_collection()
+            embedding = list(self.embedding_model.embed([text]))[0]
+            if not point_id:
+                point_id = str(uuid.uuid4())
+            
+            await self.client.upsert(
+                collection_name=self.collection_name,
+                points=[
+                    models.PointStruct(
+                        id=point_id,
+                        vector=embedding,
+                        payload={"content": text, **metadata}
+                    )
+                ]
+            )
+            logger.info(f"Upserted document with ID {point_id} to collection {self.collection_name}")
+        except Exception as e:
+            logger.error(f"Error upserting to Vector DB: {e}")
+
+    async def delete(self, point_ids: List[str]):
+        try:
+            await self.client.delete(
+                collection_name=self.collection_name,
+                points_selector=models.PointIdsList(
+                    points=point_ids
+                )
+            )
+            logger.info(f"Deleted documents with IDs {point_ids} from collection {self.collection_name}")
+        except Exception as e:
+            logger.error(f"Error deleting from Vector DB: {e}")
 
 
 class AgentBase(ABC):
@@ -56,6 +133,7 @@ class AgentBase(ABC):
             deps_type: Type[BaseModel] = None,
             description: str = "",
             tools: Sequence[Tool[AgentDepsT] | ToolFuncEither[AgentDepsT, ...]] = (),
+            vector_db_collection_name: Optional[str] = None
     ):
         self.agent_name = agent_name
         self.base_url = base_url
@@ -73,6 +151,10 @@ class AgentBase(ABC):
         self.tools = tools
         self.agent = self._create_agent()
         self.a2a_server = self._get_server()
+        
+        self.vector_db_service = None
+        if vector_db_collection_name:
+            self.vector_db_service = VectorDbService(vector_db_collection_name)
 
     @abstractmethod
     def get_thinking_budget(self) -> int:
