@@ -145,6 +145,17 @@ class IncidentCreationAgentConfig:
     MIN_SIMILARITY_SCORE = float(os.environ.get("INCIDENT_AGENT_MIN_SIMILARITY_SCORE", "0.7"))
 
 
+# RAG Update Agent
+class JiraRagUpdateAgentConfig:
+    THINKING_BUDGET = 2000
+    OWN_NAME = "Jira RAG Update Agent"
+    PORT = int(os.environ.get("PORT", "8006"))
+    EXTERNAL_PORT = int(os.environ.get("EXTERNAL_PORT", PORT))
+    PROTOCOL = "http"
+    MODEL_NAME = "google-gla:gemini-2.5-flash"
+    MAX_REQUESTS_PER_TASK = 10
+
+
 class QdrantConfig:
     URL = os.environ.get("QDRANT_URL", "http://localhost:6333")
     API_KEY = os.environ.get("QDRANT_API_KEY")

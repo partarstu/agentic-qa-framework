@@ -3,10 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import base64
-import uuid
 from abc import ABC, abstractmethod
 from contextlib import asynccontextmanager
-from typing import Type, List, Sequence, Optional, Dict, Any
+from typing import Type, List, Sequence, Optional
 from urllib.parse import urlparse
 
 import uvicorn
@@ -26,14 +25,13 @@ from pydantic_ai.models.groq import GroqModelSettings
 from pydantic_ai.settings import ModelSettings
 from pydantic_ai.tools import AgentDepsT, ToolFuncEither
 from pydantic_ai.usage import UsageLimits
-from qdrant_client import AsyncQdrantClient, models
-from sentence_transformers import SentenceTransformer
 
 import config
 from common.agent_executor import DefaultAgentExecutor
 from common import utils
 from common.custom_llm_wrapper import CustomLlmWrapper
 from common.models import JsonSerializableModel
+from common.services.vector_db_service import VectorDbService
 
 MAX_RETRIES = 3
 REGISTRATION_PATH = f"{config.ORCHESTRATOR_URL}/register"
@@ -41,85 +39,6 @@ MCP_SERVER_ATTACHMENTS_FOLDER_PATH = config.MCP_SERVER_ATTACHMENTS_FOLDER_PATH
 ATTACHMENTS_DESTINATION_FOLDER_PATH = config.ATTACHMENTS_DESTINATION_FOLDER_PATH
 
 logger = utils.get_logger("agent_base")
-
-
-class VectorDbService:
-    def __init__(self, collection_name: str):
-        self.collection_name = collection_name
-        self.client = AsyncQdrantClient(
-            url=getattr(config.QdrantConfig, "URL", "http://localhost:6333"),
-            api_key=getattr(config.QdrantConfig, "API_KEY", None),
-        )
-        self.model_name = getattr(config.QdrantConfig, "EMBEDDING_MODEL", "Qwen/Qwen3-Embedding-0.6B")
-        
-        logger.info(f"Initializing VectorDbService with model: {self.model_name}")
-        self.embedding_model = SentenceTransformer(self.model_name)
-
-    def _get_embedding(self, text: str) -> List[float]:
-        # SentenceTransformer returns ndarray, convert to list
-        embedding = self.embedding_model.encode(text)
-        return embedding.tolist()
-
-    async def _ensure_collection(self):
-        if not await self.client.collection_exists(self.collection_name):
-            # We dynamically detect the vector size by embedding a dummy string
-            dummy_vec = self._get_embedding("test")
-            vector_size = len(dummy_vec)
-            
-            await self.client.create_collection(
-                collection_name=self.collection_name,
-                vectors_config=models.VectorParams(size=vector_size, distance=models.Distance.COSINE)
-            )
-
-    async def search(self, query_text: str, limit: int = 5, score_threshold: float = 0.7) -> List[models.ScoredPoint]:
-        try:
-            embedding = self._get_embedding(query_text)
-            # Ensure collection exists before search (optional, or assume it exists)
-            # await self._ensure_collection() 
-            
-            hits = await self.client.search(
-                collection_name=self.collection_name,
-                query_vector=embedding,
-                limit=limit,
-                score_threshold=score_threshold
-            )
-            return hits
-        except Exception as e:
-            logger.error(f"Error querying Vector DB: {e}")
-            return []
-
-    async def upsert(self, text: str, metadata: Dict[str, Any], point_id: str = None):
-        try:
-            await self._ensure_collection()
-            embedding = self._get_embedding(text)
-            if not point_id:
-                point_id = str(uuid.uuid4())
-            
-            await self.client.upsert(
-                collection_name=self.collection_name,
-                points=[
-                    models.PointStruct(
-                        id=point_id,
-                        vector=embedding,
-                        payload={"content": text, **metadata}
-                    )
-                ]
-            )
-            logger.info(f"Upserted document with ID {point_id} to collection {self.collection_name}")
-        except Exception as e:
-            logger.error(f"Error upserting to Vector DB: {e}")
-
-    async def delete(self, point_ids: List[str]):
-        try:
-            await self.client.delete(
-                collection_name=self.collection_name,
-                points_selector=models.PointIdsList(
-                    points=point_ids
-                )
-            )
-            logger.info(f"Deleted documents with IDs {point_ids} from collection {self.collection_name}")
-        except Exception as e:
-            logger.error(f"Error deleting from Vector DB: {e}")
 
 
 class AgentBase(ABC):

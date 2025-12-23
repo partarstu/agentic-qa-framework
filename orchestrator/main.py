@@ -25,13 +25,12 @@ from pydantic_ai.settings import ModelSettings
 
 import config
 from common import utils
-from common.agent_base import VectorDbService
+from common.services.vector_db_service import VectorDbService
 from common.custom_llm_wrapper import CustomLlmWrapper
 from common.models import SelectedAgent, GeneratedTestCases, TestCase, ProjectExecutionRequest, TestExecutionResult, \
     TestExecutionRequest, SelectedAgents, JsonSerializableModel, IncidentCreationInput, IncidentCreationResult
 from common.services.test_management_system_client_provider import get_test_management_client
 from common.services.test_reporting_client_base_provider import get_test_reporting_client
-from orchestrator.rag_update_agent import rag_update_agent, RagUpdateDeps
 
 MAX_RETRIES = 3
 
@@ -41,7 +40,6 @@ logger = utils.get_logger("orchestrator")
 
 # Initialize Vector DB Service for Orchestrator
 vector_db_service = VectorDbService(getattr(config.QdrantConfig, "COLLECTION_NAME", "jira_issues"))
-rag_update_lock = asyncio.Lock()
 
 
 class AgentStatus(str, Enum):
@@ -296,19 +294,22 @@ async def update_rag_db(request: ProjectExecutionRequest, api_key: str = Depends
     """
     Triggers the RAG Vector DB update for the given project.
     """
-    if rag_update_lock.locked():
-        return {"message": "RAG update already in progress. Please try again later.", "status": "skipped"}
-
-    async with rag_update_lock:
-        project_key = request.project_key
-        logger.info(f"Starting RAG update for project {project_key}")
-        try:
-            deps = RagUpdateDeps(project_key=project_key)
-            result = await rag_update_agent.run(f"Sync Jira bugs for project {project_key}", deps=deps)
-            logger.info(f"RAG update completed: {result.output}")
-            return {"message": "RAG update completed.", "details": result.output.model_dump()}
-        except Exception as e:
-            _handle_exception(f"RAG update failed: {e}")
+    project_key = request.project_key
+    logger.info(f"Starting RAG update for project {project_key}")
+    try:
+        task_description = "Update RAG Vector DB with Jira issues"
+        agent_id = await _choose_agent_id(task_description)
+        completed_task, _ = await _send_task_to_agent(agent_id, f"Sync Jira bugs for project {project_key}",
+                                                   task_description)
+        
+        _validate_task_status(completed_task, task_description)
+        received_artifacts = _get_artifacts_from_task(completed_task, task_description)
+        text_content = _get_text_content_from_artifacts(received_artifacts, task_description)
+        
+        logger.info(f"RAG update completed: {text_content}")
+        return {"message": "RAG update completed.", "details": text_content}
+    except Exception as e:
+        _handle_exception(f"RAG update failed: {e}")
 
 
 # noinspection PyUnusedLocal
@@ -577,7 +578,7 @@ async def _request_incident_creation(incident_input: IncidentCreationInput) -> I
                 content_to_index += f"\nLogs: {incident_input.agent_execution_logs[:500]}..."
 
             await vector_db_service.upsert(
-                text=content_to_index,
+                data=content_to_index,
                 metadata={"issue_key": result.incident_key, "source": "incident_creation"},
                 point_id=result.incident_key
             )

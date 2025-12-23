@@ -24,6 +24,14 @@ class JiraUserStory(JsonSerializableModel):
     status: str
 
 
+class JiraIssue(JsonSerializableModel):
+    id: str = Field(description="The ID of the issue")
+    key: str = Field(description="The key of the issue")
+    summary: str = Field(description="The summary of the issue")
+    description: str = Field(description="The description of the issue")
+    issue_type: str = Field(description="The type of the issue")
+
+
 class RequirementsReviewFeedback(JsonSerializableModel):
     suggested_improvements: List[str] = Field(description="List of improvements suggested by the review")
 
