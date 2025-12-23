@@ -32,7 +32,7 @@ async def test_review_jira_requirements_endpoint(mock_task_completed):
          patch("orchestrator.main._send_task_to_agent", new_callable=AsyncMock) as mock_send:
         
         mock_choose.return_value = "agent-1"
-        mock_send.return_value = mock_task_completed
+        mock_send.return_value = (mock_task_completed, "logs")
         
         response = client.post("/new-requirements-available", json={"issue_key": "TEST-1"})
         

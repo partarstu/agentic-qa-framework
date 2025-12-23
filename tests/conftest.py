@@ -5,10 +5,9 @@ import os
 # Set dummy API key for OpenAI provider
 os.environ["OPENAI_API_KEY"] = "dummy"
 
-# Mock transformers before it is imported by application code
-mock_transformers = MagicMock()
-sys.modules["transformers"] = mock_transformers
-sys.modules["transformers.pipeline"] = MagicMock()
+# Mock sentence_transformers to avoid loading models during test collection
+mock_sentence_transformers = MagicMock()
+sys.modules["sentence_transformers"] = mock_sentence_transformers
 
 import pytest
 

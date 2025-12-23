@@ -154,7 +154,6 @@ class QdrantConfig:
     MAX_RESULTS = int(os.environ.get("RAG_MAX_RESULTS", "5"))
     # Qwen3-Embedding-0.6B: 600M params, 32K context, 100+ languages, MTEB score: 64.33
     # Supports Matryoshka dimensions (32-1024), default output: 1024 dimensions
-    # Using quantized ONNX version for FastEmbed compatibility
     EMBEDDING_MODEL = os.environ.get("RAG_EMBEDDING_MODEL", "Qwen/Qwen3-Embedding-0.6B")
     VALID_STATUSES = os.environ.get("JIRA_VALID_STATUSES", "To Do,In Progress,Done").split(",")
     BUG_ISSUE_TYPE = os.environ.get("JIRA_BUG_ISSUE_TYPE", "Bug")

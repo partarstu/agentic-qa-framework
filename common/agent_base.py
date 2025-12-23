@@ -27,7 +27,7 @@ from pydantic_ai.settings import ModelSettings
 from pydantic_ai.tools import AgentDepsT, ToolFuncEither
 from pydantic_ai.usage import UsageLimits
 from qdrant_client import AsyncQdrantClient, models
-from fastembed import TextEmbedding
+from sentence_transformers import SentenceTransformer
 
 import config
 from common.agent_executor import DefaultAgentExecutor
@@ -50,15 +50,20 @@ class VectorDbService:
             url=getattr(config.QdrantConfig, "URL", "http://localhost:6333"),
             api_key=getattr(config.QdrantConfig, "API_KEY", None),
         )
-        # Qwen3-Embedding-0.6B: High-performance multilingual model (MTEB: 64.33)
-        # 32K context, 100+ languages, Matryoshka dimensions (32-1024)
-        self.embedding_model = TextEmbedding(model_name=getattr(config.QdrantConfig, "EMBEDDING_MODEL", "Qwen/Qwen3-Embedding-0.6B"))
+        self.model_name = getattr(config.QdrantConfig, "EMBEDDING_MODEL", "Qwen/Qwen3-Embedding-0.6B")
+        
+        logger.info(f"Initializing VectorDbService with model: {self.model_name}")
+        self.embedding_model = SentenceTransformer(self.model_name)
+
+    def _get_embedding(self, text: str) -> List[float]:
+        # SentenceTransformer returns ndarray, convert to list
+        embedding = self.embedding_model.encode(text)
+        return embedding.tolist()
 
     async def _ensure_collection(self):
         if not await self.client.collection_exists(self.collection_name):
-            # Qwen3-Embedding-0.6B defaults to 1024 dimensions
             # We dynamically detect the vector size by embedding a dummy string
-            dummy_vec = list(self.embedding_model.embed(["test"]))[0]
+            dummy_vec = self._get_embedding("test")
             vector_size = len(dummy_vec)
             
             await self.client.create_collection(
@@ -68,7 +73,7 @@ class VectorDbService:
 
     async def search(self, query_text: str, limit: int = 5, score_threshold: float = 0.7) -> List[models.ScoredPoint]:
         try:
-            embedding = list(self.embedding_model.embed([query_text]))[0]
+            embedding = self._get_embedding(query_text)
             # Ensure collection exists before search (optional, or assume it exists)
             # await self._ensure_collection() 
             
@@ -86,7 +91,7 @@ class VectorDbService:
     async def upsert(self, text: str, metadata: Dict[str, Any], point_id: str = None):
         try:
             await self._ensure_collection()
-            embedding = list(self.embedding_model.embed([text]))[0]
+            embedding = self._get_embedding(text)
             if not point_id:
                 point_id = str(uuid.uuid4())
             

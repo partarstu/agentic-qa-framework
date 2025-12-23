@@ -89,7 +89,7 @@ async def test_execute_single_test_success(mock_registry):
     with patch("orchestrator.main._send_task_to_agent", new_callable=AsyncMock) as mock_send, \
          patch("orchestrator.main._get_results_extractor_agent") as mock_extractor_agent_cls:
          
-        mock_send.return_value = mock_task
+        mock_send.return_value = (mock_task, "logs")
         
         mock_extractor_instance = MagicMock()
         mock_extractor_agent_cls.return_value = mock_extractor_instance
