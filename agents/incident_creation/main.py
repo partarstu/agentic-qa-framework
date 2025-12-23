@@ -32,12 +32,7 @@ jira_mcp_server = MCPServerSSE(url=JIRA_MCP_SERVER_URL, timeout=config.MCP_SERVE
 class IncidentCreationAgent(AgentBase):
     """Agent for creating incident reports in Jira.
     
-    This agent uses the Jira MCP Server for all Jira operations:
-    - jira_get_issue: Get issue details including linked issues
-    - jira_create_issue: Create new incidents (Bug type)
-    - jira_update_issue: Update issues including uploading attachments
-    - jira_create_issue_link: Link incidents to test cases
-    - jira_search: Search for existing issues using JQL
+    This agent uses the Jira MCP Server for all Jira operations
     
     Custom tools:
     - search_duplicates_in_rag: Search for similar incidents in the RAG vector database
@@ -56,14 +51,7 @@ class IncidentCreationAgent(AgentBase):
             system_prompt=self.dup_detect_prompt.get_prompt(),
             name="duplicate_detector",
         )
-        
-        # Tools available to the main agent
-        # Note: Most Jira operations should use the MCP server tools directly.
-        # These custom tools provide specialized functionality:
-        # - search_duplicates_in_rag: Searches the RAG vector database for similar incidents
-        # - save_artifacts_for_mcp_upload: Writes artifacts to filesystem so MCP can upload them
         tools = [self.search_duplicates_in_rag, self.save_artifacts_for_mcp_upload]
-
         agent_config = getattr(config, "IncidentCreationAgentConfig", None)
         port = agent_config.PORT if agent_config else 8005
         ext_port = agent_config.EXTERNAL_PORT if agent_config else 8005
@@ -96,17 +84,8 @@ class IncidentCreationAgent(AgentBase):
     async def search_duplicates_in_rag(self, ctx: RunContext[IncidentCreationInput]) -> List[dict]:
         """Searches for potential duplicate incidents using the RAG vector database.
         
-        This tool searches the local Qdrant vector database for semantically similar
-        incidents based on the current failure description. Returns a list of candidate
-        issues with their keys and content summaries.
-        
-        For each candidate returned, you should:
-        1. Use the jira_get_issue MCP tool to fetch full details if needed
-        2. Analyze if it's truly a duplicate of the current incident
-        
-        To check for bugs already linked to the test case, use jira_get_issue MCP tool
-        with the test_case_key from context to get its linked issues.
-        
+        This tool searches the vector database for semantically similar incidents based on the current failure description.
+
         Returns:
             List of dicts with 'issue_key' and 'content' for each potential duplicate.
         """
@@ -120,11 +99,11 @@ class IncidentCreationAgent(AgentBase):
             return []
 
         hits = await self.vector_db_service.search(
-            failure_description, 
-            limit=config.QdrantConfig.MAX_RESULTS, 
+            failure_description,
+            limit=config.QdrantConfig.MAX_RESULTS,
             score_threshold=RAG_MIN_SIMILARITY
         )
-        
+
         candidates = [
             {
                 "issue_key": hit.payload.get('issue_key', 'Unknown'),
@@ -133,7 +112,7 @@ class IncidentCreationAgent(AgentBase):
             }
             for hit in hits if hit.payload
         ]
-        
+
         logger.info(f"Found {len(candidates)} potential duplicates via RAG.")
         return candidates
 
@@ -161,14 +140,14 @@ class IncidentCreationAgent(AgentBase):
 
         saved_paths = []
         mcp_folder = config.MCP_SERVER_ATTACHMENTS_FOLDER_PATH
-        
+
         for artifact in ctx.deps.available_artefacts:
             try:
                 # Generate unique filename to avoid conflicts
                 unique_id = str(uuid.uuid4())[:8]
                 safe_filename = f"{unique_id}_{artifact.file_name}"
                 file_path = os.path.join(mcp_folder, safe_filename)
-                
+
                 # Write the file to the MCP server's accessible filesystem
                 with open(file_path, 'wb') as f:
                     # artifact.file can be bytes or a file-like object
@@ -176,19 +155,20 @@ class IncidentCreationAgent(AgentBase):
                         f.write(artifact.file)
                     else:
                         f.write(artifact.file.read())
-                
+
                 saved_paths.append(file_path)
                 logger.info(f"Saved artifact {artifact.file_name} to {file_path}")
             except Exception as e:
                 logger.error(f"Failed to save {artifact.file_name}: {e}")
-        
+
         return {
             "file_paths": saved_paths,
             "message": f"Saved {len(saved_paths)} artifacts to MCP server filesystem. "
                        f"Use jira_update_issue with attachments='{','.join(saved_paths)}' to upload them."
         }
 
-    async def _check_duplicate(self, input_data: IncidentCreationInput, candidate_key: str, candidate_content: str) -> DuplicateDetectionResult:
+    async def _check_duplicate(self, input_data: IncidentCreationInput, candidate_key: str,
+                               candidate_content: str) -> DuplicateDetectionResult:
         """Internal method to check if a candidate issue is a duplicate of the current incident."""
         prompt = f"Current Incident:\n{input_data.model_dump_json()}\n\nCandidate Incident ({candidate_key}):\n{candidate_content}"
         result = await self.duplicate_detector.run(prompt)

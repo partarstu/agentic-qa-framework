@@ -49,7 +49,7 @@ async def test_upsert_issues(agent):
     assert isinstance(jira_issue, JiraIssue)
     assert jira_issue.key == "TEST-1"
     assert jira_issue.issue_type == "Bug"
-    assert call_args.kwargs['point_id'] == "TEST-1"
+    assert jira_issue.project_key == "TEST_PROJ"
 
 @pytest.mark.asyncio
 async def test_delete_issues(agent):

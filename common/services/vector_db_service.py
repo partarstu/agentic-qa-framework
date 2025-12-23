@@ -7,10 +7,10 @@ from typing import List, Dict, Any, Union
 
 from qdrant_client import AsyncQdrantClient, models
 from sentence_transformers import SentenceTransformer
-from pydantic import BaseModel
 
 import config
 from common import utils
+from common.models import VectorizableBaseModel
 
 logger = utils.get_logger("vector_db_service")
 
@@ -23,7 +23,7 @@ class VectorDbService:
             api_key=getattr(config.QdrantConfig, "API_KEY", None),
         )
         self.model_name = getattr(config.QdrantConfig, "EMBEDDING_MODEL", "Qwen/Qwen3-Embedding-0.6B")
-        
+
         logger.info(f"Initializing VectorDbService with model: {self.model_name}")
         self.embedding_model = SentenceTransformer(self.model_name)
 
@@ -36,7 +36,7 @@ class VectorDbService:
             # We dynamically detect the vector size by embedding a dummy string
             dummy_vec = self._get_embedding("test")
             vector_size = len(dummy_vec)
-            
+
             try:
                 await self.client.create_collection(
                     collection_name=self.collection_name,
@@ -50,56 +50,53 @@ class VectorDbService:
                 else:
                     raise e
 
-    async def search(self, query_text: str, limit: int = 5, score_threshold: float = 0.7) -> List[models.ScoredPoint]:
+    async def search(
+        self,
+        query_text: str,
+        limit: int = 5,
+        score_threshold: float = 0.7,
+        query_filter: models.Filter | None = None,
+    ) -> List[models.ScoredPoint]:
+        """Search for similar vectors in the collection.
+
+        Args:
+            query_text: The text to embed and search for.
+            limit: Maximum number of results to return.
+            score_threshold: Minimum similarity score threshold.
+            query_filter: Optional Qdrant Filter object for payload-based filtering.
+                          Use models.Filter with must/should/must_not conditions.
+                          Example: models.Filter(must=[models.FieldCondition(
+                              key="issue_type", match=models.MatchValue(value="Bug")
+                          )])
+
+        Returns:
+            List of scored points matching the query and filter conditions.
+        """
         try:
             embedding = self._get_embedding(query_text)
             response = await self.client.query_points(
                 collection_name=self.collection_name,
                 query=embedding,
                 limit=limit,
-                score_threshold=score_threshold
+                score_threshold=score_threshold,
+                query_filter=query_filter,
             )
             return response.points
         except Exception as e:
             logger.error(f"Error querying Vector DB: {e}")
             return []
 
-    async def upsert(self, data: Union[str, BaseModel], metadata: Dict[str, Any] = None, point_id: str = None):
+    async def upsert(self, data: VectorizableBaseModel):
         try:
             await self._ensure_collection()
-            
-            if isinstance(data, str):
-                text = data
-                payload = {"content": text}
-            else:
-                text = str(data)
-                payload = data.model_dump()
-            
-            if metadata:
-                payload.update(metadata)
-                
+            text = data.get_embedding_content()
+            payload = data.model_dump()
+            point_id = data.get_vector_id()
+
             embedding = self._get_embedding(text)
-            
-            if not point_id:
-                # Try to find an ID in the model if available
-                if not isinstance(data, str):
-                     if hasattr(data, "id"):
-                        point_id = str(data.id)
-                     elif hasattr(data, "key"):
-                        point_id = str(data.key)
-                
-                if not point_id:
-                    point_id = str(uuid.uuid4())
-            
             await self.client.upsert(
                 collection_name=self.collection_name,
-                points=[
-                    models.PointStruct(
-                        id=point_id,
-                        vector=embedding,
-                        payload=payload
-                    )
-                ]
+                points=[models.PointStruct(id=point_id, vector=embedding, payload=payload)]
             )
             logger.info(f"Upserted document with ID {point_id} to collection {self.collection_name}")
         except Exception as e:

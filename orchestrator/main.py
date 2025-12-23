@@ -28,7 +28,8 @@ from common import utils
 from common.services.vector_db_service import VectorDbService
 from common.custom_llm_wrapper import CustomLlmWrapper
 from common.models import SelectedAgent, GeneratedTestCases, TestCase, ProjectExecutionRequest, TestExecutionResult, \
-    TestExecutionRequest, SelectedAgents, JsonSerializableModel, IncidentCreationInput, IncidentCreationResult
+    TestExecutionRequest, SelectedAgents, JsonSerializableModel, IncidentCreationInput, IncidentCreationResult, \
+    IncidentIndexData
 from common.services.test_management_system_client_provider import get_test_management_client
 from common.services.test_reporting_client_base_provider import get_test_reporting_client
 
@@ -577,11 +578,13 @@ async def _request_incident_creation(incident_input: IncidentCreationInput) -> I
             if incident_input.agent_execution_logs:
                 content_to_index += f"\nLogs: {incident_input.agent_execution_logs[:500]}..."
 
-            await vector_db_service.upsert(
-                data=content_to_index,
-                metadata={"issue_key": result.incident_key, "source": "incident_creation"},
-                point_id=result.incident_key
+            incident_data = IncidentIndexData(
+                incident_key=result.incident_key,
+                content=content_to_index,
+                source="incident_creation"
             )
+
+            await vector_db_service.upsert(data=incident_data)
         except Exception as e:
             logger.error(f"Failed to index created incident {result.incident_key}: {e}")
 

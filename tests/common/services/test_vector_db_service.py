@@ -5,7 +5,18 @@
 import pytest
 from unittest.mock import MagicMock, patch, AsyncMock
 from common.services.vector_db_service import VectorDbService
+from common.models import VectorizableBaseModel
 from qdrant_client import models
+
+class DummyModel(VectorizableBaseModel):
+    id: str
+    content: str
+    
+    def get_vector_id(self) -> str:
+        return self.id
+        
+    def get_embedding_content(self) -> str:
+        return self.content
 
 @pytest.fixture
 def mock_qdrant_client():
@@ -68,7 +79,8 @@ async def test_search(vector_db_service, mock_qdrant_client):
 @pytest.mark.asyncio
 async def test_upsert(vector_db_service, mock_qdrant_client):
     mock_qdrant_client.collection_exists.return_value = True
-    await vector_db_service.upsert("text", {"meta": "data"})
+    data = DummyModel(id="123", content="text")
+    await vector_db_service.upsert(data)
     mock_qdrant_client.upsert.assert_called_once()
 
 @pytest.mark.asyncio

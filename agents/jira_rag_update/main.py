@@ -2,15 +2,16 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import List
+from typing import List, Optional
 
 from pydantic_ai.mcp import MCPServerSSE
+from qdrant_client import models as qdrant_models
 
 import config
 from common import utils
 from common.agent_base import AgentBase
 from common.services.vector_db_service import VectorDbService
-from common.models import JsonSerializableModel, JiraIssue
+from common.models import JsonSerializableModel, JiraIssue, ProjectMetadata
 
 logger = utils.get_logger("jira_rag_update_agent")
 
@@ -60,7 +61,13 @@ class JiraRagUpdateAgent(AgentBase):
             instructions=instruction_prompt,
             mcp_servers=[jira_mcp_server],
             description="Agent responsible for keeping the RAG Vector DB up-to-date with Jira issues.",
-            tools=[self.get_last_update_timestamp, self.save_last_update_timestamp, self.upsert_issues, self.delete_issues]
+            tools=[
+                self.get_last_update_timestamp,
+                self.save_last_update_timestamp,
+                self.upsert_issues,
+                self.delete_issues,
+                self.search_issues,
+            ]
         )
 
     def get_thinking_budget(self) -> int:
@@ -89,19 +96,21 @@ class JiraRagUpdateAgent(AgentBase):
     async def save_last_update_timestamp(self, project_key: str, timestamp: str) -> str:
         """Saves the last update timestamp for the project."""
         try:
-            await self.metadata_db.upsert(
-                data=f"Metadata for {project_key}",
-                metadata={"last_update": timestamp},
-                point_id=project_key
-            )
+            metadata = ProjectMetadata(project_key=project_key, last_update=timestamp)
+            await self.metadata_db.upsert(data=metadata)
             return "Timestamp saved."
         except Exception as e:
             logger.error(f"Error saving last update: {e}")
             return f"Error saving timestamp: {e}"
 
     async def upsert_issues(self, project_key: str, issues: List[dict]) -> str:
-        """Upserts a list of Jira issues into the vector DB. 
-        Expects issues to have 'key', 'id', 'fields.summary', 'fields.description', 'fields.status.name', 'fields.issuetype.name'.
+        """Upserts a list of Jira issues into the vector DB.
+
+        Expects issues to have:
+        - 'key', 'id'
+        - 'fields.summary', 'fields.description'
+        - 'fields.status.name', 'fields.issuetype.name'
+        - 'fields.updated' (optional, ISO 8601 datetime for filtering)
         """
         count = 0
         try:
@@ -111,32 +120,30 @@ class JiraRagUpdateAgent(AgentBase):
                 fields = issue.get("fields", {})
                 summary = fields.get("summary", "")
                 description = fields.get("description", "") or ""
-                
+
                 status_obj = fields.get("status", {})
                 status = status_obj.get("name") if isinstance(status_obj, dict) else str(status_obj)
-                
+
                 issuetype_obj = fields.get("issuetype", {})
                 issue_type = issuetype_obj.get("name") if isinstance(issuetype_obj, dict) else str(issuetype_obj)
-                
+
+                # Extract updated timestamp for datetime range filtering
+                updated_at = fields.get("updated")
+
                 jira_issue = JiraIssue(
                     id=issue_id,
                     key=key,
                     summary=summary,
                     description=description,
-                    issue_type=issue_type
+                    issue_type=issue_type,
+                    status=status,
+                    project_key=project_key,
+                    source="jira_sync",
+                    updated_at=updated_at,
                 )
-                
-                # Using issue key as point_id
-                await self.issues_db.upsert(
-                    data=jira_issue,
-                    metadata={
-                        "issue_key": key,
-                        "project": project_key,
-                        "status": status,
-                        "source": "jira_sync"
-                    },
-                    point_id=key
-                )
+
+                # Using issue key as point_id via jira_issue.get_vector_id()
+                await self.issues_db.upsert(data=jira_issue)
                 count += 1
             return f"Upserted {count} issues."
         except Exception as e:
@@ -153,6 +160,105 @@ class JiraRagUpdateAgent(AgentBase):
         except Exception as e:
             logger.error(f"Error deleting issues: {e}")
             return f"Error deleting issues: {e}"
+
+    async def search_issues(
+        self,
+        query_text: str,
+        limit: int = 10,
+        score_threshold: float = 0.7,
+        issue_type: Optional[str] = None,
+        status: Optional[str] = None,
+        project_key: Optional[str] = None,
+        updated_after: Optional[str] = None,
+        updated_before: Optional[str] = None,
+    ) -> List[dict]:
+        """Searches for Jira issues in the vector DB with optional payload filters.
+
+        Args:
+            query_text: The semantic search query text.
+            limit: Maximum number of results to return (default: 10).
+            score_threshold: Minimum similarity score (default: 0.7).
+            issue_type: Filter by issue type (e.g., 'Bug', 'Story', 'Task').
+            status: Filter by issue status (e.g., 'To Do', 'In Progress', 'Done').
+            project_key: Filter by project key.
+            updated_after: Filter issues updated after this datetime (ISO 8601 format, e.g., '2025-01-15T00:00:00Z').
+            updated_before: Filter issues updated before this datetime (ISO 8601 format).
+
+        Returns:
+            List of matching issues with their payload data and similarity scores.
+            Each item contains: 'id', 'key', 'summary', 'description', 'issue_type',
+            'status', 'project_key', 'updated_at', 'score'.
+        """
+        try:
+            # Build filter conditions
+            conditions = []
+
+            if issue_type:
+                conditions.append(
+                    qdrant_models.FieldCondition(
+                        key="issue_type",
+                        match=qdrant_models.MatchValue(value=issue_type),
+                    )
+                )
+
+            if status:
+                conditions.append(
+                    qdrant_models.FieldCondition(
+                        key="status",
+                        match=qdrant_models.MatchValue(value=status),
+                    )
+                )
+
+            if project_key:
+                conditions.append(
+                    qdrant_models.FieldCondition(
+                        key="project_key",
+                        match=qdrant_models.MatchValue(value=project_key),
+                    )
+                )
+
+            # Datetime range filter for updated_at
+            if updated_after or updated_before:
+                conditions.append(
+                    qdrant_models.FieldCondition(
+                        key="updated_at",
+                        range=qdrant_models.DatetimeRange(
+                            gte=updated_after,
+                            lte=updated_before,
+                        ),
+                    )
+                )
+
+            # Create filter only if there are conditions
+            query_filter = qdrant_models.Filter(must=conditions) if conditions else None
+
+            points = await self.issues_db.search(
+                query_text=query_text,
+                limit=limit,
+                score_threshold=score_threshold,
+                query_filter=query_filter,
+            )
+
+            # Format results
+            results = []
+            for point in points:
+                payload = point.payload or {}
+                results.append({
+                    "id": point.id,
+                    "key": payload.get("key"),
+                    "summary": payload.get("summary"),
+                    "description": payload.get("description"),
+                    "issue_type": payload.get("issue_type"),
+                    "status": payload.get("status"),
+                    "project_key": payload.get("project_key"),
+                    "updated_at": payload.get("updated_at"),
+                    "score": point.score,
+                })
+
+            return results
+        except Exception as e:
+            logger.error(f"Error searching issues: {e}")
+            return []
 
 
 agent = JiraRagUpdateAgent()

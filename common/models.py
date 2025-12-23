@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from typing import List, Literal, Optional
+from abc import ABC, abstractmethod
 
 from a2a.types import FileWithBytes
 from pydantic import Field, BaseModel
@@ -15,6 +16,20 @@ class JsonSerializableModel(BaseModel):
         return self.model_dump_json(indent=2)
 
 
+class VectorizableBaseModel(JsonSerializableModel, ABC):
+    """Abstract base class for models that can be stored in a vector database."""
+
+    @abstractmethod
+    def get_vector_id(self) -> str:
+        """Returns the unique ID for the vector database."""
+        pass
+
+    @abstractmethod
+    def get_embedding_content(self) -> str:
+        """Returns the content to be embedded."""
+        pass
+
+
 class JiraUserStory(JsonSerializableModel):
     id: int
     key: str
@@ -24,12 +39,58 @@ class JiraUserStory(JsonSerializableModel):
     status: str
 
 
-class JiraIssue(JsonSerializableModel):
+class JiraIssue(VectorizableBaseModel):
+    """Model representing a Jira issue for vector storage.
+
+    Fields can be used for payload filtering in vector searches:
+    - issue_type: Filter by issue type (e.g., 'Bug', 'Story', 'Task')
+    - status: Filter by issue status (e.g., 'To Do', 'In Progress', 'Done')
+    - project_key: Filter by project key
+    - source: Filter by data source
+    - updated_at: Filter by last update timestamp (ISO 8601 format for datetime range queries)
+    """
+
     id: str = Field(description="The ID of the issue")
     key: str = Field(description="The key of the issue")
     summary: str = Field(description="The summary of the issue")
     description: str = Field(description="The description of the issue")
     issue_type: str = Field(description="The type of the issue")
+    status: Optional[str] = Field(default=None, description="Status of the issue")
+    project_key: Optional[str] = Field(default=None, description="Project key of the issue")
+    source: Optional[str] = Field(default=None, description="Source of the data")
+    updated_at: Optional[str] = Field(
+        default=None,
+        description="Last update timestamp in ISO 8601 format (e.g., '2025-01-15T10:30:00Z') for datetime range filtering",
+    )
+
+    def get_vector_id(self) -> str:
+        return self.key
+
+    def get_embedding_content(self) -> str:
+        return str(self)
+
+
+class ProjectMetadata(VectorizableBaseModel):
+    project_key: str = Field(description="Key of the project")
+    last_update: str = Field(description="Last update timestamp")
+
+    def get_vector_id(self) -> str:
+        return self.project_key
+
+    def get_embedding_content(self) -> str:
+        return f"Metadata for {self.project_key}"
+
+
+class IncidentIndexData(VectorizableBaseModel):
+    incident_key: str = Field(description="Key of the incident")
+    content: str = Field(description="Content to be indexed")
+    source: str = Field(default="incident_creation", description="Source of the data")
+
+    def get_vector_id(self) -> str:
+        return self.incident_key
+
+    def get_embedding_content(self) -> str:
+        return self.content
 
 
 class RequirementsReviewFeedback(JsonSerializableModel):
