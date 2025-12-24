@@ -323,8 +323,8 @@ async def execute_tests(request: ProjectExecutionRequest, api_key: str = Depends
         test_management_client = get_test_management_client()
         automated_test_cases = []
         try:
-            automated_tests_dict = test_management_client.fetch_ready_for_execution_test_cases_by_labels(project_key,
-                                                                                                         [config.OrchestratorConfig.AUTOMATED_TC_LABEL])
+            automated_tests_dict = test_management_client.fetch_ready_for_execution_test_cases_by_labels(
+                project_key,                          [config.OrchestratorConfig.AUTOMATED_TC_LABEL])
             automated_test_cases = automated_tests_dict.get(config.OrchestratorConfig.AUTOMATED_TC_LABEL, [])
             if not automated_test_cases:
                 logger.info(f"No test cases ready for execution found for project {project_key}.")

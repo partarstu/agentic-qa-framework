@@ -101,7 +101,26 @@ class VectorDbService:
         except Exception as e:
             logger.error(f"Error upserting to Vector DB: {e}")
 
-    async def delete(self, point_ids: List[str]):
+    async def retrieve(self, point_ids: list[str]) -> list[models.Record]:
+        """Retrieve points by their IDs from the collection.
+
+        Args:
+            point_ids: List of point IDs to retrieve.
+
+        Returns:
+            List of Record objects containing point data.
+        """
+        try:
+            await self._ensure_collection()
+            return await self.client.retrieve(
+                collection_name=self.collection_name,
+                ids=point_ids,
+            )
+        except Exception as e:
+            logger.error(f"Error retrieving from Vector DB: {e}")
+            return []
+
+    async def delete(self, point_ids: list[str]):
         try:
             await self.client.delete(
                 collection_name=self.collection_name,

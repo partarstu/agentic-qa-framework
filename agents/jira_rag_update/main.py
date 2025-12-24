@@ -69,12 +69,7 @@ class JiraRagUpdateAgent(AgentBase):
         """Retrieves the last update timestamp for the project from the metadata DB. 
         Returns '1970-01-01 00:00' if not found."""
         try:
-            await self.metadata_db._ensure_collection()
-            # Direct client access to retrieve by ID (project_key)
-            points = await self.metadata_db.client.retrieve(
-                collection_name=METADATA_COLLECTION,
-                ids=[project_key]
-            )
+            points = await self.metadata_db.retrieve(point_ids=[project_key])
             if points and points[0].payload:
                 return points[0].payload.get("last_update", "1970-01-01 00:00")
             return "1970-01-01 00:00"
