@@ -84,7 +84,7 @@ class TestCaseGenerationAgent(AgentBase):
     def get_max_requests_per_task(self) -> int:
         return config.TestCaseGenerationAgentConfig.MAX_REQUESTS_PER_TASK
 
-    def _generate_test_cases(self, jira_issue_content: str, attachments_content: str) -> GeneratedTestCases:
+    async def _generate_test_cases(self, jira_issue_content: str, attachments_content: str) -> GeneratedTestCases:
         """
         Generates test cases based on the Jira issue content and attachments.
 
@@ -96,14 +96,14 @@ class TestCaseGenerationAgent(AgentBase):
            Generated test cases.
        """
 
-        extracted_acceptance_criteria = self.extract_acceptance_criteria(attachments_content, jira_issue_content)
-        test_steps_sequences = self.generate_test_steps(extracted_acceptance_criteria)
-        generated_test_cases = self.generate_test_cases(extracted_acceptance_criteria, jira_issue_content,
-                                                        test_steps_sequences)
+        extracted_acceptance_criteria = await self.extract_acceptance_criteria(attachments_content, jira_issue_content)
+        test_steps_sequences = await self.generate_test_steps(extracted_acceptance_criteria)
+        generated_test_cases = await self.generate_test_cases(extracted_acceptance_criteria, jira_issue_content,
+                                                              test_steps_sequences)
         return generated_test_cases
 
-    def generate_test_cases(self, extracted_acceptance_criteria: AcceptanceCriteriaList, jira_issue_content: str,
-                            test_steps_sequences: TestStepsSequenceList) -> GeneratedTestCases:
+    async def generate_test_cases(self, extracted_acceptance_criteria: AcceptanceCriteriaList, jira_issue_content: str,
+                                  test_steps_sequences: TestStepsSequenceList) -> GeneratedTestCases:
         logger.info("Generating Test Cases for all step sequences")
         user_message = f"""
 Jira Issue content:
@@ -117,19 +117,21 @@ Acceptance Criteria Items:
 Test Step Sequences:
 {test_steps_sequences.model_dump_json()}
 """
-        generated_test_cases: GeneratedTestCases = self.test_case_creator_agent.run_sync(user_message).output
+        result = await self.test_case_creator_agent.run(user_message)
+        generated_test_cases: GeneratedTestCases = result.output
         logger.info(f"Generated {len(generated_test_cases.test_cases)} test cases.")
         return generated_test_cases
 
-    def generate_test_steps(self, extracted_acceptance_criteria: AcceptanceCriteriaList) -> TestStepsSequenceList:
+    async def generate_test_steps(self, extracted_acceptance_criteria: AcceptanceCriteriaList) -> TestStepsSequenceList:
         logger.info("Generating Steps for all ACs")
         user_message = f"Acceptance Criteria Items:\n{extracted_acceptance_criteria.model_dump_json()}"
-        test_steps_sequences: TestStepsSequenceList = self.steps_generator_agent.run_sync(user_message).output
+        result = await self.steps_generator_agent.run(user_message)
+        test_steps_sequences: TestStepsSequenceList = result.output
         logger.info(f"Generated {len(test_steps_sequences.items)} test step sequences with total "
                     f"of {sum(len(s.steps) for s in test_steps_sequences.items)} steps.")
         return test_steps_sequences
 
-    def extract_acceptance_criteria(self, attachments_content: str, jira_issue_content: str) -> AcceptanceCriteriaList:
+    async def extract_acceptance_criteria(self, attachments_content: str, jira_issue_content: str) -> AcceptanceCriteriaList:
         user_message = f"""
 Jira Issue content:
 {jira_issue_content}
@@ -138,7 +140,8 @@ Content of all relevant attachments:
 {attachments_content}
 """
         logger.info("Starting AC extraction")
-        extracted_acceptance_criteria: AcceptanceCriteriaList = self.ac_extractor_agent.run_sync(user_message).output
+        result = await self.ac_extractor_agent.run(user_message)
+        extracted_acceptance_criteria: AcceptanceCriteriaList = result.output
         logger.info(f"Extracted {len(extracted_acceptance_criteria.items)} ACs")
         return extracted_acceptance_criteria
 

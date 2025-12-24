@@ -1,6 +1,6 @@
 
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, patch, AsyncMock
 import sys
 
 # Mock MCPServerSSE before importing the module
@@ -53,26 +53,27 @@ def test_agent_init(agent, mock_config):
     assert agent.steps_generator_agent is not None
     assert agent.test_case_creator_agent is not None
 
-def test_generate_test_cases_flow(agent):
+@pytest.mark.asyncio
+async def test_generate_test_cases_flow(agent):
     # Setup return values for sub-agents
     mock_ac_result = MagicMock()
     mock_ac_result.output = AcceptanceCriteriaList(items=[])
-    agent.ac_extractor_agent.run_sync.return_value = mock_ac_result
+    agent.ac_extractor_agent.run = AsyncMock(return_value=mock_ac_result)
     
     mock_steps_result = MagicMock()
     mock_steps_result.output = TestStepsSequenceList(items=[])
-    agent.steps_generator_agent.run_sync.return_value = mock_steps_result
+    agent.steps_generator_agent.run = AsyncMock(return_value=mock_steps_result)
     
     mock_tc_result = MagicMock()
     mock_tc_result.output = GeneratedTestCases(test_cases=[])
-    agent.test_case_creator_agent.run_sync.return_value = mock_tc_result
+    agent.test_case_creator_agent.run = AsyncMock(return_value=mock_tc_result)
     
-    result = agent._generate_test_cases("Jira Content", "Attachments")
+    result = await agent._generate_test_cases("Jira Content", "Attachments")
     
     assert isinstance(result, GeneratedTestCases)
-    agent.ac_extractor_agent.run_sync.assert_called_once()
-    agent.steps_generator_agent.run_sync.assert_called_once()
-    agent.test_case_creator_agent.run_sync.assert_called_once()
+    agent.ac_extractor_agent.run.assert_called_once()
+    agent.steps_generator_agent.run.assert_called_once()
+    agent.test_case_creator_agent.run.assert_called_once()
 
 @patch("agents.test_case_generation.main.get_test_management_client")
 def test_upload_test_cases(mock_get_client, agent):
