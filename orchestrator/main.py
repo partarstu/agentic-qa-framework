@@ -343,6 +343,11 @@ async def execute_tests(request: ProjectExecutionRequest, api_key: str = Depends
 
         all_execution_results = await _request_all_test_cases_execution(grouped_test_cases)
         logger.info(f"Collected execution results for {len(all_execution_results)} test cases.")
+        
+        # Request incident creation for all failed tests
+        logger.info("Processing failed tests for incident creation.")
+        await _request_incident_creation_for_failed_tests(all_execution_results)
+        
         if all_execution_results:
             logger.info("Generating test execution report based on all execution results.")
             await _generate_test_report(all_execution_results, project_key, test_management_client)
@@ -356,6 +361,54 @@ async def _generate_test_report(all_execution_results, project_key, test_managem
     test_management_client.create_test_execution(all_execution_results, project_key, test_cycle_key)
     reporting_client = get_test_reporting_client(str(Path(__file__).resolve().parent.parent.resolve()))
     reporting_client.generate_report(all_execution_results)
+
+
+async def _request_incident_creation_for_failed_tests(
+    all_execution_results: List[TestExecutionResult],
+) -> None:
+    """
+    Process all failed test execution results and create incidents for each.
+
+    This function iterates over all test execution results, identifies those with
+    'failed' or 'error' status, and requests incident creation for each one.
+
+    Args:
+        all_execution_results: List of all test execution results to process.
+    """
+    failed_results = [
+        result for result in all_execution_results
+        if result.testExecutionStatus in ["failed", "error"]
+    ]
+    
+    if not failed_results:
+        logger.info("No failed tests found. Skipping incident creation.")
+        return
+    
+    logger.info(f"Found {len(failed_results)} failed test(s). Creating incidents in parallel.")
+    
+    async def _create_incident_for_result(result: TestExecutionResult) -> None:
+        """Helper coroutine to create incident for a single failed test result."""
+        logger.info(f"Test case {result.testCaseKey} failed. Initiating incident creation.")
+        try:
+            incident_input = IncidentCreationInput(
+                test_case_key=result.testCaseKey,
+                test_execution_result=str(result.generalErrorMessage),
+                test_step_results=result.stepResults,
+                agent_execution_logs=result.logs,
+                system_description=result.system_description,
+                available_artefacts=result.artifacts or []
+            )
+            incident_result = await _request_incident_creation(incident_input)
+            result.incident_creation_result = incident_result
+            logger.info(
+                f"Incident creation completed for test case {result.testCaseKey}. "
+                f"Incident key: {incident_result.incident_key if incident_result else 'N/A'}"
+            )
+        except Exception as e:
+            logger.error(f"Failed to create incident for test case {result.testCaseKey}: {e}")
+    
+    # Execute all incident creations in parallel
+    await asyncio.gather(*[_create_incident_for_result(result) for result in failed_results])
 
 
 async def _request_all_test_cases_execution(grouped_test_cases):
@@ -540,21 +593,6 @@ Result format is a JSON.
     
     if not test_execution_result.system_description:
         test_execution_result.system_description = f"Agent: {agent_name}, Environment: Standard Test Environment"
-
-    if test_execution_result.testExecutionStatus in ["failed", "error"]:
-        logger.info(f"Test case {test_case.key} failed. Initiating incident creation.")
-        try:
-            incident_input = IncidentCreationInput(
-                test_case_key=test_case.key,
-                test_execution_result=str(test_execution_result),
-                agent_execution_logs=test_execution_result.logs,
-                system_description=test_execution_result.system_description,
-                available_artefacts=file_artifacts or []
-            )
-            incident_result = await _request_incident_creation(incident_input)
-            test_execution_result.incident_creation_result = incident_result
-        except Exception as e:
-            logger.error(f"Failed to create incident for test case {test_case.key}: {e}")
 
     logger.info(f"Executed test case {test_case.key}. Status: {test_execution_result.testExecutionStatus}")
     return test_execution_result

@@ -22,9 +22,15 @@ class VectorDbService:
             api_key=getattr(config.QdrantConfig, "API_KEY", None),
         )
         self.model_name = getattr(config.QdrantConfig, "EMBEDDING_MODEL", "Qwen/Qwen3-Embedding-0.6B")
+        self._embedding_model: SentenceTransformer | None = None
 
-        logger.info(f"Initializing VectorDbService with model: {self.model_name}")
-        self.embedding_model = SentenceTransformer(self.model_name)
+    @property
+    def embedding_model(self) -> SentenceTransformer:
+        """Lazily initialize and return the embedding model."""
+        if self._embedding_model is None:
+            logger.info(f"Lazily initializing VectorDbService embedding model: {self.model_name}")
+            self._embedding_model = SentenceTransformer(self.model_name)
+        return self._embedding_model
 
     def _get_embedding(self, text: str) -> List[float]:
         embedding = self.embedding_model.encode(text)

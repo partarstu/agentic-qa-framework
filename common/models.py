@@ -228,6 +228,9 @@ class SelectedAgents(JsonSerializableModel):
 class IncidentCreationInput(JsonSerializableModel):
     test_case_key: str
     test_execution_result: str
+    test_step_results: List["TestStepResult"] = Field(
+        description="Structured test step execution results for reproduction steps and analysis"
+    )
     agent_execution_logs: Optional[str] = None
     system_description: str
     available_artefacts: List[FileWithBytes]
