@@ -2,8 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-import uuid
-from typing import List, Dict, Any, Union
+from typing import List
 
 from qdrant_client import AsyncQdrantClient, models
 from sentence_transformers import SentenceTransformer

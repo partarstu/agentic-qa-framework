@@ -8,6 +8,7 @@ from pydantic_ai.mcp import MCPServerSSE
 from qdrant_client import models as qdrant_models
 
 import config
+from agents.jira_rag_update.prompt import JiraRagUpdateSystemPrompt
 from common import utils
 from common.agent_base import AgentBase
 from common.services.vector_db_service import VectorDbService
@@ -32,22 +33,10 @@ class JiraRagUpdateAgent(AgentBase):
     def __init__(self):
         self.issues_db = VectorDbService(RAG_COLLECTION)
         self.metadata_db = VectorDbService(METADATA_COLLECTION)
-        
-        instruction_prompt = (
-            f"You are an agent responsible for keeping the RAG Vector DB up-to-date with Jira issues.\n"
-            f"Your task is to sync bugs for a specific project based on the user request.\n"
-            f"1. Extract the `project_key` from the user request.\n"
-            f"2. Get the last update timestamp using `get_last_update_timestamp(project_key)`.\n"
-            f"3. Search Jira (using available MCP tools) for issues in the project that were CREATED or UPDATED after the timestamp.\n"
-            f"   - Use JQL to find issues: `project = {{project_key}} AND updated >= '{{timestamp}}' AND issuetype = '{BUG_ISSUE_TYPE}'`.\n"
-            f"   - Ensure you fetch enough issues (handling pagination if the tool requires it, or asking for max results).\n"
-            f"4. For the found issues, analyze their status:\n"
-            f"   - Valid statuses are: {VALID_STATUSES}\n"
-            f"   - If the status is in the valid list, add it to the list for `upsert_issues`.\n"
-            f"   - If the status is NOT in the valid list, add its key to the list for `delete_issues`.\n"
-            f"5. Call `upsert_issues` with the valid issues and `delete_issues` with the invalid issue keys. Ensure you pass the correct `project_key`.\n"
-            f"6. After successfully processing all issues, call `save_last_update_timestamp` with the `project_key` and current time (use formatted string like 'YYYY-MM-DD HH:mm').\n"
-            f"7. Return a result summarizing the actions (processed count)."
+
+        instruction_prompt = JiraRagUpdateSystemPrompt(
+            valid_statuses=VALID_STATUSES,
+            bug_issue_type=BUG_ISSUE_TYPE,
         )
 
         super().__init__(
@@ -58,7 +47,7 @@ class JiraRagUpdateAgent(AgentBase):
             protocol=config.JiraRagUpdateAgentConfig.PROTOCOL,
             model_name=config.JiraRagUpdateAgentConfig.MODEL_NAME,
             output_type=RagUpdateResult,
-            instructions=instruction_prompt,
+            instructions=instruction_prompt.get_prompt(),
             mcp_servers=[jira_mcp_server],
             description="Agent responsible for keeping the RAG Vector DB up-to-date with Jira issues.",
             tools=[
