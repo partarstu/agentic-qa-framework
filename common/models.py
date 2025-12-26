@@ -238,10 +238,6 @@ class IncidentCreationInput(JsonSerializableModel):
     )
     agent_execution_logs: Optional[str] = None
     system_description: str
-    artifact_file_paths: List[str] = Field(
-        default_factory=list,
-        description="Paths to artifact files (screenshots, videos, logs) on the MCP server filesystem"
-    )
 
 
 class DuplicateDetectionResult(JsonSerializableModel):

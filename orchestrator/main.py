@@ -3,6 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
+import base64
+import os
 import time
 from collections import defaultdict
 from contextlib import asynccontextmanager
@@ -369,9 +371,6 @@ async def _request_incident_creation_for_failed_tests(
     """
     Process all failed test execution results and create incidents for each.
 
-    This function iterates over all test execution results, identifies those with
-    'failed' or 'error' status, and requests incident creation for each one.
-
     Args:
         all_execution_results: List of all test execution results to process.
     """
@@ -395,10 +394,9 @@ async def _request_incident_creation_for_failed_tests(
                 test_execution_result=str(result.generalErrorMessage),
                 test_step_results=result.stepResults,
                 agent_execution_logs=result.logs,
-                system_description=result.system_description,
-                available_artefacts=result.artifacts or []
+                system_description=result.system_description
             )
-            incident_result = await _request_incident_creation(incident_input)
+            incident_result = await _request_incident_creation(incident_input, result.artifacts or [])
             result.incident_creation_result = incident_result
             logger.info(
                 f"Incident creation completed for test case {result.testCaseKey}. "
@@ -584,8 +582,6 @@ async def _execute_single_test(agent_id: str, test_case: TestCase,
 Your input are the following test case execution results:\n```\n{text_results}\n```
 
 Information you need to find: all data of the requested output JSON object.
-
-Result format is a JSON.
 """
     result = await _get_results_extractor_agent(TestExecutionResult).run(user_prompt)
     test_execution_result: TestExecutionResult = result.output
@@ -608,25 +604,54 @@ Result format is a JSON.
     return test_execution_result
 
 
-async def _request_incident_creation(incident_input: IncidentCreationInput) -> IncidentCreationResult:
+
+
+
+
+
+
+async def _request_incident_creation(
+    incident_input: IncidentCreationInput,
+    artifacts: List[FileWithBytes]
+) -> IncidentCreationResult:
+    """Request incident creation with all artifacts sent as file parts.
+    
+    Args:
+        incident_input: The incident creation input JSON.
+        artifacts: All file artifacts to send as file parts in the A2A message.
+        
+    Returns:
+        IncidentCreationResult containing the created incident information.
+    """
     task_description = "Create incident report"
     agent_id = await _choose_agent_id(task_description)
-    completed_task, _ = await _send_task_to_agent(agent_id,
-                                               incident_input.model_dump_json(),
-                                               task_description)
+    
+    # Create message with JSON text part and ALL artifact file parts
+    message_parts = [TextPart(text=incident_input.model_dump_json())]
+    
+    # Add ALL artifacts as file parts (agent will handle them)
+    for artifact in artifacts:
+        message_parts.append(FilePart(file=artifact))
+        logger.info(f"Adding artifact '{artifact.name}' as file part to incident creation message")
+    
+    # Create the message
+    message = Message(parts=message_parts)
+    
+    completed_task, _ = await _send_task_to_agent_with_message(agent_id, message, task_description)
     
     task_description = f"Incident creation for test case {incident_input.test_case_key}"
     received_artifacts = _get_artifacts_from_task(completed_task, task_description)
     text_content = _get_text_content_from_artifacts(received_artifacts, task_description)
     result = IncidentCreationResult.model_validate_json(text_content)
 
-    if result.incident_key:
+    if result.incident_key and result.incident_id:
         try:
             content_to_index = f"{incident_input.test_execution_result}\n{incident_input.system_description}"
             if incident_input.agent_execution_logs:
                 content_to_index += f"\nLogs: {incident_input.agent_execution_logs[:500]}..."
 
             incident_data = IncidentIndexData(
+                incident_id=result.incident_id,
                 incident_key=result.incident_key,
                 content=content_to_index,
                 source="incident_creation"
@@ -711,8 +736,17 @@ def _get_file_contents_from_artifacts(artifacts: list[Artifact]) -> List[FileWit
     return file_parts
 
 
-async def _send_task_to_agent(agent_id: str, input_data: str, task_description: str) -> tuple[Task | None, str]:
-    # Updated for Step 3.1: Self-Healing Task Distribution
+async def _send_task_to_agent_with_message(agent_id: str, message: Message, task_description: str) -> tuple[Task | None, str]:
+    """Send a custom message (with file parts) to an agent.
+    
+    Args:
+        agent_id: ID of the agent to send the message to.
+        message: The A2A Message object to send (can contain text and file parts).
+        task_description: Description of the task for logging.
+        
+    Returns:
+        Tuple of (completed Task, execution logs).
+    """
     agent_card = await agent_registry.get_card(agent_id)
     if not agent_card:
         raise ValueError(f"Agent with ID '{agent_id}' is not yet registered with his card")
@@ -728,13 +762,9 @@ async def _send_task_to_agent(agent_id: str, input_data: str, task_description: 
             client_factory = ClientFactory(config=client_config)
             a2a_client = client_factory.create(card=agent_card)
 
-            response_iterator = a2a_client.send_message(new_agent_text_message(input_data))
+            response_iterator = a2a_client.send_message(message)
             start_time = time.time()
             last_task = None
-            
-            # We use a loop to wait for completion or timeout
-            # Note: The original code had a while loop with timeout. 
-            # We want to wrap this with try/except to handle timeouts and set status to BROKEN/AVAILABLE.
             
             while (time_left := _get_time_left_for_task_completion_waiting(start_time)) > 0:
                 try:
@@ -745,15 +775,13 @@ async def _send_task_to_agent(agent_id: str, input_data: str, task_description: 
                         return last_task, "\n".join(execution_logs)
                     _handle_exception(f"Task '{task_description}' iterator finished before completion.", 500)
                 except asyncio.TimeoutError:
-                    # Handle Timeout (Step 3.1)
                     logger.error(f"Task '{task_description}' timed out while waiting for completion.")
                     try:
-                        # Mark as BROKEN and enqueue for cancellation retry
-                         await agent_registry.update_status(agent_id, AgentStatus.BROKEN)
-                         await cancellation_queue.put((agent_id, time.time()))
+                        await agent_registry.update_status(agent_id, AgentStatus.BROKEN)
+                        await cancellation_queue.put((agent_id, time.time()))
                     except Exception as ex:
-                         logger.error(f"Error handling timeout for agent {agent_id}: {ex}")
-                         await agent_registry.update_status(agent_id, AgentStatus.BROKEN)
+                        logger.error(f"Error handling timeout for agent {agent_id}: {ex}")
+                        await agent_registry.update_status(agent_id, AgentStatus.BROKEN)
                     
                     _handle_exception(f"Task '{task_description}' timed out while waiting for completion.", 408)
 
@@ -782,15 +810,27 @@ async def _send_task_to_agent(agent_id: str, input_data: str, task_description: 
             return None, "\n".join(execution_logs)
 
     except Exception as e:
-        # Handle General Exception (Step 3.1)
         logger.error(f"Error communicating with agent {agent_id}: {e}")
         await agent_registry.update_status(agent_id, AgentStatus.BROKEN)
         raise e
-    # finally:
-        # "If success, set agent_status[agent_id] = AgentStatus.AVAILABLE."
-        # This is handled inside the loop upon return. 
-        # If exception raised, it goes to except block -> BROKEN.
-        # So we don't need a catch-all finally that sets AVAILABLE because it might override BROKEN.
+
+
+async def _send_task_to_agent(agent_id: str, input_data: str, task_description: str) -> tuple[Task | None, str]:
+    """Send a text message to an agent.
+
+    This is a convenience wrapper around _send_task_to_agent_with_message that
+    creates a simple text message from the input string.
+
+    Args:
+        agent_id: ID of the agent to send the message to.
+        input_data: The text content to send to the agent.
+        task_description: Description of the task for logging.
+
+    Returns:
+        Tuple of (completed Task, execution logs).
+    """
+    message = new_agent_text_message(input_data)
+    return await _send_task_to_agent_with_message(agent_id, message, task_description)
 
 
 async def _choose_agent_id(agent_task_description):

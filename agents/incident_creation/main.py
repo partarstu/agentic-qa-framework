@@ -5,11 +5,12 @@
 import base64
 import os
 import uuid
+from pathlib import Path
 from typing import List
 
-from a2a.types import Message, FilePart, FileWithBytes
-from a2a.utils import get_message_text
-from pydantic_ai import Agent, RunContext
+from a2a.types import Message, FilePart, FileWithBytes, TextPart
+from pydantic_ai import Agent
+from pydantic_ai.messages import UserContent, BinaryContent, ImageMediaType, VideoMediaType
 from pydantic_ai.mcp import MCPServerSSE
 
 import config
@@ -38,10 +39,11 @@ class IncidentCreationAgent(AgentBase):
     
     This agent uses the Jira MCP Server for all Jira operations.
     
-    File attachments from incoming messages are automatically extracted and saved
-    to the MCP server filesystem. The saved file paths are then provided as part
-    of the agent input, allowing the agent to reference these files when creating
-    incidents and uploading attachments via MCP tools.
+    The orchestrator passes all file artifacts as file parts in the A2A message.
+    This agent:
+    - Extracts and saves all artifacts to the MCP server filesystem 
+    - Adds file paths to the user message text
+    - Passes media files (images, videos) as BinaryContent for LLM visual analysis
     
     Custom tools:
     - search_duplicates_in_rag: Search for similar incidents in the RAG vector database
@@ -124,19 +126,32 @@ class IncidentCreationAgent(AgentBase):
         return candidates
 
     @staticmethod
-    def _extract_and_save_files_from_message(received_message: Message) -> list[str]:
-        """Extracts file attachments from received message and saves them to the MCP server filesystem.
+    def _is_media_file(file: FileWithBytes) -> bool:
+        """Check if a file is a media file (image or video)."""
+        if not file.name:
+            return False
         
-        This method directly extracts any FilePart attachments from the A2A message
-        and saves them to the shared filesystem that the MCP server can access.
+        media_extensions = {
+            # Images
+            '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp', '.svg', '.ico',
+            # Videos
+            '.mp4', '.avi', '.mov', '.wmv', '.flv', '.webm', '.mkv'
+        }
+        
+        file_ext = Path(file.name).suffix.lower()
+        return file_ext in media_extensions
+    
+    def _extract_and_save_artifacts(self, received_message: Message) -> tuple[list[str], list[FileWithBytes]]:
+        """Extract artifacts from message, save them, and separate media files.
         
         Args:
-            received_message: The A2A Message object containing potential file attachments.
-        
+            received_message: The A2A Message containing file parts.
+            
         Returns:
-            List of file paths where the attachments were saved on the MCP server filesystem.
+            Tuple of (saved_file_paths, media_files_for_llm)
         """
         saved_paths: list[str] = []
+        media_files: list[FileWithBytes] = []
         mcp_folder = config.MCP_SERVER_ATTACHMENTS_FOLDER_PATH
         
         for part in received_message.parts:
@@ -144,57 +159,79 @@ class IncidentCreationAgent(AgentBase):
                 file = part.file
                 if isinstance(file, FileWithBytes):
                     try:
-                        # Decode the base64 content
+                        # Decode and save the file
                         file_content = base64.b64decode(file.bytes)
                         
-                        # Generate unique filename to avoid conflicts
+                        # Generate unique filename
                         unique_id = str(uuid.uuid4())[:8]
                         original_name = file.name or "attachment"
                         safe_filename = f"{unique_id}_{original_name}"
                         file_path = os.path.join(mcp_folder, safe_filename)
                         
-                        # Write the file to the MCP server's accessible filesystem
+                        # Write to MCP server filesystem
                         with open(file_path, 'wb') as f:
                             f.write(file_content)
                         
                         saved_paths.append(file_path)
-                        logger.info(f"Saved attachment '{original_name}' to {file_path}")
+                        logger.info(f"Saved artifact '{original_name}' to {file_path}")
+                        
+                        # Keep media files for LLM analysis
+                        if self._is_media_file(file):
+                            media_files.append(file)
+                            
                     except Exception as e:
-                        logger.error(f"Failed to save attachment from message: {e}")
+                        logger.error(f"Failed to save artifact: {e}")
         
         if saved_paths:
-            logger.info(f"Extracted and saved {len(saved_paths)} attachments from received message.")
-        else:
-            logger.info("No file attachments found in received message.")
+            logger.info(f"Saved {len(saved_paths)} artifacts, {len(media_files)} are media files for LLM")
         
-        return saved_paths
+        return saved_paths, media_files
     
     async def run(self, received_message: Message) -> Message:
-        """Overrides base run method to extract files from message and include paths in agent input.
+        """Overrides base run method to handle artifact extraction and processing.
         
-        This method extracts any file attachments from the received message, saves them to
-        the MCP server filesystem, and includes the saved file paths in the text input
-        provided to the agent. This allows the agent to reference the files when creating
-        incidents and uploading attachments via MCP tools.
+        This method:
+        1. Extracts the IncidentCreationInput JSON from the text part
+        2. Extracts all file parts, saves them to MCP server filesystem  
+        3. Creates a user message with:
+           - JSON input + file paths as text
+           - Media files as BinaryContent for LLM visual analysis
         """
-        # Extract and save file attachments from the message
-        saved_file_paths = self._extract_and_save_files_from_message(received_message)
-        
-        # Get the text content from the message
-        text_content = get_message_text(received_message)
-        
-        # Append saved file paths information to the input if files were saved
-        if saved_file_paths:
-            attachments_info = (
-                f"\n\n---\nSAVED ATTACHMENT FILE PATHS (use these with jira_update_issue 'attachments' parameter):\n"
-                f"{', '.join(saved_file_paths)}"
-            )
-            text_content += attachments_info
-        
         logger.info("Got a task to execute, starting execution.")
         
-        # Call the agent with just the text content (including file path info)
-        result = await self._get_agent_execution_result([text_content])
+        # Extract and save all artifacts from the message
+        saved_paths, media_files = self._extract_and_save_artifacts(received_message)
+        
+        # Get the JSON text content from themessage
+        text_content = ""
+        for part in received_message.parts:
+            if isinstance(part, TextPart):
+                text_content = part.text
+                break
+        
+        # Add saved file paths information to the text
+        if saved_paths:
+            paths_info = (
+                f"\n\n---\nSAVED ARTIFACT FILE PATHS (use these with jira MCP tools for attachments):\n"
+                f"{chr(10).join(saved_paths)}"
+            )
+            text_content += paths_info
+        
+        # Build user content list: text + media files as BinaryContent
+        user_content: List[UserContent] = [text_content]
+        
+        # Add media files for LLM analysis
+        for media_file in media_files:
+            file_content = base64.b64decode(media_file.bytes)
+            mime_type = media_file.mimeType or ""
+            
+            if mime_type.startswith("image"):
+                user_content.append(BinaryContent(data=file_content, media_type=ImageMediaType))
+            elif mime_type.startswith("video"):
+                user_content.append(BinaryContent(data=file_content, media_type=VideoMediaType))
+        
+        # Call the agent with the prepared content
+        result = await self._get_agent_execution_result(user_content)
         
         logger.info("Completed execution of the task.")
         return self._get_text_message_from_results(result)
