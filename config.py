@@ -83,7 +83,7 @@ class OrchestratorConfig:
     TASK_EXECUTION_TIMEOUT = 500.0
     AGENT_DISCOVERY_TIMEOUT_SECONDS = 120
     INCOMING_REQUEST_WAIT_TIMEOUT = AGENT_DISCOVERY_TIMEOUT_SECONDS + 5
-    MODEL_NAME = "google-gla:gemini-2.5-flash"
+    MODEL_NAME = "google-gla:gemini-3-flash-preview"
     API_KEY = os.environ.get("ORCHESTRATOR_API_KEY")
 
 
@@ -94,7 +94,7 @@ class RequirementsReviewAgentConfig:
     PORT = int(os.environ.get("PORT", "8001"))
     EXTERNAL_PORT = int(os.environ.get("EXTERNAL_PORT", PORT))
     PROTOCOL = "http"
-    MODEL_NAME = "google-gla:gemini-2.5-pro"
+    MODEL_NAME = "google-gla:gemini-3-flash-preview"
     MAX_REQUESTS_PER_TASK = 10
 
 
@@ -105,7 +105,7 @@ class TestCaseClassificationAgentConfig:
     PORT = int(os.environ.get("PORT", "8003"))
     EXTERNAL_PORT = int(os.environ.get("EXTERNAL_PORT", PORT))
     PROTOCOL = "http"
-    MODEL_NAME = "google-gla:gemini-2.5-flash"
+    MODEL_NAME = "google-gla:gemini-3-flash-preview"
     MAX_REQUESTS_PER_TASK = 5
 
 
@@ -116,7 +116,7 @@ class TestCaseGenerationAgentConfig:
     PORT = int(os.environ.get("PORT", "8002"))
     EXTERNAL_PORT = int(os.environ.get("EXTERNAL_PORT", PORT))
     PROTOCOL = "http"
-    MODEL_NAME = "google-gla:gemini-2.5-flash"
+    MODEL_NAME = "google-gla:gemini-3-flash-preview"
     MAX_REQUESTS_PER_TASK = 10
 
 
@@ -128,7 +128,7 @@ class TestCaseReviewAgentConfig:
     PORT = int(os.environ.get("PORT", "8004"))
     EXTERNAL_PORT = int(os.environ.get("EXTERNAL_PORT", PORT))
     PROTOCOL = "http"
-    MODEL_NAME = "google-gla:gemini-2.5-pro"
+    MODEL_NAME = "google-gla:gemini-3-flash-preview"
     MAX_REQUESTS_PER_TASK = 5
 
 
@@ -139,7 +139,7 @@ class IncidentCreationAgentConfig:
     PORT = int(os.environ.get("PORT", "8007"))
     EXTERNAL_PORT = int(os.environ.get("EXTERNAL_PORT", PORT))
     PROTOCOL = "http"
-    MODEL_NAME = "google-gla:gemini-2.5-flash"
+    MODEL_NAME = "google-gla:gemini-3-flash-preview"
     MAX_REQUESTS_PER_TASK = 10
     COLLECTION_NAME = os.environ.get("INCIDENT_AGENT_COLLECTION_NAME", "incident_issues")
     MIN_SIMILARITY_SCORE = float(os.environ.get("INCIDENT_AGENT_MIN_SIMILARITY_SCORE", "0.7"))
@@ -152,7 +152,7 @@ class JiraRagUpdateAgentConfig:
     PORT = int(os.environ.get("PORT", "8006"))
     EXTERNAL_PORT = int(os.environ.get("EXTERNAL_PORT", PORT))
     PROTOCOL = "http"
-    MODEL_NAME = "google-gla:gemini-2.5-flash"
+    MODEL_NAME = "google-gla:gemini-3-flash-preview"
     MAX_REQUESTS_PER_TASK = 10
 
 

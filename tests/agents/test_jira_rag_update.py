@@ -47,12 +47,13 @@ async def test_upsert_issues(agent):
     # call_args.kwargs['data'] should be a JiraIssue
     jira_issue = call_args.kwargs['data']
     assert isinstance(jira_issue, JiraIssue)
+    assert jira_issue.id == 1001
     assert jira_issue.key == "TEST-1"
     assert jira_issue.issue_type == "Bug"
     assert jira_issue.project_key == "TEST_PROJ"
 
 @pytest.mark.asyncio
 async def test_delete_issues(agent):
-    result = await agent.delete_issues(["TEST-1"])
+    result = await agent.delete_issues([1001])
     assert "Deleted 1 issues" in result
-    agent.issues_db.delete.assert_called_once_with(["TEST-1"])
+    agent.issues_db.delete.assert_called_once_with(["1001"])

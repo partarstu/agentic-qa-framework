@@ -65,11 +65,23 @@ class JiraRagUpdateAgent(AgentBase):
     def get_max_requests_per_task(self) -> int:
         return config.JiraRagUpdateAgentConfig.MAX_REQUESTS_PER_TASK
 
+    @staticmethod
+    def _key_to_int(key: str) -> str:
+        """Convert a project key to an integer ID for ProjectMetadata storage.
+        
+        Uses hash to create a deterministic integer from the string key.
+        Note: This is only used for ProjectMetadata. JiraIssue uses numeric IDs directly.
+        """
+        import hashlib
+        return str(int(hashlib.md5(key.encode()).hexdigest()[:16], 16))
+
     async def get_last_update_timestamp(self, project_key: str) -> str:
         """Retrieves the last update timestamp for the project from the metadata DB. 
         Returns '1970-01-01 00:00' if not found."""
         try:
-            points = await self.metadata_db.retrieve(point_ids=[project_key])
+            # Convert project_key to integer ID for retrieval
+            int_id = self._key_to_int(project_key)
+            points = await self.metadata_db.retrieve(point_ids=[int_id])
             if points and points[0].payload:
                 return points[0].payload.get("last_update", "1970-01-01 00:00")
             return "1970-01-01 00:00"
@@ -100,7 +112,7 @@ class JiraRagUpdateAgent(AgentBase):
         try:
             for issue in issues:
                 key = issue.get("key")
-                issue_id = str(issue.get("id", ""))
+                issue_id = int(issue.get("id", 0))
                 fields = issue.get("fields", {})
                 summary = fields.get("summary", "")
                 description = fields.get("description", "") or ""
@@ -126,7 +138,7 @@ class JiraRagUpdateAgent(AgentBase):
                     updated_at=updated_at,
                 )
 
-                # Using issue key as point_id via jira_issue.get_vector_id()
+                # Using numeric issue ID as point_id via jira_issue.get_vector_id()
                 await self.issues_db.upsert(data=jira_issue)
                 count += 1
             return f"Upserted {count} issues."
@@ -134,13 +146,15 @@ class JiraRagUpdateAgent(AgentBase):
             logger.error(f"Error upserting issues: {e}")
             return f"Error upserting issues: {e}"
 
-    async def delete_issues(self, issue_keys: List[str]) -> str:
-        """Deletes a list of Jira issues from the vector DB."""
+    async def delete_issues(self, issue_ids: List[int]) -> str:
+        """Deletes a list of Jira issues from the vector DB by their numeric IDs."""
         try:
-            if not issue_keys:
+            if not issue_ids:
                 return "No issues to delete."
-            await self.issues_db.delete(issue_keys)
-            return f"Deleted {len(issue_keys)} issues."
+            # Convert integer IDs to strings for Qdrant
+            str_ids = [str(issue_id) for issue_id in issue_ids]
+            await self.issues_db.delete(str_ids)
+            return f"Deleted {len(issue_ids)} issues."
         except Exception as e:
             logger.error(f"Error deleting issues: {e}")
             return f"Error deleting issues: {e}"

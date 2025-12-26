@@ -2,6 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import hashlib
 from typing import List, Literal, Optional
 from abc import ABC, abstractmethod
 
@@ -50,7 +51,7 @@ class JiraIssue(VectorizableBaseModel):
     - updated_at: Filter by last update timestamp (ISO 8601 format for datetime range queries)
     """
 
-    id: str = Field(description="The ID of the issue")
+    id: int = Field(description="The numeric ID of the issue")
     key: str = Field(description="The key of the issue")
     summary: str = Field(description="The summary of the issue")
     description: str = Field(description="The description of the issue")
@@ -64,7 +65,8 @@ class JiraIssue(VectorizableBaseModel):
     )
 
     def get_vector_id(self) -> str:
-        return self.key
+        # Use the numeric Jira issue ID directly
+        return str(self.id)
 
     def get_embedding_content(self) -> str:
         return str(self)
@@ -75,19 +77,22 @@ class ProjectMetadata(VectorizableBaseModel):
     last_update: str = Field(description="Last update timestamp")
 
     def get_vector_id(self) -> str:
-        return self.project_key
+        # Convert project_key to integer using hash
+        return str(int(hashlib.md5(self.project_key.encode()).hexdigest()[:16], 16))
 
     def get_embedding_content(self) -> str:
         return f"Metadata for {self.project_key}"
 
 
 class IncidentIndexData(VectorizableBaseModel):
+    incident_id: int = Field(description="Numeric ID of the incident")
     incident_key: str = Field(description="Key of the incident")
     content: str = Field(description="Content to be indexed")
     source: str = Field(default="incident_creation", description="Source of the data")
 
     def get_vector_id(self) -> str:
-        return self.incident_key
+        # Use the numeric Jira incident ID directly
+        return str(self.incident_id)
 
     def get_embedding_content(self) -> str:
         return self.content
@@ -233,7 +238,10 @@ class IncidentCreationInput(JsonSerializableModel):
     )
     agent_execution_logs: Optional[str] = None
     system_description: str
-    available_artefacts: List[FileWithBytes]
+    artifact_file_paths: List[str] = Field(
+        default_factory=list,
+        description="Paths to artifact files (screenshots, videos, logs) on the MCP server filesystem"
+    )
 
 
 class DuplicateDetectionResult(JsonSerializableModel):
@@ -243,6 +251,7 @@ class DuplicateDetectionResult(JsonSerializableModel):
 
 
 class IncidentCreationResult(JsonSerializableModel):
+    incident_id: Optional[int] = Field(default=None, description="The numeric ID of the created incident")
     incident_key: Optional[str] = Field(description="The key of the created incident, may be null if duplicates are detected")
     duplicates: List[DuplicateDetectionResult] = Field(
         description="All identified positive duplicate incident detection results, may be empty")
