@@ -44,7 +44,7 @@ AGENT_BASE_URL = os.environ.get("AGENT_BASE_URL", "http://localhost")
 MCP_SERVER_ATTACHMENTS_FOLDER_PATH = "/tmp"
 ATTACHMENTS_DESTINATION_FOLDER_PATH = "D://temp"
 REMOTE_EXECUTION_AGENT_HOSTS = os.environ.get("REMOTE_EXECUTION_AGENT_HOSTS", AGENT_BASE_URL)
-AGENT_DISCOVERY_PORTS = os.environ.get("AGENT_DISCOVERY_PORTS", "8001-8006")
+AGENT_DISCOVERY_PORTS = os.environ.get("AGENT_DISCOVERY_PORTS", "8001-8007")
 USE_GOOGLE_CLOUD_STORAGE = os.environ.get("USE_CLOUD_STORAGE", "False").lower() in ("true", "1", "t")
 GOOGLE_CLOUD_STORAGE_BUCKET_NAME = os.environ.get("CLOUD_STORAGE_BUCKET_NAME")
 JIRA_ATTACHMENTS_CLOUD_STORAGE_FOLDER = os.environ.get("JIRA_ATTACHMENTS_CLOUD_STORAGE_FOLDER", "jira")
@@ -136,7 +136,7 @@ class TestCaseReviewAgentConfig:
 class IncidentCreationAgentConfig:
     THINKING_BUDGET = 16000
     OWN_NAME = "Incident Creation Agent"
-    PORT = int(os.environ.get("PORT", "8005"))
+    PORT = int(os.environ.get("PORT", "8007"))
     EXTERNAL_PORT = int(os.environ.get("EXTERNAL_PORT", PORT))
     PROTOCOL = "http"
     MODEL_NAME = "google-gla:gemini-2.5-flash"

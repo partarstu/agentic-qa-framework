@@ -89,25 +89,24 @@ class IncidentCreationAgent(AgentBase):
     def get_max_requests_per_task(self) -> int:
         return 10
 
-    async def search_duplicates_in_rag(self, ctx: RunContext[IncidentCreationInput]) -> List[dict]:
+    async def search_duplicates_in_rag(self, incident_description: str) -> List[dict]:
         """Searches for potential duplicate incidents using the RAG vector database.
         
-        This tool searches the vector database for semantically similar incidents based on the current failure description.
+        This tool searches the vector database for semantically similar incidents based on the incident description.
+        
+        Args:
+            incident_description: Description of the incident including the error description, 
+                                test case name, and test step where the issue occurred.
 
         Returns:
             List of dicts with 'issue_key' and 'content' for each potential duplicate.
         """
-        input_data = ctx.deps
-        failure_description = f"{input_data.test_execution_result}\n{input_data.system_description}"
-        if input_data.agent_execution_logs:
-            failure_description += f"\nLogs: {input_data.agent_execution_logs[:500]}..."
-
         if not self.vector_db_service:
             logger.warning("Vector DB service not initialized, skipping RAG search.")
             return []
 
         hits = await self.vector_db_service.search(
-            failure_description,
+            incident_description,
             limit=config.QdrantConfig.MAX_RESULTS,
             score_threshold=RAG_MIN_SIMILARITY
         )

@@ -481,7 +481,7 @@ async def _execute_test_group(test_type: str, test_cases: List[TestCase],
     results: List[TestExecutionResult] = []
     workers = []
     for agent_id in valid_agent_ids:
-        workers.append(asyncio.create_task(_agent_worker(agent_id, queue, results)))
+        workers.append(asyncio.create_task(_agent_worker(agent_id, queue, results, valid_agent_ids)))
 
     # Wait for all items in the queue to be processed
     await queue.join()
@@ -496,50 +496,60 @@ async def _execute_test_group(test_type: str, test_cases: List[TestCase],
     return results
 
 
-async def _agent_worker(agent_id: str, queue: asyncio.Queue, results: List[TestExecutionResult]):
+async def _agent_worker(agent_id: str, queue: asyncio.Queue, results: List[TestExecutionResult], pool_agent_ids: List[str]):
     logger.info(f"Agent worker started for agent {agent_id}")
     try:
         while True:
-            # Check agent status
             status = await agent_registry.get_status(agent_id)
             if status != AgentStatus.AVAILABLE:
                 if status == AgentStatus.BROKEN:
                     logger.warning(f"Agent {agent_id} is BROKEN. Worker stopping.")
                     break
-                # If BUSY, just wait a bit? But logically if it is this worker's turn, 
-                # and we are using a queue, the agent should be AVAILABLE or we made it BUSY ourselves?
-                # In this architecture, we have one worker per agent. 
-                # So this worker is the ONLY one sending tasks to this agent.
-                # So if it says BUSY, it might be busy from a previous task (unlikely if single worker)
-                # or marked BUSY by this worker.
-                # However, let's follow the plan: "If agent_status[agent_id] is not AVAILABLE, wait/sleep."
                 await asyncio.sleep(1)
                 continue
 
             test_case, test_type = await queue.get()
-            
             try:
-                # Execute
                 result = await _execute_single_test(agent_id, test_case, test_type)
                 if result:
                     results.append(result)
             except Exception as e:
                 logger.error(f"Error in worker for agent {agent_id}: {e}")
-                # Retry logic: Put back in queue
-                # Mark agent broken if needed? The plan says:
-                # "If _execute_single_test raises exception... Mark agent as BROKEN (if not already)."
-                # "Retry: Put the failed test_case back into the queue"
+                # Mark agent as BROKEN first
                 await agent_registry.update_status(agent_id, AgentStatus.BROKEN)
-                queue.put_nowait((test_case, test_type))
-                queue.task_done() # Mark the failed task as done so we don't block join? 
-                # Wait, if we put it back, queue size increases. 
-                # queue.join() blocks until unfinished_tasks goes to 0.
-                # We called get(), so unfinished_tasks is same.
-                # If we put_nowait, unfinished_tasks +1.
-                # We call task_done() for the one we failed.
-                # So net change is 0. Correct.
+                
+                # Check if any other agents in the pool are still alive (not BROKEN)
+                any_agents_alive = False
+                for other_id in pool_agent_ids:
+                    if other_id != agent_id:
+                        status = await agent_registry.get_status(other_id)
+                        if status != AgentStatus.BROKEN:
+                            any_agents_alive = True
+                            break
+                
+                if any_agents_alive:
+                    # Retry logic: Put back in queue
+                    logger.info(f"Agent {agent_id} broken, but other agents available. Re-queueing task.")
+                    queue.put_nowait((test_case, test_type))
+                else:
+                    # Last agent standing failed. Report error.
+                    logger.error(f"All agents for this group are broken. Returning failed result for test case {test_case.key}.")
+                    agent_name = await agent_registry.get_name(agent_id)
+                    failed_result = TestExecutionResult(
+                        stepResults=[],
+                        testCaseKey=test_case.key,
+                        testCaseName=test_case.name,
+                        testExecutionStatus="error",
+                        generalErrorMessage=f"All agents failed. Last error from {agent_name}: {e}",
+                        logs="", 
+                        start_timestamp=datetime.now().isoformat(),
+                        end_timestamp=datetime.now().isoformat(),
+                        system_description=f"Agent: {agent_name} (Failed - No Retry Available)"
+                    )
+                    results.append(failed_result)
+
+                queue.task_done()
                 break # Exit worker as agent is broken
-            
             queue.task_done()
     except asyncio.CancelledError:
         logger.info(f"Agent worker for {agent_id} cancelled.")

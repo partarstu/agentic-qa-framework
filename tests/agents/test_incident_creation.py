@@ -49,13 +49,16 @@ async def test_search_duplicates_in_rag(agent):
     input_data = IncidentCreationInput(
         test_case_key="TC-123",
         test_execution_result="Failed with NPE",
+        test_step_results=[],
         agent_execution_logs="Logs...",
         system_description="Win10",
         available_artefacts=[]
     )
     
-    ctx = MagicMock()
-    ctx.deps = input_data
+    # Create incident description
+    incident_description = f"""Test Case: {input_data.test_case_key}
+Error Description: {input_data.test_execution_result}
+System: {input_data.system_description}"""
     
     # Mock Vector DB search
     mock_hit = MagicMock()
@@ -64,7 +67,7 @@ async def test_search_duplicates_in_rag(agent):
     agent.vector_db_service.search.return_value = [mock_hit]
     
     # Run
-    candidates = await agent.search_duplicates_in_rag(ctx)
+    candidates = await agent.search_duplicates_in_rag(incident_description)
     
     assert len(candidates) == 1
     assert candidates[0]["issue_key"] == "BUG-1"
@@ -72,4 +75,5 @@ async def test_search_duplicates_in_rag(agent):
     assert candidates[0]["similarity_score"] == 0.85
     
     agent.vector_db_service.search.assert_called_once()
+
 
