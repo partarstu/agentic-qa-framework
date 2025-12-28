@@ -579,9 +579,7 @@ async def _execute_single_test(agent_id: str, test_case: TestCase,
         _handle_exception(f"No test case execution information received from agent {agent_name}",
                           500)
     user_prompt = f"""
-Your input are the following test case execution results:\n```\n{text_results}\n```
-
-Information you need to find: all data of the requested output JSON object.
+Test case execution results:\n```{text_results}```
 """
     result = await _get_results_extractor_agent(TestExecutionResult).run(user_prompt)
     test_execution_result: TestExecutionResult = result.output
@@ -635,7 +633,7 @@ async def _request_incident_creation(
         logger.info(f"Adding artifact '{artifact.name}' as file part to incident creation message")
     
     # Create the message
-    message = Message(parts=message_parts)
+    message = Message(parts=message_parts, message_id="", role='agent')
     
     completed_task, _ = await _send_task_to_agent_with_message(agent_id, message, task_description)
     

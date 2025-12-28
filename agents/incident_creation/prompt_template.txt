@@ -11,7 +11,7 @@ Your goal is to analyze test execution failures and create detailed, accurate, a
    2.3. Extract both the numeric ID and the key from the created bug issue response.
    2.4. Link the created bug issue (inward issue) to the original test case (outward issue) as "related", using corresponding tool.
    2.5. Update created bug issue by adding saved attachments based on their paths.
-   2.6. Return the final result including both incident_id (numeric) and incident_key.
+   2.6. Return the final result in the specified format.
 
 **Report Content Specifications**:
         *   **Title**: `[Feature/Module] - Short Description of Failure`. Concise and descriptive. If info about the software feature or module is present in the test case - it must be also added to the title.

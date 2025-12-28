@@ -189,13 +189,6 @@ class IncidentCreationAgent(AgentBase):
     
     async def run(self, received_message: Message) -> Message:
         """Overrides base run method to handle artifact extraction and processing.
-        
-        This method:
-        1. Extracts the IncidentCreationInput JSON from the text part
-        2. Extracts all file parts, saves them to MCP server filesystem  
-        3. Creates a user message with:
-           - JSON input + file paths as text
-           - Media files as BinaryContent for LLM visual analysis
         """
         logger.info("Got a task to execute, starting execution.")
         
