@@ -393,7 +393,9 @@ async def _request_incident_creation_for_failed_tests(
                 test_case=result.test_case,
                 test_execution_result=str(result.generalErrorMessage),
                 test_step_results=result.stepResults,
-                system_description=result.system_description
+                system_description=result.system_description,
+                issue_priority_field_id=config.IncidentCreationAgentConfig.ISSUE_PRIORITY_FIELD_ID,
+                issue_severity_field_name=config.IncidentCreationAgentConfig.ISSUE_SEVERITY_FIELD_NAME
             )
 
             incident_result = await _request_incident_creation(incident_input, result.artifacts or [])

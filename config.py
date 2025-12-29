@@ -143,6 +143,18 @@ class IncidentCreationAgentConfig:
     MODEL_NAME = "google-gla:gemini-3-flash-preview"
     MAX_REQUESTS_PER_TASK = 10
     MIN_SIMILARITY_SCORE = float(os.environ.get("INCIDENT_AGENT_MIN_SIMILARITY_SCORE", "0.7"))
+    ISSUE_PRIORITY_FIELD_ID = os.environ.get("INCIDENT_AGENT_ISSUE_PRIORITY_FIELD_ID", "priority")
+    ISSUE_SEVERITY_FIELD_NAME = os.environ.get("INCIDENT_AGENT_ISSUE_SEVERITY_FIELD_NAME", "severity")
+    # Severity values: comma-separated list of "value:description" pairs
+    SEVERITY_VALUES = os.environ.get(
+        "INCIDENT_AGENT_SEVERITY_VALUES",
+        "Critical:blocker or crash,Major:functional failure,Minor:UI/UX issue,Cosmetic:typo or minor visual issue"
+    )
+    # Priority values: comma-separated list of "value:description" pairs
+    PRIORITY_VALUES = os.environ.get(
+        "INCIDENT_AGENT_PRIORITY_VALUES",
+        "High:immediate fix,Medium:normal release,Low:backlog"
+    )
 
 
 # RAG Update Agent

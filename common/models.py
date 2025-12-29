@@ -238,6 +238,12 @@ class IncidentCreationInput(JsonSerializableModel):
         description="Structured test step execution results for reproduction steps and analysis"
     )
     system_description: str
+    issue_priority_field_id: str = Field(
+        description="The ID of the Jira issue field for issue priority"
+    )
+    issue_severity_field_name: str = Field(
+        description="The name of the Jira issue field for issue severity"
+    )
 
 
 class DuplicateDetectionResult(JsonSerializableModel):

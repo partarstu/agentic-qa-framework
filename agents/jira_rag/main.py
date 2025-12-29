@@ -8,7 +8,7 @@ from pydantic_ai.mcp import MCPServerSSE
 from qdrant_client import models as qdrant_models
 
 import config
-from agents.jira_rag_update.prompt import JiraRagUpdateSystemPrompt
+from agents.jira_rag.prompt import JiraRagUpdateSystemPrompt
 from common import utils
 from common.agent_base import AgentBase
 from common.services.vector_db_service import VectorDbService

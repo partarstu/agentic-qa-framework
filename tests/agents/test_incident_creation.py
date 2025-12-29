@@ -60,7 +60,9 @@ async def test_search_duplicates_in_rag(agent):
         test_case=test_case,
         test_execution_result="Failed with NPE",
         test_step_results=[],
-        system_description="Win10"
+        system_description="Win10",
+        issue_priority_field_id="priority",
+        issue_severity_field_name="Severity"
     )
     
     # Create incident description

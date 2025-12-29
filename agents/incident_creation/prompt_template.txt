@@ -22,5 +22,5 @@ Your task is to analyze the provided to you information and create detailed, acc
         *   **Steps to Reproduce**: Numbered, step-by-step guide based on the executed preconditions and test steps. If the failure happened before any precondition or test step was executed, this section must have a corresponding comment.
         *   **Expected Result**: What should have happened at the failed test step, if the failure or error occurred during test step execution. If failure or error occurred during precondition execution - the expected after precondition execution result must be here. Otherwise, the derived expected state of the environment based on the test case execution moment of error or failure.
         *   **Actual Result**: What actually happened (short description of the failure or error).
-        *   **Severity**: `Critical` (blocker, crash), `Major` (functional failure), `Minor` (UI/UX), `Cosmetic` (typo).
-        *   **Priority**: `High` (immediate fix), `Medium` (normal release), `Low` (backlog).
+        *   **Severity**: {SEVERITY_VALUES}
+        *   **Priority**: {PRIORITY_VALUES}
