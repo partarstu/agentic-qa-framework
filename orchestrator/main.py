@@ -126,7 +126,7 @@ async def lifespan(app: FastAPI):
             await discovery_task
         except asyncio.CancelledError:
             logger.info("Agent discovery task successfully cancelled.")
-            
+
     if not cancellation_task.cancel():
         try:
             await cancellation_task
@@ -148,7 +148,7 @@ async def _retry_cancellation_task():
     while True:
         try:
             agent_id, timestamp = await cancellation_queue.get()
-            
+
             # If it's been more than 24 hours, give up
             if time.time() - timestamp > 24 * 3600:
                 logger.warning(f"Gave up cancelling task for agent {agent_id} after 24 hours.")
@@ -157,17 +157,17 @@ async def _retry_cancellation_task():
 
             # Attempt cancellation (or recovery check)
             logger.info(f"Attempting to cancel task/recover agent {agent_id}...")
-            
+
             # Placeholder for actual cancellation logic. 
             # We check if agent is responsive (e.g. we can get its card).
             # If responsive, we assume we can reset it to AVAILABLE.
             agent_card = await agent_registry.get_card(agent_id)
             is_recovered = False
             if agent_card:
-                 # Try to fetch card again to see if it responds
-                 if await _fetch_agent_card(agent_card.url):
-                     is_recovered = True
-            
+                # Try to fetch card again to see if it responds
+                if await _fetch_agent_card(agent_card.url):
+                    is_recovered = True
+
             if is_recovered:
                 logger.info(f"Agent {agent_id} successfully recovered/cancelled. Marking AVAILABLE.")
                 await agent_registry.update_status(agent_id, AgentStatus.AVAILABLE)
@@ -176,12 +176,12 @@ async def _retry_cancellation_task():
                 logger.info(f"Agent {agent_id} not recovered yet. Will retry.")
                 cancellation_queue.task_done()
                 # Re-queue with delay
-                await asyncio.sleep(60) # Wait 1 minute before retrying same agent? 
+                await asyncio.sleep(60)  # Wait 1 minute before retrying same agent?
                 # To avoid busy loop if queue has items, we should sleep or use a better scheduling.
                 # But putting it back immediately makes this loop spin if queue has items and they fail.
                 # So we should put it back and sleep.
                 await cancellation_queue.put((agent_id, timestamp))
-                
+
         except asyncio.CancelledError:
             break
         except Exception as e:
@@ -257,8 +257,8 @@ async def review_jira_requirements(request: Request, api_key: str = Depends(_val
     user_story_id = await _get_jira_issue_key_from_request(request)
     task_description = "Review the Jira user story"
     agent_id = await _choose_agent_id(task_description)
-    completed_task, _ = await _send_task_to_agent(agent_id, f"Jira user story with key {user_story_id}",
-                                               task_description)
+    completed_task = await _send_task_to_agent(agent_id, f"Jira user story with key {user_story_id}",
+                                                task_description)
     _validate_task_status(completed_task, f"Review of the user story {user_story_id}")
     logger.info("Received response from an agent, requirements review seems to be complete.")
     return {"message": f"Review of the requirements for Jira user story {user_story_id} completed."}
@@ -302,13 +302,13 @@ async def update_rag_db(request: ProjectExecutionRequest, api_key: str = Depends
     try:
         task_description = "Update RAG Vector DB with Jira issues"
         agent_id = await _choose_agent_id(task_description)
-        completed_task, _ = await _send_task_to_agent(agent_id, f"Sync Jira bugs for project {project_key}",
-                                                   task_description)
-        
+        completed_task = await _send_task_to_agent(agent_id, f"Sync Jira bugs for project {project_key}",
+                                                    task_description)
+
         _validate_task_status(completed_task, task_description)
         received_artifacts = _get_artifacts_from_task(completed_task, task_description)
         text_content = _get_text_content_from_artifacts(received_artifacts, task_description)
-        
+
         logger.info(f"RAG update completed: {text_content}")
         return {"message": "RAG update completed.", "details": text_content}
     except Exception as e:
@@ -326,7 +326,7 @@ async def execute_tests(request: ProjectExecutionRequest, api_key: str = Depends
         automated_test_cases = []
         try:
             automated_tests_dict = test_management_client.fetch_ready_for_execution_test_cases_by_labels(
-                project_key,                          [config.OrchestratorConfig.AUTOMATED_TC_LABEL])
+                project_key, [config.OrchestratorConfig.AUTOMATED_TC_LABEL])
             automated_test_cases = automated_tests_dict.get(config.OrchestratorConfig.AUTOMATED_TC_LABEL, [])
             if not automated_test_cases:
                 logger.info(f"No test cases ready for execution found for project {project_key}.")
@@ -345,11 +345,11 @@ async def execute_tests(request: ProjectExecutionRequest, api_key: str = Depends
 
         all_execution_results = await _request_all_test_cases_execution(grouped_test_cases)
         logger.info(f"Collected execution results for {len(all_execution_results)} test cases.")
-        
+
         # Request incident creation for all failed tests
         logger.info("Processing failed tests for incident creation.")
         await _request_incident_creation_for_failed_tests(all_execution_results)
-        
+
         if all_execution_results:
             logger.info("Generating test execution report based on all execution results.")
             await _generate_test_report(all_execution_results, project_key, test_management_client)
@@ -366,7 +366,7 @@ async def _generate_test_report(all_execution_results, project_key, test_managem
 
 
 async def _request_incident_creation_for_failed_tests(
-    all_execution_results: List[TestExecutionResult],
+        all_execution_results: List[TestExecutionResult],
 ) -> None:
     """
     Process all failed test execution results and create incidents for each.
@@ -378,13 +378,13 @@ async def _request_incident_creation_for_failed_tests(
         result for result in all_execution_results
         if result.testExecutionStatus in ["failed", "error"]
     ]
-    
+
     if not failed_results:
         logger.info("No failed tests found. Skipping incident creation.")
         return
-    
+
     logger.info(f"Found {len(failed_results)} failed test(s). Creating incidents in parallel.")
-    
+
     async def _create_incident_for_result(result: TestExecutionResult) -> None:
         """Helper coroutine to create incident for a single failed test result."""
         logger.info(f"Test case {result.testCaseKey} failed. Initiating incident creation.")
@@ -393,9 +393,9 @@ async def _request_incident_creation_for_failed_tests(
                 test_case_key=result.testCaseKey,
                 test_execution_result=str(result.generalErrorMessage),
                 test_step_results=result.stepResults,
-                agent_execution_logs=result.logs,
                 system_description=result.system_description
             )
+
             incident_result = await _request_incident_creation(incident_input, result.artifacts or [])
             result.incident_creation_result = incident_result
             logger.info(
@@ -404,7 +404,7 @@ async def _request_incident_creation_for_failed_tests(
             )
         except Exception as e:
             logger.error(f"Failed to create incident for test case {result.testCaseKey}: {e}")
-    
+
     # Execute all incident creations in parallel
     await asyncio.gather(*[_create_incident_for_result(result) for result in failed_results])
 
@@ -487,7 +487,7 @@ async def _execute_test_group(test_type: str, test_cases: List[TestCase],
     # Cancel all workers
     for worker in workers:
         worker.cancel()
-    
+
     # Wait for workers to finish cancelling
     await asyncio.gather(*workers, return_exceptions=True)
 
@@ -515,7 +515,7 @@ async def _agent_worker(agent_id: str, queue: asyncio.Queue, results: List[TestE
                 logger.error(f"Error in worker for agent {agent_id}: {e}")
                 # Mark agent as BROKEN first
                 await agent_registry.update_status(agent_id, AgentStatus.BROKEN)
-                
+
                 # Check if any other agents in the pool are still alive (not BROKEN)
                 any_agents_alive = False
                 for other_id in pool_agent_ids:
@@ -524,7 +524,7 @@ async def _agent_worker(agent_id: str, queue: asyncio.Queue, results: List[TestE
                         if status != AgentStatus.BROKEN:
                             any_agents_alive = True
                             break
-                
+
                 if any_agents_alive:
                     # Retry logic: Put back in queue
                     logger.info(f"Agent {agent_id} broken, but other agents available. Re-queueing task.")
@@ -539,7 +539,6 @@ async def _agent_worker(agent_id: str, queue: asyncio.Queue, results: List[TestE
                         testCaseName=test_case.name,
                         testExecutionStatus="error",
                         generalErrorMessage=f"All agents failed. Last error from {agent_name}: {e}",
-                        logs="", 
                         start_timestamp=datetime.now().isoformat(),
                         end_timestamp=datetime.now().isoformat(),
                         system_description=f"Agent: {agent_name} (Failed - No Retry Available)"
@@ -547,7 +546,7 @@ async def _agent_worker(agent_id: str, queue: asyncio.Queue, results: List[TestE
                     results.append(failed_result)
 
                 queue.task_done()
-                break # Exit worker as agent is broken
+                break  # Exit worker as agent is broken
             queue.task_done()
     except asyncio.CancelledError:
         logger.info(f"Agent worker for {agent_id} cancelled.")
@@ -560,11 +559,9 @@ async def _execute_single_test(agent_id: str, test_case: TestCase,
     task_description = f"Execution of test case {test_case.key} (type: {test_type})"
     execution_request = TestExecutionRequest(test_case=test_case)
     artifacts = []
-    logs = ""
     start_timestamp = datetime.now()
     try:
-        completed_task, logs = await _send_task_to_agent(agent_id, execution_request.model_dump_json(),
-                                                   task_description)
+        completed_task = await _send_task_to_agent(agent_id, execution_request.model_dump_json(), task_description)
         artifacts = _get_artifacts_from_task(completed_task, task_description)
     except Exception as e:
         _handle_exception(f"Failed to execute test case {test_case.key}. Error: {e}", 500)
@@ -587,14 +584,14 @@ Test case execution results:\n```{text_results}```
         _handle_exception("Couldn't map the test execution results received from the agent to the expected format.")
 
     test_execution_result.testCaseKey = test_case.key
-    test_execution_result.logs = logs
     if not test_execution_result.start_timestamp:
         test_execution_result.start_timestamp = start_timestamp.isoformat()
     if not test_execution_result.end_timestamp:
         test_execution_result.end_timestamp = end_timestamp.isoformat()
+    # Extract file artifacts from agent response - logs are included as file parts by the agent
     file_artifacts = _get_file_contents_from_artifacts(artifacts)
     test_execution_result.artifacts = file_artifacts
-    
+
     if not test_execution_result.system_description:
         test_execution_result.system_description = f"Agent: {agent_name}, Environment: Standard Test Environment"
 
@@ -602,15 +599,9 @@ Test case execution results:\n```{text_results}```
     return test_execution_result
 
 
-
-
-
-
-
-
 async def _request_incident_creation(
-    incident_input: IncidentCreationInput,
-    artifacts: List[FileWithBytes]
+        incident_input: IncidentCreationInput,
+        artifacts: List[FileWithBytes]
 ) -> IncidentCreationResult:
     """Request incident creation with all artifacts sent as file parts.
     
@@ -623,20 +614,20 @@ async def _request_incident_creation(
     """
     task_description = "Create incident report"
     agent_id = await _choose_agent_id(task_description)
-    
+
     # Create message with JSON text part and ALL artifact file parts
     message_parts = [TextPart(text=incident_input.model_dump_json())]
-    
+
     # Add ALL artifacts as file parts (agent will handle them)
     for artifact in artifacts:
         message_parts.append(FilePart(file=artifact))
         logger.info(f"Adding artifact '{artifact.name}' as file part to incident creation message")
-    
+
     # Create the message
     message = Message(parts=message_parts, message_id="", role='agent')
-    
-    completed_task, _ = await _send_task_to_agent_with_message(agent_id, message, task_description)
-    
+
+    completed_task = await _send_task_to_agent_with_message(agent_id, message, task_description)
+
     task_description = f"Incident creation for test case {incident_input.test_case_key}"
     received_artifacts = _get_artifacts_from_task(completed_task, task_description)
     text_content = _get_text_content_from_artifacts(received_artifacts, task_description)
@@ -645,8 +636,6 @@ async def _request_incident_creation(
     if result.incident_key and result.incident_id:
         try:
             content_to_index = f"{incident_input.test_execution_result}\n{incident_input.system_description}"
-            if incident_input.agent_execution_logs:
-                content_to_index += f"\nLogs: {incident_input.agent_execution_logs[:500]}..."
 
             incident_data = IncidentIndexData(
                 incident_id=result.incident_id,
@@ -665,9 +654,9 @@ async def _request_incident_creation(
 async def _request_test_cases_generation(user_story_id) -> GeneratedTestCases:
     task_description = "Generate test cases"
     agent_id = await _choose_agent_id(task_description)
-    completed_task, _ = await _send_task_to_agent(agent_id,
-                                               f"Jira user story with key {user_story_id}",
-                                               task_description)
+    completed_task = await _send_task_to_agent(agent_id,
+                                                f"Jira user story with key {user_story_id}",
+                                                task_description)
     task_description = f"Generation of test cases for the user story {user_story_id}"
     received_artifacts = _get_artifacts_from_task(completed_task, task_description)
     text_content = _get_text_content_from_artifacts(received_artifacts, task_description)
@@ -685,8 +674,8 @@ def _get_artifacts_from_task(task: Task, task_description: str) -> list[Artifact
 async def _request_test_cases_classification(test_cases: List[TestCase], user_story_id: str) -> list[Artifact]:
     task_description = "Classify test cases"
     agent_id = await _choose_agent_id(task_description)
-    completed_task, _ = await _send_task_to_agent(agent_id,
-                                               f"Test cases:\n{test_cases}", task_description)
+    completed_task = await _send_task_to_agent(agent_id,
+                                                f"Test cases:\n{test_cases}", task_description)
     return _get_artifacts_from_task(completed_task,
                                     f"Classification of test cases for the user story {user_story_id}")
 
@@ -694,7 +683,7 @@ async def _request_test_cases_classification(test_cases: List[TestCase], user_st
 async def _request_test_cases_review(test_cases: List[TestCase], user_story_id: str) -> list[Artifact]:
     task_description = "Review test cases"
     agent_id = await _choose_agent_id(task_description)
-    completed_task, _ = await _send_task_to_agent(agent_id, f"Test cases:\n{test_cases}\nUser Story ID: {user_story_id}", task_description)
+    completed_task = await _send_task_to_agent(agent_id, f"Test cases:\n{test_cases}\nUser Story ID: {user_story_id}", task_description)
     return _get_artifacts_from_task(completed_task, "Review of test cases")
 
 
@@ -734,16 +723,19 @@ def _get_file_contents_from_artifacts(artifacts: list[Artifact]) -> List[FileWit
     return file_parts
 
 
-async def _send_task_to_agent_with_message(agent_id: str, message: Message, task_description: str) -> tuple[Task | None, str]:
+async def _send_task_to_agent_with_message(agent_id: str, message: Message, task_description: str) -> Task | None:
     """Send a custom message (with file parts) to an agent.
-    
+
+    Execution logs are expected to arrive from agents as file parts in the task artifacts.
+    Interested parties should extract logs directly from artifacts using get_execution_logs_from_artifacts().
+
     Args:
         agent_id: ID of the agent to send the message to.
         message: The A2A Message object to send (can contain text and file parts).
         task_description: Description of the task for logging.
-        
+
     Returns:
-        Tuple of (completed Task, execution logs).
+        The completed Task, or None if the task failed to complete.
     """
     agent_card = await agent_registry.get_card(agent_id)
     if not agent_card:
@@ -751,8 +743,6 @@ async def _send_task_to_agent_with_message(agent_id: str, message: Message, task
 
     # Set BUSY status
     await agent_registry.update_status(agent_id, AgentStatus.BUSY)
-
-    execution_logs = []
 
     try:
         async with httpx.AsyncClient(timeout=config.OrchestratorConfig.TASK_EXECUTION_TIMEOUT) as client:
@@ -763,14 +753,14 @@ async def _send_task_to_agent_with_message(agent_id: str, message: Message, task
             response_iterator = a2a_client.send_message(message)
             start_time = time.time()
             last_task = None
-            
+
             while (time_left := _get_time_left_for_task_completion_waiting(start_time)) > 0:
                 try:
                     response = await asyncio.wait_for(response_iterator.__anext__(), timeout=time_left)
                 except StopAsyncIteration:
                     if last_task and last_task.status.state in (TaskState.completed, TaskState.failed, TaskState.rejected):
                         await agent_registry.update_status(agent_id, AgentStatus.AVAILABLE)
-                        return last_task, "\n".join(execution_logs)
+                        return last_task
                     _handle_exception(f"Task '{task_description}' iterator finished before completion.", 500)
                 except asyncio.TimeoutError:
                     logger.error(f"Task '{task_description}' timed out while waiting for completion.")
@@ -780,7 +770,7 @@ async def _send_task_to_agent_with_message(agent_id: str, message: Message, task
                     except Exception as ex:
                         logger.error(f"Error handling timeout for agent {agent_id}: {ex}")
                         await agent_registry.update_status(agent_id, AgentStatus.BROKEN)
-                    
+
                     _handle_exception(f"Task '{task_description}' timed out while waiting for completion.", 408)
 
                 if isinstance(response, JSONRPCErrorResponse):
@@ -792,20 +782,19 @@ async def _send_task_to_agent_with_message(agent_id: str, message: Message, task
                     if task.status.state in (TaskState.completed, TaskState.failed, TaskState.rejected):
                         logger.info(f"Task '{task_description}' was completed with status '{str(task.status.state)}'.")
                         await agent_registry.update_status(agent_id, AgentStatus.AVAILABLE)
-                        return task, "\n".join(execution_logs)
+                        return task
                     else:
                         logger.debug(
                             f"Task for {task_description} is still in '{task.status.state}' state. Waiting for its "
                             f"completion. Agent: '{agent_card.name}' (ID: {agent_id})")
                 elif isinstance(response, Message):
                     msg_text = get_message_text(response)
-                    execution_logs.append(f"[{datetime.now().isoformat()}] {msg_text}")
                     logger.info(
                         f"Received a message from agent in the scope of the "
                         f"task '{task_description}': {msg_text}")
 
             _handle_exception(f"Task for {task_description} wasn't complete within timeout.", 408)
-            return None, "\n".join(execution_logs)
+            return None
 
     except Exception as e:
         logger.error(f"Error communicating with agent {agent_id}: {e}")
@@ -813,11 +802,14 @@ async def _send_task_to_agent_with_message(agent_id: str, message: Message, task
         raise e
 
 
-async def _send_task_to_agent(agent_id: str, input_data: str, task_description: str) -> tuple[Task | None, str]:
+async def _send_task_to_agent(agent_id: str, input_data: str, task_description: str) -> Task | None:
     """Send a text message to an agent.
 
     This is a convenience wrapper around _send_task_to_agent_with_message that
     creates a simple text message from the input string.
+
+    Execution logs are expected to arrive from agents as file parts in the task artifacts.
+    Interested parties should extract logs directly from artifacts using get_execution_logs_from_artifacts().
 
     Args:
         agent_id: ID of the agent to send the message to.
@@ -825,7 +817,7 @@ async def _send_task_to_agent(agent_id: str, input_data: str, task_description: 
         task_description: Description of the task for logging.
 
     Returns:
-        Tuple of (completed Task, execution logs).
+        The completed Task, or None if the task failed to complete.
     """
     message = new_agent_text_message(input_data)
     return await _send_task_to_agent_with_message(agent_id, message, task_description)
@@ -837,7 +829,7 @@ async def _choose_agent_id(agent_task_description):
     agent_id = await _select_agent(agent_task_description)
     if not agent_id:
         _handle_exception(f"No agent found to handle the task '{agent_task_description}'.", 404)
-    
+
     agent_name = await agent_registry.get_name(agent_id)
     logger.info(
         f"Selected agent '{agent_name}' (ID: {agent_id}) for task '{agent_task_description}'.")
@@ -889,7 +881,7 @@ The list of all registered with you agents:\n{agents_info}
     for agent_id in selected_agent_ids:
         if await agent_registry.contains(agent_id):
             valid_agent_ids.append(agent_id)
-            
+
     for agent_id in valid_agent_ids:
         agent_name = await agent_registry.get_name(agent_id)
         logger.info(f"Selected agent '{agent_name}' with ID '{agent_id}' for task '{task_description}'.")
@@ -969,15 +961,15 @@ async def _discover_agents():
 
     tasks = [_fetch_agent_card(url) for url in set(remote_agent_urls)]
     found_urls = []
-    
+
     # Update for thread safety using AgentRegistry
     agent_cards = await asyncio.gather(*tasks)
-    
+
     # We need to check against existing agents. 
     # Since registry methods are async, we should iterate and check.
-    
+
     existing_cards = await agent_registry.get_all_cards()
-    
+
     for agent_card in agent_cards:
         if agent_card:
             # Check if an agent with this URL is already registered

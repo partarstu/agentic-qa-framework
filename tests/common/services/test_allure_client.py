@@ -32,7 +32,6 @@ def test_generate_report_with_results(mock_logger_cls, allure_client):
             testCaseName="TC1", 
             testExecutionStatus="passed", 
             generalErrorMessage="", 
-            logs="Some logs", 
             start_timestamp="2023-01-01T10:00:00Z", 
             end_timestamp="2023-01-01T10:01:00Z",
             artifacts=[FileWithBytes(name="screen", bytes=b"MTIz", mime_type="image/png")]
@@ -52,15 +51,21 @@ def test_generate_report_with_results(mock_logger_cls, allure_client):
 def test_generate_report_failed(mock_logger_cls, allure_client):
     mock_logger = mock_logger_cls.return_value
     with patch("subprocess.run"):
+        import base64
+        logs_content = "Error logs"
+        encoded_logs = base64.b64encode(logs_content.encode('utf-8')).decode('utf-8')
+        
         results = [TestExecutionResult(
             stepResults=[], 
             testCaseKey="TEST-2", 
             testCaseName="TC2", 
             testExecutionStatus="failed", 
             generalErrorMessage="Failure msg", 
-            logs="Error logs", 
             start_timestamp="2023-01-01T10:00:00Z", 
-            end_timestamp="2023-01-01T10:01:00Z"
+            end_timestamp="2023-01-01T10:01:00Z",
+            artifacts=[
+                FileWithBytes(name="execution_logs.txt", bytes=encoded_logs, mime_type="text/plain")
+            ]
         )]
         
         allure_client.generate_report(results)
@@ -70,6 +75,7 @@ def test_generate_report_failed(mock_logger_cls, allure_client):
         assert test_result.name == "TC2"
         assert test_result.status == Status.FAILED
         assert test_result.statusDetails.message == "Failure msg"
+        assert test_result.statusDetails.trace == logs_content
 
 def test_generate_html_call(allure_client):
     # Verify subprocess call structure

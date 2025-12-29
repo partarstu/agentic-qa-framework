@@ -5,12 +5,10 @@
 import base64
 import os
 import uuid
-from pathlib import Path
 from typing import List
 
-from a2a.types import Message, FilePart, FileWithBytes, TextPart
+from a2a.types import FilePart, FileWithBytes
 from pydantic_ai import Agent
-from pydantic_ai.messages import UserContent, BinaryContent, ImageMediaType, VideoMediaType
 from pydantic_ai.mcp import MCPServerSSE
 
 import config
@@ -23,6 +21,7 @@ from common.models import (
     IncidentCreationResult,
     DuplicateDetectionResult,
 )
+from common.services.test_management_system_client_provider import get_test_management_client
 
 logger = utils.get_logger("incident_creation_agent")
 
@@ -36,17 +35,6 @@ jira_mcp_server = MCPServerSSE(url=JIRA_MCP_SERVER_URL, timeout=config.MCP_SERVE
 
 class IncidentCreationAgent(AgentBase):
     """Agent for creating incident reports in Jira.
-    
-    This agent uses the Jira MCP Server for all Jira operations.
-    
-    The orchestrator passes all file artifacts as file parts in the A2A message.
-    This agent:
-    - Extracts and saves all artifacts to the MCP server filesystem 
-    - Adds file paths to the user message text
-    - Passes media files (images, videos) as BinaryContent for LLM visual analysis
-    
-    Custom tools:
-    - search_duplicates_in_rag: Search for similar incidents in the RAG vector database
     """
 
     def __init__(self):
@@ -68,6 +56,8 @@ class IncidentCreationAgent(AgentBase):
         own_name = agent_config.OWN_NAME if agent_config else "Incident Creation Agent"
         thinking_budget = agent_config.THINKING_BUDGET if agent_config else 16000
         self._thinking_budget = thinking_budget
+        self._saved_artifact_paths: list[str] = []
+        self._media_files: list[FileWithBytes] = []
 
         super().__init__(
             agent_name=own_name,
@@ -81,7 +71,7 @@ class IncidentCreationAgent(AgentBase):
             mcp_servers=[jira_mcp_server],
             deps_type=IncidentCreationInput,
             description="Agent which creates detailed incident reports in Jira based on test execution results.",
-            tools=[self.search_duplicates_in_rag],
+            tools=[self._search_duplicate_candidates_in_rag, self._get_linked_issues, self._check_if_duplicate, self._save_artifacts],
             vector_db_collection_name=QDRANT_COLLECTION_NAME
         )
 
@@ -91,14 +81,14 @@ class IncidentCreationAgent(AgentBase):
     def get_max_requests_per_task(self) -> int:
         return 10
 
-    async def search_duplicates_in_rag(self, incident_description: str) -> List[dict]:
+    async def _search_duplicate_candidates_in_rag(self, incident_description: str) -> List[dict]:
         """Searches for potential duplicate incidents using the RAG vector database.
         
         This tool searches the vector database for semantically similar incidents based on the incident description.
         
         Args:
             incident_description: Description of the incident including the error description, 
-                                test case name, and test step where the issue occurred.
+                                test case name, test step where the issue occurred, steps to reproduce, system info etc.
 
         Returns:
             List of dicts with 'issue_key' and 'content' for each potential duplicate.
@@ -126,112 +116,69 @@ class IncidentCreationAgent(AgentBase):
         return candidates
 
     @staticmethod
-    def _is_media_file(file: FileWithBytes) -> bool:
-        """Check if a file is a media file (image or video)."""
-        if not file.name:
-            return False
-        
-        media_extensions = {
-            # Images
-            '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp', '.svg', '.ico',
-            # Videos
-            '.mp4', '.avi', '.mov', '.wmv', '.flv', '.webm', '.mkv'
-        }
-        
-        file_ext = Path(file.name).suffix.lower()
-        return file_ext in media_extensions
-    
-    def _extract_and_save_artifacts(self, received_message: Message) -> tuple[list[str], list[FileWithBytes]]:
-        """Extract artifacts from message, save them, and separate media files.
-        
+    async def _get_linked_issues(test_case_key: str) -> List[str]:
+        """Fetches all Jira issues linked to the test case.
+
         Args:
-            received_message: The A2A Message containing file parts.
-            
+            test_case_key: The key of the test case (e.g., 'PROJ-T123').
+
         Returns:
-            Tuple of (saved_file_paths, media_files_for_llm)
+            List of Jira issues linked to the test case.
+        """
+        try:
+            test_management_client = get_test_management_client()
+            linked_issues = test_management_client.fetch_linked_issues(test_case_key)
+
+            issue_keys = [
+                issue.get("issue_key")
+                for issue in linked_issues
+                if issue.get("issue_key")
+            ]
+
+            logger.info(f"Found {len(issue_keys)} linked issues for test case {test_case_key}: {issue_keys}")
+            return issue_keys
+
+        except Exception as e:
+            logger.error(f"Error fetching linked issues for test case {test_case_key}: {e}")
+            return []
+
+    def _save_artifacts(self) -> list[str]:
+        """Saves all received file artifacts into the file system and returns their paths.
         """
         saved_paths: list[str] = []
-        media_files: list[FileWithBytes] = []
         mcp_folder = config.MCP_SERVER_ATTACHMENTS_FOLDER_PATH
-        
-        for part in received_message.parts:
+        for part in self.latest_received_message.parts:
             if isinstance(part, FilePart):
                 file = part.file
                 if isinstance(file, FileWithBytes):
                     try:
-                        # Decode and save the file
                         file_content = base64.b64decode(file.bytes)
-                        
-                        # Generate unique filename
                         unique_id = str(uuid.uuid4())[:8]
                         original_name = file.name or "attachment"
                         safe_filename = f"{unique_id}_{original_name}"
                         file_path = os.path.join(mcp_folder, safe_filename)
-                        
-                        # Write to MCP server filesystem
                         with open(file_path, 'wb') as f:
                             f.write(file_content)
-                        
                         saved_paths.append(file_path)
                         logger.info(f"Saved artifact '{original_name}' to {file_path}")
-                        
-                        # Keep media files for LLM analysis
-                        if self._is_media_file(file):
-                            media_files.append(file)
-                            
                     except Exception as e:
                         logger.error(f"Failed to save artifact: {e}")
-        
-        if saved_paths:
-            logger.info(f"Saved {len(saved_paths)} artifacts, {len(media_files)} are media files for LLM")
-        
-        return saved_paths, media_files
-    
-    async def run(self, received_message: Message) -> Message:
-        """Overrides base run method to handle artifact extraction and processing.
-        """
-        logger.info("Got a task to execute, starting execution.")
-        
-        # Extract and save all artifacts from the message
-        saved_paths, media_files = self._extract_and_save_artifacts(received_message)
-        
-        # Get the JSON text content from themessage
-        text_content = ""
-        for part in received_message.parts:
-            if isinstance(part, TextPart):
-                text_content = part.text
-                break
-        
-        # Add saved file paths information to the text
-        if saved_paths:
-            paths_info = (
-                f"\n\n---\nSAVED ARTIFACT FILE PATHS (use these with jira MCP tools for attachments):\n"
-                f"{chr(10).join(saved_paths)}"
-            )
-            text_content += paths_info
-        
-        # Build user content list: text + media files as BinaryContent
-        user_content: List[UserContent] = [text_content]
-        
-        # Add media files for LLM analysis
-        for media_file in media_files:
-            file_content = base64.b64decode(media_file.bytes)
-            mime_type = media_file.mimeType or ""
-            
-            if mime_type.startswith("image"):
-                user_content.append(BinaryContent(data=file_content, media_type=ImageMediaType))
-            elif mime_type.startswith("video"):
-                user_content.append(BinaryContent(data=file_content, media_type=VideoMediaType))
-        
-        # Call the agent with the prepared content
-        result = await self._get_agent_execution_result(user_content)
-        
-        logger.info("Completed execution of the task.")
-        return self._get_text_message_from_results(result)
 
-    async def _check_duplicate(self, input_data: IncidentCreationInput, candidate_key: str,
-                               candidate_content: str) -> DuplicateDetectionResult:
-        """Internal method to check if a candidate issue is a duplicate of the current incident."""
+        if saved_paths:
+            logger.info(f"Saved {len(saved_paths)} artifacts")
+        return saved_paths
+
+    async def _check_if_duplicate(self, input_data: IncidentCreationInput, candidate_key: str,
+                                  candidate_content: str) -> DuplicateDetectionResult:
+        """Checks if a candidate issue is a duplicate of the current incident.
+
+        Args:
+            input_data: The incident info which contains all available details about the failure.
+            candidate_key: The Jira issue key of the candidate duplicate (e.g., 'PROJ-123').
+            candidate_content: The full content/description of the candidate issue to compare against.
+
+        Returns: duplicate detection result.
+        """
         prompt = (f"Current Incident:\n{input_data.model_dump_json()}\n\n"
                   f"Candidate Incident ({candidate_key}):\n{candidate_content}")
         result = await self.duplicate_detector.run(prompt)

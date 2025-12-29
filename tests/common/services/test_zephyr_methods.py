@@ -41,7 +41,7 @@ def test_create_test_execution(mock_post, mock_get, zephyr_client):
     
     results = [TestExecutionResult(
         stepResults=[], testCaseKey="TEST-1", testCaseName="TC1", 
-        testExecutionStatus="passed", generalErrorMessage="", logs="", 
+        testExecutionStatus="passed", generalErrorMessage="", 
         start_timestamp="2023-01-01T10:00:00", end_timestamp="2023-01-01T10:01:00"
     )]
     

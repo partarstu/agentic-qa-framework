@@ -42,7 +42,7 @@ async def test_agent_worker_success(mock_registry, mock_queue):
     with patch("orchestrator.main._execute_single_test", new_callable=AsyncMock) as mock_exec:
         mock_exec.return_value = TestExecutionResult(
             stepResults=[], testCaseKey="TC-1", testCaseName="Name", 
-            testExecutionStatus="passed", generalErrorMessage="", logs="", 
+            testExecutionStatus="passed", generalErrorMessage="", 
             start_timestamp="now", end_timestamp="then"
         )
         
@@ -89,7 +89,7 @@ async def test_execute_single_test_success(mock_registry):
     with patch("orchestrator.main._send_task_to_agent", new_callable=AsyncMock) as mock_send, \
          patch("orchestrator.main._get_results_extractor_agent") as mock_extractor_agent_cls:
          
-        mock_send.return_value = (mock_task, "logs")
+        mock_send.return_value = mock_task
         
         mock_extractor_instance = MagicMock()
         mock_extractor_agent_cls.return_value = mock_extractor_instance
@@ -97,7 +97,7 @@ async def test_execute_single_test_success(mock_registry):
         mock_run_result = MagicMock()
         mock_run_result.output = TestExecutionResult(
             stepResults=[], testCaseKey="TC-1", testCaseName="Name", 
-            testExecutionStatus="passed", generalErrorMessage="", logs="", 
+            testExecutionStatus="passed", generalErrorMessage="", 
             start_timestamp="now", end_timestamp="then"
         )
         mock_extractor_instance.run = AsyncMock(return_value=mock_run_result)

@@ -19,7 +19,7 @@ from pydantic import BaseModel
 from pydantic_ai import Agent, Tool
 from pydantic_ai.agent import AgentRunResult
 from pydantic_ai.mcp import MCPServerSSE
-from pydantic_ai.messages import BinaryContent, AudioMediaType, ImageMediaType, UserContent
+from pydantic_ai.messages import BinaryContent, UserContent
 from pydantic_ai.models.google import GoogleModelSettings
 from pydantic_ai.models.groq import GroqModelSettings
 from pydantic_ai.settings import ModelSettings
@@ -27,8 +27,8 @@ from pydantic_ai.tools import AgentDepsT, ToolFuncEither
 from pydantic_ai.usage import UsageLimits
 
 import config
-from common.agent_executor import DefaultAgentExecutor
 from common import utils
+from common.agent_executor import DefaultAgentExecutor
 from common.custom_llm_wrapper import CustomLlmWrapper
 from common.models import JsonSerializableModel
 from common.services.vector_db_service import VectorDbService
@@ -75,10 +75,11 @@ class AgentBase(ABC):
         self.tools = tools
         self.agent = self._create_agent()
         self.a2a_server = self._get_server()
-        
+
         self.vector_db_service = None
         if vector_db_collection_name:
             self.vector_db_service = VectorDbService(vector_db_collection_name)
+        self.latest_received_message: Message | None = None
 
     @abstractmethod
     def get_thinking_budget(self) -> int:
@@ -125,6 +126,7 @@ class AgentBase(ABC):
             return await self.agent.run(received_request, usage_limits=usage_limits)
 
     async def run(self, received_message: Message) -> Message:
+        self.latest_received_message = received_message
         received_request = self._get_all_received_contents(received_message)
         logger.info("Got a task to execute, starting execution.")
         result = await self._get_agent_execution_result(received_request)
@@ -205,12 +207,9 @@ class AgentBase(ABC):
             if isinstance(part, FilePart):
                 file = part.file
                 if isinstance(file, FileWithBytes):
-                    mime_type = file.mimeType
+                    mime_type = file.mime_type
                     content = base64.b64decode(file.bytes)
-                    if mime_type.startswith("audio"):
-                        files_content.append(BinaryContent(data=content, media_type=AudioMediaType))
-                    elif mime_type.startswith("image"):
-                        files_content.append(BinaryContent(data=content, media_type=ImageMediaType))
+                    files_content.append(BinaryContent(data=content, media_type=mime_type))
         all_contents: List[UserContent] = [text_content, *files_content]
         return all_contents
 
@@ -221,7 +220,7 @@ class AgentBase(ABC):
             return new_agent_text_message(text=output.model_dump_json(), context_id=context_id, task_id=task_id)
         if isinstance(output, dict):
             text_parts = []
-            for part in result.output.get('parts', []):
+            for part in output.get('parts', []):
                 if part.get('type', "") == 'text':
                     text_parts.append(part)
             return new_agent_text_message(text="\n".join(text_parts), context_id=context_id, task_id=task_id)

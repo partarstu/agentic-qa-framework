@@ -192,7 +192,6 @@ class TestExecutionResult(JsonSerializableModel):
                                                                                   " execution")
     generalErrorMessage: str = Field(description=
                                      "General error message if the test execution failed (e.g. preconditions failed)")
-    logs: str = Field(description="Logs generated during the test execution")
     artifacts: Optional[List[FileWithBytes]] = Field(
         default=None, description="Optional dictionary of artifacts generated during execution (e.g., screenshots, "
                                   "reports, stack traces etc.)")
@@ -236,7 +235,6 @@ class IncidentCreationInput(JsonSerializableModel):
     test_step_results: List["TestStepResult"] = Field(
         description="Structured test step execution results for reproduction steps and analysis"
     )
-    agent_execution_logs: Optional[str] = None
     system_description: str
 
 

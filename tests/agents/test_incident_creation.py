@@ -50,7 +50,6 @@ async def test_search_duplicates_in_rag(agent):
         test_case_key="TC-123",
         test_execution_result="Failed with NPE",
         test_step_results=[],
-        agent_execution_logs="Logs...",
         system_description="Win10"
     )
     
@@ -66,7 +65,7 @@ System: {input_data.system_description}"""
     agent.vector_db_service.search.return_value = [mock_hit]
     
     # Run
-    candidates = await agent.search_duplicates_in_rag(incident_description)
+    candidates = await agent._search_duplicate_candidates_in_rag(incident_description)
     
     assert len(candidates) == 1
     assert candidates[0]["issue_key"] == "BUG-1"

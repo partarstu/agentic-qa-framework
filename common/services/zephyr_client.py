@@ -415,17 +415,30 @@ class ZephyrClient(TestManagementClientBase):
             raise
 
     def fetch_test_case_by_key(self, test_case_key: str) -> TestCase:
-        """
-        Fetches a single test case by its key.
-
-        Args:
-            test_case_key: The key of the test case to fetch.
-
-        Returns:
-            A TestCase object.
-        """
         with httpx.Client() as client:
             url = self._get_test_case_url(test_case_key)
             logger.info(f"Fetching test case: {test_case_key} from {url}")
             test_case_data = self._get_test_case_data(client, url)
             return self._parse_tc_json(client, None, test_case_data)
+
+    def fetch_linked_issues(self, test_case_key: str) -> List[Dict]:
+        linked_issues = []
+        url = f"{self.base_url}/testcases/{test_case_key}/links/issues"
+        logger.info(f"Fetching linked issues for test case {test_case_key} from {url}")
+        with httpx.Client() as client:
+            start_at = 0
+            max_results = 100
+            while True:
+                params = {"startAt": start_at, "maxResults": max_results}
+                response = client.get(url, headers=self.headers, params=params, timeout=CLIENT_TIMEOUT)
+                response.raise_for_status()
+                data = response.json()
+
+                for issue in data.get('values', []):
+                    linked_issues.append(issue)
+                if data.get('isLast', True):
+                    break
+                start_at += max_results
+
+        logger.info(f"Found {len(linked_issues)} linked issues for test case {test_case_key}")
+        return linked_issues
