@@ -48,7 +48,7 @@ async def test_agent_worker_success(mock_registry, mock_queue):
         
         results = []
         try:
-            await _agent_worker("agent-1", mock_queue, results)
+            await _agent_worker("agent-1", mock_queue, results, ["agent-1"])
         except asyncio.CancelledError:
             pass
             
@@ -60,7 +60,7 @@ async def test_agent_worker_success(mock_registry, mock_queue):
 async def test_agent_worker_broken(mock_registry, mock_queue):
     mock_registry.get_status.return_value = AgentStatus.BROKEN
     results = []
-    await _agent_worker("agent-1", mock_queue, results)
+    await _agent_worker("agent-1", mock_queue, results, ["agent-1"])
     assert len(results) == 0
 
 @pytest.mark.asyncio

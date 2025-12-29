@@ -2,8 +2,6 @@ import threading
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
-from transformers import AutoTokenizer, AutoModelForSequenceClassification, pipeline
-
 from common import utils
 from config import PROMPT_INJECTION_DETECTION_MODEL_PATH
 
@@ -66,6 +64,8 @@ class ProtectAiPromptGuard(PromptGuard):
             raise RuntimeError("Use get_instance() to get the instance of this class.")
         try:
             import torch
+            from transformers import AutoTokenizer, AutoModelForSequenceClassification, pipeline
+            
             self._initialized = True
             # Load the tokenizer from the local path where it was pre-downloaded
             self.tokenizer = AutoTokenizer.from_pretrained(PROMPT_INJECTION_DETECTION_MODEL_PATH)

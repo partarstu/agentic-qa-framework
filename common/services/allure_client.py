@@ -47,7 +47,8 @@ class AllureClient(TestReportingClientBase):
             datetime.fromisoformat(test_execution_result.start_timestamp.replace("Z", "+00:00")).timestamp() * 1000)
 
         # Extract logs from artifacts if available using the common utility
-        logs = utils.get_execution_logs_from_artifacts(test_execution_result.artifacts)
+        logs_list = utils.get_execution_logs_from_artifacts(test_execution_result.artifacts)
+        logs = "\n\n".join(logs_list) if logs_list else None
 
         # Map test status
         if test_execution_result.testExecutionStatus == "passed":

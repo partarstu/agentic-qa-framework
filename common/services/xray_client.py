@@ -366,3 +366,12 @@ class XrayClient(TestManagementClientBase):
         }
 
         self._execute_graphql_query(mutation, variables)
+
+    def fetch_linked_issues(self, test_case_key: str) -> List[Dict]:
+        logger.info(f"Fetching linked issues for test case {test_case_key}")
+        issue_data = self._execute_jira_request("GET", f"issue/{test_case_key}?fields=issuelinks")
+        linked_issues = []
+        if issue_data and "fields" in issue_data and "issuelinks" in issue_data["fields"]:
+            for link in issue_data["fields"]["issuelinks"]:
+                linked_issues.append(link)
+        return linked_issues

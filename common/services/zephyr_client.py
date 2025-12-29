@@ -175,33 +175,33 @@ class ZephyrClient(TestManagementClientBase):
             "startAt": start_at
         }
         with httpx.Client() as client:
-           target_status_id = self._get_test_case_status_id_by_name(client, TEST_FOR_EXECUTION_READY_STATUS_NAME,
-                                                                    params)
-           while True:
-              logger.debug(f"Fetching test cases with params: {params}")
-              response = client.get(search_url, headers=self.headers, params=params)
-              logger.debug(f"Zephyr API response status for fetching by labels: {response.status_code}")
-              response.raise_for_status()
-              data = response.json()
-              if data['maxResults']:
-                  max_results = data['maxResults']
-              for tc in data.get('values', []):
-                 if tc.get('status', {}).get('id') == target_status_id:
-                    labels = tc.get("labels", [])
-                    logger.debug(f"Test case {tc.get('key')} has labels: {labels}")
-                    for target_label in target_labels:
-                       if target_label in labels:
-                          logger.debug(f"Test case {tc.get('key')} matches target label: {target_label}")
-                          test_cases_by_label[target_label].append(self._parse_tc_json(client, None, tc))
-              if data.get('isLast', True):
-                 logger.debug("Reached the last page of results when fetching by labels.")
-                 break
-              else:
-                 logger.debug(f"Fetched {len(data.get('values', []))} test cases, total so far: "
+            target_status_id = self._get_test_case_status_id_by_name(client, TEST_FOR_EXECUTION_READY_STATUS_NAME,
+                                                                     params)
+            while True:
+                logger.debug(f"Fetching test cases with params: {params}")
+                response = client.get(search_url, headers=self.headers, params=params)
+                logger.debug(f"Zephyr API response status for fetching by labels: {response.status_code}")
+                response.raise_for_status()
+                data = response.json()
+                if data['maxResults']:
+                    max_results = data['maxResults']
+                for tc in data.get('values', []):
+                    if tc.get('status', {}).get('id') == target_status_id:
+                        labels = tc.get("labels", [])
+                        logger.debug(f"Test case {tc.get('key')} has labels: {labels}")
+                        for target_label in target_labels:
+                            if target_label in labels:
+                                logger.debug(f"Test case {tc.get('key')} matches target label: {target_label}")
+                                test_cases_by_label[target_label].append(self._parse_tc_json(client, None, tc))
+                if data.get('isLast', True):
+                    logger.debug("Reached the last page of results when fetching by labels.")
+                    break
+                else:
+                    logger.debug(f"Fetched {len(data.get('values', []))} test cases, total so far: "
                                  f"{sum(len(item_list) for item_list in test_cases_by_label.values())}")
-                 start_at += max_results
-           logger.info(f"Fetched {len(data.get('values', []))} test cases.")
-           return dict(test_cases_by_label)
+                    start_at += max_results
+            logger.info(f"Fetched {len(data.get('values', []))} test cases.")
+            return dict(test_cases_by_label)
 
     def change_test_case_status(self, project_key: str, test_case_key: str, new_status_name: str) -> None:
         """
@@ -235,7 +235,7 @@ class ZephyrClient(TestManagementClientBase):
             self._update_test_case(client, tc_url, test_case_data)
             logger.info(f"Successfully changed status of test case {test_case_key} to '{new_status_name}'.")
 
-    def _get_test_case_status_id_by_name(self, client, status_name:str, params):
+    def _get_test_case_status_id_by_name(self, client, status_name: str, params):
         statuses_url = f"{self.base_url}/statuses?maxResults=100&statusType=TEST_CASE"
         logger.debug(f"Fetching statuses from {statuses_url}")
         statuses_response = client.get(statuses_url, headers=self.headers, params=params)
@@ -245,7 +245,8 @@ class ZephyrClient(TestManagementClientBase):
         statuses = response_json.get("values", [])
         logger.debug(f"Found {len(statuses)} statuses")
         target_status_id = next(
-            (status.get("id") for status in statuses if status.get("name", "").lower() == status_name.lower() and status.get("archived") == False),
+            (status.get("id") for status in statuses if
+             status.get("name", "").lower() == status_name.lower() and status.get("archived") == False),
             None)
         if not target_status_id:
             logger.error(f"Test case status '{status_name}' not found.")
@@ -422,23 +423,27 @@ class ZephyrClient(TestManagementClientBase):
             return self._parse_tc_json(client, None, test_case_data)
 
     def fetch_linked_issues(self, test_case_key: str) -> List[Dict]:
+        """
+        Fetches Jira issues linked to a test case.
+
+        Args:
+            test_case_key: The key of the test case (e.g., 'SCRUM-T133').
+
+        Returns:
+            A list of dictionaries containing linked issue information.
+        """
         linked_issues = []
-        url = f"{self.base_url}/testcases/{test_case_key}/links/issues"
+        url = f"{self.base_url}/testcases/{test_case_key}/links"
         logger.info(f"Fetching linked issues for test case {test_case_key} from {url}")
         with httpx.Client() as client:
-            start_at = 0
-            max_results = 100
-            while True:
-                params = {"startAt": start_at, "maxResults": max_results}
-                response = client.get(url, headers=self.headers, params=params, timeout=CLIENT_TIMEOUT)
-                response.raise_for_status()
-                data = response.json()
+            response = client.get(url, headers=self.headers, timeout=CLIENT_TIMEOUT)
+            response.raise_for_status()
+            data = response.json()
 
-                for issue in data.get('values', []):
-                    linked_issues.append(issue)
-                if data.get('isLast', True):
-                    break
-                start_at += max_results
+            # The response contains 'issues' and 'webLinks' arrays
+            issues = data.get('issues', [])
+            for issue in issues:
+                linked_issues.append(issue)
 
         logger.info(f"Found {len(linked_issues)} linked issues for test case {test_case_key}")
         return linked_issues
