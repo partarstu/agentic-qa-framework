@@ -74,7 +74,7 @@ class IncidentCreationAgent(AgentBase):
             mcp_servers=[jira_mcp_server],
             deps_type=IncidentCreationInput,
             description="Agent which creates detailed incident reports in Jira based on test execution results.",
-            tools=[self._search_duplicate_candidates_in_rag, self._get_linked_issues, self._check_if_duplicate, self._save_artifacts],
+            tools=[self._search_duplicate_candidates_in_rag, self._get_linked_issues, self._check_if_duplicate, self._save_artifacts, self._link_issue_to_test_case],
             vector_db_collection_name=QDRANT_COLLECTION_NAME
         )
 
@@ -188,6 +188,25 @@ class IncidentCreationAgent(AgentBase):
                   f"Candidate Incident ({candidate_key}):\n{candidate_content}")
         result = await self.duplicate_detector.run(prompt)
         return result.output
+
+    @staticmethod
+    async def _link_issue_to_test_case(test_case_key: str, issue_id: int) -> str:
+        """Links a bug issue to the test case using the test management system.
+        
+        Args:
+            test_case_key: The key of the test case (e.g., 'PROJ-T123').
+            issue_id: The numeric ID of the created bug issue (not the key, but the ID).
+
+        Returns:
+            A confirmation message indicating success or failure.
+        """
+        try:
+            test_management_client = get_test_management_client()
+            test_management_client.link_issue_to_test_case(test_case_key, issue_id)
+            return f"Successfully linked issue {issue_id} to test case {test_case_key}"
+        except Exception as e:
+            logger.error(f"Error linking issue {issue_id} to test case {test_case_key}: {e}")
+            return f"Failed to link issue {issue_id} to test case {test_case_key}: {str(e)}"
 
 
 agent = IncidentCreationAgent()

@@ -447,3 +447,16 @@ class ZephyrClient(TestManagementClientBase):
 
         logger.info(f"Fetched {len(linked_issues)} linked issues for test case {test_case_key}")
         return linked_issues
+
+    def link_issue_to_test_case(self, test_case_key: str, issue_id: int) -> None:        
+        url = f"{self.base_url}/testcases/{test_case_key}/links/issues"
+        logger.info(f"Linking issue {issue_id} to test case {test_case_key} via {url}")
+        with httpx.Client() as client:
+            response = client.post(
+                url,
+                headers=self.headers,
+                json={"issueId": issue_id},
+                timeout=CLIENT_TIMEOUT
+            )
+            response.raise_for_status()
+            logger.info(f"Successfully linked issue {issue_id} to test case {test_case_key}")

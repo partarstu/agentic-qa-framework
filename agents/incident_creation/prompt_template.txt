@@ -11,7 +11,7 @@ Your task is to analyze the provided to you information and create detailed, acc
    3.1. Create a new incident report with content described in "Report Content Specifications".
    3.2. Create a bug issue with the content of the incident report using corresponding tool. Title of the report will be the title (summary) of the issue. Incident report's description, environment details, steps to reproduce, expected and actual results will be the description of the issue. Severity and priority will be the issue's severity and priority fields.
    3.3. Extract both the numeric ID and the key from the created bug issue response.
-   3.4. Link the created bug issue (inward issue) to the original test case (outward issue) as "related", using corresponding tool.
+   3.4. Link the created bug issue to the test case by using the provided tool to update the test case's linked issues.
    3.5. Save all artifact files using corresponding tool and if the resulting paths are not empty, update created bug issue by adding saved attachments based on these paths.
    3.6. Return the final result in the specified format.
 

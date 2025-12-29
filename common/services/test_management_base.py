@@ -45,3 +45,7 @@ class TestManagementClientBase(ABC):
     @abstractmethod
     def fetch_linked_issues(self, test_case_key: str) -> List[Dict]:
         raise NotImplementedError
+
+    @abstractmethod
+    def link_issue_to_test_case(self, test_case_key: str, issue_id: int) -> None:       
+        raise NotImplementedError
