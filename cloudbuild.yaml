@@ -7,6 +7,10 @@ steps:
   - name: 'gcr.io/cloud-builders/docker'
     args: [ 'build', '-t', 'agentic-qa-base:latest', '-f', 'Dockerfile.base', '.' ]
 
+  # Build the embedding-service image
+  - name: 'gcr.io/cloud-builders/docker'
+    args: [ 'build', '-t', 'gcr.io/$PROJECT_ID/embedding-service', '-f', 'services/embedding_service/Dockerfile', '.' ]
+
   # Build the orchestrator image
   - name: 'gcr.io/cloud-builders/docker'
     args: [ 'build', '-t', 'gcr.io/$PROJECT_ID/orchestrator', '-f', 'orchestrator/Dockerfile', '.' ]
@@ -38,6 +42,8 @@ steps:
     args: [ 'push', 'gcr.io/$PROJECT_ID/test-case-classification-agent' ]
   - name: 'gcr.io/cloud-builders/docker'
     args: [ 'push', 'gcr.io/$PROJECT_ID/test-case-review-agent' ]
+  - name: 'gcr.io/cloud-builders/docker'
+    args: [ 'push', 'gcr.io/$PROJECT_ID/embedding-service' ]
 
   # Deploy to Cloud Run
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
@@ -63,6 +69,25 @@ steps:
       - '--add-volume=type=cloud-storage,name=jira-volume,bucket=$_BUCKET_NAME,mount-options=only-dir=$_JIRA_ATTACHMENTS_FOLDER'
       - '--add-volume-mount=volume=jira-volume,mount-path=/tmp'
       - '--concurrency=5'
+
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'beta'
+      - 'run'
+      - 'deploy'
+      - 'embedding-service'
+      - '--image=gcr.io/$PROJECT_ID/embedding-service'
+      - '--network=agent-network'
+      - '--subnet=agent-network'
+      - '--ingress=internal'
+      - '--vpc-egress=private-ranges-only'
+      - '--platform=managed'
+      - '--region=us-central1'
+      - '--allow-unauthenticated'
+      - '--memory=2Gi'
+      - '--max-instances=1'
+      - '--port=8080'
 
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: gcloud
@@ -105,7 +130,7 @@ steps:
       - '--max-instances=1'
       - '--concurrency=1'
       - '--set-secrets=GOOGLE_API_KEY=GOOGLE_API_KEY:latest,JIRA_API_TOKEN=JIRA_API_TOKEN:latest,JIRA_USERNAME=JIRA_USERNAME:latest,ZEPHYR_API_TOKEN=ZEPHYR_API_TOKEN:latest,JIRA_URL=JIRA_URL:latest,JIRA_MCP_SERVER_URL=JIRA_MCP_SERVER_URL:latest,ZEPHYR_BASE_URL=ZEPHYR_BASE_URL:latest'
-      - '--set-env-vars=USE_CLOUD_STORAGE=true,GOOGLE_CLOUD_LOGGING_ENABLED=true,AGENT_BASE_URL=$_REQUIREMENTS_REVIEW_AGENT_BASE_URL,CLOUD_STORAGE_BUCKET_NAME=$_BUCKET_NAME,JIRA_ATTACHMENTS_CLOUD_STORAGE_FOLDER=$_JIRA_ATTACHMENTS_FOLDER,EXTERNAL_PORT=443'
+      - '--set-env-vars=USE_CLOUD_STORAGE=true,GOOGLE_CLOUD_LOGGING_ENABLED=true,AGENT_BASE_URL=$_REQUIREMENTS_REVIEW_AGENT_BASE_URL,CLOUD_STORAGE_BUCKET_NAME=$_BUCKET_NAME,JIRA_ATTACHMENTS_CLOUD_STORAGE_FOLDER=$_JIRA_ATTACHMENTS_FOLDER,EXTERNAL_PORT=443,EMBEDDING_SERVICE_URL=$_EMBEDDING_SERVICE_URL'
       - '--port=8001'
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: gcloud
@@ -125,7 +150,7 @@ steps:
       - '--max-instances=1'
       - '--concurrency=1'
       - '--set-secrets=GOOGLE_API_KEY=GOOGLE_API_KEY:latest,JIRA_API_TOKEN=JIRA_API_TOKEN:latest,JIRA_USERNAME=JIRA_USERNAME:latest,ZEPHYR_API_TOKEN=ZEPHYR_API_TOKEN:latest,JIRA_URL=JIRA_URL:latest,JIRA_MCP_SERVER_URL=JIRA_MCP_SERVER_URL:latest,ZEPHYR_BASE_URL=ZEPHYR_BASE_URL:latest'
-      - '--set-env-vars=USE_CLOUD_STORAGE=true,GOOGLE_CLOUD_LOGGING_ENABLED=true,AGENT_BASE_URL=$_TEST_CASE_GENERATION_AGENT_BASE_URL,CLOUD_STORAGE_BUCKET_NAME=$_BUCKET_NAME,JIRA_ATTACHMENTS_CLOUD_STORAGE_FOLDER=$_JIRA_ATTACHMENTS_FOLDER,EXTERNAL_PORT=443'
+      - '--set-env-vars=USE_CLOUD_STORAGE=true,GOOGLE_CLOUD_LOGGING_ENABLED=true,AGENT_BASE_URL=$_TEST_CASE_GENERATION_AGENT_BASE_URL,CLOUD_STORAGE_BUCKET_NAME=$_BUCKET_NAME,JIRA_ATTACHMENTS_CLOUD_STORAGE_FOLDER=$_JIRA_ATTACHMENTS_FOLDER,EXTERNAL_PORT=443,EMBEDDING_SERVICE_URL=$_EMBEDDING_SERVICE_URL'
       - '--port=8001'
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: gcloud
@@ -145,7 +170,7 @@ steps:
       - '--max-instances=1'
       - '--concurrency=1'
       - '--set-secrets=GOOGLE_API_KEY=GOOGLE_API_KEY:latest,JIRA_API_TOKEN=JIRA_API_TOKEN:latest,JIRA_USERNAME=JIRA_USERNAME:latest,ZEPHYR_API_TOKEN=ZEPHYR_API_TOKEN:latest,JIRA_URL=JIRA_URL:latest,JIRA_MCP_SERVER_URL=JIRA_MCP_SERVER_URL:latest,ZEPHYR_BASE_URL=ZEPHYR_BASE_URL:latest'
-      - '--set-env-vars=USE_CLOUD_STORAGE=true,GOOGLE_CLOUD_LOGGING_ENABLED=true,AGENT_BASE_URL=$_TEST_CASE_CLASSIFICATION_AGENT_BASE_URL,CLOUD_STORAGE_BUCKET_NAME=$_BUCKET_NAME,JIRA_ATTACHMENTS_CLOUD_STORAGE_FOLDER=$_JIRA_ATTACHMENTS_FOLDER,EXTERNAL_PORT=443'
+      - '--set-env-vars=USE_CLOUD_STORAGE=true,GOOGLE_CLOUD_LOGGING_ENABLED=true,AGENT_BASE_URL=$_TEST_CASE_CLASSIFICATION_AGENT_BASE_URL,CLOUD_STORAGE_BUCKET_NAME=$_BUCKET_NAME,JIRA_ATTACHMENTS_CLOUD_STORAGE_FOLDER=$_JIRA_ATTACHMENTS_FOLDER,EXTERNAL_PORT=443,EMBEDDING_SERVICE_URL=$_EMBEDDING_SERVICE_URL'
       - '--port=8001'
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: gcloud
@@ -165,7 +190,7 @@ steps:
       - '--max-instances=1'
       - '--concurrency=1'
       - '--set-secrets=GOOGLE_API_KEY=GOOGLE_API_KEY:latest,JIRA_API_TOKEN=JIRA_API_TOKEN:latest,JIRA_USERNAME=JIRA_USERNAME:latest,ZEPHYR_API_TOKEN=ZEPHYR_API_TOKEN:latest,JIRA_URL=JIRA_URL:latest,JIRA_MCP_SERVER_URL=JIRA_MCP_SERVER_URL:latest,ZEPHYR_BASE_URL=ZEPHYR_BASE_URL:latest'
-      - '--set-env-vars=USE_CLOUD_STORAGE=true,GOOGLE_CLOUD_LOGGING_ENABLED=true,AGENT_BASE_URL=$_TEST_CASE_REVIEW_AGENT_BASE_URL,CLOUD_STORAGE_BUCKET_NAME=$_BUCKET_NAME,JIRA_ATTACHMENTS_CLOUD_STORAGE_FOLDER=$_JIRA_ATTACHMENTS_FOLDER,EXTERNAL_PORT=443'
+      - '--set-env-vars=USE_CLOUD_STORAGE=true,GOOGLE_CLOUD_LOGGING_ENABLED=true,AGENT_BASE_URL=$_TEST_CASE_REVIEW_AGENT_BASE_URL,CLOUD_STORAGE_BUCKET_NAME=$_BUCKET_NAME,JIRA_ATTACHMENTS_CLOUD_STORAGE_FOLDER=$_JIRA_ATTACHMENTS_FOLDER,EXTERNAL_PORT=443,EMBEDDING_SERVICE_URL=$_EMBEDDING_SERVICE_URL'
       - '--port=8001'
 
 substitutions:
@@ -179,6 +204,7 @@ substitutions:
   _TEST_CASE_GENERATION_AGENT_BASE_URL: ''
   _TEST_CASE_REVIEW_AGENT_BASE_URL: ''
   _ORCHESTRATOR_REQUEST_TIMEOUT: '3500s'
+  _EMBEDDING_SERVICE_URL: ''
 
 images:
   - 'gcr.io/$PROJECT_ID/requirements-review-agent'
@@ -186,6 +212,7 @@ images:
   - 'gcr.io/$PROJECT_ID/test-case-classification-agent'
   - 'gcr.io/$PROJECT_ID/test-case-review-agent'
   - 'gcr.io/$PROJECT_ID/orchestrator'
+  - 'gcr.io/$PROJECT_ID/embedding-service'
 
 options:
   logging: CLOUD_LOGGING_ONLY

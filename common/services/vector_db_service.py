@@ -2,14 +2,17 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 from typing import List
 
 from qdrant_client import AsyncQdrantClient, models
-from sentence_transformers import SentenceTransformer
+import httpx
 
 import config
 from common import utils
 from common.models import VectorizableBaseModel
+
+from sentence_transformers import SentenceTransformer  # noqa: E402
 
 logger = utils.get_logger("vector_db_service")
 
@@ -23,23 +26,42 @@ class VectorDbService:
         )
         self.model_name = getattr(config.QdrantConfig, "EMBEDDING_MODEL", "Qwen/Qwen3-Embedding-0.6B")
         self._embedding_model: SentenceTransformer | None = None
+        self.embedding_service_url = getattr(config.QdrantConfig, "EMBEDDING_SERVICE_URL", None)
 
     @property
     def embedding_model(self) -> SentenceTransformer:
-        """Lazily initialize and return the embedding model."""
+        """Lazily initialize and return the embedding model.
+
+        If a pre-downloaded model exists at the configured path, it will be loaded
+        from there. Otherwise, the model will be downloaded from the model name.
+        """
         if self._embedding_model is None:
-            logger.info(f"Lazily initializing VectorDbService embedding model: {self.model_name}")
-            self._embedding_model = SentenceTransformer(self.model_name)
+            model_path = getattr(config.QdrantConfig, "EMBEDDING_MODEL_PATH", None)
+
+            if model_path and os.path.exists(model_path) and os.listdir(model_path):
+                logger.info(f"Loading embedding model from local path: {model_path}")
+                self._embedding_model = SentenceTransformer(model_path, trust_remote_code=True)
+            else:
+                logger.info(f"Downloading embedding model: {self.model_name}")
+                self._embedding_model = SentenceTransformer(self.model_name, trust_remote_code=True)
+
         return self._embedding_model
 
-    def _get_embedding(self, text: str) -> List[float]:
+    async def _get_embedding(self, text: str) -> List[float]:
+        if self.embedding_service_url:
+            async with httpx.AsyncClient() as client:
+                response = await client.post(f"{self.embedding_service_url}/embed", json={"text": text})
+                response.raise_for_status()
+                return response.json()["embedding"]
+
+        # Fallback to local model
         embedding = self.embedding_model.encode(text)
         return embedding.tolist()
 
     async def _ensure_collection(self):
         if not await self.client.collection_exists(self.collection_name):
             # We dynamically detect the vector size by embedding a dummy string
-            dummy_vec = self._get_embedding("test")
+            dummy_vec = await self._get_embedding("test")
             vector_size = len(dummy_vec)
 
             try:
@@ -69,16 +91,15 @@ class VectorDbService:
             limit: Maximum number of results to return.
             score_threshold: Minimum similarity score threshold.
             query_filter: Optional Qdrant Filter object for payload-based filtering.
-                          Use models.Filter with must/should/must_not conditions.
-                          Example: models.Filter(must=[models.FieldCondition(
-                              key="issue_type", match=models.MatchValue(value="Bug")
-                          )])
 
         Returns:
             List of scored points matching the query and filter conditions.
         """
         try:
-            embedding = self._get_embedding(query_text)
+            if not await self.client.collection_exists(self.collection_name):
+                logger.warning(f"Collection {self.collection_name} doesn't exist yet in DB")
+                return []
+            embedding = await self._get_embedding(query_text)
             response = await self.client.query_points(
                 collection_name=self.collection_name,
                 query=embedding,
@@ -98,7 +119,7 @@ class VectorDbService:
             payload = data.model_dump()
             point_id = data.get_vector_id()
 
-            embedding = self._get_embedding(text)
+            embedding = await self._get_embedding(text)
             await self.client.upsert(
                 collection_name=self.collection_name,
                 points=[models.PointStruct(id=point_id, vector=embedding, payload=payload)]

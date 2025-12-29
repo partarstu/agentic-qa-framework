@@ -144,8 +144,12 @@ PROMPT_GUARD_PROVIDER=protect_ai # Default: protect_ai. The provider for prompt 
 PROMPT_INJECTION_MIN_SCORE=0.8 # Default: 0.8. The minimum score for a prompt to be considered an injection.
 PROMPT_INJECTION_MODEL_NAME=ProtectAI/deberta-v3-base-prompt-injection-v2 # Default: ProtectAI/deberta-v3-base-prompt-injection-v2. The name of the model used for prompt injection detection.
 
-**Note on Prompt Injection Model Download:**
-If `PROMPT_INJECTION_CHECK_ENABLED` is set to `True` and you are running the orchestrator or agents locally (not in a Docker container deployed to the cloud), you must manually download the prompt injection detection model. This is done by running the `scripts/download_model.py` script. When deploying to cloud environments via Docker, the model download is handled automatically as part of the Docker image build process.
+**Note on Local Models:**
+If you are running the orchestrator or agents locally (not in a Docker container deployed to the cloud), you must manually download the necessary models:
+1. **Prompt Injection Detection Model:** Required if `PROMPT_INJECTION_CHECK_ENABLED` is set to `True`. Run `scripts/download_model.py`.
+2. **Embedding Model:** Required for agents using Vector DB (e.g. Incident Creation, Jira RAG Update) and Orchestrator. Run `scripts/download_embedding_model.py`.
+
+When deploying to cloud environments via Docker, the model downloads are handled automatically as part of the Docker image build process.
 # Specific Agent Model Names (example values, adjust as needed)
 # These specify the AI model to be used by each component.
 # Refer to your model provider's documentation for available model names.

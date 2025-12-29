@@ -72,7 +72,8 @@ TEMPERATURE = 0.0
 PROMPT_INJECTION_CHECK_ENABLED = os.environ.get("PROMPT_INJECTION_CHECK_ENABLED", "False").lower() in ("true", "1", "t")
 PROMPT_GUARD_PROVIDER = os.environ.get("PROMPT_GUARD_PROVIDER", "protect_ai")
 PROMPT_INJECTION_MIN_SCORE = float(os.environ.get("PROMPT_INJECTION_MIN_SCORE", "0.8"))
-PROMPT_INJECTION_DETECTION_MODEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "prompt_detection_model")
+LOCAL_MODELS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "local_models")
+PROMPT_INJECTION_DETECTION_MODEL_PATH = os.path.join(LOCAL_MODELS_PATH, "prompt_detection_model")
 PROMPT_INJECTION_DETECTION_MODEL_NAME = os.environ.get("PROMPT_INJECTION_MODEL_NAME", "ProtectAI/deberta-v3-base-prompt-injection-v2")
 
 
@@ -141,7 +142,6 @@ class IncidentCreationAgentConfig:
     PROTOCOL = "http"
     MODEL_NAME = "google-gla:gemini-3-flash-preview"
     MAX_REQUESTS_PER_TASK = 10
-    COLLECTION_NAME = os.environ.get("INCIDENT_AGENT_COLLECTION_NAME", "incident_issues")
     MIN_SIMILARITY_SCORE = float(os.environ.get("INCIDENT_AGENT_MIN_SIMILARITY_SCORE", "0.7"))
 
 
@@ -160,11 +160,12 @@ class QdrantConfig:
     URL = os.environ.get("QDRANT_URL", "http://localhost:6333")
     API_KEY = os.environ.get("QDRANT_API_KEY")
     COLLECTION_NAME = os.environ.get("QDRANT_COLLECTION_NAME", "jira_issues")
+    TICKETS_COLLECTION_NAME = os.environ.get("QDRANT_TICKETS_COLLECTION_NAME", "jira_issues")
     METADATA_COLLECTION_NAME = os.environ.get("QDRANT_METADATA_COLLECTION_NAME", "rag_metadata")
     MIN_SIMILARITY_SCORE = float(os.environ.get("RAG_MIN_SIMILARITY_SCORE", "0.7"))
     MAX_RESULTS = int(os.environ.get("RAG_MAX_RESULTS", "5"))
-    # Qwen3-Embedding-0.6B: 600M params, 32K context, 100+ languages, MTEB score: 64.33
-    # Supports Matryoshka dimensions (32-1024), default output: 1024 dimensions
-    EMBEDDING_MODEL = os.environ.get("RAG_EMBEDDING_MODEL", "Qwen/Qwen3-Embedding-0.6B")
+    EMBEDDING_MODEL = os.environ.get("RAG_EMBEDDING_MODEL", "jinaai/jina-embeddings-v3")
+    EMBEDDING_MODEL_PATH = os.path.join(LOCAL_MODELS_PATH, "embedding_model")
+    EMBEDDING_SERVICE_URL = os.environ.get("EMBEDDING_SERVICE_URL")
     VALID_STATUSES = os.environ.get("JIRA_VALID_STATUSES", "To Do,In Progress,Done").split(",")
     BUG_ISSUE_TYPE = os.environ.get("JIRA_BUG_ISSUE_TYPE", "Bug")

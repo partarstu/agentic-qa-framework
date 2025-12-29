@@ -390,7 +390,7 @@ async def _request_incident_creation_for_failed_tests(
         logger.info(f"Test case {result.testCaseKey} failed. Initiating incident creation.")
         try:
             incident_input = IncidentCreationInput(
-                test_case_key=result.testCaseKey,
+                test_case=result.test_case,
                 test_execution_result=str(result.generalErrorMessage),
                 test_step_results=result.stepResults,
                 system_description=result.system_description
@@ -541,7 +541,8 @@ async def _agent_worker(agent_id: str, queue: asyncio.Queue, results: List[TestE
                         generalErrorMessage=f"All agents failed. Last error from {agent_name}: {e}",
                         start_timestamp=datetime.now().isoformat(),
                         end_timestamp=datetime.now().isoformat(),
-                        system_description=f"Agent: {agent_name} (Failed - No Retry Available)"
+                        system_description=f"Agent: {agent_name} (Failed - No Retry Available)",
+                        test_case=test_case
                     )
                     results.append(failed_result)
 
@@ -595,6 +596,8 @@ Test case execution results:\n```{text_results}```
     if not test_execution_result.system_description:
         test_execution_result.system_description = f"Agent: {agent_name}, Environment: Standard Test Environment"
 
+    test_execution_result.test_case = test_case
+
     logger.info(f"Executed test case {test_case.key}. Status: {test_execution_result.testExecutionStatus}")
     return test_execution_result
 
@@ -628,7 +631,7 @@ async def _request_incident_creation(
 
     completed_task = await _send_task_to_agent_with_message(agent_id, message, task_description)
 
-    task_description = f"Incident creation for test case {incident_input.test_case_key}"
+    task_description = f"Incident creation for test case {incident_input.test_case.key}"
     received_artifacts = _get_artifacts_from_task(completed_task, task_description)
     text_content = _get_text_content_from_artifacts(received_artifacts, task_description)
     result = IncidentCreationResult.model_validate_json(text_content)

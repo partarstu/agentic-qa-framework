@@ -4,7 +4,7 @@
 
 import pytest
 from unittest.mock import MagicMock, patch, AsyncMock
-from agents.jira_rag_update.main import JiraRagUpdateAgent
+from agents.jira_rag_update.main import JiraRagAgent
 from common.models import JiraIssue
 
 @pytest.fixture
@@ -20,7 +20,7 @@ def mock_db_service():
 @pytest.fixture
 def agent(mock_db_service):
     with patch("agents.jira_rag_update.main.jira_mcp_server"):
-        return JiraRagUpdateAgent()
+        return JiraRagAgent()
 
 @pytest.mark.asyncio
 async def test_upsert_issues(agent):

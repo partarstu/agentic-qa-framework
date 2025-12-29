@@ -6,7 +6,7 @@ import sys
 with patch("pydantic_ai.mcp.MCPServerSSE"):
     from agents.incident_creation.main import IncidentCreationAgent
 
-from common.models import IncidentCreationInput, IncidentCreationResult, DuplicateDetectionResult
+from common.models import IncidentCreationInput, IncidentCreationResult, DuplicateDetectionResult, TestCase
 from a2a.types import FileWithBytes
 
 @pytest.fixture
@@ -46,15 +46,25 @@ def test_agent_init(agent, mock_config):
 @pytest.mark.asyncio
 async def test_search_duplicates_in_rag(agent):
     # Prepare input
+    test_case = TestCase(
+        key="TC-123",
+        labels=[],
+        name="Sample Test Case",
+        summary="Test case for testing",
+        comment="",
+        preconditions=None,
+        steps=[],
+        parent_issue_key=None
+    )
     input_data = IncidentCreationInput(
-        test_case_key="TC-123",
+        test_case=test_case,
         test_execution_result="Failed with NPE",
         test_step_results=[],
         system_description="Win10"
     )
     
     # Create incident description
-    incident_description = f"""Test Case: {input_data.test_case_key}
+    incident_description = f"""Test Case: {input_data.test_case.key}
 Error Description: {input_data.test_execution_result}
 System: {input_data.system_description}"""
     

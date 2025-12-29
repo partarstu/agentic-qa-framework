@@ -10,10 +10,15 @@ COPY requirements.txt .
 # Install any needed packages specified in requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy and run script to pre-download the prompt injection detection model
-COPY config.py /app/scripts/config.py
-COPY scripts/download_model.py /app/scripts/download_model.py
-RUN python /app/scripts/download_model.py
+# Create local_models directory for pre-downloaded models
+RUN mkdir -p /app/local_models
+
+# Copy and run scripts to pre-download the models
+COPY config.py /app/config.py
+COPY scripts/download_prompt_guard_model.py /app/scripts/download_prompt_guard_model.py
+
+# Download prompt injection detection model (if enabled)
+RUN python /app/scripts/download_prompt_guard_model.py
 
 # Keep the image clean
 RUN rm -rf /var/lib/apt/lists/*

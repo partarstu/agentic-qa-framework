@@ -9,5 +9,5 @@ mcp/jira/.env
  GEMINI.md
 /.gemini
 substitutions.yaml
-/prompt_detection_model/
+/local_models/
 test_main.py

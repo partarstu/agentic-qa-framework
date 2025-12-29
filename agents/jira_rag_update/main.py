@@ -16,7 +16,7 @@ from common.models import JsonSerializableModel, JiraIssue, ProjectMetadata
 
 logger = utils.get_logger("jira_rag_update_agent")
 
-RAG_COLLECTION = getattr(config.QdrantConfig, "COLLECTION_NAME", "jira_issues")
+RAG_COLLECTION = getattr(config.QdrantConfig, "TICKETS_COLLECTION_NAME", "jira_issues")
 METADATA_COLLECTION = getattr(config.QdrantConfig, "METADATA_COLLECTION_NAME", "rag_metadata")
 VALID_STATUSES = getattr(config.QdrantConfig, "VALID_STATUSES", ["To Do", "In Progress", "Done"])
 BUG_ISSUE_TYPE = getattr(config.QdrantConfig, "BUG_ISSUE_TYPE", "Bug")
@@ -29,7 +29,7 @@ class RagUpdateResult(JsonSerializableModel):
     processed_count: int
 
 
-class JiraRagUpdateAgent(AgentBase):
+class JiraRagAgent(AgentBase):
     def __init__(self):
         self.issues_db = VectorDbService(RAG_COLLECTION)
         self.metadata_db = VectorDbService(METADATA_COLLECTION)
@@ -184,11 +184,8 @@ class JiraRagUpdateAgent(AgentBase):
 
         Returns:
             List of matching issues with their payload data and similarity scores.
-            Each item contains: 'id', 'key', 'summary', 'description', 'issue_type',
-            'status', 'project_key', 'updated_at', 'score'.
         """
         try:
-            # Build filter conditions
             conditions = []
 
             if issue_type:
@@ -259,7 +256,7 @@ class JiraRagUpdateAgent(AgentBase):
             return []
 
 
-agent = JiraRagUpdateAgent()
+agent = JiraRagAgent()
 app = agent.a2a_server
 
 if __name__ == "__main__":

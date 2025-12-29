@@ -201,6 +201,8 @@ class TestExecutionResult(JsonSerializableModel):
                                                                         "executed the test case.")
     incident_creation_result: Optional["IncidentCreationResult"] = Field(
         default=None, description="Result of the incident creation process if the test failed.")
+    test_case: Optional["TestCase"] = Field(
+        default=None, description="The full test case object that was executed.")
 
 
 class TestCaseKeys(JsonSerializableModel):
@@ -230,7 +232,7 @@ class SelectedAgents(JsonSerializableModel):
 
 
 class IncidentCreationInput(JsonSerializableModel):
-    test_case_key: str
+    test_case: TestCase
     test_execution_result: str
     test_step_results: List["TestStepResult"] = Field(
         description="Structured test step execution results for reproduction steps and analysis"

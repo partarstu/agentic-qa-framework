@@ -1,0 +1,6 @@
+fastapi
+uvicorn
+sentence-transformers
+pydantic
+python-dotenv
+einops

@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from collections import defaultdict
-from typing import List, Dict
+from typing import List, Dict, Any
 
 from dateutil import parser
 import httpx
@@ -422,7 +422,7 @@ class ZephyrClient(TestManagementClientBase):
             test_case_data = self._get_test_case_data(client, url)
             return self._parse_tc_json(client, None, test_case_data)
 
-    def fetch_linked_issues(self, test_case_key: str) -> List[Dict]:
+    def fetch_linked_issues(self, test_case_key: str) -> List[Any]:
         """
         Fetches Jira issues linked to a test case.
 
@@ -445,5 +445,5 @@ class ZephyrClient(TestManagementClientBase):
             for issue in issues:
                 linked_issues.append(issue)
 
-        logger.info(f"Found {len(linked_issues)} linked issues for test case {test_case_key}")
+        logger.info(f"Fetched {len(linked_issues)} linked issues for test case {test_case_key}")
         return linked_issues

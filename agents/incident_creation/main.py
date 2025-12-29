@@ -3,12 +3,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import base64
+import json
 import os
 import uuid
 from typing import List
 
 from a2a.types import FilePart, FileWithBytes
 from pydantic_ai import Agent
+from qdrant_client import models as qdrant_models
 from pydantic_ai.mcp import MCPServerSSE
 
 import config
@@ -26,8 +28,9 @@ from common.services.test_management_system_client_provider import get_test_mana
 logger = utils.get_logger("incident_creation_agent")
 
 # Qdrant RAG Config
-QDRANT_COLLECTION_NAME = getattr(config.IncidentCreationAgentConfig, "COLLECTION_NAME", "incident_issues")
+QDRANT_COLLECTION_NAME = getattr(config.QdrantConfig, "TICKETS_COLLECTION_NAME", "jira_issues")
 RAG_MIN_SIMILARITY = getattr(config.IncidentCreationAgentConfig, "MIN_SIMILARITY_SCORE", 0.7)
+BUG_ISSUE_TYPE = getattr(config.QdrantConfig, "BUG_ISSUE_TYPE", "Bug")
 JIRA_MCP_SERVER_URL = config.JIRA_MCP_SERVER_URL
 
 jira_mcp_server = MCPServerSSE(url=JIRA_MCP_SERVER_URL, timeout=config.MCP_SERVER_TIMEOUT_SECONDS)
@@ -97,10 +100,20 @@ class IncidentCreationAgent(AgentBase):
             logger.warning("Vector DB service not initialized, skipping RAG search.")
             return []
 
+        bug_filter = qdrant_models.Filter(
+            must=[
+                qdrant_models.FieldCondition(
+                    key="issue_type",
+                    match=qdrant_models.MatchValue(value=BUG_ISSUE_TYPE),
+                )
+            ]
+        )
+
         hits = await self.vector_db_service.search(
             incident_description,
             limit=config.QdrantConfig.MAX_RESULTS,
-            score_threshold=RAG_MIN_SIMILARITY
+            score_threshold=RAG_MIN_SIMILARITY,
+            query_filter=bug_filter,
         )
 
         candidates = [
@@ -128,15 +141,7 @@ class IncidentCreationAgent(AgentBase):
         try:
             test_management_client = get_test_management_client()
             linked_issues = test_management_client.fetch_linked_issues(test_case_key)
-
-            issue_keys = [
-                issue.get("issue_key")
-                for issue in linked_issues
-                if issue.get("issue_key")
-            ]
-
-            logger.info(f"Found {len(issue_keys)} linked issues for test case {test_case_key}: {issue_keys}")
-            return issue_keys
+            return [json.dumps(linked_issue) for linked_issue in linked_issues]
 
         except Exception as e:
             logger.error(f"Error fetching linked issues for test case {test_case_key}: {e}")
