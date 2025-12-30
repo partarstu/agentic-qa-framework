@@ -86,4 +86,13 @@ System: {input_data.system_description}"""
     
     agent.vector_db_service.search.assert_called_once()
 
-
+@pytest.mark.asyncio
+async def test_link_issue_to_test_case_tool(agent):
+    with patch("agents.incident_creation.main.get_test_management_client") as mock_get_client:
+        mock_client = MagicMock()
+        mock_get_client.return_value = mock_client
+        
+        result = await agent._link_issue_to_test_case("TC-123", 10001, "Relates")
+        
+        assert "Successfully linked" in result
+        mock_client.link_issue_to_test_case.assert_called_with("TC-123", 10001, "Relates")

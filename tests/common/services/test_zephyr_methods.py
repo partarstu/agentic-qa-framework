@@ -1,4 +1,3 @@
-
 import pytest
 from unittest.mock import MagicMock, patch
 from common.services.zephyr_client import ZephyrClient
@@ -58,3 +57,12 @@ def test_create_test_plan(mock_post, zephyr_client):
     key = zephyr_client.create_test_plan("PROJ", "Cycle Name")
     assert key == "CYCLE-1"
 
+@patch("httpx.Client.post")
+def test_link_issue_to_test_case(mock_post, zephyr_client):
+    mock_post.return_value.status_code = 201
+    
+    zephyr_client.link_issue_to_test_case("TC-123", 10001, "Relates")
+    
+    assert mock_post.called
+    args, kwargs = mock_post.call_args
+    assert kwargs['json'] == {"issueId": 10001, "type": "Relates"}

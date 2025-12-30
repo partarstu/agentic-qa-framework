@@ -47,5 +47,5 @@ class TestManagementClientBase(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def link_issue_to_test_case(self, test_case_key: str, issue_id: int) -> None:       
+    def link_issue_to_test_case(self, test_case_key: str, issue_id: int, link_type: str) -> None:       
         raise NotImplementedError

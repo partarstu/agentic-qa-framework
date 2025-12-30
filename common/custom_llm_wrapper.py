@@ -21,19 +21,19 @@ from common import utils
 from common.models import JsonSerializableModel
 from common.prompt_injection.guard import GuardPrompt, PromptGuardFactory
 
+LOG_SEPARATTOR = '-' * 80
+
 logger = utils.get_logger("llm_wrapper")
 
 
 class CustomLlmWrapper(WrapperModel):
     def __init__(self, wrapped: Model | KnownModelName):
         super().__init__(wrapped)
+        self.latest_instructions: str | None = None
 
-    async def request(
-            self,
-            messages: List[ModelMessage],
-            model_settings: ModelSettings | None,
-            model_request_parameters: ModelRequestParameters,
-    ) -> ModelResponse:
+    async def request(self, messages: List[ModelMessage], model_settings: ModelSettings | None,
+                      model_request_parameters: ModelRequestParameters,
+                      ) -> ModelResponse:
         if config.PROMPT_INJECTION_CHECK_ENABLED:
             self._validate_for_prompt_injection(messages)
 
@@ -96,16 +96,19 @@ class CustomLlmWrapper(WrapperModel):
             logger.error(f"Prompt injection attack detected for the following prompt: \n{guard_prompt.prompt}")
             raise HTTPException(status_code=400, detail="Prompt injection attack detected.")
 
-    @staticmethod
-    def _log_model_request(message):
+    def _log_model_request(self, message):
+        if message.instructions and self.latest_instructions != message.instructions:
+            self.latest_instructions = message.instructions
+            timestamp = message.timestamp.strftime('%Y-%m-%d %H:%M:%S')
+            logger.debug(f"[{timestamp}] Agent is using following instructions: "
+                         f"\n{LOG_SEPARATTOR}\n{self.latest_instructions}\n{LOG_SEPARATTOR}")
         for part in message.parts:
-            separator = '-' * 80
             if isinstance(part, ToolReturnPart):
                 timestamp = part.timestamp.strftime('%Y-%m-%d %H:%M:%S')
                 payload = part.content.model_dump_json(indent=2) if isinstance(part.content, JsonSerializableModel) \
                     else json.dumps(part.content, indent=2)
                 logger.debug(f"[{timestamp}] Agent is responding with the execution result of tool: "
-                             f"'{part.tool_name}' with result: \n{separator}\n{payload}\n{separator}")
+                             f"'{part.tool_name}' with result: \n{LOG_SEPARATTOR}\n{payload}\n{LOG_SEPARATTOR}")
             elif isinstance(part, UserPromptPart):
                 timestamp = part.timestamp.strftime('%Y-%m-%d %H:%M:%S')
                 if isinstance(part.content, str):
@@ -121,10 +124,10 @@ class CustomLlmWrapper(WrapperModel):
                 else:
                     content_to_log = f'<{type(part.content).__name__}>'
                 logger.debug(f"[{timestamp}] Agent is prompting the model with user input: "
-                             f"\n{separator}\n{content_to_log}\n{separator}")
+                             f"\n{LOG_SEPARATTOR}\n{content_to_log}\n{LOG_SEPARATTOR}")
             elif isinstance(part, SystemPromptPart):
                 timestamp = part.timestamp.strftime('%Y-%m-%d %H:%M:%S')
-                logger.debug(f"[{timestamp}] Agent is using system prompt: \n{separator}\n{part.content}\n{separator}")
+                logger.debug(f"[{timestamp}] Agent is using system prompt: \n{LOG_SEPARATTOR}\n{part.content}\n{LOG_SEPARATTOR}")
             elif isinstance(part, RetryPromptPart):
                 timestamp = part.timestamp.strftime('%Y-%m-%d %H:%M:%S')
                 logger.debug(f"[{timestamp}] Agent is retrying prompting the model, the root "

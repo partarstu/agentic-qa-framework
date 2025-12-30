@@ -375,3 +375,6 @@ class XrayClient(TestManagementClientBase):
             for link in issue_data["fields"]["issuelinks"]:
                 linked_issues.append(link)
         return linked_issues
+
+    def link_issue_to_test_case(self, test_case_key: str, issue_id: int, link_type: str) -> None:
+        raise NotImplementedError("Linking issues is not yet implemented for Xray client.")

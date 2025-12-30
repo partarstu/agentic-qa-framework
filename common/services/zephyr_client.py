@@ -246,7 +246,7 @@ class ZephyrClient(TestManagementClientBase):
         logger.debug(f"Found {len(statuses)} statuses")
         target_status_id = next(
             (status.get("id") for status in statuses if
-             status.get("name", "").lower() == status_name.lower() and status.get("archived") == False),
+             status.get("name", "").lower() == status_name.lower() and not status.get("archived")),
             None)
         if not target_status_id:
             logger.error(f"Test case status '{status_name}' not found.")
@@ -448,14 +448,14 @@ class ZephyrClient(TestManagementClientBase):
         logger.info(f"Fetched {len(linked_issues)} linked issues for test case {test_case_key}")
         return linked_issues
 
-    def link_issue_to_test_case(self, test_case_key: str, issue_id: int) -> None:        
+    def link_issue_to_test_case(self, test_case_key: str, issue_id: int, link_type: str) -> None:        
         url = f"{self.base_url}/testcases/{test_case_key}/links/issues"
-        logger.info(f"Linking issue {issue_id} to test case {test_case_key} via {url}")
+        logger.info(f"Linking issue {issue_id} to test case {test_case_key} via {url} with type {link_type}")
         with httpx.Client() as client:
             response = client.post(
                 url,
                 headers=self.headers,
-                json={"issueId": issue_id},
+                json={"issueId": issue_id, "type": link_type},
                 timeout=CLIENT_TIMEOUT
             )
             response.raise_for_status()

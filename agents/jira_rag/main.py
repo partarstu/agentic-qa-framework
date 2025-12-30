@@ -68,20 +68,16 @@ class JiraRagAgent(AgentBase):
     @staticmethod
     def _key_to_int(key: str) -> str:
         """Convert a project key to an integer ID for ProjectMetadata storage.
-        
-        Uses hash to create a deterministic integer from the string key.
-        Note: This is only used for ProjectMetadata. JiraIssue uses numeric IDs directly.
         """
         import hashlib
         return str(int(hashlib.md5(key.encode()).hexdigest()[:16], 16))
 
     async def get_last_update_timestamp(self, project_key: str) -> str:
-        """Retrieves the last update timestamp for the project from the metadata DB. 
+        """Retrieves the timestamp of the last project update from the metadata DB.
         Returns '1970-01-01 00:00' if not found."""
         try:
-            # Convert project_key to integer ID for retrieval
-            int_id = self._key_to_int(project_key)
-            points = await self.metadata_db.retrieve(point_ids=[int_id])
+            project_new_id = self._key_to_int(project_key)
+            points = await self.metadata_db.retrieve(point_ids=[project_new_id])
             if points and points[0].payload:
                 return points[0].payload.get("last_update", "1970-01-01 00:00")
             return "1970-01-01 00:00"
@@ -90,7 +86,7 @@ class JiraRagAgent(AgentBase):
             return "1970-01-01 00:00"
 
     async def save_last_update_timestamp(self, project_key: str, timestamp: str) -> str:
-        """Saves the last update timestamp for the project."""
+        """Saves the timestamp of the last project update."""
         try:
             metadata = ProjectMetadata(project_key=project_key, last_update=timestamp)
             await self.metadata_db.upsert(data=metadata)
@@ -99,47 +95,13 @@ class JiraRagAgent(AgentBase):
             logger.error(f"Error saving last update: {e}")
             return f"Error saving timestamp: {e}"
 
-    async def upsert_issues(self, project_key: str, issues: List[dict]) -> str:
+    async def upsert_issues(self, issues: List[JiraIssue]) -> str:
         """Upserts a list of Jira issues into the vector DB.
-
-        Expects issues to have:
-        - 'key', 'id'
-        - 'fields.summary', 'fields.description'
-        - 'fields.status.name', 'fields.issuetype.name'
-        - 'fields.updated' (optional, ISO 8601 datetime for filtering)
         """
         count = 0
         try:
             for issue in issues:
-                key = issue.get("key")
-                issue_id = int(issue.get("id", 0))
-                fields = issue.get("fields", {})
-                summary = fields.get("summary", "")
-                description = fields.get("description", "") or ""
-
-                status_obj = fields.get("status", {})
-                status = status_obj.get("name") if isinstance(status_obj, dict) else str(status_obj)
-
-                issuetype_obj = fields.get("issuetype", {})
-                issue_type = issuetype_obj.get("name") if isinstance(issuetype_obj, dict) else str(issuetype_obj)
-
-                # Extract updated timestamp for datetime range filtering
-                updated_at = fields.get("updated")
-
-                jira_issue = JiraIssue(
-                    id=issue_id,
-                    key=key,
-                    summary=summary,
-                    description=description,
-                    issue_type=issue_type,
-                    status=status,
-                    project_key=project_key,
-                    source="jira_sync",
-                    updated_at=updated_at,
-                )
-
-                # Using numeric issue ID as point_id via jira_issue.get_vector_id()
-                await self.issues_db.upsert(data=jira_issue)
+                await self.issues_db.upsert(data=issue)
                 count += 1
             return f"Upserted {count} issues."
         except Exception as e:
@@ -151,7 +113,6 @@ class JiraRagAgent(AgentBase):
         try:
             if not issue_ids:
                 return "No issues to delete."
-            # Convert integer IDs to strings for Qdrant
             str_ids = [str(issue_id) for issue_id in issue_ids]
             await self.issues_db.delete(str_ids)
             return f"Deleted {len(issue_ids)} issues."

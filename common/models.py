@@ -21,8 +21,13 @@ class VectorizableBaseModel(JsonSerializableModel, ABC):
     """Abstract base class for models that can be stored in a vector database."""
 
     @abstractmethod
-    def get_vector_id(self) -> str:
-        """Returns the unique ID for the vector database."""
+    def get_vector_id(self) -> int | str:
+        """Returns the unique ID for the vector database.
+
+        The ID must be either:
+        - A 64-bit unsigned integer
+        - A UUID string in standard format (e.g., '550e8400-e29b-41d4-a716-446655440000')
+        """
         pass
 
     @abstractmethod
@@ -41,16 +46,6 @@ class JiraUserStory(JsonSerializableModel):
 
 
 class JiraIssue(VectorizableBaseModel):
-    """Model representing a Jira issue for vector storage.
-
-    Fields can be used for payload filtering in vector searches:
-    - issue_type: Filter by issue type (e.g., 'Bug', 'Story', 'Task')
-    - status: Filter by issue status (e.g., 'To Do', 'In Progress', 'Done')
-    - project_key: Filter by project key
-    - source: Filter by data source
-    - updated_at: Filter by last update timestamp (ISO 8601 format for datetime range queries)
-    """
-
     id: int = Field(description="The numeric ID of the issue")
     key: str = Field(description="The key of the issue")
     summary: str = Field(description="The summary of the issue")
@@ -64,9 +59,8 @@ class JiraIssue(VectorizableBaseModel):
         description="Last update timestamp in ISO 8601 format (e.g., '2025-01-15T10:30:00Z') for datetime range filtering",
     )
 
-    def get_vector_id(self) -> str:
-        # Use the numeric Jira issue ID directly
-        return str(self.id)
+    def get_vector_id(self) -> int:
+        return self.id
 
     def get_embedding_content(self) -> str:
         return str(self)
@@ -76,26 +70,11 @@ class ProjectMetadata(VectorizableBaseModel):
     project_key: str = Field(description="Key of the project")
     last_update: str = Field(description="Last update timestamp")
 
-    def get_vector_id(self) -> str:
-        # Convert project_key to integer using hash
-        return str(int(hashlib.md5(self.project_key.encode()).hexdigest()[:16], 16))
+    def get_vector_id(self) -> int:
+        return int(hashlib.md5(self.project_key.encode()).hexdigest()[:16], 16)
 
     def get_embedding_content(self) -> str:
         return f"Metadata for {self.project_key}"
-
-
-class IncidentIndexData(VectorizableBaseModel):
-    incident_id: int = Field(description="Numeric ID of the incident")
-    incident_key: str = Field(description="Key of the incident")
-    content: str = Field(description="Content to be indexed")
-    source: str = Field(default="incident_creation", description="Source of the data")
-
-    def get_vector_id(self) -> str:
-        # Use the numeric Jira incident ID directly
-        return str(self.incident_id)
-
-    def get_embedding_content(self) -> str:
-        return self.content
 
 
 class RequirementsReviewFeedback(JsonSerializableModel):
@@ -240,9 +219,6 @@ class IncidentCreationInput(JsonSerializableModel):
     system_description: str
     issue_priority_field_id: str = Field(
         description="The ID of the Jira issue field for issue priority"
-    )
-    issue_severity_field_name: str = Field(
-        description="The name of the Jira issue field for issue severity"
     )
 
 

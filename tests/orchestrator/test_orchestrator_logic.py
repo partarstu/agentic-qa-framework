@@ -10,9 +10,14 @@ async def clear_registry():
     # Clear registry before/after test
     agent_registry._cards.clear()
     agent_registry._statuses.clear()
+    agent_registry._broken_reasons.clear()
+    agent_registry._stuck_task_ids.clear()
     yield
     agent_registry._cards.clear()
     agent_registry._statuses.clear()
+    agent_registry._broken_reasons.clear()
+    agent_registry._stuck_task_ids.clear()
+
 
 @pytest.fixture
 def mock_agent_card():

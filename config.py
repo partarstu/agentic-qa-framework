@@ -29,6 +29,7 @@ JIRA_TOKEN = os.environ.get("JIRA_API_TOKEN")
 NEW_REQUIREMENTS_WEBHOOK_URL = f"{ORCHESTRATOR_URL}/new-requirements-available"
 STORY_READY_FOR_TEST_CASE_GENERATION_WEBHOOK_URL = f"{ORCHESTRATOR_URL}/story-ready-for-test-case-generation"
 EXECUTE_TESTS_WEBHOOK_URL = f"{ORCHESTRATOR_URL}/execute-tests"
+UPDATE_RAG_DB_WEBHOOK_URL = f"{ORCHESTRATOR_URL}/update-rag-db"
 
 # Secrets
 JIRA_WEBHOOK_SECRET = os.environ.get("JIRA_WEBHOOK_SECRET")
@@ -143,12 +144,12 @@ class IncidentCreationAgentConfig:
     MODEL_NAME = "google-gla:gemini-3-flash-preview"
     MAX_REQUESTS_PER_TASK = 10
     MIN_SIMILARITY_SCORE = float(os.environ.get("INCIDENT_AGENT_MIN_SIMILARITY_SCORE", "0.7"))
-    ISSUE_PRIORITY_FIELD_ID = os.environ.get("INCIDENT_AGENT_ISSUE_PRIORITY_FIELD_ID", "priority")
-    ISSUE_SEVERITY_FIELD_NAME = os.environ.get("INCIDENT_AGENT_ISSUE_SEVERITY_FIELD_NAME", "severity")
+    ISSUE_PRIORITY_FIELD_ID = os.environ.get("ISSUE_PRIORITY_FIELD_ID", "priority")
+    ISSUE_SEVERITY_FIELD_NAME = os.environ.get("ISSUE_SEVERITY_FIELD_NAME", "customfield_10124")
     # Severity values: comma-separated list of "value:description" pairs
     SEVERITY_VALUES = os.environ.get(
         "INCIDENT_AGENT_SEVERITY_VALUES",
-        "Critical:blocker or crash,Major:functional failure,Minor:UI/UX issue,Cosmetic:typo or minor visual issue"
+        "'10020':blocker or crash,'10021':functional failure,'10022':UI/UX issue,'10023':typo or minor visual issue"
     )
     # Priority values: comma-separated list of "value:description" pairs
     PRIORITY_VALUES = os.environ.get(

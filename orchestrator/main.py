@@ -3,8 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
-import base64
-import os
 import time
 from collections import defaultdict
 from contextlib import asynccontextmanager
@@ -18,7 +16,7 @@ import httpx
 import uvicorn
 from a2a.client import ClientFactory, ClientConfig
 from a2a.types import TaskState, AgentCard, Artifact, Task, JSONRPCErrorResponse, TextPart, FilePart, FileWithBytes, \
-    Message
+    Message, TaskIdParams
 from a2a.utils import new_agent_text_message, get_message_text
 from fastapi import FastAPI, Request, HTTPException, Security, Depends
 from fastapi.security import APIKeyHeader
@@ -27,13 +25,12 @@ from pydantic_ai.settings import ModelSettings
 
 import config
 from common import utils
-from common.services.vector_db_service import VectorDbService
 from common.custom_llm_wrapper import CustomLlmWrapper
 from common.models import SelectedAgent, GeneratedTestCases, TestCase, ProjectExecutionRequest, TestExecutionResult, \
-    TestExecutionRequest, SelectedAgents, JsonSerializableModel, IncidentCreationInput, IncidentCreationResult, \
-    IncidentIndexData
+    TestExecutionRequest, SelectedAgents, JsonSerializableModel, IncidentCreationInput, IncidentCreationResult
 from common.services.test_management_system_client_provider import get_test_management_client
 from common.services.test_reporting_client_base_provider import get_test_reporting_client
+from common.services.vector_db_service import VectorDbService
 
 MAX_RETRIES = 3
 
@@ -51,10 +48,18 @@ class AgentStatus(str, Enum):
     BROKEN = "BROKEN"
 
 
+class BrokenReason(str, Enum):
+    """Reason why an agent is marked as BROKEN."""
+    OFFLINE = "OFFLINE"  # Agent was unreachable (network error, crashed)
+    TASK_STUCK = "TASK_STUCK"  # Agent is reachable but a task timed out or is stuck
+
+
 class AgentRegistry:
     def __init__(self):
         self._cards: Dict[str, AgentCard] = {}
         self._statuses: Dict[str, AgentStatus] = {}
+        self._broken_reasons: Dict[str, BrokenReason] = {}
+        self._stuck_task_ids: Dict[str, str] = {}  # agent_id -> last stuck task_id
         self._lock = asyncio.Lock()
 
     async def get_card(self, agent_id: str) -> AgentCard | None:
@@ -72,19 +77,46 @@ class AgentRegistry:
             if agent_id not in self._statuses:
                 self._statuses[agent_id] = AgentStatus.AVAILABLE
 
-    async def update_status(self, agent_id: str, status: AgentStatus):
+    async def update_status(
+            self,
+            agent_id: str,
+            status: AgentStatus,
+            broken_reason: BrokenReason | None = None,
+            stuck_task_id: str | None = None
+    ):
         async with self._lock:
             if agent_id in self._cards:
                 self._statuses[agent_id] = status
+                if status == AgentStatus.BROKEN and broken_reason:
+                    self._broken_reasons[agent_id] = broken_reason
+                    if stuck_task_id:
+                        self._stuck_task_ids[agent_id] = stuck_task_id
+                elif status == AgentStatus.AVAILABLE:
+                    # Clear broken context when agent becomes available
+                    self._broken_reasons.pop(agent_id, None)
+                    self._stuck_task_ids.pop(agent_id, None)
 
     async def get_status(self, agent_id: str) -> AgentStatus:
         async with self._lock:
             return self._statuses.get(agent_id, AgentStatus.BROKEN)
 
+    async def get_broken_context(self, agent_id: str) -> tuple[BrokenReason | None, str | None]:
+        """Get the reason and stuck task ID for a broken agent.
+        
+        Returns:
+            Tuple of (broken_reason, stuck_task_id) or (None, None) if not broken.
+        """
+        async with self._lock:
+            reason = self._broken_reasons.get(agent_id)
+            task_id = self._stuck_task_ids.get(agent_id)
+            return reason, task_id
+
     async def remove(self, agent_id: str):
         async with self._lock:
             self._cards.pop(agent_id, None)
             self._statuses.pop(agent_id, None)
+            self._broken_reasons.pop(agent_id, None)
+            self._stuck_task_ids.pop(agent_id, None)
 
     async def get_all_cards(self) -> Dict[str, AgentCard]:
         async with self._lock:
@@ -101,6 +133,23 @@ class AgentRegistry:
     async def get_valid_agents(self) -> List[str]:
         async with self._lock:
             return [aid for aid, status in self._statuses.items() if status != AgentStatus.BROKEN and aid in self._cards]
+
+    async def get_agent_id_by_url(self, url: str) -> str | None:
+        async with self._lock:
+            for agent_id, card in self._cards.items():
+                if card.url == url:
+                    return agent_id
+            return None
+
+    async def get_broken_agents(self) -> Dict[str, tuple[BrokenReason | None, str | None]]:
+        async with self._lock:
+            result = {}
+            for agent_id, status in self._statuses.items():
+                if status == AgentStatus.BROKEN:
+                    reason = self._broken_reasons.get(agent_id)
+                    task_id = self._stuck_task_ids.get(agent_id)
+                    result[agent_id] = (reason, task_id)
+            return result
 
 
 agent_registry = AgentRegistry()
@@ -143,50 +192,126 @@ orchestrator_app = FastAPI(lifespan=lifespan)
 
 
 async def _retry_cancellation_task():
-    """Background task to retry cancellation of tasks on broken agents."""
-    logger.info("Starting retry cancellation task.")
+    """Background task to recover broken agents.
+    
+    This task handles two types of broken agents differently:
+    - OFFLINE: Agent was unreachable. Recovery = agent responds to card fetch.
+    - TASK_STUCK: Agent is reachable but a task timed out. Recovery = cancel the stuck task first.
+    """
+    logger.info("Starting broken agent recovery task.")
     while True:
         try:
             agent_id, timestamp = await cancellation_queue.get()
 
             # If it's been more than 24 hours, give up
             if time.time() - timestamp > 24 * 3600:
-                logger.warning(f"Gave up cancelling task for agent {agent_id} after 24 hours.")
+                logger.warning(f"Gave up recovering agent {agent_id} after 24 hours.")
                 cancellation_queue.task_done()
                 continue
 
-            # Attempt cancellation (or recovery check)
-            logger.info(f"Attempting to cancel task/recover agent {agent_id}...")
-
-            # Placeholder for actual cancellation logic. 
-            # We check if agent is responsive (e.g. we can get its card).
-            # If responsive, we assume we can reset it to AVAILABLE.
+            broken_reason, stuck_task_id = await agent_registry.get_broken_context(agent_id)
             agent_card = await agent_registry.get_card(agent_id)
+
+            if not agent_card:
+                logger.warning(f"Agent {agent_id} no longer has a registered card. Skipping recovery.")
+                cancellation_queue.task_done()
+                continue
+
+            logger.info(f"Attempting to recover agent {agent_id} (reason: {broken_reason})...")
+
             is_recovered = False
-            if agent_card:
-                # Try to fetch card again to see if it responds
+
+            if broken_reason == BrokenReason.OFFLINE:
+                # For OFFLINE agents: check if they respond to card fetch
                 if await _fetch_agent_card(agent_card.url):
+                    logger.info(f"Agent {agent_id} is back online.")
+                    is_recovered = True
+                else:
+                    logger.debug(f"Agent {agent_id} is still offline.")
+
+            elif broken_reason == BrokenReason.TASK_STUCK:
+                # For TASK_STUCK agents: attempt to cancel the stuck task first
+                if stuck_task_id:
+                    cancel_success = await _cancel_agent_task(agent_card, stuck_task_id)
+                    if cancel_success:
+                        logger.info(f"Successfully cancelled stuck task {stuck_task_id} on agent {agent_id}.")
+                        is_recovered = True
+                    else:
+                        # Cancellation failed - check if agent is at least responsive
+                        if await _fetch_agent_card(agent_card.url):
+                            logger.warning(
+                                f"Could not cancel task {stuck_task_id} on agent {agent_id}, "
+                                f"but agent is responsive. Marking as available anyway."
+                            )
+                            is_recovered = True
+                        else:
+                            # Agent is now offline, update reason
+                            logger.warning(f"Agent {agent_id} is no longer reachable. Updating to OFFLINE.")
+                            await agent_registry.update_status(
+                                agent_id, AgentStatus.BROKEN, BrokenReason.OFFLINE
+                            )
+                else:
+                    # No stuck task ID tracked, just check if agent responds
+                    if await _fetch_agent_card(agent_card.url):
+                        logger.info(f"Agent {agent_id} is responsive (no task ID to cancel).")
+                        is_recovered = True
+
+            else:
+                # Unknown or None reason - fall back to simple reachability check
+                if await _fetch_agent_card(agent_card.url):
+                    logger.info(f"Agent {agent_id} is responsive.")
                     is_recovered = True
 
             if is_recovered:
-                logger.info(f"Agent {agent_id} successfully recovered/cancelled. Marking AVAILABLE.")
+                logger.info(f"Agent {agent_id} successfully recovered. Marking AVAILABLE.")
                 await agent_registry.update_status(agent_id, AgentStatus.AVAILABLE)
                 cancellation_queue.task_done()
             else:
-                logger.info(f"Agent {agent_id} not recovered yet. Will retry.")
+                logger.info(f"Agent {agent_id} not recovered yet. Will retry in 60 seconds.")
                 cancellation_queue.task_done()
-                # Re-queue with delay
-                await asyncio.sleep(60)  # Wait 1 minute before retrying same agent?
-                # To avoid busy loop if queue has items, we should sleep or use a better scheduling.
-                # But putting it back immediately makes this loop spin if queue has items and they fail.
-                # So we should put it back and sleep.
+                await asyncio.sleep(60)
                 await cancellation_queue.put((agent_id, timestamp))
 
         except asyncio.CancelledError:
             break
         except Exception as e:
-            logger.error(f"Error in cancellation retry task: {e}")
+            logger.error(f"Error in broken agent recovery task: {e}")
             await asyncio.sleep(5)
+
+
+async def _cancel_agent_task(agent_card: AgentCard, task_id: str) -> bool:
+    """Attempt to cancel a task on an agent using the A2A protocol.
+    
+    Args:
+        agent_card: The agent's card containing connection info.
+        task_id: The ID of the task to cancel.
+        
+    Returns:
+        True if cancellation was successful or acknowledged, False otherwise.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=config.OrchestratorConfig.AGENT_DISCOVERY_TIMEOUT_SECONDS) as client:
+            client_config = ClientConfig(httpx_client=client)
+            client_factory = ClientFactory(config=client_config)
+            a2a_client = client_factory.create(card=agent_card)
+
+            cancelled_task = await a2a_client.cancel_task(TaskIdParams(id=task_id))
+
+            # Check if cancellation was accepted
+            if not cancelled_task.status:
+                logger.warning(f"Task got no status, artefacts: {cancelled_task.artifacts}")
+                return False
+            if cancelled_task.status.state != TaskState.canceled:
+                logger.warning(f"Task cancellation failed: got status {cancelled_task.status.state} and "
+                               f"message {cancelled_task.status.message}")
+                return False
+
+            logger.info(f"Task {task_id} cancellation request sent successfully.")
+            return True
+
+    except Exception as e:
+        logger.warning(f"Failed to cancel task {task_id}: {e}")
+        return False
 
 
 # --- For selecting the single best for the task agent ---
@@ -258,7 +383,7 @@ async def review_jira_requirements(request: Request, api_key: str = Depends(_val
     task_description = "Review the Jira user story"
     agent_id = await _choose_agent_id(task_description)
     completed_task = await _send_task_to_agent(agent_id, f"Jira user story with key {user_story_id}",
-                                                task_description)
+                                               task_description)
     _validate_task_status(completed_task, f"Review of the user story {user_story_id}")
     logger.info("Received response from an agent, requirements review seems to be complete.")
     return {"message": f"Review of the requirements for Jira user story {user_story_id} completed."}
@@ -303,7 +428,7 @@ async def update_rag_db(request: ProjectExecutionRequest, api_key: str = Depends
         task_description = "Update RAG Vector DB with Jira issues"
         agent_id = await _choose_agent_id(task_description)
         completed_task = await _send_task_to_agent(agent_id, f"Sync Jira bugs for project {project_key}",
-                                                    task_description)
+                                                   task_description)
 
         _validate_task_status(completed_task, task_description)
         received_artifacts = _get_artifacts_from_task(completed_task, task_description)
@@ -394,8 +519,7 @@ async def _request_incident_creation_for_failed_tests(
                 test_execution_result=str(result.generalErrorMessage),
                 test_step_results=result.stepResults,
                 system_description=result.system_description,
-                issue_priority_field_id=config.IncidentCreationAgentConfig.ISSUE_PRIORITY_FIELD_ID,
-                issue_severity_field_name=config.IncidentCreationAgentConfig.ISSUE_SEVERITY_FIELD_NAME
+                issue_priority_field_id=config.IncidentCreationAgentConfig.ISSUE_PRIORITY_FIELD_ID
             )
 
             incident_result = await _request_incident_creation(incident_input, result.artifacts or [])
@@ -515,8 +639,10 @@ async def _agent_worker(agent_id: str, queue: asyncio.Queue, results: List[TestE
                     results.append(result)
             except Exception as e:
                 logger.error(f"Error in worker for agent {agent_id}: {e}")
-                # Mark agent as BROKEN first
-                await agent_registry.update_status(agent_id, AgentStatus.BROKEN)
+                # Mark agent as BROKEN - task execution failed
+                await agent_registry.update_status(
+                    agent_id, AgentStatus.BROKEN, BrokenReason.TASK_STUCK
+                )
 
                 # Check if any other agents in the pool are still alive (not BROKEN)
                 any_agents_alive = False
@@ -637,22 +763,6 @@ async def _request_incident_creation(
     received_artifacts = _get_artifacts_from_task(completed_task, task_description)
     text_content = _get_text_content_from_artifacts(received_artifacts, task_description)
     result = IncidentCreationResult.model_validate_json(text_content)
-
-    if result.incident_key and result.incident_id:
-        try:
-            content_to_index = f"{incident_input.test_execution_result}\n{incident_input.system_description}"
-
-            incident_data = IncidentIndexData(
-                incident_id=result.incident_id,
-                incident_key=result.incident_key,
-                content=content_to_index,
-                source="incident_creation"
-            )
-
-            await vector_db_service.upsert(data=incident_data)
-        except Exception as e:
-            logger.error(f"Failed to index created incident {result.incident_key}: {e}")
-
     return result
 
 
@@ -660,8 +770,8 @@ async def _request_test_cases_generation(user_story_id) -> GeneratedTestCases:
     task_description = "Generate test cases"
     agent_id = await _choose_agent_id(task_description)
     completed_task = await _send_task_to_agent(agent_id,
-                                                f"Jira user story with key {user_story_id}",
-                                                task_description)
+                                               f"Jira user story with key {user_story_id}",
+                                               task_description)
     task_description = f"Generation of test cases for the user story {user_story_id}"
     received_artifacts = _get_artifacts_from_task(completed_task, task_description)
     text_content = _get_text_content_from_artifacts(received_artifacts, task_description)
@@ -680,7 +790,7 @@ async def _request_test_cases_classification(test_cases: List[TestCase], user_st
     task_description = "Classify test cases"
     agent_id = await _choose_agent_id(task_description)
     completed_task = await _send_task_to_agent(agent_id,
-                                                f"Test cases:\n{test_cases}", task_description)
+                                               f"Test cases:\n{test_cases}", task_description)
     return _get_artifacts_from_task(completed_task,
                                     f"Classification of test cases for the user story {user_story_id}")
 
@@ -769,12 +879,18 @@ async def _send_task_to_agent_with_message(agent_id: str, message: Message, task
                     _handle_exception(f"Task '{task_description}' iterator finished before completion.", 500)
                 except asyncio.TimeoutError:
                     logger.error(f"Task '{task_description}' timed out while waiting for completion.")
+                    # Get task ID if available for tracking
+                    stuck_task_id = last_task.id if last_task else None
                     try:
-                        await agent_registry.update_status(agent_id, AgentStatus.BROKEN)
+                        await agent_registry.update_status(
+                            agent_id, AgentStatus.BROKEN, BrokenReason.TASK_STUCK, stuck_task_id
+                        )
                         await cancellation_queue.put((agent_id, time.time()))
                     except Exception as ex:
                         logger.error(f"Error handling timeout for agent {agent_id}: {ex}")
-                        await agent_registry.update_status(agent_id, AgentStatus.BROKEN)
+                        await agent_registry.update_status(
+                            agent_id, AgentStatus.BROKEN, BrokenReason.TASK_STUCK, stuck_task_id
+                        )
 
                     _handle_exception(f"Task '{task_description}' timed out while waiting for completion.", 408)
 
@@ -803,7 +919,9 @@ async def _send_task_to_agent_with_message(agent_id: str, message: Message, task
 
     except Exception as e:
         logger.error(f"Error communicating with agent {agent_id}: {e}")
-        await agent_registry.update_status(agent_id, AgentStatus.BROKEN)
+        # Connection/communication error likely means agent is offline
+        await agent_registry.update_status(agent_id, AgentStatus.BROKEN, BrokenReason.OFFLINE)
+        await cancellation_queue.put((agent_id, time.time()))
         raise e
 
 
@@ -967,26 +1085,36 @@ async def _discover_agents():
     tasks = [_fetch_agent_card(url) for url in set(remote_agent_urls)]
     found_urls = []
 
-    # Update for thread safety using AgentRegistry
     agent_cards = await asyncio.gather(*tasks)
-
-    # We need to check against existing agents. 
-    # Since registry methods are async, we should iterate and check.
-
-    existing_cards = await agent_registry.get_all_cards()
 
     for agent_card in agent_cards:
         if agent_card:
             # Check if an agent with this URL is already registered
-            already_registered = False
-            for agent_id, existing_card in existing_cards.items():
-                if existing_card.url == agent_card.url:
-                    logger.info(f"Agent with URL {agent_card.url} is already registered with ID {agent_id}. Skipping.")
-                    already_registered = True
-                    break
-            if not already_registered:
-                agent_id = str(uuid4())
-                await agent_registry.register(agent_id, agent_card)
+            existing_agent_id = await agent_registry.get_agent_id_by_url(agent_card.url)
+
+            if existing_agent_id:
+                # Agent already registered - check if it was BROKEN and needs recovery
+                status = await agent_registry.get_status(existing_agent_id)
+                if status == AgentStatus.BROKEN:
+                    broken_reason, _ = await agent_registry.get_broken_context(existing_agent_id)
+                    if broken_reason == BrokenReason.OFFLINE:
+                        # Agent was offline but is now responsive - reset to AVAILABLE
+                        logger.info(
+                            f"Agent {existing_agent_id} (URL: {agent_card.url}) was OFFLINE "
+                            f"but is now responsive. Resetting to AVAILABLE."
+                        )
+                        await agent_registry.update_status(existing_agent_id, AgentStatus.AVAILABLE)
+                    else:
+                        logger.debug(
+                            f"Agent {existing_agent_id} is BROKEN for reason {broken_reason}, "
+                            f"not resetting during discovery."
+                        )
+                else:
+                    logger.debug(f"Agent with URL {agent_card.url} is already registered with ID {existing_agent_id}.")
+            else:
+                # New agent - register it
+                new_agent_id = str(uuid4())
+                await agent_registry.register(new_agent_id, agent_card)
                 found_urls.append(agent_card.url)
 
     if found_urls:
