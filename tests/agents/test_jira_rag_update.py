@@ -25,19 +25,18 @@ def agent(mock_db_service):
 @pytest.mark.asyncio
 async def test_upsert_issues(agent):
     issues = [
-        {
-            "key": "TEST-1",
-            "id": "1001",
-            "fields": {
-                "summary": "Summary",
-                "description": "Desc",
-                "status": {"name": "To Do"},
-                "issuetype": {"name": "Bug"}
-            }
-        }
+        JiraIssue(
+            key="TEST-1",
+            id=1001,
+            summary="Summary",
+            description="Desc",
+            status="To Do",
+            issue_type="Bug",
+            project_key="TEST_PROJ",
+        )
     ]
     
-    result = await agent.upsert_issues("TEST_PROJ", issues)
+    result = await agent.upsert_issues(issues)
     
     assert "Upserted 1 issues" in result
     agent.issues_db.upsert.assert_called_once()
@@ -56,4 +55,4 @@ async def test_upsert_issues(agent):
 async def test_delete_issues(agent):
     result = await agent.delete_issues([1001])
     assert "Deleted 1 issues" in result
-    agent.issues_db.delete.assert_called_once_with(["1001"])
+    agent.issues_db.delete.assert_called_once_with([1001])

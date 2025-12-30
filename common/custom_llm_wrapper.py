@@ -1,4 +1,5 @@
 import json
+from datetime import datetime
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import List, Sequence, Optional
@@ -99,18 +100,18 @@ class CustomLlmWrapper(WrapperModel):
     def _log_model_request(self, message):
         if message.instructions and self.latest_instructions != message.instructions:
             self.latest_instructions = message.instructions
-            timestamp = message.timestamp.strftime('%Y-%m-%d %H:%M:%S')
+            timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             logger.debug(f"[{timestamp}] Agent is using following instructions: "
                          f"\n{LOG_SEPARATTOR}\n{self.latest_instructions}\n{LOG_SEPARATTOR}")
         for part in message.parts:
             if isinstance(part, ToolReturnPart):
-                timestamp = part.timestamp.strftime('%Y-%m-%d %H:%M:%S')
+                timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                 payload = part.content.model_dump_json(indent=2) if isinstance(part.content, JsonSerializableModel) \
                     else json.dumps(part.content, indent=2)
                 logger.debug(f"[{timestamp}] Agent is responding with the execution result of tool: "
                              f"'{part.tool_name}' with result: \n{LOG_SEPARATTOR}\n{payload}\n{LOG_SEPARATTOR}")
             elif isinstance(part, UserPromptPart):
-                timestamp = part.timestamp.strftime('%Y-%m-%d %H:%M:%S')
+                timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                 if isinstance(part.content, str):
                     content_to_log = part.content
                 elif isinstance(part.content, Sequence):
@@ -126,16 +127,16 @@ class CustomLlmWrapper(WrapperModel):
                 logger.debug(f"[{timestamp}] Agent is prompting the model with user input: "
                              f"\n{LOG_SEPARATTOR}\n{content_to_log}\n{LOG_SEPARATTOR}")
             elif isinstance(part, SystemPromptPart):
-                timestamp = part.timestamp.strftime('%Y-%m-%d %H:%M:%S')
+                timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                 logger.debug(f"[{timestamp}] Agent is using system prompt: \n{LOG_SEPARATTOR}\n{part.content}\n{LOG_SEPARATTOR}")
             elif isinstance(part, RetryPromptPart):
-                timestamp = part.timestamp.strftime('%Y-%m-%d %H:%M:%S')
+                timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                 logger.debug(f"[{timestamp}] Agent is retrying prompting the model, the root "
                              f"cause: {part.content}")
 
     @staticmethod
     def _log_model_response(message):
-        timestamp = message.timestamp.strftime('%Y-%m-%d %H:%M:%S')
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         separator = '-' * 80
         for part in message.parts:
             if isinstance(part, ToolCallPart):

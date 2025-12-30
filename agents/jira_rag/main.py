@@ -66,11 +66,11 @@ class JiraRagAgent(AgentBase):
         return config.JiraRagUpdateAgentConfig.MAX_REQUESTS_PER_TASK
 
     @staticmethod
-    def _key_to_int(key: str) -> str:
+    def _key_to_int(key: str) -> int:
         """Convert a project key to an integer ID for ProjectMetadata storage.
         """
         import hashlib
-        return str(int(hashlib.md5(key.encode()).hexdigest()[:16], 16))
+        return int(hashlib.md5(key.encode()).hexdigest()[:16], 16)
 
     async def get_last_update_timestamp(self, project_key: str) -> str:
         """Retrieves the timestamp of the last project update from the metadata DB.
@@ -113,8 +113,7 @@ class JiraRagAgent(AgentBase):
         try:
             if not issue_ids:
                 return "No issues to delete."
-            str_ids = [str(issue_id) for issue_id in issue_ids]
-            await self.issues_db.delete(str_ids)
+            await self.issues_db.delete(issue_ids)
             return f"Deleted {len(issue_ids)} issues."
         except Exception as e:
             logger.error(f"Error deleting issues: {e}")

@@ -127,15 +127,19 @@ class VectorDbService:
             logger.info(f"Upserted document with ID {point_id} to collection {self.collection_name}")
         except Exception as e:
             logger.error(f"Error upserting to Vector DB: {e}")
+            raise
 
-    async def retrieve(self, point_ids: list[str]) -> list[models.Record]:
+    async def retrieve(self, point_ids: list[int | str]) -> list[models.Record]:
         """Retrieve points by their IDs from the collection.
 
         Args:
-            point_ids: List of point IDs to retrieve.
+            point_ids: List of point IDs to retrieve (64-bit unsigned integers or UUID strings).
 
         Returns:
             List of Record objects containing point data.
+
+        Raises:
+            Exception: If retrieval from Vector DB fails.
         """
         try:
             await self._ensure_collection()
@@ -145,9 +149,17 @@ class VectorDbService:
             )
         except Exception as e:
             logger.error(f"Error retrieving from Vector DB: {e}")
-            return []
+            raise
 
-    async def delete(self, point_ids: list[str]):
+    async def delete(self, point_ids: list[int | str]):
+        """Delete points by their IDs from the collection.
+
+        Args:
+            point_ids: List of point IDs to delete (64-bit unsigned integers or UUID strings).
+
+        Raises:
+            Exception: If deletion from Vector DB fails.
+        """
         try:
             await self.client.delete(
                 collection_name=self.collection_name,
@@ -158,3 +170,4 @@ class VectorDbService:
             logger.info(f"Deleted documents with IDs {point_ids} from collection {self.collection_name}")
         except Exception as e:
             logger.error(f"Error deleting from Vector DB: {e}")
+            raise
