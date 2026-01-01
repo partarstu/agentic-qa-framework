@@ -6,6 +6,7 @@ FROM agentic-qa-base:latest
 ARG WORK_DIR=/app
 WORKDIR ${WORK_DIR}
 
+COPY scripts/download_embedding_model.py /app/scripts/download_embedding_model.py
 RUN python /app/scripts/download_embedding_model.py
 
 COPY services/embedding_service/ ${WORK_DIR}/services/embedding_service
