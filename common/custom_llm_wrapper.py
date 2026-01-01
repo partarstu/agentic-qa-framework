@@ -73,10 +73,7 @@ class CustomLlmWrapper(WrapperModel):
                     if isinstance(part.content, str):
                         prompt_content = part.content
                     else:
-                        try:
-                            prompt_content = json.dumps(part.content)
-                        except TypeError:
-                            prompt_content = str(part.content)
+                        prompt_content = CustomLlmWrapper._serialize_content(part.content)
                     return GuardPrompt(
                         prompt_description=f"Result of the execution of the tool '{part.tool_name}' : ",
                         prompt=prompt_content
@@ -97,6 +94,19 @@ class CustomLlmWrapper(WrapperModel):
             logger.error(f"Prompt injection attack detected for the following prompt: \n{guard_prompt.prompt}")
             raise HTTPException(status_code=400, detail="Prompt injection attack detected.")
 
+    @staticmethod
+    def _serialize_content(content) -> str:
+        """Serialize content to JSON, handling JsonSerializableModel instances."""
+        if isinstance(content, JsonSerializableModel):
+            return content.model_dump_json(indent=2)
+        if isinstance(content, list):
+            serialized = [
+                item.model_dump() if isinstance(item, JsonSerializableModel) else item
+                for item in content
+            ]
+            return json.dumps(serialized, indent=2)
+        return json.dumps(content, indent=2)
+
     def _log_model_request(self, message):
         if message.instructions and self.latest_instructions != message.instructions:
             self.latest_instructions = message.instructions
@@ -106,8 +116,7 @@ class CustomLlmWrapper(WrapperModel):
         for part in message.parts:
             if isinstance(part, ToolReturnPart):
                 timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                payload = part.content.model_dump_json(indent=2) if isinstance(part.content, JsonSerializableModel) \
-                    else json.dumps(part.content, indent=2)
+                payload = self._serialize_content(part.content)
                 logger.debug(f"[{timestamp}] Agent is responding with the execution result of tool: "
                              f"'{part.tool_name}' with result: \n{LOG_SEPARATTOR}\n{payload}\n{LOG_SEPARATTOR}")
             elif isinstance(part, UserPromptPart):

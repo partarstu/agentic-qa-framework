@@ -70,20 +70,28 @@ async def test_search_duplicates_in_rag(agent):
 Error Description: {input_data.test_execution_result}
 System: {input_data.system_description}"""
     
-    # Mock Vector DB search
+    # Mock Vector DB search with a valid JiraIssue payload
     mock_hit = MagicMock()
-    mock_hit.payload = {"issue_key": "BUG-1", "content": "Similar NPE"}
+    mock_hit.payload = {
+        "id": 10001,
+        "key": "BUG-1",
+        "summary": "Similar NPE in login flow",
+        "description": "Similar NPE",
+        "issue_type": "Bug",
+        "status": "Open",
+        "project_key": "PROJ",
+    }
     mock_hit.score = 0.85
     agent.vector_db_service.search.return_value = [mock_hit]
-    
+
     # Run
     candidates = await agent._search_duplicate_candidates_in_rag(incident_description)
-    
+
     assert len(candidates) == 1
-    assert candidates[0]["issue_key"] == "BUG-1"
-    assert candidates[0]["content"] == "Similar NPE"
-    assert candidates[0]["similarity_score"] == 0.85
-    
+    assert candidates[0].key == "BUG-1"
+    assert candidates[0].description == "Similar NPE"
+    assert candidates[0].issue_type == "Bug"
+
     agent.vector_db_service.search.assert_called_once()
 
 @pytest.mark.asyncio

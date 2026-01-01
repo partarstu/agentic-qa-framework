@@ -22,6 +22,7 @@ from common.models import (
     IncidentCreationInput,
     IncidentCreationResult,
     DuplicateDetectionResult,
+    JiraIssue,
 )
 from common.services.test_management_system_client_provider import get_test_management_client
 
@@ -74,7 +75,8 @@ class IncidentCreationAgent(AgentBase):
             mcp_servers=[jira_mcp_server],
             deps_type=IncidentCreationInput,
             description="Agent which creates detailed incident reports in Jira based on test execution results.",
-            tools=[self._search_duplicate_candidates_in_rag, self._get_linked_issues, self._check_if_duplicate, self._save_artifacts, self._link_issue_to_test_case],
+            tools=[self._search_duplicate_candidates_in_rag, self._get_linked_issues, self._check_if_duplicate, self._save_artifacts,
+                   self._link_issue_to_test_case],
             vector_db_collection_name=QDRANT_COLLECTION_NAME
         )
 
@@ -84,17 +86,17 @@ class IncidentCreationAgent(AgentBase):
     def get_max_requests_per_task(self) -> int:
         return 10
 
-    async def _search_duplicate_candidates_in_rag(self, incident_description: str) -> List[dict]:
+    async def _search_duplicate_candidates_in_rag(self, incident_description: str) -> list[JiraIssue]:
         """Searches for potential duplicate incidents using the RAG vector database.
-        
+
         This tool searches the vector database for semantically similar incidents based on the incident description.
-        
+
         Args:
-            incident_description: Description of the incident including the error description, 
+            incident_description: Description of the incident including the error description,
                                 test case name, test step where the issue occurred, steps to reproduce, system info etc.
 
         Returns:
-            List of dicts with 'issue_key' and 'content' for each potential duplicate.
+            List of JiraIssue objects representing potential duplicate incidents.
         """
         if not self.vector_db_service:
             logger.warning("Vector DB service not initialized, skipping RAG search.")
@@ -116,14 +118,13 @@ class IncidentCreationAgent(AgentBase):
             query_filter=bug_filter,
         )
 
-        candidates = [
-            {
-                "issue_key": hit.payload.get('issue_key', 'Unknown'),
-                "content": hit.payload.get('content', ''),
-                "similarity_score": hit.score
-            }
-            for hit in hits if hit.payload
-        ]
+        candidates: list[JiraIssue] = []
+        for hit in hits:
+            if hit.payload:
+                try:
+                    candidates.append(JiraIssue.model_validate(hit.payload))
+                except Exception as e:
+                    logger.warning(f"Failed to parse JiraIssue from payload: {e}")
 
         logger.info(f"Found {len(candidates)} potential duplicates via RAG.")
         return candidates
@@ -155,13 +156,13 @@ class IncidentCreationAgent(AgentBase):
         since the Jira MCP server runs in Docker and expects paths relative to its filesystem.
         """
         import posixpath
-        
+
         saved_paths: list[str] = []
         # Local path where files are actually saved (e.g., D:\temp on Windows)
         local_folder = config.ATTACHMENTS_DESTINATION_FOLDER_PATH
         # MCP container path for the Jira MCP server (e.g., /tmp in Docker)
         mcp_folder = config.MCP_SERVER_ATTACHMENTS_FOLDER_PATH
-        
+
         for part in self.latest_received_message.parts:
             if isinstance(part.root, FilePart):
                 file_part = part.root

@@ -63,7 +63,7 @@ class JiraIssue(VectorizableBaseModel):
         return self.id
 
     def get_embedding_content(self) -> str:
-        return str(self)
+        return f"{self.summary}\n\n{self.description}"
 
 
 class ProjectMetadata(VectorizableBaseModel):
