@@ -16,6 +16,7 @@ jira_mcp_server = MCPServerSSE(url=config.JIRA_MCP_SERVER_URL, timeout=config.MC
 
 
 class TestCaseClassificationAgent(AgentBase):
+    __test__ = False
     def __init__(self):
         instruction_prompt = TestCaseClassificationSystemPrompt()
         super().__init__(

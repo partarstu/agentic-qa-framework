@@ -114,7 +114,7 @@ class AgentBase(ABC):
             instructions=self.instructions,
             name=self.agent_name,
             model_settings=self.model_settings,
-            mcp_servers=self.mcp_servers,
+            toolsets=self.mcp_servers,
             tools=self.tools,
             retries=MAX_RETRIES,
             output_retries=MAX_RETRIES

@@ -93,6 +93,7 @@ class AcceptanceCriteriaList(JsonSerializableModel):
 
 
 class TestStep(JsonSerializableModel):
+    __test__ = False
     action: str = Field(
         description="The description of the action which needs to be executed in the scope of this test step")
     expected_results: str = Field(description="Results expected after the test step action is executed")
@@ -105,10 +106,12 @@ class TestStepsSequence(JsonSerializableModel):
 
 
 class TestStepsSequenceList(JsonSerializableModel):
+    __test__ = False
     items: List[TestStepsSequence] = Field(description="List of test step sequences for multiple acceptance criteria.")
 
 
 class TestCase(JsonSerializableModel):
+    __test__ = False
     key: Optional[str] = Field(description="The ID or key of the generated test case")
     labels: list[str] = Field(description="The list of the labels which were assigned to this test case, should "
                                           "be empty for a newly created test case")
@@ -155,6 +158,7 @@ class TestExecutionRequest(JsonSerializableModel):
 
 
 class TestStepResult(JsonSerializableModel):
+    __test__ = False
     stepDescription: str = Field(description="Description of the test step (action which was executed)")
     testData: list[str] = Field(description="Data used for the test step")
     expectedResults: str = Field(description="Expected results for the test step")
@@ -164,6 +168,7 @@ class TestStepResult(JsonSerializableModel):
 
 
 class TestExecutionResult(JsonSerializableModel):
+    __test__ = False
     stepResults: List[TestStepResult] = Field(description="List of test step execution results in the test case")
     testCaseKey: str = Field(description="Key of the executed test case")
     testCaseName: str = Field(description="Name of the executed test case")

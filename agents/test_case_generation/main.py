@@ -27,6 +27,7 @@ jira_mcp_server = MCPServerSSE(url=config.JIRA_MCP_SERVER_URL, timeout=config.MC
 
 
 class TestCaseGenerationAgent(AgentBase):
+    __test__ = False
     def __init__(self):
         # Initialize sub-agent prompts
         self.ac_extraction_prompt = AcExtractionPrompt()
@@ -40,7 +41,7 @@ class TestCaseGenerationAgent(AgentBase):
             model=CustomLlmWrapper(wrapped=model_name),
             output_type=AcceptanceCriteriaList,
             system_prompt=self.ac_extraction_prompt.get_prompt(),
-            mcp_servers=[jira_mcp_server],
+            toolsets=[jira_mcp_server],
             name="ac_extractor",
         )
 

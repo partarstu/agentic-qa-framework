@@ -7,6 +7,7 @@ from a2a.utils import get_message_text
 import config
 
 class TestAgent(AgentBase):
+    __test__ = False
     def get_thinking_budget(self) -> int:
         return 1000
 
