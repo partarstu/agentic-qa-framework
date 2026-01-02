@@ -144,9 +144,9 @@ class IncidentCreationAgent(AgentBase):
             linked_issues = test_management_client.fetch_linked_issues(test_case_key)
             return [json.dumps(linked_issue) for linked_issue in linked_issues]
 
-        except Exception as e:
+        except Exception:
             logger.exception(f"Error fetching linked issues for test case {test_case_key}.")
-            return []
+            raise
 
     def _save_artifacts(self) -> list[str]:
         """Saves all received file artifacts into the file system and returns their paths.
@@ -220,9 +220,9 @@ class IncidentCreationAgent(AgentBase):
             test_management_client = get_test_management_client()
             test_management_client.link_issue_to_test_case(test_case_key, issue_id, link_type)
             return f"Successfully linked issue {issue_id} to test case {test_case_key} with type {link_type}"
-        except Exception as e:
+        except Exception:
             logger.exception(f"Error linking issue {issue_id} to test case {test_case_key}.")
-            return f"Failed to link issue {issue_id} to test case {test_case_key}: {str(e)}"
+            raise
 
 
 agent = IncidentCreationAgent()

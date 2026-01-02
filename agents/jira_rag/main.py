@@ -83,7 +83,7 @@ class JiraRagAgent(AgentBase):
             return "1970-01-01 00:00"
         except Exception:
             logger.exception("Error fetching last update")
-            return "1970-01-01 00:00"
+            raise
 
     async def save_last_update_timestamp(self, project_key: str, timestamp: str) -> str:
         """Saves the timestamp of the last project update."""
@@ -91,9 +91,9 @@ class JiraRagAgent(AgentBase):
             metadata = ProjectMetadata(project_key=project_key, last_update=timestamp)
             await self.metadata_db.upsert(data=metadata)
             return "Timestamp saved."
-        except Exception as e:
+        except Exception:
             logger.exception("Error saving last update")
-            return f"Error saving timestamp: {type(e).__name__}: {e}"
+            raise
 
     async def upsert_issues(self, issues: List[JiraIssue]) -> str:
         """Upserts a list of Jira issues into the vector DB.
@@ -104,9 +104,9 @@ class JiraRagAgent(AgentBase):
                 await self.issues_db.upsert(data=issue)
                 count += 1
             return f"Upserted {count} issues."
-        except Exception as e:
+        except Exception:
             logger.exception("Error upserting issues")
-            return f"Error upserting issues: {type(e).__name__}: {e}"
+            raise
 
     async def delete_issues(self, issue_ids: List[int]) -> str:
         """Deletes a list of Jira issues from the vector DB by their numeric IDs."""
@@ -115,9 +115,9 @@ class JiraRagAgent(AgentBase):
                 return "No issues to delete."
             await self.issues_db.delete(issue_ids)
             return f"Deleted {len(issue_ids)} issues."
-        except Exception as e:
+        except Exception:
             logger.exception("Error deleting issues")
-            return f"Error deleting issues: {type(e).__name__}: {e}"
+            raise
 
     async def search_issues(
         self,
@@ -213,7 +213,7 @@ class JiraRagAgent(AgentBase):
             return results
         except Exception:
             logger.exception("Error searching issues")
-            return []
+            raise
 
 
 agent = JiraRagAgent()

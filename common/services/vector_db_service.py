@@ -2,6 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import asyncio
 import os
 from typing import List
 
@@ -21,11 +22,12 @@ class VectorDbService:
     def __init__(self, collection_name: str):
         self.collection_name = collection_name
         self.client = AsyncQdrantClient(
-            url=getattr(config.QdrantConfig, "URL", "http://localhost:6333"),
+            url=getattr(config.QdrantConfig, "URL", "http://localhost"),
+            port=getattr(config.QdrantConfig, "PORT", 6333),
             api_key=getattr(config.QdrantConfig, "API_KEY", None),
             timeout=getattr(config.QdrantConfig, "TIMEOUT_SECONDS", 30.0),
         )
-        self.model_name = getattr(config.QdrantConfig, "EMBEDDING_MODEL", "Qwen/Qwen3-Embedding-0.6B")
+        self.model_name = getattr(config.QdrantConfig, "EMBEDDING_MODEL")
         self._embedding_model: SentenceTransformer | None = None
         self.embedding_service_url = getattr(config.QdrantConfig, "EMBEDDING_SERVICE_URL", None)
 
@@ -89,8 +91,7 @@ class VectorDbService:
                     vectors_config=models.VectorParams(size=vector_size, distance=models.Distance.COSINE)
                 )
             except Exception as e:
-                # Handle race condition where collection is created concurrently
-                # Qdrant client might raise an error if collection already exists
+                # Handle race condition where collection is created concurrently                
                 if "already exists" in str(e).lower() or "conflict" in str(e).lower():
                     logger.info(f"Collection {self.collection_name} already exists (race condition handled).")
                 else:
@@ -129,7 +130,7 @@ class VectorDbService:
             return response.points
         except Exception:
             logger.exception("Error querying Vector DB")
-            return []
+            raise
 
     async def upsert(self, data: VectorizableBaseModel):
         try:
