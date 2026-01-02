@@ -275,7 +275,7 @@ async def _retry_cancellation_task():
         except asyncio.CancelledError:
             break
         except Exception as e:
-            logger.error(f"Error in broken agent recovery task: {e}")
+            logger.exception(f"Error in broken agent recovery task.")
             await asyncio.sleep(5)
 
 
@@ -529,7 +529,7 @@ async def _request_incident_creation_for_failed_tests(
                 f"Incident key: {incident_result.incident_key if incident_result else 'N/A'}"
             )
         except Exception as e:
-            logger.error(f"Failed to create incident for test case {result.testCaseKey}: {e}")
+            logger.exception(f"Failed to create incident for test case {result.testCaseKey}.")
 
     # Execute all incident creations in parallel
     await asyncio.gather(*[_create_incident_for_result(result) for result in failed_results])
@@ -638,7 +638,7 @@ async def _agent_worker(agent_id: str, queue: asyncio.Queue, results: List[TestE
                 if result:
                     results.append(result)
             except Exception as e:
-                logger.error(f"Error in worker for agent {agent_id}: {e}")
+                logger.exception(f"Error in worker for agent {agent_id}.")
                 # Mark agent as BROKEN - task execution failed
                 await agent_registry.update_status(
                     agent_id, AgentStatus.BROKEN, BrokenReason.TASK_STUCK
@@ -887,7 +887,7 @@ async def _send_task_to_agent_with_message(agent_id: str, message: Message, task
                         )
                         await cancellation_queue.put((agent_id, time.time()))
                     except Exception as ex:
-                        logger.error(f"Error handling timeout for agent {agent_id}: {ex}")
+                        logger.exception(f"Error handling timeout for agent {agent_id}.")
                         await agent_registry.update_status(
                             agent_id, AgentStatus.BROKEN, BrokenReason.TASK_STUCK, stuck_task_id
                         )
@@ -918,7 +918,7 @@ async def _send_task_to_agent_with_message(agent_id: str, message: Message, task
             return None
 
     except Exception as e:
-        logger.error(f"Error communicating with agent {agent_id}: {e}")
+        logger.exception(f"Error communicating with agent {agent_id}.")
         # Connection/communication error likely means agent is offline
         await agent_registry.update_status(agent_id, AgentStatus.BROKEN, BrokenReason.OFFLINE)
         await cancellation_queue.put((agent_id, time.time()))

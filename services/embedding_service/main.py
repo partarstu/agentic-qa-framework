@@ -45,7 +45,7 @@ async def get_embedding(request: EmbeddingRequest):
         embedding = embedding_model.encode(request.text)
         return EmbeddingResponse(embedding=embedding.tolist())
     except Exception as e:
-        logger.error(f"Error generating embedding: {e}")
+        logger.exception(f"Error generating embedding.")
         raise HTTPException(status_code=500, detail=str(e))
 
 

@@ -412,7 +412,7 @@ class ZephyrClient(TestManagementClientBase):
             timestamp = parser.parse(timestamp_str)
             return timestamp.strftime("%Y-%m-%dT%H:%M:%SZ")
         except ValueError as e:
-            logger.error(f"Could not parse timestamp '{timestamp_str}': {e}")
+            logger.exception(f"Could not parse timestamp '{timestamp_str}'.")
             raise
 
     def fetch_test_case_by_key(self, test_case_key: str) -> TestCase:

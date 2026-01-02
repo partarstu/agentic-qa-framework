@@ -103,7 +103,7 @@ class AllureClient(TestReportingClientBase):
             subprocess.run(command, check=True, capture_output=True, text=True)
             logger.info("Allure report generated successfully.")
         except subprocess.CalledProcessError as e:
-            logger.error(f"Failed to generate Allure report: {e}")
+            logger.exception(f"Failed to generate Allure report.")
             logger.error(f"Stdout: {e.stdout}")
             logger.error(f"Stderr: {e.stderr}")
             raise

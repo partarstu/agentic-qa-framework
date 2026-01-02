@@ -81,8 +81,8 @@ class JiraRagAgent(AgentBase):
             if points and points[0].payload:
                 return points[0].payload.get("last_update", "1970-01-01 00:00")
             return "1970-01-01 00:00"
-        except Exception as e:
-            logger.error(f"Error fetching last update: {e}")
+        except Exception:
+            logger.exception("Error fetching last update")
             return "1970-01-01 00:00"
 
     async def save_last_update_timestamp(self, project_key: str, timestamp: str) -> str:
@@ -92,8 +92,8 @@ class JiraRagAgent(AgentBase):
             await self.metadata_db.upsert(data=metadata)
             return "Timestamp saved."
         except Exception as e:
-            logger.error(f"Error saving last update: {e}")
-            return f"Error saving timestamp: {e}"
+            logger.exception("Error saving last update")
+            return f"Error saving timestamp: {type(e).__name__}: {e}"
 
     async def upsert_issues(self, issues: List[JiraIssue]) -> str:
         """Upserts a list of Jira issues into the vector DB.
@@ -105,8 +105,8 @@ class JiraRagAgent(AgentBase):
                 count += 1
             return f"Upserted {count} issues."
         except Exception as e:
-            logger.error(f"Error upserting issues: {e}")
-            return f"Error upserting issues: {e}"
+            logger.exception("Error upserting issues")
+            return f"Error upserting issues: {type(e).__name__}: {e}"
 
     async def delete_issues(self, issue_ids: List[int]) -> str:
         """Deletes a list of Jira issues from the vector DB by their numeric IDs."""
@@ -116,8 +116,8 @@ class JiraRagAgent(AgentBase):
             await self.issues_db.delete(issue_ids)
             return f"Deleted {len(issue_ids)} issues."
         except Exception as e:
-            logger.error(f"Error deleting issues: {e}")
-            return f"Error deleting issues: {e}"
+            logger.exception("Error deleting issues")
+            return f"Error deleting issues: {type(e).__name__}: {e}"
 
     async def search_issues(
         self,
@@ -211,8 +211,8 @@ class JiraRagAgent(AgentBase):
                 })
 
             return results
-        except Exception as e:
-            logger.error(f"Error searching issues: {e}")
+        except Exception:
+            logger.exception("Error searching issues")
             return []
 
 

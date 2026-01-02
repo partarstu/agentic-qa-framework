@@ -180,5 +180,6 @@ class QdrantConfig:
     EMBEDDING_MODEL = os.environ.get("RAG_EMBEDDING_MODEL", "jinaai/jina-embeddings-v3")
     EMBEDDING_MODEL_PATH = os.path.join(LOCAL_MODELS_PATH, "embedding_model")
     EMBEDDING_SERVICE_URL = os.environ.get("EMBEDDING_SERVICE_URL")
+    EMBEDDING_SERVICE_TIMEOUT_SECONDS = float(os.environ.get("EMBEDDING_SERVICE_TIMEOUT_SECONDS", "30.0"))
     VALID_STATUSES = os.environ.get("JIRA_VALID_STATUSES", "To Do,In Progress,Done").split(",")
     BUG_ISSUE_TYPE = os.environ.get("JIRA_BUG_ISSUE_TYPE", "Bug")

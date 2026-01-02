@@ -145,7 +145,7 @@ class IncidentCreationAgent(AgentBase):
             return [json.dumps(linked_issue) for linked_issue in linked_issues]
 
         except Exception as e:
-            logger.error(f"Error fetching linked issues for test case {test_case_key}: {e}")
+            logger.exception(f"Error fetching linked issues for test case {test_case_key}.")
             return []
 
     def _save_artifacts(self) -> list[str]:
@@ -182,7 +182,7 @@ class IncidentCreationAgent(AgentBase):
                         saved_paths.append(mcp_file_path)
                         logger.info(f"Saved artifact '{original_name}' to {local_file_path} (MCP path: {mcp_file_path})")
                     except Exception as e:
-                        logger.error(f"Failed to save artifact: {e}")
+                        logger.exception(f"Failed to save artifact.")
 
         if saved_paths:
             logger.info(f"Saved {len(saved_paths)} artifacts")
@@ -221,7 +221,7 @@ class IncidentCreationAgent(AgentBase):
             test_management_client.link_issue_to_test_case(test_case_key, issue_id, link_type)
             return f"Successfully linked issue {issue_id} to test case {test_case_key} with type {link_type}"
         except Exception as e:
-            logger.error(f"Error linking issue {issue_id} to test case {test_case_key}: {e}")
+            logger.exception(f"Error linking issue {issue_id} to test case {test_case_key}.")
             return f"Failed to link issue {issue_id} to test case {test_case_key}: {str(e)}"
 
 

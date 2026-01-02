@@ -49,10 +49,28 @@ class VectorDbService:
 
     async def _get_embedding(self, text: str) -> List[float]:
         if self.embedding_service_url:
-            async with httpx.AsyncClient() as client:
-                response = await client.post(f"{self.embedding_service_url}/embed", json={"text": text})
-                response.raise_for_status()
-                return response.json()["embedding"]
+            timeout = httpx.Timeout(config.QdrantConfig.EMBEDDING_SERVICE_TIMEOUT_SECONDS)
+            try:
+                async with httpx.AsyncClient(timeout=timeout) as client:
+                    response = await client.post(
+                        f"{self.embedding_service_url}/embed",
+                        json={"text": text}
+                    )
+                    response.raise_for_status()
+                    return response.json()["embedding"]
+            except httpx.TimeoutException:
+                logger.exception(
+                    f"Timeout calling embedding service at {self.embedding_service_url}"
+                )
+                raise
+            except httpx.HTTPStatusError as e:
+                logger.exception(
+                    f"HTTP error from embedding service: {e.response.status_code} - {e.response.text}"
+                )
+                raise
+            except Exception:
+                logger.exception("Error calling embedding service")
+                raise
 
         # Fallback to local model
         embedding = self.embedding_model.encode(text)
@@ -108,8 +126,8 @@ class VectorDbService:
                 query_filter=query_filter,
             )
             return response.points
-        except Exception as e:
-            logger.error(f"Error querying Vector DB: {e}")
+        except Exception:
+            logger.exception("Error querying Vector DB")
             return []
 
     async def upsert(self, data: VectorizableBaseModel):
@@ -125,8 +143,8 @@ class VectorDbService:
                 points=[models.PointStruct(id=point_id, vector=embedding, payload=payload)]
             )
             logger.info(f"Upserted document with ID {point_id} to collection {self.collection_name}")
-        except Exception as e:
-            logger.error(f"Error upserting to Vector DB: {e}")
+        except Exception:
+            logger.exception("Error upserting to Vector DB")
             raise
 
     async def retrieve(self, point_ids: list[int | str]) -> list[models.Record]:
@@ -147,8 +165,8 @@ class VectorDbService:
                 collection_name=self.collection_name,
                 ids=point_ids,
             )
-        except Exception as e:
-            logger.error(f"Error retrieving from Vector DB: {e}")
+        except Exception:
+            logger.exception("Error retrieving from Vector DB")
             raise
 
     async def delete(self, point_ids: list[int | str]):
@@ -168,6 +186,6 @@ class VectorDbService:
                 )
             )
             logger.info(f"Deleted documents with IDs {point_ids} from collection {self.collection_name}")
-        except Exception as e:
-            logger.error(f"Error deleting from Vector DB: {e}")
+        except Exception:
+            logger.exception("Error deleting from Vector DB")
             raise

@@ -31,7 +31,7 @@ async def load_test_case(test_case_key: str) -> TestCase:
             raise ValueError(f"Test case with key '{test_case_key}' not found.")
         return test_case
     except Exception as e:
-        logger.error(f"Failed to load test case '{test_case_key}': {e}")
+        logger.exception(f"Failed to load test case '{test_case_key}'")
         raise
 
 
@@ -146,8 +146,8 @@ async def main():
         
         test_case = await load_test_case(args.test_case_key)
         await send_test_case_to_agent(args.agent_port, test_case)
-    except Exception as e:
-        logger.error(f"An error occurred: {e}")
+    except Exception:
+        logger.exception(f"An error occurred.")
 
 
 if __name__ == "__main__":
