@@ -164,6 +164,16 @@ api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=False)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Orchestrator starting up...")
+
+    # Perform initial agent discovery before accepting requests
+    logger.info("Starting initial agent discovery...")
+    try:
+        await _discover_agents()
+        logger.info("Initial agent discovery finished.")
+    except Exception as e:
+        logger.error(f"Initial agent discovery failed: {e}")
+
+    # Start periodic tasks after initial discovery
     discovery_task = asyncio.create_task(periodic_agent_discovery())
     cancellation_task = asyncio.create_task(_retry_cancellation_task())
 
@@ -360,16 +370,16 @@ def _get_results_extractor_agent(output_type: type[JsonSerializableModel] | type
 
 
 async def periodic_agent_discovery():
-    """Periodically discovers agents."""
+    """Periodically discovers agents after the initial startup discovery."""
     while True:
+        # Wait before the next discovery cycle (initial discovery is done during startup)
+        await asyncio.sleep(config.OrchestratorConfig.AGENTS_DISCOVERY_INTERVAL_SECONDS)
         try:
             logger.info("Starting periodic agent discovery...")
             await _discover_agents()
             logger.info("Periodic agent discovery finished.")
         except Exception as e:
             _handle_exception(f"An error occurred during periodic agent discovery: {e}")
-        finally:
-            await asyncio.sleep(config.OrchestratorConfig.AGENTS_DISCOVERY_INTERVAL_SECONDS)
 
 
 # noinspection PyUnusedLocal
