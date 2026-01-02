@@ -172,6 +172,7 @@ class JiraRagUpdateAgentConfig:
 class QdrantConfig:
     URL = os.environ.get("QDRANT_URL", "http://localhost:6333")
     API_KEY = os.environ.get("QDRANT_API_KEY")
+    TIMEOUT_SECONDS = float(os.environ.get("QDRANT_TIMEOUT_SECONDS", "30.0"))
     COLLECTION_NAME = os.environ.get("QDRANT_COLLECTION_NAME", "jira_issues")
     TICKETS_COLLECTION_NAME = os.environ.get("QDRANT_TICKETS_COLLECTION_NAME", "jira_issues")
     METADATA_COLLECTION_NAME = os.environ.get("QDRANT_METADATA_COLLECTION_NAME", "rag_metadata")

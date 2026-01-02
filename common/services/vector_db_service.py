@@ -23,6 +23,7 @@ class VectorDbService:
         self.client = AsyncQdrantClient(
             url=getattr(config.QdrantConfig, "URL", "http://localhost:6333"),
             api_key=getattr(config.QdrantConfig, "API_KEY", None),
+            timeout=getattr(config.QdrantConfig, "TIMEOUT_SECONDS", 30.0),
         )
         self.model_name = getattr(config.QdrantConfig, "EMBEDDING_MODEL", "Qwen/Qwen3-Embedding-0.6B")
         self._embedding_model: SentenceTransformer | None = None
