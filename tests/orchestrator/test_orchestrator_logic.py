@@ -1,7 +1,7 @@
 
 import pytest
 from unittest.mock import MagicMock, patch, AsyncMock
-from orchestrator.main import _discover_agents, agent_registry, _fetch_agent_card, _select_agent, discovery_agent
+from orchestrator.main import _discover_agents, agent_registry, _fetch_agent_card, _select_agent, discovery_agent, AgentStatus, BrokenReason
 from a2a.types import AgentCard, AgentCapabilities
 import config
 
@@ -88,6 +88,74 @@ async def test_select_agent(clear_registry, mock_agent_card):
 
 @pytest.mark.asyncio
 async def test_select_agent_none_found(clear_registry):
-    # Registry empty
     agent_id = await _select_agent("some task")
     assert agent_id is None
+
+@pytest.mark.asyncio
+async def test_discover_agents_existing_reachable(clear_registry, mock_agent_card):
+    # Pre-register the agent
+    await agent_registry.register("existing-id", mock_agent_card)
+
+    with patch("config.REMOTE_EXECUTION_AGENT_HOSTS", "http://localhost"), \
+         patch("config.AGENT_DISCOVERY_PORTS", "8001-8001"), \
+         patch("orchestrator.main._fetch_agent_card", return_value=mock_agent_card) as mock_fetch, \
+         patch("orchestrator.main._check_agent_reachability", return_value=True) as mock_check:
+        
+        await _discover_agents()
+        
+        # Verify _fetch_agent_card was NOT called
+        mock_fetch.assert_not_called()
+        # Verify check was called
+        mock_check.assert_called_once_with("http://localhost:8001")
+        
+        # Verify agent is still there
+        assert await agent_registry.contains("existing-id")
+
+@pytest.mark.asyncio
+async def test_discover_agents_existing_unreachable(clear_registry, mock_agent_card):
+    # Pre-register the agent
+    await agent_registry.register("existing-id", mock_agent_card)
+
+    with patch("config.REMOTE_EXECUTION_AGENT_HOSTS", "http://localhost"), \
+         patch("config.AGENT_DISCOVERY_PORTS", "8001-8001"), \
+         patch("orchestrator.main._fetch_agent_card", return_value=mock_agent_card) as mock_fetch, \
+         patch("orchestrator.main._check_agent_reachability", return_value=False) as mock_check:
+        
+        await _discover_agents()
+        
+        mock_check.assert_called_once_with("http://localhost:8001")
+        
+        # Verify agent REMOVED
+        assert not await agent_registry.contains("existing-id")
+
+@pytest.mark.asyncio
+async def test_discover_agents_existing_recovery(clear_registry, mock_agent_card):
+    # Pre-register the agent as BROKEN/OFFLINE
+    await agent_registry.register("existing-id", mock_agent_card)
+    await agent_registry.update_status("existing-id", AgentStatus.BROKEN, BrokenReason.OFFLINE)
+
+    with patch("config.REMOTE_EXECUTION_AGENT_HOSTS", "http://localhost"), \
+         patch("config.AGENT_DISCOVERY_PORTS", "8001-8001"), \
+         patch("orchestrator.main._fetch_agent_card", return_value=mock_agent_card), \
+         patch("orchestrator.main._check_agent_reachability", return_value=True):
+        
+        await _discover_agents()
+        
+        # Verify agent RECOVERED
+        assert await agent_registry.get_status("existing-id") == AgentStatus.AVAILABLE
+
+@pytest.mark.asyncio
+async def test_discover_agents_fetches_new(clear_registry, mock_agent_card):
+    # Registry empty
+    
+    with patch("config.REMOTE_EXECUTION_AGENT_HOSTS", "http://localhost"), \
+         patch("config.AGENT_DISCOVERY_PORTS", "8001-8001"), \
+         patch("orchestrator.main._fetch_agent_card", return_value=mock_agent_card) as mock_fetch:
+        
+        await _discover_agents()
+        
+        # Verify _fetch_agent_card WAS called
+        mock_fetch.assert_called_once_with("http://localhost:8001")
+        
+        # Verify new agent registered
+        assert not await agent_registry.is_empty()

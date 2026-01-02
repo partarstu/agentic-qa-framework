@@ -1062,9 +1062,52 @@ async def _fetch_agent_card(agent_base_url: str) -> AgentCard | None:
         return None
 
 
+async def _check_agent_reachability(agent_base_url: str) -> bool:
+    agent_card_url = f"{agent_base_url}/.well-known/agent-card.json"
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.head(agent_card_url,
+                                         timeout=config.OrchestratorConfig.AGENT_DISCOVERY_TIMEOUT_SECONDS)
+            if response.status_code == 405:  # Method Not Allowed, fallback to GET
+                response = await client.get(agent_card_url,
+                                            timeout=config.OrchestratorConfig.AGENT_DISCOVERY_TIMEOUT_SECONDS)
+            return response.status_code == 200
+    except Exception:
+        return False
+
+
+async def _process_url_discovery(url: str):
+    existing_agent_id = await agent_registry.get_agent_id_by_url(url)
+    if existing_agent_id:
+        if await _check_agent_reachability(url):
+            status = await agent_registry.get_status(existing_agent_id)
+            if status == AgentStatus.BROKEN:
+                broken_reason, _ = await agent_registry.get_broken_context(existing_agent_id)
+                if broken_reason == BrokenReason.OFFLINE:
+                    logger.info(
+                        f"Agent {existing_agent_id} (URL: {url}) was OFFLINE "
+                        f"but is now responsive. Resetting to AVAILABLE."
+                    )
+                    await agent_registry.update_status(existing_agent_id, AgentStatus.AVAILABLE)
+        else:
+            logger.info(f"Agent {existing_agent_id} at {url} is unreachable. Removing from registry.")            
+            await agent_registry.remove(existing_agent_id)
+    else:        
+        agent_card = await _fetch_agent_card(url)
+        if agent_card:            
+            existing_agent_id = await agent_registry.get_agent_id_by_url(agent_card.url)
+            if existing_agent_id:
+                logger.debug(f"Agent with URL {agent_card.url} is already registered with ID {existing_agent_id}.")
+            else:                
+                new_agent_id = str(uuid4())
+                await agent_registry.register(new_agent_id, agent_card)
+                logger.info(f"Discovered and registered agent with URL: {agent_card.url}")
+
+
 async def _discover_agents():
     """
     Discovers remote agents by scanning a port range on each of the configured base URLs.
+    Checks reachability of existing agents and discovers new ones.
     """
     agent_base_urls_str = config.REMOTE_EXECUTION_AGENT_HOSTS
     port_range_str = config.AGENT_DISCOVERY_PORTS
@@ -1092,43 +1135,8 @@ async def _discover_agents():
         logger.warning("No agent URLs were generated for discovery.")
         return
 
-    tasks = [_fetch_agent_card(url) for url in set(remote_agent_urls)]
-    found_urls = []
-
-    agent_cards = await asyncio.gather(*tasks)
-
-    for agent_card in agent_cards:
-        if agent_card:
-            # Check if an agent with this URL is already registered
-            existing_agent_id = await agent_registry.get_agent_id_by_url(agent_card.url)
-
-            if existing_agent_id:
-                # Agent already registered - check if it was BROKEN and needs recovery
-                status = await agent_registry.get_status(existing_agent_id)
-                if status == AgentStatus.BROKEN:
-                    broken_reason, _ = await agent_registry.get_broken_context(existing_agent_id)
-                    if broken_reason == BrokenReason.OFFLINE:
-                        # Agent was offline but is now responsive - reset to AVAILABLE
-                        logger.info(
-                            f"Agent {existing_agent_id} (URL: {agent_card.url}) was OFFLINE "
-                            f"but is now responsive. Resetting to AVAILABLE."
-                        )
-                        await agent_registry.update_status(existing_agent_id, AgentStatus.AVAILABLE)
-                    else:
-                        logger.debug(
-                            f"Agent {existing_agent_id} is BROKEN for reason {broken_reason}, "
-                            f"not resetting during discovery."
-                        )
-                else:
-                    logger.debug(f"Agent with URL {agent_card.url} is already registered with ID {existing_agent_id}.")
-            else:
-                # New agent - register it
-                new_agent_id = str(uuid4())
-                await agent_registry.register(new_agent_id, agent_card)
-                found_urls.append(agent_card.url)
-
-    if found_urls:
-        logger.info(f"Discovered and pre-registered agents with following URLs: {', '.join(found_urls)}")
+    tasks = [_process_url_discovery(url) for url in set(remote_agent_urls)]
+    await asyncio.gather(*tasks)
 
 
 if __name__ == "__main__":
