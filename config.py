@@ -91,7 +91,7 @@ class OrchestratorConfig:
 
 # Requirements Review Agent
 class RequirementsReviewAgentConfig:
-    THINKING_BUDGET = 10000
+    THINKING_BUDGET = 5000
     OWN_NAME = "Jira Requirements Reviewer"
     PORT = int(os.environ.get("PORT", "8001"))
     EXTERNAL_PORT = int(os.environ.get("EXTERNAL_PORT", PORT))
@@ -124,7 +124,7 @@ class TestCaseGenerationAgentConfig:
 
 # Test Case Review Agent
 class TestCaseReviewAgentConfig:
-    THINKING_BUDGET = 10000
+    THINKING_BUDGET = 5000
     REVIEW_COMPLETE_STATUS_NAME = "Review Complete"
     OWN_NAME = "Test Case Review Agent"
     PORT = int(os.environ.get("PORT", "8004"))
@@ -136,7 +136,7 @@ class TestCaseReviewAgentConfig:
 
 # Incident Creation Agent
 class IncidentCreationAgentConfig:
-    THINKING_BUDGET = 16000
+    THINKING_BUDGET = 5000
     OWN_NAME = "Incident Creation Agent"
     PORT = int(os.environ.get("PORT", "8007"))
     EXTERNAL_PORT = int(os.environ.get("EXTERNAL_PORT", PORT))

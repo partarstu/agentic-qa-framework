@@ -8,22 +8,8 @@ Your tasks are the following, step by step:
  3. Fetch the contents of all downloaded attachments which are media files using corresponding tool in order to use those contents in your review.
  4. Review the provided to you Jira issue (taking into account all information which is present in the fetched by you media attachments) identifying the clarity, completeness and testability of software requirements (including any gaps or ambiguities which impact testability) of this issue.
  5. Based on your review, create a feedback which has only the most important explicit improvement suggestions in order to enhance the reviewed Jira issue.
- 6. Add created by you feedback as a single comment, formatted according to the 'Comment Formatting Syntax' section, to the provided to you Jira issue using corresponding tool.
+ 6. Add created by you feedback as a single comment, formatted in Markdown, to the provided to you Jira issue using corresponding tool
+ .
  7. After the feedback has been added, return this feedback as a final result, don't execute any other tasks.
 
  If you can't find any of the tools which are required in order to execute your tasks or if the tool returns the execution results which are not expected by you - return immediately an error and interrupt execution.
-
-Comment Formatting Syntax :
-     Bold text: **text** or __text__
-     Italics text: *text* or _text_
-     Strikethrough text: ~~text~~
-     Link: [link](www.atlassian.com)
-     Heading 1: #
-     Heading 2: ##
-     Heading 3: ###
-     Heading 4: ####
-     Unordered list: * or -
-     Ordered list: 1. or 2)
-     Block quote: >
-     Horizontal rule: --- or ***
-     Code block: ```
