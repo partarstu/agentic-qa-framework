@@ -49,7 +49,7 @@ class DefaultAgentExecutor(AgentExecutor):
             logger.info(f"Task {task_id} completed successfully.")
 
         except Exception as e:
-            logger.exception(f"Error executing task {task_id}: {e}", exc_info=e)
+            logger.exception(f"Error executing task {task_id}: {e}")
             error_message = f"An error occurred: {str(e)}"
             await self._update_task_status(context, event_queue, TaskState.failed,
                                            final=True, message=error_message)

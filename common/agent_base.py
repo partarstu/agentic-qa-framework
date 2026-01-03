@@ -129,9 +129,13 @@ class AgentBase(ABC):
         self.latest_received_message = received_message
         received_request = self._get_all_received_contents(received_message)
         logger.info("Got a task to execute, starting execution.")
-        result = await self._get_agent_execution_result(received_request)
-        logger.info("Completed execution of the task.")
-        return self._get_text_message_from_results(result)
+        try:
+            result = await self._get_agent_execution_result(received_request)
+            logger.info("Completed execution of the task.")
+            return self._get_text_message_from_results(result)
+        except Exception as e:
+            logger.exception(f"Error during agent execution: {e}")
+            raise
 
     # noinspection PyUnusedLocal
     @asynccontextmanager

@@ -158,10 +158,13 @@ class IncidentCreationAgent(AgentBase):
         import posixpath
 
         saved_paths: list[str] = []
-        # Local path where files are actually saved (e.g., D:\temp on Windows)
+        # Local path where files are actually saved (e.g., /tmp in Linux or D:\\temp on Windows)
         local_folder = config.ATTACHMENTS_DESTINATION_FOLDER_PATH
         # MCP container path for the Jira MCP server (e.g., /tmp in Docker)
         mcp_folder = config.MCP_SERVER_ATTACHMENTS_FOLDER_PATH
+
+        # Ensure the destination folder exists
+        os.makedirs(local_folder, exist_ok=True)
 
         for part in self.latest_received_message.parts:
             if isinstance(part.root, FilePart):
