@@ -97,7 +97,7 @@ steps:
       - '--platform=managed'
       - '--region=us-central1'
       - '--allow-unauthenticated'
-      - '--memory=2Gi'
+      - '--memory=8Gi'
       - '--max-instances=1'
       - '--port=8080'
 
