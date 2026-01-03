@@ -97,7 +97,7 @@ class RequirementsReviewAgentConfig:
     EXTERNAL_PORT = int(os.environ.get("EXTERNAL_PORT", PORT))
     PROTOCOL = "http"
     MODEL_NAME = "google-gla:gemini-3-flash-preview"
-    MAX_REQUESTS_PER_TASK = 10
+    MAX_REQUESTS_PER_TASK = 30
 
 
 # Test Case Classification Agent
@@ -108,7 +108,7 @@ class TestCaseClassificationAgentConfig:
     EXTERNAL_PORT = int(os.environ.get("EXTERNAL_PORT", PORT))
     PROTOCOL = "http"
     MODEL_NAME = "google-gla:gemini-3-flash-preview"
-    MAX_REQUESTS_PER_TASK = 5
+    MAX_REQUESTS_PER_TASK = 30
 
 
 # Test Case Generation Agent
@@ -119,7 +119,7 @@ class TestCaseGenerationAgentConfig:
     EXTERNAL_PORT = int(os.environ.get("EXTERNAL_PORT", PORT))
     PROTOCOL = "http"
     MODEL_NAME = "google-gla:gemini-3-flash-preview"
-    MAX_REQUESTS_PER_TASK = 10
+    MAX_REQUESTS_PER_TASK = 30
 
 
 # Test Case Review Agent
@@ -131,7 +131,7 @@ class TestCaseReviewAgentConfig:
     EXTERNAL_PORT = int(os.environ.get("EXTERNAL_PORT", PORT))
     PROTOCOL = "http"
     MODEL_NAME = "google-gla:gemini-3-flash-preview"
-    MAX_REQUESTS_PER_TASK = 5
+    MAX_REQUESTS_PER_TASK = 30
 
 
 # Incident Creation Agent
@@ -142,7 +142,7 @@ class IncidentCreationAgentConfig:
     EXTERNAL_PORT = int(os.environ.get("EXTERNAL_PORT", PORT))
     PROTOCOL = "http"
     MODEL_NAME = "google-gla:gemini-3-flash-preview"
-    MAX_REQUESTS_PER_TASK = 10
+    MAX_REQUESTS_PER_TASK = 30
     MIN_SIMILARITY_SCORE = float(os.environ.get("INCIDENT_AGENT_MIN_SIMILARITY_SCORE", "0.7"))
     ISSUE_PRIORITY_FIELD_ID = os.environ.get("ISSUE_PRIORITY_FIELD_ID", "priority")
     ISSUE_SEVERITY_FIELD_NAME = os.environ.get("ISSUE_SEVERITY_FIELD_NAME", "customfield_10124")
@@ -166,7 +166,7 @@ class JiraRagUpdateAgentConfig:
     EXTERNAL_PORT = int(os.environ.get("EXTERNAL_PORT", PORT))
     PROTOCOL = "http"
     MODEL_NAME = "google-gla:gemini-3-flash-preview"
-    MAX_REQUESTS_PER_TASK = 10
+    MAX_REQUESTS_PER_TASK = 30
 
 
 class QdrantConfig:

@@ -5,7 +5,7 @@
 from pydantic_ai.mcp import MCPServerSSE
 
 import config
-from common.agent_base import AgentBase
+from common.agent_base import AgentBase, MCP_SERVER_ATTACHMENTS_FOLDER_PATH
 from agents.test_case_review.prompt import TestCaseReviewSystemPrompt
 from common import utils
 from common.models import TestCaseReviewRequest, TestCaseReviewFeedbacks
@@ -18,7 +18,9 @@ jira_mcp_server = MCPServerSSE(url=config.JIRA_MCP_SERVER_URL, timeout=config.MC
 class TestCaseReviewAgent(AgentBase):
     __test__ = False
     def __init__(self):
-        instruction_prompt = TestCaseReviewSystemPrompt()
+        instruction_prompt = TestCaseReviewSystemPrompt(
+            attachments_remote_folder_path=MCP_SERVER_ATTACHMENTS_FOLDER_PATH
+        )
         super().__init__(
             agent_name=config.TestCaseReviewAgentConfig.OWN_NAME,
             base_url=config.AGENT_BASE_URL,

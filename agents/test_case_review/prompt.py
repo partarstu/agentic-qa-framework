@@ -10,12 +10,26 @@ logger = utils.get_logger("test_case_review_agent")
 
 
 class TestCaseReviewSystemPrompt(PromptBase):
+    """
+    Loads a prompt template for instructions, replaces placeholders with actual values,
+    and provides the final prompt as a string.
+    """
+
     def get_script_dir(self) -> Path:
         return Path(__file__).resolve().parent
 
-    def __init__(self, template_file_name: str = "prompt_template.txt"):
+    def __init__(self, attachments_remote_folder_path: str, template_file_name: str = "prompt_template.txt"):
+        """
+        Initializes the TestCaseReviewSystemPrompt instance.
+
+        Args:
+            attachments_remote_folder_path: The remote folder path for attachments.
+            template_file_name: The name of the prompt template file.
+        """
         super().__init__(template_file_name)
+        self.attachments_remote_folder_path = attachments_remote_folder_path
 
     def get_prompt(self) -> str:
+        """Returns the formatted prompt as a string."""
         logger.info("Generating test case review system prompt")
-        return self.template
+        return self.template.format(attachments_remote_folder_path=self.attachments_remote_folder_path)
