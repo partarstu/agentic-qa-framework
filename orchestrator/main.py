@@ -454,7 +454,6 @@ async def update_rag_db(request: ProjectExecutionRequest, api_key: str = Depends
 @orchestrator_app.post("/execute-tests")
 async def execute_tests(request: ProjectExecutionRequest, api_key: str = Depends(_validate_api_key)):
     async with execution_lock:
-        # _validate_request_authorization(request)
         project_key = request.project_key
         logger.info(f"Received request to execute automated tests for project '{project_key}'.")
         test_management_client = get_test_management_client()
