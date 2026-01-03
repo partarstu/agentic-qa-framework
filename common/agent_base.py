@@ -132,10 +132,81 @@ class AgentBase(ABC):
         try:
             result = await self._get_agent_execution_result(received_request)
             logger.info("Completed execution of the task.")
+            self._log_llm_comments_if_result_incomplete(result.output)
             return self._get_text_message_from_results(result)
         except Exception as e:
             logger.exception(f"Error during agent execution: {e}")
             raise
+
+    def _log_llm_comments_if_result_incomplete(self, output: BaseModel | None) -> None:
+        """Logs LLM comments if the agent result appears empty or incomplete.
+
+        This method checks if the result from the agent seems empty or null,
+        and if so, logs the `llm_comments` field (if present) as a warning
+        to help debug situations where the LLM couldn't fully complete the task.
+
+        Args:
+            output: The output from the agent execution.
+        """
+        if output is None:
+            logger.warning("Agent returned None result.")
+            return
+
+        # Check if the output has the llm_comments attribute (from BaseAgentResult)
+        llm_comments = getattr(output, "llm_comments", None)
+        if not llm_comments:
+            return
+
+        # Check if the result appears to be empty or incomplete
+        is_incomplete = self._check_if_result_incomplete(output)
+        if is_incomplete:
+            logger.warning(
+                f"Agent returned incomplete result. LLM comments: {llm_comments}"
+            )
+
+    @staticmethod
+    def _check_if_result_incomplete(output: BaseModel) -> bool:
+        """Checks if the agent result appears to be empty or incomplete.
+
+        A result is considered incomplete if all its primary data fields
+        (excluding metadata fields like llm_comments) are empty, null, or
+        contain only empty collections.
+
+        Args:
+            output: The output model from the agent execution.
+
+        Returns:
+            True if the result appears incomplete, False otherwise.
+        """
+        if output is None:
+            return True
+
+        # Get all field names, excluding llm_comments which is metadata
+        field_names = [
+            name for name in output.model_fields.keys()
+            if name != "llm_comments"
+        ]
+
+        if not field_names:
+            return False
+
+        for field_name in field_names:
+            value = getattr(output, field_name, None)
+            if value is None:
+                continue
+            # Check if it's a non-empty collection
+            if isinstance(value, (list, dict, set)):
+                if len(value) > 0:
+                    return False
+            # Check if it's a non-empty string
+            elif isinstance(value, str):
+                if value.strip():
+                    return False
+            # Any other truthy value means the result is not incomplete
+            elif value:
+                return False
+
+        return True
 
     # noinspection PyUnusedLocal
     @asynccontextmanager

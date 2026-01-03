@@ -12,7 +12,7 @@ from agents.jira_rag.prompt import JiraRagUpdateSystemPrompt
 from common import utils
 from common.agent_base import AgentBase
 from common.services.vector_db_service import VectorDbService
-from common.models import JsonSerializableModel, JiraIssue, ProjectMetadata
+from common.models import JiraIssue, ProjectMetadata, RagUpdateResult
 
 logger = utils.get_logger("jira_rag_update_agent")
 
@@ -22,11 +22,6 @@ VALID_STATUSES = getattr(config.QdrantConfig, "VALID_STATUSES", ["To Do", "In Pr
 BUG_ISSUE_TYPE = getattr(config.QdrantConfig, "BUG_ISSUE_TYPE", "Bug")
 
 jira_mcp_server = MCPServerSSE(url=config.JIRA_MCP_SERVER_URL, timeout=config.MCP_SERVER_TIMEOUT_SECONDS)
-
-
-class RagUpdateResult(JsonSerializableModel):
-    status: str
-    processed_count: int
 
 
 class JiraRagAgent(AgentBase):
