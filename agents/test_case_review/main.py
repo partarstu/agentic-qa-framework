@@ -33,7 +33,7 @@ class TestCaseReviewAgent(AgentBase):
             instructions=instruction_prompt.get_prompt(),
             mcp_servers=[jira_mcp_server],
             description="Agent which reviews generated test cases for coherence, redundancy, and effectiveness.",
-            tools=[self.add_review_feedback, self.set_test_case_status_to_review_complete]
+            tools=[self.add_review_feedback, self.set_test_case_status_to_review_complete, self._get_media_file_content]
         )
 
     def get_thinking_budget(self) -> int:
