@@ -28,8 +28,8 @@ class BaseAgentResult(JsonSerializableModel):
     llm_comments: Optional[str] = Field(
         default=None,
         description="Debug comments regarding any exceptional situations, missing tools, information gaps, "
-        "or other issues encountered during task execution. Use this field to explain what prevented "
-        "full task completion or to provide additional context about the result."
+                    "or other issues encountered during task execution. Use this field to explain what prevented "
+                    "full task completion or to provide additional context about the result."
     )
 
 
@@ -106,7 +106,6 @@ class RequirementsReviewFeedback(BaseAgentResult):
     suggested_improvements: List[str] = Field(description="List of improvements suggested by the review")
 
 
-
 class AcceptanceCriteriaItem(JsonSerializableModel):
     id: str = Field(description="The ID of the acceptance criterion (e.g., 'AC-1')")
     text: str = Field(description="The text of the acceptance criterion")
@@ -162,8 +161,7 @@ class ClassifiedTestCase(JsonSerializableModel):
     test_type: Literal["UI", "API", "Performance", "Load/Stress"]
     automation_capability: Literal["automated", "semi-automated", "manual"]
     labels: List[str]
-    tool_use_comment: str = Field(
-        description="Any comments regarding which tools you used, with which arguments and why")
+    tool_use_comment: str = Field(description="Any comments regarding which tools you used, with which arguments and why")
 
 
 class TestCaseReviewRequest(JsonSerializableModel):
@@ -177,10 +175,8 @@ class TestCaseReviewFeedback(JsonSerializableModel):
 
 class TestCaseReviewFeedbacks(BaseAgentResult):
     """Result of test case review."""
-
-    review_feedbacks: list[TestCaseReviewFeedback] = Field(
-        description="A dictionary where the key is the test case ID/key and the value is the review feedback of "
-                    "this test case")
+    review_feedbacks: list[TestCaseReviewFeedback] = Field(description="A dictionary where the key is the test case ID/key and the "
+                                                                       "value is the review feedback of this test case")
 
 
 class TestExecutionRequest(JsonSerializableModel):
@@ -254,9 +250,7 @@ class IncidentCreationInput(JsonSerializableModel):
         description="Structured test step execution results for reproduction steps and analysis"
     )
     system_description: str
-    issue_priority_field_id: str = Field(
-        description="The ID of the Jira issue field for issue priority"
-    )
+    issue_priority_field_id: str = Field(description="The ID of the Jira issue field for issue priority")
 
 
 class DuplicateDetectionResult(JsonSerializableModel):
@@ -266,9 +260,6 @@ class DuplicateDetectionResult(JsonSerializableModel):
 
 
 class IncidentCreationResult(BaseAgentResult):
-    """Result of incident creation."""
-
-    incident_id: Optional[int] = Field(default=None, description="The numeric ID of the created incident")
-    incident_key: Optional[str] = Field(description="The key of the created incident, may be null if duplicates are detected")
-    duplicates: List[DuplicateDetectionResult] = Field(
-        description="All identified positive duplicate incident detection results, may be empty")
+    incident_id: Optional[int] = Field(default=None, description="The numeric issue ID of the created incident")
+    incident_key: Optional[str] = Field(description="The key of the created incident, is null if duplicates are detected")
+    duplicates: List[DuplicateDetectionResult] = Field(description="All identified duplicate incident detection results, may be empty")

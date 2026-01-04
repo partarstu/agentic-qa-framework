@@ -10,7 +10,7 @@ import httpx
 
 import config
 from common import utils
-from common.models import TestCase, TestStep, TestExecutionResult
+from common.models import TestCase, TestStep, TestExecutionResult, DuplicateDetectionResult
 from common.services.test_management_base import TestManagementClientBase
 
 TEST_FOR_EXECUTION_READY_STATUS_NAME = "Approved"
@@ -301,8 +301,9 @@ class ZephyrClient(TestManagementClientBase):
                     if result.incident_creation_result.incident_key:
                         comment += f"\n\nIncident created: {result.incident_creation_result.incident_key}"
                     if result.incident_creation_result.duplicates:
-                        duplicates = ", ".join([d.issue_key for d in result.incident_creation_result.duplicates])
-                        comment += f"\n\nPotential duplicates found: {duplicates}"
+                        duplicates = result.incident_creation_result.duplicates
+                        duplicates_string = ", ".join([d.issue_key for d in duplicates])
+                        comment += f"\n\nPotential duplicates found: {duplicates_string}"
 
                 payload = {
                     "projectKey": project_key,
@@ -317,16 +318,26 @@ class ZephyrClient(TestManagementClientBase):
                 if version_id:
                     payload["versionId"] = version_id
 
-                response = client.post(f"{self.base_url}/testexecutions", headers=self.headers, json=payload,
-                                       timeout=CLIENT_TIMEOUT)
+                response = client.post(f"{self.base_url}/testexecutions", headers=self.headers, json=payload, timeout=CLIENT_TIMEOUT)
                 logger.debug(f"Zephyr API response status for test execution creation: {response.status_code}")
                 response.raise_for_status()
                 execution_id = response.json().get("id")
                 logger.info(f"Test execution created with ID: {execution_id}")
 
+                # Link test execution to the created bug issue if an incident was created
+                if execution_id and result.incident_creation_result:
+                    if result.incident_creation_result.incident_id:
+                        self._link_issue_to_test_execution(client, execution_id, result.incident_creation_result.incident_id)
+
+    def _link_issue_to_test_execution(self, client: httpx.Client, test_execution_id: int, issue_id: int) -> None:
+        url = f"{self.base_url}/testexecutions/{test_execution_id}/links/issues"
+        logger.info(f"Linking issue {issue_id} to test execution {test_execution_id} via {url}")
+        response = client.post(url, headers=self.headers, json={"issueId": issue_id}, timeout=CLIENT_TIMEOUT)
+        response.raise_for_status()
+        logger.info(f"Successfully linked issue {issue_id} to test execution {test_execution_id}")
+
     def _get_test_steps(self, client, test_case_key):
-        logger.debug(f"Fetching test steps of test case: {test_case_key} in order update their "
-                     f"test execution status")
+        logger.debug(f"Fetching test steps of test case: {test_case_key} in order update their test execution status")
         steps_url = f"{self.base_url}/testcases/{test_case_key}/teststeps?maxResults=1000"
         test_step_response = client.get(steps_url, headers=self.headers)
         test_step_response.raise_for_status()
@@ -336,11 +347,6 @@ class ZephyrClient(TestManagementClientBase):
     def create_test_plan(self, project_key: str, name: str, description: str = None) -> str:
         """
         Creates a new test cycle in Zephyr.
-
-        Args:
-            project_key: The project key for the test cycle.
-            name: The name of the test cycle.
-            description: Optional. The description of the test cycle.
 
         Returns:
             The key of the created test cycle.
@@ -355,8 +361,7 @@ class ZephyrClient(TestManagementClientBase):
             if description:
                 payload["description"] = description
 
-            response = client.post(f"{self.base_url}/testcycles", headers=self.headers, json=payload,
-                                   timeout=CLIENT_TIMEOUT)
+            response = client.post(f"{self.base_url}/testcycles", headers=self.headers, json=payload, timeout=CLIENT_TIMEOUT)
             logger.debug(f"Zephyr API response status for test cycle creation: {response.status_code}")
             response.raise_for_status()
             test_cycle_key = response.json().get("key")
@@ -448,7 +453,7 @@ class ZephyrClient(TestManagementClientBase):
         logger.info(f"Fetched {len(linked_issues)} linked issues for test case {test_case_key}")
         return linked_issues
 
-    def link_issue_to_test_case(self, test_case_key: str, issue_id: int, link_type: str) -> None:        
+    def link_issue_to_test_case(self, test_case_key: str, issue_id: int, link_type: str) -> None:
         url = f"{self.base_url}/testcases/{test_case_key}/links/issues"
         logger.info(f"Linking issue {issue_id} to test case {test_case_key} via {url} with type {link_type}")
         with httpx.Client() as client:
