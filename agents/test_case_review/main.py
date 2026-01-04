@@ -45,7 +45,7 @@ class TestCaseReviewAgent(AgentBase):
     @staticmethod
     def add_review_feedback(test_case_key: str, feedback: str) -> str:
         """
-        Adds test case review feedback as a comment to the test case.
+        Adds feedback as a comment to the test case.
 
         Args:
             test_case_key: The key or ID of the test case.

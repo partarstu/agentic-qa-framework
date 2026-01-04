@@ -1065,11 +1065,8 @@ async def _check_agent_reachability(agent_base_url: str) -> bool:
     agent_card_url = f"{agent_base_url}/.well-known/agent-card.json"
     try:
         async with httpx.AsyncClient() as client:
-            response = await client.head(agent_card_url,
+            response = await client.get(agent_card_url,
                                          timeout=config.OrchestratorConfig.AGENT_DISCOVERY_TIMEOUT_SECONDS)
-            if response.status_code == 405:  # Method Not Allowed, fallback to GET
-                response = await client.get(agent_card_url,
-                                            timeout=config.OrchestratorConfig.AGENT_DISCOVERY_TIMEOUT_SECONDS)
             return response.status_code == 200
     except Exception:
         return False
