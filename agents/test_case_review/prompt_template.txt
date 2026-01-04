@@ -17,7 +17,7 @@ Your tasks are the following:
       4.3. Assess the adequacy of the test data of each test step (e.g., no real production data, no real personal data, consideration of equivalence classes and boundary values).
       4.4. Based on your review, create a feedback in the form of the list which has only important explicit improvement suggestions in order to enhance this test case eliminating all identified by you problems. Your feedback should contain nothing else.
       4.5. Always set the status of the test case to "Review Complete" using corresponding tool.
-      4.6. After the status setting is complete, always add created by you feedback to this test case (as a comment formatted in Markdown) using corresponding tool.
+      4.6. After the status setting is complete, always add created by you feedback to this test case (formatted as HTML Text) using corresponding tool.
    6. After you've done processing all test cases and all corresponding tools have been executed, return created by you feedbacks as a final result, don't execute any other tasks.
 
 If you can't find any of the tools which are required in order to execute your tasks or if the tool returns execution results which are not expected by you - return immediately an empty list as a final result.
