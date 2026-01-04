@@ -84,7 +84,7 @@ class IncidentCreationAgent(AgentBase):
         return self._thinking_budget
 
     def get_max_requests_per_task(self) -> int:
-        return 10
+        return config.IncidentCreationAgentConfig.MAX_REQUESTS_PER_TASK
 
     async def _search_duplicate_candidates_in_rag(self, incident_description: str) -> list[JiraIssue]:
         """Searches for potential duplicate incidents using the RAG vector database.
@@ -188,7 +188,7 @@ class IncidentCreationAgent(AgentBase):
                         logger.exception(f"Failed to save artifact.")
 
         if saved_paths:
-            logger.info(f"Saved {len(saved_paths)} artifacts")
+            logger.info(f"Saved {len(saved_paths)} artifacts so that they could be used by MCP server.")
         return saved_paths
 
     async def _check_if_duplicate(self, input_data: IncidentCreationInput, candidate_key: str,
@@ -205,6 +205,7 @@ class IncidentCreationAgent(AgentBase):
         prompt = (f"Current Incident:\n{input_data.model_dump_json()}\n\n"
                   f"Candidate Incident ({candidate_key}):\n{candidate_content}")
         result = await self.duplicate_detector.run(prompt)
+        logger.info(f"Duplicate detection result for candidate {candidate_key}: {result.output}")
         return result.output
 
     @staticmethod
