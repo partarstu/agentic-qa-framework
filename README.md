@@ -122,6 +122,8 @@ USE_GOOGLE_CLOUD_STORAGE=False # Default: False. Is set to "True" if running in 
 GOOGLE_CLOUD_STORAGE_BUCKET_NAME=YOUR_BUCKET_NAME # Required if USE_GOOGLE_CLOUD_STORAGE is True. The name of the GCS 
                                  bucket in which downloaded by Jira MCP server attachments are stored.
 JIRA_ATTACHMENTS_CLOUD_STORAGE_FOLDER=jira # Default: jira. The folder within the GCS bucket where Jira attachments are stored.
+JIRA_ATTACHMENT_SKIP_POSTFIX=_SKIP # Default: _SKIP. Attachments with filenames ending in this postfix (before the extension) 
+                                   # will be excluded from agent analysis. Case-insensitive. Example: "mockup_SKIP.png" is skipped.
 
 # OpenTelemetry (for tracing and metrics)
 OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 # Default: http://localhost:4317. Endpoint for OpenTelemetry collector.

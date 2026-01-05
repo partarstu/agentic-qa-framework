@@ -219,20 +219,21 @@ class AgentBase(ABC):
         logger.info("Shutting down.")
 
     @staticmethod
-    def _get_media_file_content(file_path: str) -> BinaryContent:
-        """Fetches the content of a media file from the local file system or the cloud storage.
+    def _fetch_attachments(attachment_paths: list[str]) -> dict[str, BinaryContent]:
+        """Fetches and all attachments, returning them as binary content for multimodal processing.
 
-            Args:
-                file_path: The path to the media file.
+        This method processes downloaded attachments, filtering out:
+        - Files with the configured skip postfix
+        - Files with unsupported MIME types
 
-            Returns:
-                A BinaryContent object containing the file's data.
-            """
-        if config.USE_GOOGLE_CLOUD_STORAGE:
-            return utils.fetch_media_file_content_from_gcs(file_path, config.GOOGLE_CLOUD_STORAGE_BUCKET_NAME,
-                                                           config.JIRA_ATTACHMENTS_CLOUD_STORAGE_FOLDER)
-        else:
-            return utils.fetch_media_file_content_from_local(file_path, ATTACHMENTS_DESTINATION_FOLDER_PATH)
+        Args:
+            attachment_paths: List of file paths to the downloaded attachments.
+
+        Returns:
+            Dictionary mapping filename to BinaryContent for valid, supported attachments.
+        """
+        from common.attachment_handler import fetch_all_attachments
+        return fetch_all_attachments(attachment_paths)
 
     def _get_server(self) -> FastAPI:
         request_handler = DefaultRequestHandler(

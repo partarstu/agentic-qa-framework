@@ -4,6 +4,7 @@
 
 from pydantic_ai import Agent
 from pydantic_ai.mcp import MCPServerSSE
+from pydantic_ai.messages import BinaryContent
 
 import config
 from agents.test_case_generation.prompt import (
@@ -28,6 +29,7 @@ jira_mcp_server = MCPServerSSE(url=config.JIRA_MCP_SERVER_URL, timeout=config.MC
 
 class TestCaseGenerationAgent(AgentBase):
     __test__ = False
+
     def __init__(self):
         # Initialize sub-agent prompts
         self.ac_extraction_prompt = AcExtractionPrompt()
@@ -60,7 +62,6 @@ class TestCaseGenerationAgent(AgentBase):
         )
 
         # Initialize base agent (as orchestrator placeholder)
-        # Note: We change output_type to str for the final confirmation message.
         instruction_prompt = TestCaseGenerationSystemPrompt(
             attachments_remote_folder_path=MCP_SERVER_ATTACHMENTS_FOLDER_PATH
         )
@@ -72,11 +73,12 @@ class TestCaseGenerationAgent(AgentBase):
             protocol=config.TestCaseGenerationAgentConfig.PROTOCOL,
             model_name=config.TestCaseGenerationAgentConfig.MODEL_NAME,
             output_type=GeneratedTestCases,
-            instructions=instruction_prompt.get_prompt(),  # Kept for compatibility/fallback
+            instructions=instruction_prompt.get_prompt(),
             mcp_servers=[jira_mcp_server],
             deps_type=JiraUserStory,
             description="Agent which generates test cases based on Jira user stories.",
-            tools=[self._upload_test_cases_into_test_management_system, self._generate_test_cases],
+            tools=[self._upload_test_cases_into_test_management_system, self._generate_test_cases,
+                   self._fetch_attachments],
         )
 
     def get_thinking_budget(self) -> int:
@@ -85,18 +87,18 @@ class TestCaseGenerationAgent(AgentBase):
     def get_max_requests_per_task(self) -> int:
         return config.TestCaseGenerationAgentConfig.MAX_REQUESTS_PER_TASK
 
-    async def _generate_test_cases(self, jira_issue_content: str, attachments_content: str) -> GeneratedTestCases:
+    async def _generate_test_cases(self, jira_issue_content: str, attachment_paths: list[str]) -> GeneratedTestCases:
         """
         Generates test cases based on the Jira issue content and attachments.
 
-       Args:
-           jira_issue_content: The whole content of the Jira issue.
-           attachments_content: The content of all relevant for this Jira issue attachments.
+        Args:
+            jira_issue_content: The whole content of the Jira issue.
+            attachment_paths: List of file paths to the downloaded attachments.
 
-       Returns:
-           Generated test cases.
-       """
-
+        Returns:
+            Generated test cases.
+        """
+        attachments_content = self._fetch_attachments(attachment_paths)
         extracted_acceptance_criteria = await self.extract_acceptance_criteria(attachments_content, jira_issue_content)
         test_steps_sequences = await self.generate_test_steps(extracted_acceptance_criteria)
         generated_test_cases = await self.generate_test_cases(extracted_acceptance_criteria, jira_issue_content,
@@ -132,16 +134,19 @@ Test Step Sequences:
                     f"of {sum(len(s.steps) for s in test_steps_sequences.items)} steps.")
         return test_steps_sequences
 
-    async def extract_acceptance_criteria(self, attachments_content: str, jira_issue_content: str) -> AcceptanceCriteriaList:
-        user_message = f"""
-Jira Issue content:
-{jira_issue_content}
+    async def extract_acceptance_criteria(self, attachments_content: dict[str, BinaryContent],
+                                          jira_issue_content: str) -> AcceptanceCriteriaList:
+        user_message_parts: list[str | BinaryContent] = [
+            f"Jira Issue content:\n{jira_issue_content}"
+        ]
+        # Add attachment identifiers as context
+        if attachments_content:                   
+            for filename, binary_content in attachments_content.items():
+                user_message_parts.append(f"Attachment: {filename}")
+                user_message_parts.append(binary_content)
 
-Content of all relevant attachments:
-{attachments_content}
-"""
-        logger.info("Starting AC extraction")
-        result = await self.ac_extractor_agent.run(user_message)
+        logger.info("Starting AC extraction with %d attachments", len(attachments_content))
+        result = await self.ac_extractor_agent.run(user_message_parts)
         extracted_acceptance_criteria: AcceptanceCriteriaList = result.output
         logger.info(f"Extracted {len(extracted_acceptance_criteria.items)} ACs")
         return extracted_acceptance_criteria
@@ -153,14 +158,13 @@ Content of all relevant attachments:
         Uploads the provided test cases in the configured test management system.
 
         Args:
-        test_cases: The list of test cases to be created.
-        project_key: The key of the Jira project to which the Jira issue belongs.
-        user_story_id: ID of the Jira user story (not its key), e.g. 120.
+            test_cases: The list of test cases to be created.
+            project_key: The key of the Jira project to which the Jira issue belongs.
+            user_story_id: ID of the Jira user story (not its key), e.g. 120.
 
-    Returns:
-        A confirmation message with the keys (IDs) of the created test cases.
-    """
-
+        Returns:
+            A confirmation message with the keys (IDs) of the created test cases.
+        """
         client = get_test_management_client()
         created_test_case_ids = client.create_test_cases(test_cases.test_cases, project_key, user_story_id)
         return f"Successfully created test cases with following keys (IDs): {', '.join(created_test_case_ids)}"

@@ -68,12 +68,18 @@ async def test_generate_test_cases_flow(agent):
     mock_tc_result.output = GeneratedTestCases(test_cases=[])
     agent.test_case_creator_agent.run = AsyncMock(return_value=mock_tc_result)
     
-    result = await agent._generate_test_cases("Jira Content", "Attachments")
+    # Mock _fetch_attachments to return empty dict
+    agent._fetch_attachments = MagicMock(return_value={})
+    
+    # Pass file paths instead of BinaryContent objects
+    result = await agent._generate_test_cases("Jira Content", ["/path/to/attachment.png"])
     
     assert isinstance(result, GeneratedTestCases)
+    agent._fetch_attachments.assert_called_once_with(["/path/to/attachment.png"])
     agent.ac_extractor_agent.run.assert_called_once()
     agent.steps_generator_agent.run.assert_called_once()
     agent.test_case_creator_agent.run.assert_called_once()
+
 
 @patch("agents.test_case_generation.main.get_test_management_client")
 def test_upload_test_cases(mock_get_client, agent):

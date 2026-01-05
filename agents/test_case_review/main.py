@@ -17,6 +17,7 @@ jira_mcp_server = MCPServerSSE(url=config.JIRA_MCP_SERVER_URL, timeout=config.MC
 
 class TestCaseReviewAgent(AgentBase):
     __test__ = False
+
     def __init__(self):
         instruction_prompt = TestCaseReviewSystemPrompt(
             attachments_remote_folder_path=MCP_SERVER_ATTACHMENTS_FOLDER_PATH
@@ -33,7 +34,7 @@ class TestCaseReviewAgent(AgentBase):
             instructions=instruction_prompt.get_prompt(),
             mcp_servers=[jira_mcp_server],
             description="Agent which reviews generated test cases for coherence, redundancy, and effectiveness.",
-            tools=[self.add_review_feedback, self.set_test_case_status_to_review_complete, self._get_media_file_content]
+            tools=[self.add_review_feedback, self.set_test_case_status_to_review_complete, self._fetch_attachments]
         )
 
     def get_thinking_budget(self) -> int:

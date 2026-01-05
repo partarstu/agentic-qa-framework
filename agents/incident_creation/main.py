@@ -184,7 +184,7 @@ class IncidentCreationAgent(AgentBase):
                         mcp_file_path = posixpath.join(mcp_folder, safe_filename)
                         saved_paths.append(mcp_file_path)
                         logger.info(f"Saved artifact '{original_name}' to {local_file_path} (MCP path: {mcp_file_path})")
-                    except Exception as e:
+                    except Exception:
                         logger.exception(f"Failed to save artifact.")
 
         if saved_paths:

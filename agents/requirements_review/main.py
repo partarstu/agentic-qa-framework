@@ -32,7 +32,7 @@ class RequirementsReviewAgent(AgentBase):
             mcp_servers=[atlassian_mcp_server],
             deps_type=JiraUserStory,
             description="Agent which does the review of requirements including Jira user stories",
-            tools=[self._get_media_file_content]
+            tools=[self._fetch_attachments]
         )
 
     def get_thinking_budget(self) -> int:
