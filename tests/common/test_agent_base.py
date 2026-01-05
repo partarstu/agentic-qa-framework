@@ -60,15 +60,3 @@ async def test_agent_run_success(test_agent_instance):
         
         # Use raw string for regex-like escaping or double escape
         assert get_message_text(response) == '{"result":"success"}'
-
-@patch("common.agent_base.config.USE_GOOGLE_CLOUD_STORAGE", False)
-@patch("common.utils.fetch_media_file_content_from_local")
-def test_get_media_file_content_local(mock_fetch, test_agent_instance):
-    test_agent_instance._get_media_file_content("test.png")
-    mock_fetch.assert_called_once()
-
-@patch("common.agent_base.config.USE_GOOGLE_CLOUD_STORAGE", True)
-@patch("common.utils.fetch_media_file_content_from_gcs")
-def test_get_media_file_content_gcs(mock_fetch, test_agent_instance):
-    test_agent_instance._get_media_file_content("test.png")
-    mock_fetch.assert_called_once()

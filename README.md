@@ -117,11 +117,11 @@ EXTERNAL_PORT=8001 # Default: 8001. The externally accessible port for the agent
 REMOTE_EXECUTION_AGENT_HOSTS=http://localhost # Default: http://localhost. Comma-separated URLs of remote agent hosts.
 AGENT_DISCOVERY_PORTS=8001-8006 # Default: 8001-8006. Port range for agent discovery.
 
-# Google Cloud Storage (for attachments)
-USE_GOOGLE_CLOUD_STORAGE=False # Default: False. Is set to "True" if running in the Google Cloud.
-GOOGLE_CLOUD_STORAGE_BUCKET_NAME=YOUR_BUCKET_NAME # Required if USE_GOOGLE_CLOUD_STORAGE is True. The name of the GCS 
-                                 bucket in which downloaded by Jira MCP server attachments are stored.
-JIRA_ATTACHMENTS_CLOUD_STORAGE_FOLDER=jira # Default: jira. The folder within the GCS bucket where Jira attachments are stored.
+# Google Cloud Storage (via Volume Mounts)
+# In cloud deployments, GCS buckets are mounted as local folders via Cloud Run volume mounts.
+# The following variables configure the local paths where attachments are accessed:
+ATTACHMENTS_DESTINATION_FOLDER_PATH=/tmp # Default: /tmp. Path where attachments are read from.
+MCP_SERVER_ATTACHMENTS_FOLDER_PATH=/tmp # Default: /tmp. Path where MCP server stores attachments.
 JIRA_ATTACHMENT_SKIP_POSTFIX=_SKIP # Default: _SKIP. Attachments with filenames ending in this postfix (before the extension) 
                                    # will be excluded from agent analysis. Case-insensitive. Example: "mockup_SKIP.png" is skipped.
 

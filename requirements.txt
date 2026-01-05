@@ -4,7 +4,6 @@ allure-python-commons==2.15.2
 python-dotenv==1.2.1
 gunicorn==23.0.0
 google-cloud-logging==3.13.0
-google-cloud-storage==3.7.0
 transformers==4.57.3
 torch==2.9.1
 sentence-transformers==5.2.0

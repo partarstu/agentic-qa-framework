@@ -110,7 +110,10 @@ def is_supported_mime_type(mime_type: str | None) -> bool:
 
 def _fetch_file_bytes(file_path: str) -> tuple[bytes, str]:
     """
-    Fetch file bytes from local storage or Google Cloud Storage.
+    Fetch file bytes from local storage.
+
+    In cloud deployments, GCS buckets are mounted as local folders via Cloud Run
+    volume mounts, so all file access is done through the local file system.
 
     Args:
         file_path: The path to the file (relative path as returned by MCP server).
@@ -122,34 +125,13 @@ def _fetch_file_bytes(file_path: str) -> tuple[bytes, str]:
         RuntimeError: If the file cannot be found or read.
     """
     file_name = Path(file_path).name
+    local_file_path = Path(config.ATTACHMENTS_DESTINATION_FOLDER_PATH) / file_name
+    local_file_path = local_file_path.resolve()
 
-    if config.USE_GOOGLE_CLOUD_STORAGE:
-        from google.cloud import storage
+    if not local_file_path.is_file():
+        raise RuntimeError(f"File {local_file_path} does not exist.")
 
-        folder = config.JIRA_ATTACHMENTS_CLOUD_STORAGE_FOLDER
-        if folder:
-            blob_name = f"{folder}/{file_name}"
-        else:
-            blob_name = file_name
-
-        storage_client = storage.Client()
-        bucket = storage_client.bucket(config.GOOGLE_CLOUD_STORAGE_BUCKET_NAME)
-        blob = bucket.blob(blob_name)
-
-        if not blob.exists():
-            raise RuntimeError(
-                f"File {blob_name} does not exist in GCS bucket {config.GOOGLE_CLOUD_STORAGE_BUCKET_NAME}."
-            )
-
-        file_bytes = blob.download_as_bytes()
-    else:
-        local_file_path = Path(config.ATTACHMENTS_DESTINATION_FOLDER_PATH) / file_name
-        local_file_path = local_file_path.resolve()
-
-        if not local_file_path.is_file():
-            raise RuntimeError(f"File {local_file_path} does not exist.")
-
-        file_bytes = local_file_path.read_bytes()
+    file_bytes = local_file_path.read_bytes()
 
     return file_bytes, file_name
 

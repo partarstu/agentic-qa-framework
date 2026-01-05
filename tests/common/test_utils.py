@@ -12,9 +12,6 @@ from common import utils
 def mock_config(monkeypatch):
     monkeypatch.setattr("config.GOOGLE_CLOUD_LOGGING_ENABLED", False)
     monkeypatch.setattr("config.LOG_LEVEL", "INFO")
-    monkeypatch.setattr("config.USE_GOOGLE_CLOUD_STORAGE", False)
-    monkeypatch.setattr("config.GOOGLE_CLOUD_STORAGE_BUCKET_NAME", "test-bucket")
-    monkeypatch.setattr("config.JIRA_ATTACHMENTS_CLOUD_STORAGE_FOLDER", "test-folder")
 
 def test_get_logger_local():
     logger = utils.get_logger("test_logger")
@@ -53,31 +50,3 @@ def test_fetch_media_file_content_from_local_invalid_mime():
          
          with pytest.raises(RuntimeError, match="not a media file"):
              utils.fetch_media_file_content_from_local("test.txt", "/tmp")
-
-@patch("google.cloud.storage.Client")
-def test_fetch_media_file_content_from_gcs_success(mock_storage_client):
-    mock_bucket = MagicMock()
-    mock_blob = MagicMock()
-    mock_storage_client.return_value.bucket.return_value = mock_bucket
-    mock_bucket.blob.return_value = mock_blob
-    
-    mock_blob.exists.return_value = True
-    mock_blob.download_as_bytes.return_value = b"gcs data"
-    
-    with patch("mimetypes.guess_type", return_value=("image/jpeg", None)):
-        content = utils.fetch_media_file_content_from_gcs("test.jpg", "bucket", "folder")
-        assert content.data == b"gcs data"
-        assert content.media_type == "image/jpeg"
-
-@patch("google.cloud.storage.Client")
-def test_fetch_media_file_content_from_gcs_not_found(mock_storage_client):
-    mock_bucket = MagicMock()
-    mock_blob = MagicMock()
-    mock_storage_client.return_value.bucket.return_value = mock_bucket
-    mock_bucket.blob.return_value = mock_blob
-    
-    mock_blob.exists.return_value = False
-    
-    with pytest.raises(RuntimeError, match="does not exist in GCS"):
-        utils.fetch_media_file_content_from_gcs("test.jpg", "bucket", "folder")
-
