@@ -120,7 +120,7 @@ AGENT_DISCOVERY_PORTS=8001-8006 # Default: 8001-8006. Port range for agent disco
 # Google Cloud Storage (via Volume Mounts)
 # In cloud deployments, GCS buckets are mounted as local folders via Cloud Run volume mounts.
 # The following variables configure the local paths where attachments are accessed:
-ATTACHMENTS_DESTINATION_FOLDER_PATH=/tmp # Default: /tmp. Path where attachments are read from.
+ATTACHMENTS_LOCAL_DESTINATION_FOLDER_PATH=/tmp # Default: /tmp. Path where attachments are read from.
 MCP_SERVER_ATTACHMENTS_FOLDER_PATH=/tmp # Default: /tmp. Path where MCP server stores attachments.
 JIRA_ATTACHMENT_SKIP_POSTFIX=_SKIP # Default: _SKIP. Attachments with filenames ending in this postfix (before the extension) 
                                    # will be excluded from agent analysis. Case-insensitive. Example: "mockup_SKIP.png" is skipped.
@@ -192,7 +192,7 @@ To run the Jira MCP server, you will need Docker installed.
    ```
    This command will start the Docker container for the MCP server, mapping port `9000` on your host to the container's
    port `9000`. It also mounts a local directory (`D:\temp` in the example, corresponding to
-   `ATTACHMENTS_DESTINATION_FOLDER_PATH` in your main `.env` file) to `/tmp` inside the container (corresponding to
+   `ATTACHMENTS_LOCAL_DESTINATION_FOLDER_PATH` in your main `.env` file) to `/tmp` inside the container (corresponding to
    `MCP_SERVER_ATTACHMENTS_FOLDER_PATH`). Ensure this local directory exists and has appropriate permissions. Such an
    approach is needed because the current implementation of Jira MCP server only downloads the attachments locally on
    the server and doesn't transfer them to the agent. That's why those downloaded attachments need to be retrieved and

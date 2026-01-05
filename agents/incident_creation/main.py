@@ -151,7 +151,7 @@ class IncidentCreationAgent(AgentBase):
     def _save_artifacts(self) -> list[str]:
         """Saves all received file artifacts into the file system and returns their paths.
         
-        Files are saved to the local/host path (ATTACHMENTS_DESTINATION_FOLDER_PATH) but
+        Files are saved to the local/host path (ATTACHMENTS_LOCAL_DESTINATION_FOLDER_PATH) but
         the returned paths use the MCP server's container path (MCP_SERVER_ATTACHMENTS_FOLDER_PATH)
         since the Jira MCP server runs in Docker and expects paths relative to its filesystem.
         """
@@ -159,7 +159,7 @@ class IncidentCreationAgent(AgentBase):
 
         saved_paths: list[str] = []
         # Local path where files are actually saved (e.g., /tmp in Linux or D:\\temp on Windows)
-        local_folder = config.ATTACHMENTS_DESTINATION_FOLDER_PATH
+        local_folder = config.ATTACHMENTS_LOCAL_DESTINATION_FOLDER_PATH
         # MCP container path for the Jira MCP server (e.g., /tmp in Docker)
         mcp_folder = config.MCP_SERVER_ATTACHMENTS_FOLDER_PATH
 

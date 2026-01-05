@@ -122,7 +122,7 @@ def _fetch_file_bytes(file_path: str) -> tuple[bytes, str]:
         RuntimeError: If the file cannot be found or read.
     """
     file_name = Path(file_path).name
-    local_file_path = Path(config.ATTACHMENTS_DESTINATION_FOLDER_PATH) / file_name
+    local_file_path = Path(config.ATTACHMENTS_LOCAL_DESTINATION_FOLDER_PATH) / file_name
     local_file_path = local_file_path.resolve()
 
     if not local_file_path.is_file():
