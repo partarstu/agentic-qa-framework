@@ -79,7 +79,7 @@ steps:
       - '--port=9000'
       - '--args=--transport,sse,--port,9000,-vv'
       - '--add-volume=type=cloud-storage,name=jira-volume,bucket=$_BUCKET_NAME,mount-options=only-dir=$_JIRA_ATTACHMENTS_FOLDER'
-      - '--add-volume-mount=volume=jira-volume,mount-path=/tmp'
+      - '--add-volume-mount=volume=jira-volume,mount-path=$_JIRA_MCP_SERVER_ATTACHMENTS_MOUNT_PATH'
       - '--concurrency=5'
 
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
@@ -145,10 +145,12 @@ steps:
       - '--max-instances=1'
       - '--concurrency=5'
       - '--set-env-vars=^;^REMOTE_EXECUTION_AGENT_HOSTS=$_REMOTE_EXECUTION_AGENT_HOSTS'
-      - '--set-env-vars=AGENT_DISCOVERY_PORTS=443-443,GOOGLE_CLOUD_LOGGING_ENABLED=true,QDRANT_URL=$_QDRANT_URL'
+      - '--set-env-vars=AGENT_DISCOVERY_PORTS=443-443,GOOGLE_CLOUD_LOGGING_ENABLED=true,QDRANT_URL=$_QDRANT_URL,MCP_SERVER_ATTACHMENTS_FOLDER_PATH=$_ATTACHMENTS_MOUNT_PATH'
       - '--set-secrets=GOOGLE_API_KEY=GOOGLE_API_KEY:latest,JIRA_API_TOKEN=JIRA_API_TOKEN:latest,JIRA_USERNAME=JIRA_USERNAME:latest,ZEPHYR_API_TOKEN=ZEPHYR_API_TOKEN:latest,JIRA_URL=JIRA_URL:latest,ZEPHYR_BASE_URL=ZEPHYR_BASE_URL:latest,ORCHESTRATOR_API_KEY=ORCHESTRATOR_API_KEY:latest,QDRANT_API_KEY=QDRANT_API_KEY:latest'
       - '--add-volume=type=cloud-storage,name=gcs-allure-reports,bucket=$_ALLURE_REPORTS_BUCKET'
       - '--add-volume-mount=volume=gcs-allure-reports,mount-path=$_ALLURE_REPORTS_CONTAINER_PATH'
+      - '--add-volume=type=cloud-storage,name=jira-volume,bucket=$_BUCKET_NAME,mount-options=only-dir=$_JIRA_ATTACHMENTS_FOLDER'
+      - '--add-volume-mount=volume=jira-volume,mount-path=$LOCAL_ATTACHMENTS_MOUNT_PATH'
       - '--timeout=$_ORCHESTRATOR_REQUEST_TIMEOUT'
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: gcloud
@@ -168,8 +170,10 @@ steps:
       - '--max-instances=1'
       - '--concurrency=2'
       - '--set-secrets=GOOGLE_API_KEY=GOOGLE_API_KEY:latest,JIRA_API_TOKEN=JIRA_API_TOKEN:latest,JIRA_USERNAME=JIRA_USERNAME:latest,ZEPHYR_API_TOKEN=ZEPHYR_API_TOKEN:latest,JIRA_URL=JIRA_URL:latest,JIRA_MCP_SERVER_URL=JIRA_MCP_SERVER_URL:latest,ZEPHYR_BASE_URL=ZEPHYR_BASE_URL:latest'
-      - '--set-env-vars=GOOGLE_CLOUD_LOGGING_ENABLED=true,AGENT_BASE_URL=$_REQUIREMENTS_REVIEW_AGENT_BASE_URL,EXTERNAL_PORT=443,EMBEDDING_SERVICE_URL=$_EMBEDDING_SERVICE_URL'
+      - '--set-env-vars=GOOGLE_CLOUD_LOGGING_ENABLED=true,AGENT_BASE_URL=$_REQUIREMENTS_REVIEW_AGENT_BASE_URL,EXTERNAL_PORT=443,EMBEDDING_SERVICE_URL=$_EMBEDDING_SERVICE_URL,MCP_SERVER_ATTACHMENTS_FOLDER_PATH=$_ATTACHMENTS_MOUNT_PATH'
       - '--port=8001'
+      - '--add-volume=type=cloud-storage,name=jira-volume,bucket=$_BUCKET_NAME,mount-options=only-dir=$_JIRA_ATTACHMENTS_FOLDER'
+      - '--add-volume-mount=volume=jira-volume,mount-path=$LOCAL_ATTACHMENTS_MOUNT_PATH'
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: gcloud
     args:
@@ -188,8 +192,10 @@ steps:
       - '--max-instances=1'
       - '--concurrency=2'
       - '--set-secrets=GOOGLE_API_KEY=GOOGLE_API_KEY:latest,JIRA_API_TOKEN=JIRA_API_TOKEN:latest,JIRA_USERNAME=JIRA_USERNAME:latest,ZEPHYR_API_TOKEN=ZEPHYR_API_TOKEN:latest,JIRA_URL=JIRA_URL:latest,JIRA_MCP_SERVER_URL=JIRA_MCP_SERVER_URL:latest,ZEPHYR_BASE_URL=ZEPHYR_BASE_URL:latest'
-      - '--set-env-vars=GOOGLE_CLOUD_LOGGING_ENABLED=true,AGENT_BASE_URL=$_TEST_CASE_GENERATION_AGENT_BASE_URL,EXTERNAL_PORT=443,EMBEDDING_SERVICE_URL=$_EMBEDDING_SERVICE_URL'
+      - '--set-env-vars=GOOGLE_CLOUD_LOGGING_ENABLED=true,AGENT_BASE_URL=$_TEST_CASE_GENERATION_AGENT_BASE_URL,EXTERNAL_PORT=443,EMBEDDING_SERVICE_URL=$_EMBEDDING_SERVICE_URL,MCP_SERVER_ATTACHMENTS_FOLDER_PATH=$_ATTACHMENTS_MOUNT_PATH'
       - '--port=8001'
+      - '--add-volume=type=cloud-storage,name=jira-volume,bucket=$_BUCKET_NAME,mount-options=only-dir=$_JIRA_ATTACHMENTS_FOLDER'
+      - '--add-volume-mount=volume=jira-volume,mount-path=$LOCAL_ATTACHMENTS_MOUNT_PATH'
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: gcloud
     args:
@@ -208,8 +214,10 @@ steps:
       - '--max-instances=1'
       - '--concurrency=2'
       - '--set-secrets=GOOGLE_API_KEY=GOOGLE_API_KEY:latest,JIRA_API_TOKEN=JIRA_API_TOKEN:latest,JIRA_USERNAME=JIRA_USERNAME:latest,ZEPHYR_API_TOKEN=ZEPHYR_API_TOKEN:latest,JIRA_URL=JIRA_URL:latest,JIRA_MCP_SERVER_URL=JIRA_MCP_SERVER_URL:latest,ZEPHYR_BASE_URL=ZEPHYR_BASE_URL:latest'
-      - '--set-env-vars=GOOGLE_CLOUD_LOGGING_ENABLED=true,AGENT_BASE_URL=$_TEST_CASE_CLASSIFICATION_AGENT_BASE_URL,EXTERNAL_PORT=443,EMBEDDING_SERVICE_URL=$_EMBEDDING_SERVICE_URL'
+      - '--set-env-vars=GOOGLE_CLOUD_LOGGING_ENABLED=true,AGENT_BASE_URL=$_TEST_CASE_CLASSIFICATION_AGENT_BASE_URL,EXTERNAL_PORT=443,EMBEDDING_SERVICE_URL=$_EMBEDDING_SERVICE_URL,MCP_SERVER_ATTACHMENTS_FOLDER_PATH=$_ATTACHMENTS_MOUNT_PATH'
       - '--port=8001'
+      - '--add-volume=type=cloud-storage,name=jira-volume,bucket=$_BUCKET_NAME,mount-options=only-dir=$_JIRA_ATTACHMENTS_FOLDER'
+      - '--add-volume-mount=volume=jira-volume,mount-path=$LOCAL_ATTACHMENTS_MOUNT_PATH'
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: gcloud
     args:
@@ -228,8 +236,10 @@ steps:
       - '--max-instances=1'
       - '--concurrency=2'
       - '--set-secrets=GOOGLE_API_KEY=GOOGLE_API_KEY:latest,JIRA_API_TOKEN=JIRA_API_TOKEN:latest,JIRA_USERNAME=JIRA_USERNAME:latest,ZEPHYR_API_TOKEN=ZEPHYR_API_TOKEN:latest,JIRA_URL=JIRA_URL:latest,JIRA_MCP_SERVER_URL=JIRA_MCP_SERVER_URL:latest,ZEPHYR_BASE_URL=ZEPHYR_BASE_URL:latest'
-      - '--set-env-vars=GOOGLE_CLOUD_LOGGING_ENABLED=true,AGENT_BASE_URL=$_TEST_CASE_REVIEW_AGENT_BASE_URL,EXTERNAL_PORT=443,EMBEDDING_SERVICE_URL=$_EMBEDDING_SERVICE_URL'
+      - '--set-env-vars=GOOGLE_CLOUD_LOGGING_ENABLED=true,AGENT_BASE_URL=$_TEST_CASE_REVIEW_AGENT_BASE_URL,EXTERNAL_PORT=443,EMBEDDING_SERVICE_URL=$_EMBEDDING_SERVICE_URL,MCP_SERVER_ATTACHMENTS_FOLDER_PATH=$_ATTACHMENTS_MOUNT_PATH'
       - '--port=8001'
+      - '--add-volume=type=cloud-storage,name=jira-volume,bucket=$_BUCKET_NAME,mount-options=only-dir=$_JIRA_ATTACHMENTS_FOLDER'
+      - '--add-volume-mount=volume=jira-volume,mount-path=$LOCAL_ATTACHMENTS_MOUNT_PATH'
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: gcloud
     args:
@@ -249,9 +259,9 @@ steps:
       - '--max-instances=1'
       - '--concurrency=2'
       - '--set-secrets=GOOGLE_API_KEY=GOOGLE_API_KEY:latest,JIRA_API_TOKEN=JIRA_API_TOKEN:latest,JIRA_USERNAME=JIRA_USERNAME:latest,ZEPHYR_API_TOKEN=ZEPHYR_API_TOKEN:latest,JIRA_URL=JIRA_URL:latest,JIRA_MCP_SERVER_URL=JIRA_MCP_SERVER_URL:latest,ZEPHYR_BASE_URL=ZEPHYR_BASE_URL:latest,QDRANT_API_KEY=QDRANT_API_KEY:latest'
-      - '--set-env-vars=GOOGLE_CLOUD_LOGGING_ENABLED=true,AGENT_BASE_URL=$_INCIDENT_CREATION_AGENT_BASE_URL,EXTERNAL_PORT=443,EMBEDDING_SERVICE_URL=$_EMBEDDING_SERVICE_URL,QDRANT_URL=$_QDRANT_URL,QDRANT_PORT=443,ATTACHMENTS_DESTINATION_FOLDER_PATH=/tmp,MCP_SERVER_ATTACHMENTS_FOLDER_PATH=/tmp'
+      - '--set-env-vars=GOOGLE_CLOUD_LOGGING_ENABLED=true,AGENT_BASE_URL=$_INCIDENT_CREATION_AGENT_BASE_URL,EXTERNAL_PORT=443,EMBEDDING_SERVICE_URL=$_EMBEDDING_SERVICE_URL,QDRANT_URL=$_QDRANT_URL,QDRANT_PORT=443,ATTACHMENTS_DESTINATION_FOLDER_PATH=$LOCAL_ATTACHMENTS_MOUNT_PATH,MCP_SERVER_ATTACHMENTS_FOLDER_PATH=$_ATTACHMENTS_MOUNT_PATH'
       - '--add-volume=type=cloud-storage,name=jira-volume,bucket=$_BUCKET_NAME,mount-options=only-dir=$_JIRA_ATTACHMENTS_FOLDER'
-      - '--add-volume-mount=volume=jira-volume,mount-path=/tmp'
+      - '--add-volume-mount=volume=jira-volume,mount-path=$LOCAL_ATTACHMENTS_MOUNT_PATH'
       - '--port=8001'
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: gcloud
@@ -271,11 +281,15 @@ steps:
       - '--max-instances=1'
       - '--concurrency=2'
       - '--set-secrets=GOOGLE_API_KEY=GOOGLE_API_KEY:latest,JIRA_API_TOKEN=JIRA_API_TOKEN:latest,JIRA_USERNAME=JIRA_USERNAME:latest,ZEPHYR_API_TOKEN=ZEPHYR_API_TOKEN:latest,JIRA_URL=JIRA_URL:latest,JIRA_MCP_SERVER_URL=JIRA_MCP_SERVER_URL:latest,ZEPHYR_BASE_URL=ZEPHYR_BASE_URL:latest,QDRANT_API_KEY=QDRANT_API_KEY:latest'
-      - '--set-env-vars=GOOGLE_CLOUD_LOGGING_ENABLED=true,AGENT_BASE_URL=$_JIRA_RAG_AGENT_BASE_URL,EXTERNAL_PORT=443,EMBEDDING_SERVICE_URL=$_EMBEDDING_SERVICE_URL,QDRANT_URL=$_QDRANT_URL,QDRANT_PORT=443'
+      - '--set-env-vars=GOOGLE_CLOUD_LOGGING_ENABLED=true,AGENT_BASE_URL=$_JIRA_RAG_AGENT_BASE_URL,EXTERNAL_PORT=443,EMBEDDING_SERVICE_URL=$_EMBEDDING_SERVICE_URL,QDRANT_URL=$_QDRANT_URL,QDRANT_PORT=443,MCP_SERVER_ATTACHMENTS_FOLDER_PATH=$_ATTACHMENTS_MOUNT_PATH'
       - '--port=8001'
+      - '--add-volume=type=cloud-storage,name=jira-volume,bucket=$_BUCKET_NAME,mount-options=only-dir=$_JIRA_ATTACHMENTS_FOLDER'
+      - '--add-volume-mount=volume=jira-volume,mount-path=$LOCAL_ATTACHMENTS_MOUNT_PATH'
 
 substitutions:
   _JIRA_ATTACHMENTS_FOLDER: 'jira'
+  _ATTACHMENTS_MOUNT_PATH: '/tmp'
+  _JIRA_MCP_SERVER_ATTACHMENTS_MOUNT_PATH: '/tmp'
   _BUCKET_NAME: ''
   _ALLURE_REPORTS_CONTAINER_PATH: '/app/allure-report'
   _ALLURE_REPORTS_BUCKET: ''

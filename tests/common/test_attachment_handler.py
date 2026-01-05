@@ -42,14 +42,13 @@ class TestGetMimeType:
         assert mime_type is None
 
     @patch("common.attachment_handler.magic")
-    def test_get_mime_type_from_bytes_using_magic(self, mock_magic):
-        """Test MIME type detection from file bytes using python-magic."""
-        mock_magic.from_buffer.return_value = "image/png"
-        file_bytes = b"\x89PNG\r\n\x1a\n"  # PNG magic bytes
-        
-        mime_type = attachment_handler.get_mime_type("file_without_extension", file_bytes)
-        
-        mock_magic.from_buffer.assert_called_once_with(file_bytes, mime=True)
+    def test_get_mime_type_using_magic(self, mock_magic):
+        """Test MIME type detection from file using python-magic."""
+        mock_magic.from_file.return_value = "image/png"
+
+        mime_type = attachment_handler.get_mime_type("file_without_extension")
+
+        mock_magic.from_file.assert_called_once_with("file_without_extension", mime=True)
         assert mime_type == "image/png"
 
 

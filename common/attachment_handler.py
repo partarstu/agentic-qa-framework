@@ -40,18 +40,15 @@ SUPPORTED_MIME_TYPES: set[str] = (
 )
 
 
-def get_mime_type(file_path: str, file_bytes: bytes | None = None) -> str | None:
+def get_mime_type(file_path: str) -> str | None:
     """
     Determine the MIME type of file.
 
     First attempts to guess from the file extension using mimetypes.
-    If that fails and file_bytes are provided, uses python-magic to detect
-    the MIME type from file content.
+    If that fails, uses python-magic to detect the MIME type from file content.
 
     Args:
-        file_path: Path to the file (used for extension-based detection).
-        file_bytes: Optional raw bytes of the file for content-based detection.
-
+        file_path: Path to the file (used for extension-based detection and magic).
     Returns:
         The detected MIME type string, or None if detection fails.
     """
@@ -60,7 +57,7 @@ def get_mime_type(file_path: str, file_bytes: bytes | None = None) -> str | None
     if mime_type:
         return mime_type
 
-    # Fall back to content-based detection if bytes are provided
+    # Fall back to content-based detection
     try:
         return magic.from_file(file_path, mime=True)
     except Exception as e:
@@ -181,7 +178,7 @@ def fetch_all_attachments(attachment_paths: list[str], skip_postfix: str | None 
             continue
 
         # Detect MIME type
-        mime_type = get_mime_type(file_path, file_bytes)
+        mime_type = get_mime_type(file_path)
 
         # Check if MIME type is supported
         if not is_supported_mime_type(mime_type):

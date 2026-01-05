@@ -42,7 +42,16 @@ def mock_sentence_transformer():
 
 @pytest.fixture
 def vector_db_service(mock_qdrant_client, mock_sentence_transformer):
-    return VectorDbService("test_collection")
+    with patch("common.services.vector_db_service.config.QdrantConfig") as mock_config:
+        mock_config.URL = "http://localhost"
+        mock_config.PORT = 6333
+        mock_config.API_KEY = None
+        mock_config.TIMEOUT_SECONDS = 30.0
+        mock_config.EMBEDDING_MODEL = "test_model"
+        mock_config.EMBEDDING_SERVICE_URL = None
+        mock_config.EMBEDDING_MODEL_PATH = None
+        
+        return VectorDbService("test_collection")
 
 @pytest.mark.asyncio
 async def test_ensure_collection_exists(vector_db_service, mock_qdrant_client):
