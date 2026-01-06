@@ -1000,10 +1000,9 @@ async def _choose_agent_id(agent_task_description: str) -> str:
     max_wait_interval = 30  # Cap at 30 seconds between retries
     
     while (time.time() - start_time) < max_wait_time:
-        available_agents = await agent_registry.get_available_agents()
-        
-        if available_agents:
-            agent_id = await _select_agent(agent_task_description)
+        available_agent_ids = await agent_registry.get_available_agents()
+        if available_agent_ids:
+            agent_id = await _select_agent(agent_task_description, available_agent_ids)
             if agent_id:
                 agent_name = await agent_registry.get_name(agent_id)
                 logger.info(
@@ -1087,7 +1086,8 @@ async def _select_all_suitable_agent_ids(task_description: str) -> List[str]:
     
     Only considers agents that are currently AVAILABLE for new tasks.
     """
-    agents_info = await _get_agents_info()
+    available_agent_ids = await agent_registry.get_available_agents()
+    agents_info = await _get_agents_info(available_agent_ids)
     user_prompt = f"""
 Target task description: "{task_description}".
 
@@ -1097,10 +1097,9 @@ The list of all registered with you agents:\n{agents_info}
     result = await multi_discovery_agent.run(user_prompt)
     selected_agent_ids = result.output.ids or []
     valid_agent_ids = []
-    available_agents = await agent_registry.get_available_agents()
     for agent_id in selected_agent_ids:
-        # Verify agent exists AND is still AVAILABLE (status may have changed since discovery)
-        if await agent_registry.contains(agent_id) and agent_id in available_agents:
+        # Verify agent exists AND is in our available agents list
+        if await agent_registry.contains(agent_id) and agent_id in available_agent_ids:
             valid_agent_ids.append(agent_id)
 
     for agent_id in valid_agent_ids:
@@ -1109,14 +1108,16 @@ The list of all registered with you agents:\n{agents_info}
     return valid_agent_ids
 
 
-async def _get_agents_info():
+async def _get_agents_info(available_agent_ids: List[str]) -> str:
     """Get information about agents that are AVAILABLE for new tasks.
     
-    Only returns agents with AVAILABLE status to ensure BUSY or BROKEN agents
-    are not selected for new tasks.
+    Args:
+        available_agent_ids: List of agent IDs that are currently AVAILABLE.
+        
+    Returns:
+        Formatted string with agent information for the discovery agent.
     """
     agents_info = ""
-    available_agent_ids = await agent_registry.get_available_agents()
     all_cards = await agent_registry.get_all_cards()
     for agent_id in available_agent_ids:
         card = all_cards.get(agent_id)
@@ -1126,9 +1127,20 @@ async def _get_agents_info():
     return agents_info
 
 
-async def _select_agent(task_description: str) -> str | None:
-    """Selects the best agent from the registry to handle a given task and returns its ID"""
-    agents_info = await _get_agents_info()
+async def _select_agent(task_description: str, available_agent_ids: List[str]) -> str | None:
+    """Selects the best agent from the available agents to handle a given task.
+    
+    Args:
+        task_description: Description of the task to be assigned.
+        available_agent_ids: List of agent IDs that are currently AVAILABLE.
+        
+    Returns:
+        The ID of the selected agent, or None if no suitable agent found.
+    """
+    agents_info = await _get_agents_info(available_agent_ids)
+    if not agents_info:
+        return None
+    
     user_prompt = f"""
 Target task description: "{task_description}".
 
@@ -1136,7 +1148,8 @@ The list of all registered with you agents:\n{agents_info}
 """
     result = await discovery_agent.run(user_prompt)
     selected_agent_id = result.output.id or None
-    if selected_agent_id and await agent_registry.contains(selected_agent_id):
+    # Verify the selected agent is in our available list
+    if selected_agent_id and selected_agent_id in available_agent_ids:
         return selected_agent_id
     return None
 

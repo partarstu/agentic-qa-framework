@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useQuery, QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { Cpu, RefreshCw, LogOut } from 'lucide-react';
+import { Cpu, LogOut } from 'lucide-react';
 import { dashboardApi } from './api/dashboardApi';
 import { onConnectionStatusChange, onAuthStatusChange } from './api/client';
 import { AuthProvider, useAuth } from './context/AuthContext';
@@ -53,9 +53,6 @@ function Dashboard() {
     queryFn: () => dashboardApi.getLogs(100),
   });
 
-  const handleRefresh = () => {
-    queryClient.invalidateQueries();
-  };
 
   const [isOffline, setIsOffline] = useState(false);
 
@@ -87,13 +84,7 @@ function Dashboard() {
                 <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></div>
                 <span>Live</span>
               </div>
-              <button
-                onClick={handleRefresh}
-                className="p-2 rounded-lg bg-slate-700 hover:bg-slate-600 transition-colors"
-                title="Refresh all data"
-              >
-                <RefreshCw className="w-5 h-5 text-slate-300" />
-              </button>
+
               {/* User info and logout */}
               <div className="flex items-center gap-3 pl-3 border-l border-slate-600">
                 <span className="text-sm text-slate-300">{username}</span>
