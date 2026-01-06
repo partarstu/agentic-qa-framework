@@ -99,9 +99,9 @@ class OrchestratorConfig:
 # Dashboard Authentication
 class DashboardAuthConfig:
     """Configuration for UI dashboard authentication."""
-    USERNAME = os.environ["DASHBOARD_USERNAME"]
-    PASSWORD = os.environ["DASHBOARD_PASSWORD"]
-    JWT_SECRET = os.environ["DASHBOARD_JWT_SECRET"]
+    USERNAME = os.environ.get("DASHBOARD_USERNAME", "")
+    PASSWORD = os.environ.get("DASHBOARD_PASSWORD", "")
+    JWT_SECRET = os.environ.get("DASHBOARD_JWT_SECRET", "")
     JWT_ALGORITHM = "HS256"
     JWT_EXPIRE_HOURS = int(os.environ.get("DASHBOARD_JWT_EXPIRE_HOURS", "24"))
 
