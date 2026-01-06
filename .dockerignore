@@ -11,3 +11,5 @@ agents/orchestrator/test_main.py
 GEMINI.md
 /.gemini
 substitutions.yaml
+**/node_modules
+orchestrator/ui/dist

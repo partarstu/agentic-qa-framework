@@ -3,13 +3,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
+import traceback
 import time
 from collections import defaultdict
 from contextlib import asynccontextmanager
 from datetime import datetime
-from enum import Enum
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 from uuid import uuid4
 
 import httpx
@@ -18,8 +18,10 @@ from a2a.client import ClientFactory, ClientConfig
 from a2a.types import TaskState, AgentCard, Artifact, Task, JSONRPCErrorResponse, TextPart, FilePart, FileWithBytes, \
     Message, TaskIdParams
 from a2a.utils import new_agent_text_message, get_message_text
-from fastapi import FastAPI, Request, HTTPException, Security, Depends
+from fastapi import FastAPI, Request, HTTPException, Security, Depends, Query
+from fastapi.responses import JSONResponse
 from fastapi.security import APIKeyHeader
+from fastapi.staticfiles import StaticFiles
 from pydantic_ai import Agent
 from pydantic_ai.settings import ModelSettings
 
@@ -32,127 +34,25 @@ from common.services.test_management_system_client_provider import get_test_mana
 from common.services.test_reporting_client_base_provider import get_test_reporting_client
 from common.services.vector_db_service import VectorDbService
 
+# Import models and state from the models module
+from orchestrator.models import (
+    AgentStatus, BrokenReason, TaskStatus, TaskRecord, ErrorRecord,
+    agent_registry, task_history, error_history, ORCHESTRATOR_START_TIME
+)
+from orchestrator.memory_log_handler import setup_memory_logging, memory_log_handler
+from orchestrator.dashboard_service import dashboard_service
+
 MAX_RETRIES = 3
 
 MODEL_SETTINGS = ModelSettings(top_p=config.TOP_P, temperature=config.TEMPERATURE)
 
 logger = utils.get_logger("orchestrator")
 
+# Set up memory logging for dashboard
+setup_memory_logging("orchestrator")
+
 # Initialize Vector DB Service for Orchestrator
 vector_db_service = VectorDbService(getattr(config.QdrantConfig, "COLLECTION_NAME", "jira_issues"))
-
-
-class AgentStatus(str, Enum):
-    AVAILABLE = "AVAILABLE"
-    BUSY = "BUSY"
-    BROKEN = "BROKEN"
-
-
-class BrokenReason(str, Enum):
-    """Reason why an agent is marked as BROKEN."""
-    OFFLINE = "OFFLINE"  # Agent was unreachable (network error, crashed)
-    TASK_STUCK = "TASK_STUCK"  # Agent is reachable but a task timed out or is stuck
-
-
-class AgentRegistry:
-    def __init__(self):
-        self._cards: Dict[str, AgentCard] = {}
-        self._statuses: Dict[str, AgentStatus] = {}
-        self._broken_reasons: Dict[str, BrokenReason] = {}
-        self._stuck_task_ids: Dict[str, str] = {}  # agent_id -> last stuck task_id
-        self._lock = asyncio.Lock()
-
-    async def get_card(self, agent_id: str) -> AgentCard | None:
-        async with self._lock:
-            return self._cards.get(agent_id)
-
-    async def get_name(self, agent_id: str) -> str:
-        async with self._lock:
-            card = self._cards.get(agent_id)
-            return card.name if card else "Unknown"
-
-    async def register(self, agent_id: str, card: AgentCard):
-        async with self._lock:
-            self._cards[agent_id] = card
-            if agent_id not in self._statuses:
-                self._statuses[agent_id] = AgentStatus.AVAILABLE
-
-    async def update_status(
-            self,
-            agent_id: str,
-            status: AgentStatus,
-            broken_reason: BrokenReason | None = None,
-            stuck_task_id: str | None = None
-    ):
-        async with self._lock:
-            if agent_id in self._cards:
-                self._statuses[agent_id] = status
-                if status == AgentStatus.BROKEN and broken_reason:
-                    self._broken_reasons[agent_id] = broken_reason
-                    if stuck_task_id:
-                        self._stuck_task_ids[agent_id] = stuck_task_id
-                elif status == AgentStatus.AVAILABLE:
-                    # Clear broken context when agent becomes available
-                    self._broken_reasons.pop(agent_id, None)
-                    self._stuck_task_ids.pop(agent_id, None)
-
-    async def get_status(self, agent_id: str) -> AgentStatus:
-        async with self._lock:
-            return self._statuses.get(agent_id, AgentStatus.BROKEN)
-
-    async def get_broken_context(self, agent_id: str) -> tuple[BrokenReason | None, str | None]:
-        """Get the reason and stuck task ID for a broken agent.
-        
-        Returns:
-            Tuple of (broken_reason, stuck_task_id) or (None, None) if not broken.
-        """
-        async with self._lock:
-            reason = self._broken_reasons.get(agent_id)
-            task_id = self._stuck_task_ids.get(agent_id)
-            return reason, task_id
-
-    async def remove(self, agent_id: str):
-        async with self._lock:
-            self._cards.pop(agent_id, None)
-            self._statuses.pop(agent_id, None)
-            self._broken_reasons.pop(agent_id, None)
-            self._stuck_task_ids.pop(agent_id, None)
-
-    async def get_all_cards(self) -> Dict[str, AgentCard]:
-        async with self._lock:
-            return self._cards.copy()
-
-    async def is_empty(self) -> bool:
-        async with self._lock:
-            return not self._cards
-
-    async def contains(self, agent_id: str) -> bool:
-        async with self._lock:
-            return agent_id in self._cards
-
-    async def get_valid_agents(self) -> List[str]:
-        async with self._lock:
-            return [aid for aid, status in self._statuses.items() if status != AgentStatus.BROKEN and aid in self._cards]
-
-    async def get_agent_id_by_url(self, url: str) -> str | None:
-        async with self._lock:
-            for agent_id, card in self._cards.items():
-                if card.url == url:
-                    return agent_id
-            return None
-
-    async def get_broken_agents(self) -> Dict[str, tuple[BrokenReason | None, str | None]]:
-        async with self._lock:
-            result = {}
-            for agent_id, status in self._statuses.items():
-                if status == AgentStatus.BROKEN:
-                    reason = self._broken_reasons.get(agent_id)
-                    task_id = self._stuck_task_ids.get(agent_id)
-                    result[agent_id] = (reason, task_id)
-            return result
-
-
-agent_registry = AgentRegistry()
 execution_lock = asyncio.Lock()
 cancellation_queue = asyncio.Queue()
 
@@ -197,8 +97,44 @@ def _validate_api_key(api_key: str = Security(api_key_header)):
     if config.OrchestratorConfig.API_KEY and api_key != config.OrchestratorConfig.API_KEY:
         raise HTTPException(status_code=401, detail="Unauthorized: Invalid API Key")
 
-
 orchestrator_app = FastAPI(lifespan=lifespan)
+
+
+# =============================================================================
+# Dashboard API Routes (for Web UI)
+# =============================================================================
+
+@orchestrator_app.get("/api/dashboard/summary")
+async def get_dashboard_summary():
+    """Get high-level dashboard statistics."""
+    return await dashboard_service.get_summary()
+
+
+@orchestrator_app.get("/api/dashboard/agents")
+async def get_agents_status():
+    """Get detailed status of all registered agents."""
+    return await dashboard_service.get_agents_status()
+
+
+@orchestrator_app.get("/api/dashboard/tasks")
+async def get_recent_tasks(limit: int = Query(default=50, le=100)):
+    """Get recent tasks with their details."""
+    return await dashboard_service.get_recent_tasks(limit=limit)
+
+
+@orchestrator_app.get("/api/dashboard/errors")
+async def get_recent_errors(limit: int = Query(default=20, le=50)):
+    """Get recent errors with context."""
+    return await dashboard_service.get_recent_errors(limit=limit)
+
+
+@orchestrator_app.get("/api/dashboard/logs")
+async def get_logs(
+    limit: int = Query(default=100, le=500),
+    level: Optional[str] = Query(default=None, description="Filter by log level (INFO, WARNING, ERROR)")
+):
+    """Get recent application logs."""
+    return await dashboard_service.get_logs(limit=limit, level=level)
 
 
 async def _retry_cancellation_task():
@@ -865,8 +801,25 @@ async def _send_task_to_agent_with_message(agent_id: str, message: Message, task
     if not agent_card:
         raise ValueError(f"Agent with ID '{agent_id}' is not yet registered with his card")
 
-    # Set BUSY status
+    # Generate a unique task ID for tracking
+    internal_task_id = str(uuid4())
+    task_start_time = datetime.now()
+    agent_name = await agent_registry.get_name(agent_id)
+    
+    # Record task start in history
+    task_record = TaskRecord(
+        task_id=internal_task_id,
+        agent_id=agent_id,
+        agent_name=agent_name,
+        description=task_description,
+        status=TaskStatus.RUNNING,
+        start_time=task_start_time
+    )
+    await task_history.add(task_record)
+    
+    # Set BUSY status and track current task
     await agent_registry.update_status(agent_id, AgentStatus.BUSY)
+    await agent_registry.set_current_task(agent_id, internal_task_id)
 
     try:
         async with httpx.AsyncClient(timeout=config.OrchestratorConfig.TASK_EXECUTION_TIMEOUT) as client:
@@ -883,17 +836,29 @@ async def _send_task_to_agent_with_message(agent_id: str, message: Message, task
                     response = await asyncio.wait_for(response_iterator.__anext__(), timeout=time_left)
                 except StopAsyncIteration:
                     if last_task and last_task.status.state in (TaskState.completed, TaskState.failed, TaskState.rejected):
+                        # Update task history with completion
+                        final_status = TaskStatus.COMPLETED if last_task.status.state == TaskState.completed else TaskStatus.FAILED
+                        await task_history.update(
+                            internal_task_id, 
+                            status=final_status, 
+                            end_time=datetime.now()
+                        )
                         await agent_registry.update_status(agent_id, AgentStatus.AVAILABLE)
+                        await agent_registry.set_current_task(agent_id, None)
                         return last_task
-                    _handle_exception(f"Task '{task_description}' iterator finished before completion.", 500)
+                    await task_history.update(internal_task_id, TaskStatus.FAILED, datetime.now(), "Iterator finished before completion")
+                    _handle_exception(f"Task '{task_description}' iterator finished before completion.", 500, internal_task_id, agent_id)
                 except asyncio.TimeoutError:
                     logger.error(f"Task '{task_description}' timed out while waiting for completion.")
+                    # Update task history
+                    await task_history.update(internal_task_id, TaskStatus.FAILED, datetime.now(), "Task timed out")
                     # Get task ID if available for tracking
                     stuck_task_id = last_task.id if last_task else None
                     try:
                         await agent_registry.update_status(
                             agent_id, AgentStatus.BROKEN, BrokenReason.TASK_STUCK, stuck_task_id
                         )
+                        await agent_registry.set_current_task(agent_id, None)
                         await cancellation_queue.put((agent_id, time.time()))
                     except Exception as ex:
                         logger.exception(f"Error handling timeout for agent {agent_id}.")
@@ -901,17 +866,23 @@ async def _send_task_to_agent_with_message(agent_id: str, message: Message, task
                             agent_id, AgentStatus.BROKEN, BrokenReason.TASK_STUCK, stuck_task_id
                         )
 
-                    _handle_exception(f"Task '{task_description}' timed out while waiting for completion.", 408)
+                    _handle_exception(f"Task '{task_description}' timed out while waiting for completion.", 408, internal_task_id, agent_id)
 
                 if isinstance(response, JSONRPCErrorResponse):
-                    _handle_exception(f"Couldn't execute the task '{task_description}'. Root cause: {response.error}")
+                    await task_history.update(internal_task_id, TaskStatus.FAILED, datetime.now(), str(response.error))
+                    _handle_exception(f"Couldn't execute the task '{task_description}'. Root cause: {response.error}", 500, internal_task_id, agent_id)
 
                 if isinstance(response, tuple):
                     task, _ = response
                     last_task = task
                     if task.status.state in (TaskState.completed, TaskState.failed, TaskState.rejected):
                         logger.info(f"Task '{task_description}' was completed with status '{str(task.status.state)}'.")
+                        # Update task history
+                        final_status = TaskStatus.COMPLETED if task.status.state == TaskState.completed else TaskStatus.FAILED
+                        error_msg = get_message_text(task.status.message) if task.status.state != TaskState.completed else None
+                        await task_history.update(internal_task_id, final_status, datetime.now(), error_msg)
                         await agent_registry.update_status(agent_id, AgentStatus.AVAILABLE)
+                        await agent_registry.set_current_task(agent_id, None)
                         return task
                     else:
                         logger.debug(
@@ -923,13 +894,16 @@ async def _send_task_to_agent_with_message(agent_id: str, message: Message, task
                         f"Received a message from agent in the scope of the "
                         f"task '{task_description}': {msg_text}")
 
-            _handle_exception(f"Task for {task_description} wasn't complete within timeout.", 408)
+            await task_history.update(internal_task_id, TaskStatus.FAILED, datetime.now(), "Timeout waiting for completion")
+            _handle_exception(f"Task for {task_description} wasn't complete within timeout.", 408, internal_task_id, agent_id)
             return None
 
     except Exception as e:
         logger.exception(f"Error communicating with agent {agent_id}.")
+        await task_history.update(internal_task_id, TaskStatus.FAILED, datetime.now(), str(e))
         # Connection/communication error likely means agent is offline
         await agent_registry.update_status(agent_id, AgentStatus.BROKEN, BrokenReason.OFFLINE)
+        await agent_registry.set_current_task(agent_id, None)
         await cancellation_queue.put((agent_id, time.time()))
         raise e
 
@@ -976,8 +950,35 @@ async def _get_jira_issue_key_from_request(request):
     return user_story_id
 
 
-def _handle_exception(message: str, status_code: int = 500) -> HTTPException:
+def _handle_exception(
+    message: str, 
+    status_code: int = 500,
+    task_id: str | None = None,
+    agent_id: str | None = None
+) -> HTTPException:
+    """Handle an exception by logging it and recording it for the dashboard.
+    
+    Args:
+        message: Error message.
+        status_code: HTTP status code.
+        task_id: Optional task ID related to the error.
+        agent_id: Optional agent ID related to the error.
+    """
     logger.exception(message)
+    
+    # Record error for dashboard (run in background to avoid blocking)
+    error_record = ErrorRecord(
+        error_id=str(uuid4()),
+        timestamp=datetime.now(),
+        message=message,
+        task_id=task_id,
+        agent_id=agent_id,
+        module="orchestrator.main",
+        traceback_snippet=traceback.format_exc()[-500:]  # Last 500 chars of traceback
+    )
+    # Schedule the async add without waiting
+    asyncio.create_task(error_history.add(error_record))
+    
     raise HTTPException(status_code=status_code, detail=message)
 
 
@@ -1133,6 +1134,42 @@ async def _discover_agents():
 
     tasks = [_process_url_discovery(url) for url in set(remote_agent_urls)]
     await asyncio.gather(*tasks)
+
+
+# =============================================================================
+# Static File Serving for Dashboard UI
+# =============================================================================
+
+# Path to the built UI static files
+STATIC_FILES_DIR = Path(__file__).parent / "static"
+
+if STATIC_FILES_DIR.exists():
+    # Mount static files (JS, CSS, assets)
+    orchestrator_app.mount("/assets", StaticFiles(directory=STATIC_FILES_DIR / "assets"), name="assets")
+    
+    # Serve index.html for the root path
+    @orchestrator_app.get("/")
+    async def serve_dashboard():
+        """Serve the dashboard UI."""
+        from fastapi.responses import FileResponse
+        return FileResponse(STATIC_FILES_DIR / "index.html")
+    
+    # Catch-all route for SPA client-side routing (must be last)
+    @orchestrator_app.get("/{full_path:path}")
+    async def serve_spa(full_path: str):
+        """Serve index.html for all unmatched routes (SPA fallback)."""
+        from fastapi.responses import FileResponse
+        # Don't intercept API routes
+        if full_path.startswith("api/"):
+            raise HTTPException(status_code=404, detail="API endpoint not found")
+        # Check if file exists in static dir
+        file_path = STATIC_FILES_DIR / full_path
+        if file_path.exists() and file_path.is_file():
+            return FileResponse(file_path)
+        # Return index.html for client-side routing
+        return FileResponse(STATIC_FILES_DIR / "index.html")
+else:
+    logger.info("Dashboard UI static files not found. UI will not be available.")
 
 
 if __name__ == "__main__":
