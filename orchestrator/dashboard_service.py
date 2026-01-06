@@ -167,40 +167,95 @@ class OrchestratorDashboardService:
 
     def _parse_agent_logs(self, raw_logs: List[str], task_id: str, agent_id: str) -> List[LogEntry]:
         """Parse raw agent log strings into LogEntry objects.
-           We'll try to extract timestamp/level if possible, otherwise use placeholders.
+        
+        The expected log format from AgentLogCaptureHandler is:
+        '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        Example: '2026-01-06 16:20:30,123 - my_agent - INFO - Some message'
         """
         entries = []
         for log_chunk in raw_logs:
             # Agent logs might be one big string or lines
             lines = log_chunk.splitlines()
             for line in lines:
-                if not line.strip(): continue
+                if not line.strip():
+                    continue
                 
-                # Simple parsing logic - can be improved if agent log format is known
-                # Default values
-                timestamp = datetime.now().isoformat()
+                # Default values in case parsing fails
+                timestamp = None
                 level = "INFO"
                 logger_name = f"agent.{agent_id}"
                 message = line
                 
-                # Simple heuristic: "2023-..." at start
+                # Parse the log format: "timestamp - logger - level - message"
                 parts = line.split(" - ", 3)
-                if len(parts) >= 3:
-                     # Attempt to parse: timestamp - name - level - message
-                     # or: timestamp - level - message
-                     try:
-                         # Just check if first part looks like date?
-                         # For now, just keep the line as message and use task completion time? 
-                         # Actually, using current time for historical logs is confusing.
-                         # Ideally agent logs have timestamps. 
-                         pass
-                     except:
-                         pass
+                if len(parts) >= 4:
+                    # Full format: timestamp - logger - level - message
+                    raw_timestamp, parsed_logger, parsed_level, parsed_message = parts
+                    
+                    # Try to parse the timestamp
+                    try:
+                        # Format from logging: "2026-01-06 16:20:30,123"
+                        parsed_dt = datetime.strptime(raw_timestamp.strip(), "%Y-%m-%d %H:%M:%S,%f")
+                        timestamp = parsed_dt.isoformat()
+                    except ValueError:
+                        # Fallback: try without milliseconds
+                        try:
+                            parsed_dt = datetime.strptime(raw_timestamp.strip(), "%Y-%m-%d %H:%M:%S")
+                            timestamp = parsed_dt.isoformat()
+                        except ValueError:
+                            # Keep the raw timestamp string if parsing fails
+                            timestamp = raw_timestamp.strip()
+                    
+                    logger_name = parsed_logger.strip()
+                    level = parsed_level.strip().upper()
+                    message = parsed_message
+                    
+                elif len(parts) == 3:
+                    # Possible format: timestamp - level - message (missing logger)
+                    raw_timestamp, part2, part3 = parts
+                    
+                    # Check if part2 is a log level
+                    if part2.strip().upper() in ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"):
+                        # Try to parse the timestamp
+                        try:
+                            parsed_dt = datetime.strptime(raw_timestamp.strip(), "%Y-%m-%d %H:%M:%S,%f")
+                            timestamp = parsed_dt.isoformat()
+                        except ValueError:
+                            try:
+                                parsed_dt = datetime.strptime(raw_timestamp.strip(), "%Y-%m-%d %H:%M:%S")
+                                timestamp = parsed_dt.isoformat()
+                            except ValueError:
+                                timestamp = raw_timestamp.strip()
+                        
+                        level = part2.strip().upper()
+                        message = part3
+                    else:
+                        # part2 is likely the logger name, part3 might be "level - message"
+                        # Try extracting level from part3
+                        for lvl in ("ERROR", "WARNING", "DEBUG", "INFO", "CRITICAL"):
+                            if part3.startswith(lvl):
+                                level = lvl
+                                message = part3[len(lvl):].lstrip(" -:")
+                                break
+                        else:
+                            message = part3
+                        
+                        # Still try to parse timestamp
+                        try:
+                            parsed_dt = datetime.strptime(raw_timestamp.strip(), "%Y-%m-%d %H:%M:%S,%f")
+                            timestamp = parsed_dt.isoformat()
+                        except ValueError:
+                            try:
+                                parsed_dt = datetime.strptime(raw_timestamp.strip(), "%Y-%m-%d %H:%M:%S")
+                                timestamp = parsed_dt.isoformat()
+                            except ValueError:
+                                pass
+                        
+                        logger_name = part2.strip()
                 
-                # If the line contains typical log levels
-                if "ERROR" in line: level = "ERROR"
-                elif "WARNING" in line: level = "WARNING"
-                elif "DEBUG" in line: level = "DEBUG"
+                # If timestamp parsing failed completely, use current time as fallback
+                if timestamp is None:
+                    timestamp = datetime.now().isoformat()
                 
                 entries.append(LogEntry(
                     timestamp=timestamp, 

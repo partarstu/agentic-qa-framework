@@ -52,15 +52,6 @@ def fetch_media_file_content_from_local(remote_file_path: str, attachments_folde
 
 
 def get_execution_logs_from_artifacts(artifacts: list[FileWithBytes], log_filename_pattern: str = "logs") -> list[str]:
-    """Extract execution logs from file artifacts.
-
-    Args:
-        artifacts: A list of FileWithBytes objects representing file artifacts.
-        log_filename_pattern: Substring to match in artifact names to identify log files.
-
-    Returns:
-        The log files content as a list of strings.
-    """
     if not artifacts:
         return []
 

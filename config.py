@@ -49,7 +49,7 @@ SUPPORTED_ATTACHMENT_MIME_TYPES: set[str] = {
     # Images
     "image/png", "image/jpeg", "image/gif", "image/webp",
     # Documents
-    "application/pdf", "text/plain",
+    "application/pdf", "text/plain", "application/json",
     # Audio
     "audio/mpeg", "audio/wav", "audio/flac", "audio/ogg", "audio/aac", "audio/aiff",
     # Video
@@ -94,6 +94,16 @@ class OrchestratorConfig:
     API_KEY = os.environ.get("ORCHESTRATOR_API_KEY")
     AGENT_DISCOVERY_PORTS = os.environ.get("AGENT_DISCOVERY_PORTS", "8001-8007")
     REMOTE_EXECUTION_AGENT_HOSTS = os.environ.get("REMOTE_EXECUTION_AGENT_HOSTS", AGENT_BASE_URL)
+
+
+# Dashboard Authentication
+class DashboardAuthConfig:
+    """Configuration for UI dashboard authentication."""
+    USERNAME = os.environ["DASHBOARD_USERNAME"]
+    PASSWORD = os.environ["DASHBOARD_PASSWORD"]
+    JWT_SECRET = os.environ["DASHBOARD_JWT_SECRET"]
+    JWT_ALGORITHM = "HS256"
+    JWT_EXPIRE_HOURS = int(os.environ.get("DASHBOARD_JWT_EXPIRE_HOURS", "24"))
 
 
 # Requirements Review Agent

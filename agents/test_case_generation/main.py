@@ -77,8 +77,7 @@ class TestCaseGenerationAgent(AgentBase):
             mcp_servers=[jira_mcp_server],
             deps_type=JiraUserStory,
             description="Agent which generates test cases based on Jira user stories.",
-            tools=[self._upload_test_cases_into_test_management_system, self._generate_test_cases,
-                   self._fetch_attachments],
+            tools=[self._upload_test_cases_into_test_management_system, self._generate_test_cases],
         )
 
     def get_thinking_budget(self) -> int:
@@ -101,12 +100,12 @@ class TestCaseGenerationAgent(AgentBase):
         attachments_content = self._fetch_attachments(attachment_paths)
         extracted_acceptance_criteria = await self.extract_acceptance_criteria(attachments_content, jira_issue_content)
         test_steps_sequences = await self.generate_test_steps(extracted_acceptance_criteria)
-        generated_test_cases = await self.generate_test_cases(extracted_acceptance_criteria, jira_issue_content,
-                                                              test_steps_sequences)
+        generated_test_cases = await self.create_test_cases_from_steps(extracted_acceptance_criteria, jira_issue_content,
+                                                                       test_steps_sequences)
         return generated_test_cases
 
-    async def generate_test_cases(self, extracted_acceptance_criteria: AcceptanceCriteriaList, jira_issue_content: str,
-                                  test_steps_sequences: TestStepsSequenceList) -> GeneratedTestCases:
+    async def create_test_cases_from_steps(self, extracted_acceptance_criteria: AcceptanceCriteriaList, jira_issue_content: str,
+                                           test_steps_sequences: TestStepsSequenceList) -> GeneratedTestCases:
         logger.info("Generating Test Cases for all step sequences")
         user_message = f"""
 Jira Issue content:

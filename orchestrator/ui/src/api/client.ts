@@ -1,16 +1,31 @@
 import axios, { type AxiosError, type AxiosResponse, type InternalAxiosRequestConfig } from 'axios';
 
+const AUTH_TOKEN_KEY = 'dashboard_auth_token';
+
 // Event emitter for connection status
 type ConnectionStatusHandler = (isOnline: boolean) => void;
 const handlers: Set<ConnectionStatusHandler> = new Set();
+
+// Event emitter for auth status
+type AuthStatusHandler = (isAuthenticated: boolean) => void;
+const authHandlers: Set<AuthStatusHandler> = new Set();
 
 export const onConnectionStatusChange = (handler: ConnectionStatusHandler) => {
   handlers.add(handler);
   return () => { handlers.delete(handler); };
 };
 
+export const onAuthStatusChange = (handler: AuthStatusHandler) => {
+  authHandlers.add(handler);
+  return () => { authHandlers.delete(handler); };
+};
+
 const notifyHandlers = (isOnline: boolean) => {
   handlers.forEach(handler => handler(isOnline));
+};
+
+const notifyAuthHandlers = (isAuthenticated: boolean) => {
+  authHandlers.forEach(handler => handler(isAuthenticated));
 };
 
 // Create axios instance
@@ -19,12 +34,16 @@ export const apiClient = axios.create({
   timeout: 5000, // 5 seconds timeout
 });
 
-// Request interceptor to clean up config if needed
+// Request interceptor to add auth token
 apiClient.interceptors.request.use((config: InternalAxiosRequestConfig) => {
+  const token = localStorage.getItem(AUTH_TOKEN_KEY);
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`;
+  }
   return config;
 });
 
-// Response interceptor to handle connection status
+// Response interceptor to handle connection status and auth errors
 apiClient.interceptors.response.use(
   (response: AxiosResponse) => {
     // If we get a response, the backend is arguably online
@@ -33,6 +52,16 @@ apiClient.interceptors.response.use(
   },
   (error: AxiosError) => {
     console.error('API Error intercepted:', error.code, error.message, error.response?.status);
+    
+    // Handle 401 Unauthorized - token expired or invalid
+    if (error.response?.status === 401) {
+      // Clear auth data and notify listeners
+      localStorage.removeItem(AUTH_TOKEN_KEY);
+      localStorage.removeItem('dashboard_auth_expires');
+      localStorage.removeItem('dashboard_auth_username');
+      notifyAuthHandlers(false);
+      return Promise.reject(error);
+    }
     
     // Check for timeout explicitly
     if (error.code === 'ECONNABORTED') {
@@ -62,3 +91,4 @@ apiClient.interceptors.response.use(
     return Promise.reject(error);
   }
 );
+

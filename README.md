@@ -108,6 +108,13 @@ ORCHESTRATOR_API_KEY=YOUR_ORCHESTRATOR_API_KEY # Optional. Set this to activate 
                                  # This corresponds to OrchestratorConfig.API_KEY.
 JIRA_MCP_SERVER_URL=http://localhost:9000/sse # Default: http://localhost:9000/sse. The URL of the Jira MCP server.
 
+# Dashboard Authentication
+# These settings control access to the UI monitoring dashboard at /api/dashboard/*
+DASHBOARD_USERNAME=admin # Default: admin. Username for dashboard login.
+DASHBOARD_PASSWORD=admin # Default: admin. Password for dashboard login. CHANGE THIS IN PRODUCTION!
+DASHBOARD_JWT_SECRET=change-me-in-production-please # Default: change-me-in-production-please. Secret key for JWT token signing. CHANGE THIS IN PRODUCTION!
+DASHBOARD_JWT_EXPIRE_HOURS=24 # Default: 24. Number of hours before JWT tokens expire.
+
 # Zephyr Test Management System
 ZEPHYR_BASE_URL=YOUR_ZEPHYR_BASE_URL # Required. The base URL of your Zephyr instance.
 ZEPHYR_API_TOKEN=YOUR_ZEPHYR_API_TOKEN # Required. API token for Zephyr authentication.

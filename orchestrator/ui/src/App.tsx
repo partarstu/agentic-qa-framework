@@ -1,8 +1,10 @@
 import { useState, useEffect } from 'react';
 import { useQuery, QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { Cpu, RefreshCw } from 'lucide-react';
+import { Cpu, RefreshCw, LogOut } from 'lucide-react';
 import { dashboardApi } from './api/dashboardApi';
-import { onConnectionStatusChange } from './api/client';
+import { onConnectionStatusChange, onAuthStatusChange } from './api/client';
+import { AuthProvider, useAuth } from './context/AuthContext';
+import { LoginPage } from './components/LoginPage';
 import { Toast } from './components/Toast';
 import { SummaryCards, TaskSummaryCards } from './components/SummaryCards';
 import { AgentGrid } from './components/AgentGrid';
@@ -24,6 +26,8 @@ const queryClient = new QueryClient({
 });
 
 function Dashboard() {
+  const { logout, username } = useAuth();
+  
   const { data: summary, isLoading: summaryLoading } = useQuery({
     queryKey: ['summary'],
     queryFn: dashboardApi.getSummary,
@@ -90,6 +94,17 @@ function Dashboard() {
               >
                 <RefreshCw className="w-5 h-5 text-slate-300" />
               </button>
+              {/* User info and logout */}
+              <div className="flex items-center gap-3 pl-3 border-l border-slate-600">
+                <span className="text-sm text-slate-300">{username}</span>
+                <button
+                  onClick={logout}
+                  className="p-2 rounded-lg bg-slate-700 hover:bg-red-600/80 transition-colors"
+                  title="Sign out"
+                >
+                  <LogOut className="w-5 h-5 text-slate-300" />
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -126,7 +141,50 @@ function Dashboard() {
   );
 }
 
-function App() {
+function AuthenticatedApp() {
+  const { isAuthenticated, isLoading, logout } = useAuth();
+  const [authExpired, setAuthExpired] = useState(false);
+
+  // Listen for auth status changes (e.g., 401 errors)
+  useEffect(() => {
+    const unsubscribe = onAuthStatusChange((isAuth) => {
+      if (!isAuth) {
+        setAuthExpired(true);
+        logout();
+      }
+    });
+    return unsubscribe;
+  }, [logout]);
+
+  // Clear auth expired flag when user logs in again
+  useEffect(() => {
+    if (isAuthenticated) {
+      setAuthExpired(false);
+    }
+  }, [isAuthenticated]);
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 flex items-center justify-center">
+        <div className="flex flex-col items-center gap-4">
+          <div className="w-12 h-12 border-3 border-indigo-500/30 border-t-indigo-500 rounded-full animate-spin" />
+          <p className="text-slate-400">Loading...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!isAuthenticated) {
+    return (
+      <>
+        <LoginPage />
+        {authExpired && (
+          <Toast message="Your session has expired. Please sign in again." />
+        )}
+      </>
+    );
+  }
+
   return (
     <QueryClientProvider client={queryClient}>
       <Dashboard />
@@ -134,4 +192,13 @@ function App() {
   );
 }
 
+function App() {
+  return (
+    <AuthProvider>
+      <AuthenticatedApp />
+    </AuthProvider>
+  );
+}
+
 export default App;
+

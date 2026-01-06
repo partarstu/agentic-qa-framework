@@ -147,7 +147,9 @@ export function LogModal({ isOpen, onClose, taskId, agentId, title }: LogModalPr
               {filteredLogs.map((log, index) => (
                 <div key={index} className="flex gap-2 hover:bg-slate-800/50 px-1 rounded py-0.5">
                   <span className="text-slate-500 flex-shrink-0 w-24">
-                    {new Date(log.timestamp).toLocaleTimeString()}
+                    {log.timestamp && !isNaN(new Date(log.timestamp).getTime())
+                      ? new Date(log.timestamp).toLocaleTimeString()
+                      : '-'}
                   </span>
                   <span className={`flex-shrink-0 w-16 ${getLevelClass(log.level)}`}>
                     [{log.level}]
