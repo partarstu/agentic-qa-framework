@@ -165,7 +165,8 @@ class OrchestratorDashboardService:
         
         return [entry.to_dict() for entry in limited_logs]
 
-    def _parse_agent_logs(self, raw_logs: List[str], task_id: str, agent_id: str) -> List[LogEntry]:
+    @staticmethod
+    def _parse_agent_logs(raw_logs: List[str], task_id: str, agent_id: str) -> List[LogEntry]:
         """Parse raw agent log strings into LogEntry objects.
         
         The expected log format from AgentLogCaptureHandler is:
@@ -253,12 +254,12 @@ class OrchestratorDashboardService:
                         
                         logger_name = part2.strip()
                 
-                # If timestamp parsing failed completely, use current time as fallback
+                # If timestamp parsing failed completely, use empty string as fallback
                 if timestamp is None:
-                    timestamp = datetime.now().isoformat()
+                    timestamp = ""
                 
                 entries.append(LogEntry(
-                    timestamp=timestamp, 
+                    timestamp=timestamp,
                     level=level, 
                     logger_name=logger_name, 
                     message=message,

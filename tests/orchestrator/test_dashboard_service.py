@@ -67,11 +67,10 @@ def test_parse_agent_logs_real_log_format(mock_dashboard_service):
     assert parsed[0].message == '{"error": "data"}'
 
 def test_parse_agent_logs_fallback_timestamp(mock_dashboard_service):
-    # Verify that when timestamp is missing, we get a valid ISO timestamp (current time)
+    # Verify that when timestamp is missing, we get an empty string
     raw_logs = ["Just a message"]
     parsed = mock_dashboard_service._parse_agent_logs(raw_logs, "task-1", "agent-1")
     
     assert len(parsed) == 1
-    # Check that timestamp is a valid ISO string
-    dt = datetime.fromisoformat(parsed[0].timestamp)
-    assert isinstance(dt, datetime)
+    # Check that timestamp is empty
+    assert parsed[0].timestamp == ""

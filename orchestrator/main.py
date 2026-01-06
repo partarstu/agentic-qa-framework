@@ -32,6 +32,7 @@ from common.models import SelectedAgent, GeneratedTestCases, TestCase, ProjectEx
 from common.services.test_management_system_client_provider import get_test_management_client
 from common.services.test_reporting_client_base_provider import get_test_reporting_client
 from common.services.vector_db_service import VectorDbService
+from orchestrator.auth import auth_service, dashboard_auth, LoginRequest, TokenResponse
 from orchestrator.dashboard_service import dashboard_service
 from orchestrator.memory_log_handler import setup_memory_logging
 from orchestrator.models import (
@@ -98,29 +99,53 @@ orchestrator_app = FastAPI(lifespan=lifespan)
 
 
 # =============================================================================
-# Dashboard API Routes (for Web UI)
+# Dashboard Authentication Routes
+# =============================================================================
+
+@orchestrator_app.post("/api/auth/login", response_model=TokenResponse)
+async def login(request: LoginRequest):
+    """Authenticate user and return a JWT token."""
+    if not auth_service.authenticate(request.username, request.password):
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+    return auth_service.create_token(request.username)
+
+
+@orchestrator_app.post("/api/auth/logout")
+async def logout():
+    """Logout endpoint (client-side token removal)."""
+    return {"message": "Logged out successfully"}
+
+
+@orchestrator_app.get("/api/auth/verify")
+async def verify_token(username: str = Depends(dashboard_auth)):
+    """Verify if the current token is valid."""
+    return {"valid": True, "username": username}
+
+
+# =============================================================================
+# Dashboard API Routes (for Web UI) - Protected by JWT Auth
 # =============================================================================
 
 @orchestrator_app.get("/api/dashboard/summary")
-async def get_dashboard_summary():
+async def get_dashboard_summary(_: str = Depends(dashboard_auth)):
     """Get high-level dashboard statistics."""
     return await dashboard_service.get_summary()
 
 
 @orchestrator_app.get("/api/dashboard/agents")
-async def get_agents_status():
+async def get_agents_status(_: str = Depends(dashboard_auth)):
     """Get detailed status of all registered agents."""
     return await dashboard_service.get_agents_status()
 
 
 @orchestrator_app.get("/api/dashboard/tasks")
-async def get_recent_tasks(limit: int = Query(default=50, le=100)):
+async def get_recent_tasks(limit: int = Query(default=50, le=100), _: str = Depends(dashboard_auth)):
     """Get recent tasks with their details."""
     return await dashboard_service.get_recent_tasks(limit=limit)
 
 
 @orchestrator_app.get("/api/dashboard/errors")
-async def get_recent_errors(limit: int = Query(default=20, le=50)):
+async def get_recent_errors(limit: int = Query(default=20, le=50), _: str = Depends(dashboard_auth)):
     """Get recent errors with context."""
     return await dashboard_service.get_recent_errors(limit=limit)
 
@@ -130,7 +155,8 @@ async def get_logs(
     limit: int = Query(default=100, le=500),
     level: Optional[str] = Query(default=None, description="Filter by log level (INFO, WARNING, ERROR)"),
     task_id: Optional[str] = Query(default=None, description="Filter by task ID"),
-    agent_id: Optional[str] = Query(default=None, description="Filter by agent ID")
+    agent_id: Optional[str] = Query(default=None, description="Filter by agent ID"),
+    _: str = Depends(dashboard_auth)
 ):
     """Get recent application logs."""
     return await dashboard_service.get_logs(limit=limit, level=level, task_id=task_id, agent_id=agent_id)
