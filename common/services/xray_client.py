@@ -185,7 +185,14 @@ class XrayClient(TestManagementClientBase):
                               result.artifacts] if result.artifacts else []
             }
             if result.testExecutionStatus.lower() in ["failed", "error"]:
-                test_data["comment"] = result.generalErrorMessage
+                comment = result.generalErrorMessage
+                if result.incident_creation_result:
+                    if result.incident_creation_result.incident_key:
+                        comment += f"\n\nIncident created: {result.incident_creation_result.incident_key}"
+                    if result.incident_creation_result.duplicates:
+                        duplicates = ", ".join([d.issue_key for d in result.incident_creation_result.duplicates])
+                        comment += f"\n\nPotential duplicates found: {duplicates}"
+                test_data["comment"] = comment
             tests.append(test_data)
 
         payload = {
@@ -359,3 +366,15 @@ class XrayClient(TestManagementClientBase):
         }
 
         self._execute_graphql_query(mutation, variables)
+
+    def fetch_linked_issues(self, test_case_key: str) -> List[Dict]:
+        logger.info(f"Fetching linked issues for test case {test_case_key}")
+        issue_data = self._execute_jira_request("GET", f"issue/{test_case_key}?fields=issuelinks")
+        linked_issues = []
+        if issue_data and "fields" in issue_data and "issuelinks" in issue_data["fields"]:
+            for link in issue_data["fields"]["issuelinks"]:
+                linked_issues.append(link)
+        return linked_issues
+
+    def link_issue_to_test_case(self, test_case_key: str, issue_id: int, link_type: str) -> None:
+        raise NotImplementedError("Linking issues is not yet implemented for Xray client.")

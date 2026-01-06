@@ -1,4 +1,5 @@
 import json
+from datetime import datetime
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import List, Sequence, Optional
@@ -6,7 +7,7 @@ from typing import List, Sequence, Optional
 from fastapi import HTTPException
 from pydantic_ai.messages import ModelRequest, ToolReturnPart, UserPromptPart, ModelMessage, ModelResponse, \
     ToolCallPart, \
-    ThinkingPart, TextPart, SystemPromptPart, RetryPromptPart
+    ThinkingPart, TextPart, SystemPromptPart, RetryPromptPart, BinaryContent
 from pydantic_ai.models import (
     Model,
     KnownModelName,
@@ -18,7 +19,10 @@ from pydantic_ai.models.wrapper import WrapperModel
 
 import config
 from common import utils
+from common.models import JsonSerializableModel
 from common.prompt_injection.guard import GuardPrompt, PromptGuardFactory
+
+LOG_SEPARATTOR = '-' * 80
 
 logger = utils.get_logger("llm_wrapper")
 
@@ -26,13 +30,11 @@ logger = utils.get_logger("llm_wrapper")
 class CustomLlmWrapper(WrapperModel):
     def __init__(self, wrapped: Model | KnownModelName):
         super().__init__(wrapped)
+        self.latest_instructions: str | None = None
 
-    async def request(
-            self,
-            messages: List[ModelMessage],
-            model_settings: ModelSettings | None,
-            model_request_parameters: ModelRequestParameters,
-    ) -> ModelResponse:
+    async def request(self, messages: List[ModelMessage], model_settings: ModelSettings | None,
+                      model_request_parameters: ModelRequestParameters,
+                      ) -> ModelResponse:
         if config.PROMPT_INJECTION_CHECK_ENABLED:
             self._validate_for_prompt_injection(messages)
 
@@ -71,10 +73,7 @@ class CustomLlmWrapper(WrapperModel):
                     if isinstance(part.content, str):
                         prompt_content = part.content
                     else:
-                        try:
-                            prompt_content = json.dumps(part.content)
-                        except TypeError:
-                            prompt_content = str(part.content)
+                        prompt_content = CustomLlmWrapper._serialize_content(part.content)
                     return GuardPrompt(
                         prompt_description=f"Result of the execution of the tool '{part.tool_name}' : ",
                         prompt=prompt_content
@@ -96,15 +95,37 @@ class CustomLlmWrapper(WrapperModel):
             raise HTTPException(status_code=400, detail="Prompt injection attack detected.")
 
     @staticmethod
-    def _log_model_request(message):
+    def _json_serializer(obj):
+        """Custom JSON serializer for objects not handled by default json encoder."""
+        if isinstance(obj, JsonSerializableModel):
+            return obj.model_dump()
+        if isinstance(obj, BinaryContent):
+            return f"<BinaryContent: media_type={obj.media_type}, identifier={obj.identifier}, size={len(obj.data)} bytes>"
+        if isinstance(obj, bytes):
+            return f"<bytes: {len(obj)}>"
+        if hasattr(obj, 'model_dump'):
+            return obj.model_dump()
+        raise TypeError(f"Object of type {obj.__class__.__name__} is not JSON serializable")
+
+    @staticmethod
+    def _serialize_content(content) -> str:
+        """Serialize content to JSON, handling JsonSerializableModel and BinaryContent instances."""
+        return json.dumps(content, indent=2, default=CustomLlmWrapper._json_serializer)
+
+    def _log_model_request(self, message):
+        if message.instructions and self.latest_instructions != message.instructions:
+            self.latest_instructions = message.instructions
+            timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            logger.debug(f"[{timestamp}] Agent is using following instructions: "
+                         f"\n{LOG_SEPARATTOR}\n{self.latest_instructions}\n{LOG_SEPARATTOR}")
         for part in message.parts:
-            separator = '-' * 80
             if isinstance(part, ToolReturnPart):
-                timestamp = part.timestamp.strftime('%Y-%m-%d %H:%M:%S')
+                timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                payload = self._serialize_content(part.content)
                 logger.debug(f"[{timestamp}] Agent is responding with the execution result of tool: "
-                             f"'{part.tool_name}' with result: \n{separator}\n{json.dumps(part.content, indent=2)}\n{separator}")
+                             f"'{part.tool_name}' with result: \n{LOG_SEPARATTOR}\n{payload}\n{LOG_SEPARATTOR}")
             elif isinstance(part, UserPromptPart):
-                timestamp = part.timestamp.strftime('%Y-%m-%d %H:%M:%S')
+                timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                 if isinstance(part.content, str):
                     content_to_log = part.content
                 elif isinstance(part.content, Sequence):
@@ -118,18 +139,18 @@ class CustomLlmWrapper(WrapperModel):
                 else:
                     content_to_log = f'<{type(part.content).__name__}>'
                 logger.debug(f"[{timestamp}] Agent is prompting the model with user input: "
-                             f"\n{separator}\n{content_to_log}\n{separator}")
+                             f"\n{LOG_SEPARATTOR}\n{content_to_log}\n{LOG_SEPARATTOR}")
             elif isinstance(part, SystemPromptPart):
-                timestamp = part.timestamp.strftime('%Y-%m-%d %H:%M:%S')
-                logger.debug(f"[{timestamp}] Agent is using system prompt: \n{separator}\n{part.content}\n{separator}")
+                timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                logger.debug(f"[{timestamp}] Agent is using system prompt: \n{LOG_SEPARATTOR}\n{part.content}\n{LOG_SEPARATTOR}")
             elif isinstance(part, RetryPromptPart):
-                timestamp = part.timestamp.strftime('%Y-%m-%d %H:%M:%S')
+                timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                 logger.debug(f"[{timestamp}] Agent is retrying prompting the model, the root "
                              f"cause: {part.content}")
 
     @staticmethod
     def _log_model_response(message):
-        timestamp = message.timestamp.strftime('%Y-%m-%d %H:%M:%S')
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         separator = '-' * 80
         for part in message.parts:
             if isinstance(part, ToolCallPart):

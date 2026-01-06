@@ -7,7 +7,7 @@ import time
 from collections import defaultdict
 from contextlib import asynccontextmanager
 from datetime import datetime
-from functools import wraps
+from enum import Enum
 from pathlib import Path
 from typing import Dict, List
 from uuid import uuid4
@@ -16,7 +16,7 @@ import httpx
 import uvicorn
 from a2a.client import ClientFactory, ClientConfig
 from a2a.types import TaskState, AgentCard, Artifact, Task, JSONRPCErrorResponse, TextPart, FilePart, FileWithBytes, \
-    Message
+    Message, TaskIdParams
 from a2a.utils import new_agent_text_message, get_message_text
 from fastapi import FastAPI, Request, HTTPException, Security, Depends
 from fastapi.security import APIKeyHeader
@@ -27,9 +27,10 @@ import config
 from common import utils
 from common.custom_llm_wrapper import CustomLlmWrapper
 from common.models import SelectedAgent, GeneratedTestCases, TestCase, ProjectExecutionRequest, TestExecutionResult, \
-    TestExecutionRequest, SelectedAgents, JsonSerializableModel
+    TestExecutionRequest, SelectedAgents, JsonSerializableModel, IncidentCreationInput, IncidentCreationResult
 from common.services.test_management_system_client_provider import get_test_management_client
 from common.services.test_reporting_client_base_provider import get_test_reporting_client
+from common.services.vector_db_service import VectorDbService
 
 MAX_RETRIES = 3
 
@@ -37,8 +38,123 @@ MODEL_SETTINGS = ModelSettings(top_p=config.TOP_P, temperature=config.TEMPERATUR
 
 logger = utils.get_logger("orchestrator")
 
-agent_registry: Dict[str, AgentCard] = {}
-discovery_lock = asyncio.Lock()
+# Initialize Vector DB Service for Orchestrator
+vector_db_service = VectorDbService(getattr(config.QdrantConfig, "COLLECTION_NAME", "jira_issues"))
+
+
+class AgentStatus(str, Enum):
+    AVAILABLE = "AVAILABLE"
+    BUSY = "BUSY"
+    BROKEN = "BROKEN"
+
+
+class BrokenReason(str, Enum):
+    """Reason why an agent is marked as BROKEN."""
+    OFFLINE = "OFFLINE"  # Agent was unreachable (network error, crashed)
+    TASK_STUCK = "TASK_STUCK"  # Agent is reachable but a task timed out or is stuck
+
+
+class AgentRegistry:
+    def __init__(self):
+        self._cards: Dict[str, AgentCard] = {}
+        self._statuses: Dict[str, AgentStatus] = {}
+        self._broken_reasons: Dict[str, BrokenReason] = {}
+        self._stuck_task_ids: Dict[str, str] = {}  # agent_id -> last stuck task_id
+        self._lock = asyncio.Lock()
+
+    async def get_card(self, agent_id: str) -> AgentCard | None:
+        async with self._lock:
+            return self._cards.get(agent_id)
+
+    async def get_name(self, agent_id: str) -> str:
+        async with self._lock:
+            card = self._cards.get(agent_id)
+            return card.name if card else "Unknown"
+
+    async def register(self, agent_id: str, card: AgentCard):
+        async with self._lock:
+            self._cards[agent_id] = card
+            if agent_id not in self._statuses:
+                self._statuses[agent_id] = AgentStatus.AVAILABLE
+
+    async def update_status(
+            self,
+            agent_id: str,
+            status: AgentStatus,
+            broken_reason: BrokenReason | None = None,
+            stuck_task_id: str | None = None
+    ):
+        async with self._lock:
+            if agent_id in self._cards:
+                self._statuses[agent_id] = status
+                if status == AgentStatus.BROKEN and broken_reason:
+                    self._broken_reasons[agent_id] = broken_reason
+                    if stuck_task_id:
+                        self._stuck_task_ids[agent_id] = stuck_task_id
+                elif status == AgentStatus.AVAILABLE:
+                    # Clear broken context when agent becomes available
+                    self._broken_reasons.pop(agent_id, None)
+                    self._stuck_task_ids.pop(agent_id, None)
+
+    async def get_status(self, agent_id: str) -> AgentStatus:
+        async with self._lock:
+            return self._statuses.get(agent_id, AgentStatus.BROKEN)
+
+    async def get_broken_context(self, agent_id: str) -> tuple[BrokenReason | None, str | None]:
+        """Get the reason and stuck task ID for a broken agent.
+        
+        Returns:
+            Tuple of (broken_reason, stuck_task_id) or (None, None) if not broken.
+        """
+        async with self._lock:
+            reason = self._broken_reasons.get(agent_id)
+            task_id = self._stuck_task_ids.get(agent_id)
+            return reason, task_id
+
+    async def remove(self, agent_id: str):
+        async with self._lock:
+            self._cards.pop(agent_id, None)
+            self._statuses.pop(agent_id, None)
+            self._broken_reasons.pop(agent_id, None)
+            self._stuck_task_ids.pop(agent_id, None)
+
+    async def get_all_cards(self) -> Dict[str, AgentCard]:
+        async with self._lock:
+            return self._cards.copy()
+
+    async def is_empty(self) -> bool:
+        async with self._lock:
+            return not self._cards
+
+    async def contains(self, agent_id: str) -> bool:
+        async with self._lock:
+            return agent_id in self._cards
+
+    async def get_valid_agents(self) -> List[str]:
+        async with self._lock:
+            return [aid for aid, status in self._statuses.items() if status != AgentStatus.BROKEN and aid in self._cards]
+
+    async def get_agent_id_by_url(self, url: str) -> str | None:
+        async with self._lock:
+            for agent_id, card in self._cards.items():
+                if card.url == url:
+                    return agent_id
+            return None
+
+    async def get_broken_agents(self) -> Dict[str, tuple[BrokenReason | None, str | None]]:
+        async with self._lock:
+            result = {}
+            for agent_id, status in self._statuses.items():
+                if status == AgentStatus.BROKEN:
+                    reason = self._broken_reasons.get(agent_id)
+                    task_id = self._stuck_task_ids.get(agent_id)
+                    result[agent_id] = (reason, task_id)
+            return result
+
+
+agent_registry = AgentRegistry()
+execution_lock = asyncio.Lock()
+cancellation_queue = asyncio.Queue()
 
 API_KEY_NAME = "X-API-Key"
 api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=False)
@@ -48,7 +164,18 @@ api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=False)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Orchestrator starting up...")
+
+    # Perform initial agent discovery before accepting requests
+    logger.info("Starting initial agent discovery...")
+    try:
+        await _discover_agents()
+        logger.info("Initial agent discovery finished.")
+    except Exception as e:
+        logger.error(f"Initial agent discovery failed: {e}")
+
+    # Start periodic tasks after initial discovery
     discovery_task = asyncio.create_task(periodic_agent_discovery())
+    cancellation_task = asyncio.create_task(_retry_cancellation_task())
 
     yield
 
@@ -59,6 +186,12 @@ async def lifespan(app: FastAPI):
         except asyncio.CancelledError:
             logger.info("Agent discovery task successfully cancelled.")
 
+    if not cancellation_task.cancel():
+        try:
+            await cancellation_task
+        except asyncio.CancelledError:
+            logger.info("Cancellation retry task successfully cancelled.")
+
 
 def _validate_api_key(api_key: str = Security(api_key_header)):
     if config.OrchestratorConfig.API_KEY and api_key != config.OrchestratorConfig.API_KEY:
@@ -68,24 +201,127 @@ def _validate_api_key(api_key: str = Security(api_key_header)):
 orchestrator_app = FastAPI(lifespan=lifespan)
 
 
-def with_exclusive_lock(func):
-    @wraps(func)
-    async def wrapper(*args, **kwargs):
-        lock_acquired = False
+async def _retry_cancellation_task():
+    """Background task to recover broken agents.
+    
+    This task handles two types of broken agents differently:
+    - OFFLINE: Agent was unreachable. Recovery = agent responds to card fetch.
+    - TASK_STUCK: Agent is reachable but a task timed out. Recovery = cancel the stuck task first.
+    """
+    logger.info("Starting broken agent recovery task.")
+    while True:
         try:
-            async with asyncio.timeout(config.OrchestratorConfig.INCOMING_REQUEST_WAIT_TIMEOUT):
-                await discovery_lock.acquire()
-            lock_acquired = True
-            logger.info("Lock acquired by request processing.")
-            return await func(*args, **kwargs)
-        except TimeoutError:
-            _handle_exception("Could not acquire lock to process request, please try again later.", 503)
-        finally:
-            if lock_acquired:
-                discovery_lock.release()
-                logger.info("Lock released by request processing.")
+            agent_id, timestamp = await cancellation_queue.get()
 
-    return wrapper
+            # If it's been more than 24 hours, give up
+            if time.time() - timestamp > 24 * 3600:
+                logger.warning(f"Gave up recovering agent {agent_id} after 24 hours.")
+                cancellation_queue.task_done()
+                continue
+
+            broken_reason, stuck_task_id = await agent_registry.get_broken_context(agent_id)
+            agent_card = await agent_registry.get_card(agent_id)
+
+            if not agent_card:
+                logger.warning(f"Agent {agent_id} no longer has a registered card. Skipping recovery.")
+                cancellation_queue.task_done()
+                continue
+
+            logger.info(f"Attempting to recover agent {agent_id} (reason: {broken_reason})...")
+
+            is_recovered = False
+
+            if broken_reason == BrokenReason.OFFLINE:
+                # For OFFLINE agents: check if they respond to card fetch
+                if await _fetch_agent_card(agent_card.url):
+                    logger.info(f"Agent {agent_id} is back online.")
+                    is_recovered = True
+                else:
+                    logger.debug(f"Agent {agent_id} is still offline.")
+
+            elif broken_reason == BrokenReason.TASK_STUCK:
+                # For TASK_STUCK agents: attempt to cancel the stuck task first
+                if stuck_task_id:
+                    cancel_success = await _cancel_agent_task(agent_card, stuck_task_id)
+                    if cancel_success:
+                        logger.info(f"Successfully cancelled stuck task {stuck_task_id} on agent {agent_id}.")
+                        is_recovered = True
+                    else:
+                        # Cancellation failed - check if agent is at least responsive
+                        if await _fetch_agent_card(agent_card.url):
+                            logger.warning(
+                                f"Could not cancel task {stuck_task_id} on agent {agent_id}, "
+                                f"but agent is responsive. Marking as available anyway."
+                            )
+                            is_recovered = True
+                        else:
+                            # Agent is now offline, update reason
+                            logger.warning(f"Agent {agent_id} is no longer reachable. Updating to OFFLINE.")
+                            await agent_registry.update_status(
+                                agent_id, AgentStatus.BROKEN, BrokenReason.OFFLINE
+                            )
+                else:
+                    # No stuck task ID tracked, just check if agent responds
+                    if await _fetch_agent_card(agent_card.url):
+                        logger.info(f"Agent {agent_id} is responsive (no task ID to cancel).")
+                        is_recovered = True
+
+            else:
+                # Unknown or None reason - fall back to simple reachability check
+                if await _fetch_agent_card(agent_card.url):
+                    logger.info(f"Agent {agent_id} is responsive.")
+                    is_recovered = True
+
+            if is_recovered:
+                logger.info(f"Agent {agent_id} successfully recovered. Marking AVAILABLE.")
+                await agent_registry.update_status(agent_id, AgentStatus.AVAILABLE)
+                cancellation_queue.task_done()
+            else:
+                logger.info(f"Agent {agent_id} not recovered yet. Will retry in 60 seconds.")
+                cancellation_queue.task_done()
+                await asyncio.sleep(60)
+                await cancellation_queue.put((agent_id, timestamp))
+
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.exception(f"Error in broken agent recovery task.")
+            await asyncio.sleep(5)
+
+
+async def _cancel_agent_task(agent_card: AgentCard, task_id: str) -> bool:
+    """Attempt to cancel a task on an agent using the A2A protocol.
+    
+    Args:
+        agent_card: The agent's card containing connection info.
+        task_id: The ID of the task to cancel.
+        
+    Returns:
+        True if cancellation was successful or acknowledged, False otherwise.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=config.OrchestratorConfig.AGENT_DISCOVERY_TIMEOUT_SECONDS) as client:
+            client_config = ClientConfig(httpx_client=client)
+            client_factory = ClientFactory(config=client_config)
+            a2a_client = client_factory.create(card=agent_card)
+
+            cancelled_task = await a2a_client.cancel_task(TaskIdParams(id=task_id))
+
+            # Check if cancellation was accepted
+            if not cancelled_task.status:
+                logger.warning(f"Task got no status, artefacts: {cancelled_task.artifacts}")
+                return False
+            if cancelled_task.status.state != TaskState.canceled:
+                logger.warning(f"Task cancellation failed: got status {cancelled_task.status.state} and "
+                               f"message {cancelled_task.status.message}")
+                return False
+
+            logger.info(f"Task {task_id} cancellation request sent successfully.")
+            return True
+
+    except Exception as e:
+        logger.warning(f"Failed to cancel task {task_id}: {e}")
+        return False
 
 
 # --- For selecting the single best for the task agent ---
@@ -134,24 +370,20 @@ def _get_results_extractor_agent(output_type: type[JsonSerializableModel] | type
 
 
 async def periodic_agent_discovery():
-    """Periodically discovers agents."""
+    """Periodically discovers agents after the initial startup discovery."""
     while True:
+        # Wait before the next discovery cycle (initial discovery is done during startup)
+        await asyncio.sleep(config.OrchestratorConfig.AGENTS_DISCOVERY_INTERVAL_SECONDS)
         try:
-            async with discovery_lock:
-                logger.info("Lock acquired by agent discovery.")
-                logger.info("Starting periodic agent discovery...")
-                await _discover_agents()
-                logger.info("Periodic agent discovery finished.")
+            logger.info("Starting periodic agent discovery...")
+            await _discover_agents()
+            logger.info("Periodic agent discovery finished.")
         except Exception as e:
             _handle_exception(f"An error occurred during periodic agent discovery: {e}")
-        finally:
-            logger.info("Lock released by agent discovery.")
-            await asyncio.sleep(config.OrchestratorConfig.AGENTS_DISCOVERY_INTERVAL_SECONDS)
 
 
 # noinspection PyUnusedLocal
 @orchestrator_app.post("/new-requirements-available")
-@with_exclusive_lock
 async def review_jira_requirements(request: Request, api_key: str = Depends(_validate_api_key)):
     """
     Receives webhook from Jira and triggers the requirements review.
@@ -169,7 +401,6 @@ async def review_jira_requirements(request: Request, api_key: str = Depends(_val
 
 # noinspection PyUnusedLocal
 @orchestrator_app.post("/story-ready-for-test-case-generation")
-@with_exclusive_lock
 async def trigger_test_case_generation_workflow(request: Request, api_key: str = Depends(_validate_api_key)):
     """
     Receives webhook from Jira and triggers the test case generation.
@@ -187,7 +418,7 @@ async def trigger_test_case_generation_workflow(request: Request, api_key: str =
     logger.info("Received response from an agent, test case classification seems to be complete.")
 
     logger.info("Requesting review of all generated test cases.")
-    await _request_test_cases_review(generated_test_cases.test_cases)
+    await _request_test_cases_review(generated_test_cases.test_cases, user_story_id)
     logger.info("Received response from an agent, test case review seems to be complete.")
 
     return {
@@ -196,40 +427,68 @@ async def trigger_test_case_generation_workflow(request: Request, api_key: str =
 
 
 # noinspection PyUnusedLocal
-@orchestrator_app.post("/execute-tests")
-@with_exclusive_lock
-async def execute_tests(request: ProjectExecutionRequest, api_key: str = Depends(_validate_api_key)):
-    # _validate_request_authorization(request)
+@orchestrator_app.post("/update-rag-db")
+async def update_rag_db(request: ProjectExecutionRequest, api_key: str = Depends(_validate_api_key)):
+    """
+    Triggers the RAG Vector DB update for the given project.
+    """
     project_key = request.project_key
-    logger.info(f"Received request to execute automated tests for project '{project_key}'.")
-    test_management_client = get_test_management_client()
-    automated_test_cases = []
+    logger.info(f"Starting RAG update for project {project_key}")
     try:
-        automated_tests_dict = test_management_client.fetch_ready_for_execution_test_cases_by_labels(project_key,
-                                                                                                     [config.OrchestratorConfig.AUTOMATED_TC_LABEL])
-        automated_test_cases = automated_tests_dict.get(config.OrchestratorConfig.AUTOMATED_TC_LABEL, [])
-        if not automated_test_cases:
-            logger.info(f"No test cases ready for execution found for project {project_key}.")
-            return {"message": "No test cases found to execute."}
+        task_description = "Update RAG Vector DB with Jira issues"
+        agent_id = await _choose_agent_id(task_description)
+        completed_task = await _send_task_to_agent(agent_id, f"Sync Jira bugs for project {project_key}",
+                                                   task_description)
+
+        _validate_task_status(completed_task, task_description)
+        received_artifacts = _get_artifacts_from_task(completed_task, task_description)
+        text_content = _get_text_content_from_artifacts(received_artifacts, task_description)
+
+        logger.info(f"RAG update completed: {text_content}")
+        return {"message": "RAG update completed.", "details": text_content}
     except Exception as e:
-        _handle_exception(f"Failed to fetch test cases for project {project_key}: {e}")
+        _handle_exception(f"RAG update failed: {e}")
 
-    logger.info(
-        f"Retrieved {len(automated_test_cases)} test cases for automatic execution, grouping them by labels "
-        f"and requesting execution for each group.")
-    grouped_test_cases = await _group_test_cases_by_labels(automated_test_cases)
-    if not grouped_test_cases:
-        logger.info("No tests found which can be automated based on the label.")
+
+# noinspection PyUnusedLocal
+@orchestrator_app.post("/execute-tests")
+async def execute_tests(request: ProjectExecutionRequest, api_key: str = Depends(_validate_api_key)):
+    async with execution_lock:
+        project_key = request.project_key
+        logger.info(f"Received request to execute automated tests for project '{project_key}'.")
+        test_management_client = get_test_management_client()
+        automated_test_cases = []
+        try:
+            automated_tests_dict = test_management_client.fetch_ready_for_execution_test_cases_by_labels(
+                project_key, [config.OrchestratorConfig.AUTOMATED_TC_LABEL])
+            automated_test_cases = automated_tests_dict.get(config.OrchestratorConfig.AUTOMATED_TC_LABEL, [])
+            if not automated_test_cases:
+                logger.info(f"No test cases ready for execution found for project {project_key}.")
+                return {"message": "No test cases found to execute."}
+        except Exception as e:
+            _handle_exception(f"Failed to fetch test cases for project {project_key}: {e}")
+
+        logger.info(
+            f"Retrieved {len(automated_test_cases)} test cases for automatic execution, grouping them by labels "
+            f"and requesting execution for each group.")
+        grouped_test_cases = await _group_test_cases_by_labels(automated_test_cases)
+        if not grouped_test_cases:
+            logger.info("No tests found which can be automated based on the label.")
+            return {
+                "message": f"No test cases with '{config.OrchestratorConfig.AUTOMATED_TC_LABEL}' label found."}
+
+        all_execution_results = await _request_all_test_cases_execution(grouped_test_cases)
+        logger.info(f"Collected execution results for {len(all_execution_results)} test cases.")
+
+        # Request incident creation for all failed tests
+        logger.info("Processing failed tests for incident creation.")
+        await _request_incident_creation_for_failed_tests(all_execution_results)
+
+        if all_execution_results:
+            logger.info("Generating test execution report based on all execution results.")
+            await _generate_test_report(all_execution_results, project_key, test_management_client)
         return {
-            "message": f"No test cases with '{config.OrchestratorConfig.AUTOMATED_TC_LABEL}' label found."}
-
-    all_execution_results = await _request_all_test_cases_execution(grouped_test_cases)
-    logger.info(f"Collected execution results for {len(all_execution_results)} test cases.")
-    if all_execution_results:
-        logger.info("Generating test execution report based on all execution results.")
-        await _generate_test_report(all_execution_results, project_key, test_management_client)
-    return {
-        "message": f"Test execution completed for project {project_key}. Ran {len(all_execution_results)} tests."}
+            "message": f"Test execution completed for project {project_key}. Ran {len(all_execution_results)} tests."}
 
 
 async def _generate_test_report(all_execution_results, project_key, test_management_client):
@@ -238,6 +497,51 @@ async def _generate_test_report(all_execution_results, project_key, test_managem
     test_management_client.create_test_execution(all_execution_results, project_key, test_cycle_key)
     reporting_client = get_test_reporting_client(str(Path(__file__).resolve().parent.parent.resolve()))
     reporting_client.generate_report(all_execution_results)
+
+
+async def _request_incident_creation_for_failed_tests(
+        all_execution_results: List[TestExecutionResult],
+) -> None:
+    """
+    Process all failed test execution results and create incidents for each.
+
+    Args:
+        all_execution_results: List of all test execution results to process.
+    """
+    failed_results = [
+        result for result in all_execution_results
+        if result.testExecutionStatus in ["failed", "error"]
+    ]
+
+    if not failed_results:
+        logger.info("No failed tests found. Skipping incident creation.")
+        return
+
+    logger.info(f"Found {len(failed_results)} failed test(s). Creating incidents in parallel.")
+
+    async def _create_incident_for_result(result: TestExecutionResult) -> None:
+        """Helper coroutine to create incident for a single failed test result."""
+        logger.info(f"Test case {result.testCaseKey} failed. Initiating incident creation.")
+        try:
+            incident_input = IncidentCreationInput(
+                test_case=result.test_case,
+                test_execution_result=str(result.generalErrorMessage),
+                test_step_results=result.stepResults,
+                system_description=result.system_description,
+                issue_priority_field_id=config.IncidentCreationAgentConfig.ISSUE_PRIORITY_FIELD_ID
+            )
+
+            incident_result = await _request_incident_creation(incident_input, result.artifacts or [])
+            result.incident_creation_result = incident_result
+            logger.info(
+                f"Incident creation completed for test case {result.testCaseKey}. "
+                f"Incident key: {incident_result.incident_key if incident_result else 'N/A'}"
+            )
+        except Exception as e:
+            logger.exception(f"Failed to create incident for test case {result.testCaseKey}.")
+
+    # Execute all incident creations in parallel
+    await asyncio.gather(*[_create_incident_for_result(result) for result in failed_results])
 
 
 async def _request_all_test_cases_execution(grouped_test_cases):
@@ -264,7 +568,7 @@ async def _group_test_cases_by_labels(automated_test_cases):
 
 
 async def _select_execution_agents_for_each_test_label(labels: List[str]) -> Dict[str, List[str]]:
-    if not agent_registry:
+    if await agent_registry.is_empty():
         logger.warning("Agent registry is empty. Cannot select any execution agents.")
         return {label: [] for label in labels}
 
@@ -286,61 +590,106 @@ async def _select_execution_agents_for_each_test_label(labels: List[str]) -> Dic
 
 async def _execute_test_group(test_type: str, test_cases: List[TestCase],
                               agent_ids: List[str]) -> List[TestExecutionResult]:
-    logger.info(
-        f"Starting execution of {len(test_cases)} tests for type: '{test_type}' using agents: {[agent_registry[agent_id].name for agent_id in agent_ids if agent_id in agent_registry]}")
+    # Filter agents that are actually in the registry
+    valid_agent_ids = []
+    for aid in agent_ids:
+        if await agent_registry.contains(aid):
+            valid_agent_ids.append(aid)
 
-    if not agent_ids:
+    agent_names = []
+    for aid in valid_agent_ids:
+        agent_names.append(await agent_registry.get_name(aid))
+
+    logger.info(
+        f"Starting execution of {len(test_cases)} tests for type: '{test_type}' using agents: {agent_names}")
+
+    if not valid_agent_ids:
         logger.warning(f"No agents available for test type '{test_type}', skipping execution.")
         return []
 
-    tests_to_run = test_cases.copy()
-    available_agent_ids = agent_ids.copy()
-    final_results = []
+    queue = asyncio.Queue()
+    for tc in test_cases:
+        queue.put_nowait((tc, test_type))
 
-    while tests_to_run and available_agent_ids:
-        tasks = []
-        task_mapping = {}
-        batch_size = min(len(available_agent_ids), len(tests_to_run))
-        current_batch_tests = [tests_to_run.pop(0) for _ in range(batch_size)]
-        agents_for_batch = available_agent_ids[:batch_size]
+    results: List[TestExecutionResult] = []
+    workers = []
+    for agent_id in valid_agent_ids:
+        workers.append(asyncio.create_task(_agent_worker(agent_id, queue, results, valid_agent_ids)))
 
-        for i, test_case in enumerate(current_batch_tests):
-            agent_id = agents_for_batch[i]
-            agent_name = agent_registry[agent_id].name
-            logger.debug(f"Assigning test case {test_case.key} to agent {agent_name} (ID: {agent_id})")
-            tasks.append(_execute_single_test(agent_id, test_case, test_type))
-            task_mapping[i] = (agent_id, test_case)
+    # Wait for all items in the queue to be processed
+    await queue.join()
 
-        if not tasks:
-            break
+    # Cancel all workers
+    for worker in workers:
+        worker.cancel()
 
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+    # Wait for workers to finish cancelling
+    await asyncio.gather(*workers, return_exceptions=True)
 
-        failed_agent_ids = set()
-        for i, res in enumerate(results):
-            agent_id, test_case = task_mapping[i]
-            if isinstance(res, Exception):
-                agent_name = agent_registry.get(agent_id).name if agent_registry.get(agent_id) else agent_id
-                logger.error(f"Agent {agent_name} failed to execute test case {test_case.key}. Error: {res}. "
-                             f"Re-queueing test.")
-                tests_to_run.append(test_case)
-                failed_agent_ids.add(agent_id)
-            elif res:
-                final_results.append(res)
+    return results
 
-        if failed_agent_ids:
-            available_agent_ids = [aid for aid in available_agent_ids if aid not in failed_agent_ids]
-            for agent_id in failed_agent_ids:
-                if agent_id in agent_registry:
-                    logger.warning(f"Removing agent {agent_registry[agent_id].name} (ID: {agent_id}) from registry "
-                                   f"due to execution failure.")
-                    del agent_registry[agent_id]
 
-    if tests_to_run:
-        logger.warning(
-            f"Could not execute the following test cases due to lack of available agents: {[tc.key for tc in tests_to_run]}")
+async def _agent_worker(agent_id: str, queue: asyncio.Queue, results: List[TestExecutionResult], pool_agent_ids: List[str]):
+    logger.info(f"Agent worker started for agent {agent_id}")
+    try:
+        while True:
+            status = await agent_registry.get_status(agent_id)
+            if status != AgentStatus.AVAILABLE:
+                if status == AgentStatus.BROKEN:
+                    logger.warning(f"Agent {agent_id} is BROKEN. Worker stopping.")
+                    break
+                await asyncio.sleep(1)
+                continue
 
-    return final_results
+            test_case, test_type = await queue.get()
+            try:
+                result = await _execute_single_test(agent_id, test_case, test_type)
+                if result:
+                    results.append(result)
+            except Exception as e:
+                logger.exception(f"Error in worker for agent {agent_id}.")
+                # Mark agent as BROKEN - task execution failed
+                await agent_registry.update_status(
+                    agent_id, AgentStatus.BROKEN, BrokenReason.TASK_STUCK
+                )
+
+                # Check if any other agents in the pool are still alive (not BROKEN)
+                any_agents_alive = False
+                for other_id in pool_agent_ids:
+                    if other_id != agent_id:
+                        status = await agent_registry.get_status(other_id)
+                        if status != AgentStatus.BROKEN:
+                            any_agents_alive = True
+                            break
+
+                if any_agents_alive:
+                    # Retry logic: Put back in queue
+                    logger.info(f"Agent {agent_id} broken, but other agents available. Re-queueing task.")
+                    queue.put_nowait((test_case, test_type))
+                else:
+                    # Last agent standing failed. Report error.
+                    logger.error(f"All agents for this group are broken. Returning failed result for test case {test_case.key}.")
+                    agent_name = await agent_registry.get_name(agent_id)
+                    failed_result = TestExecutionResult(
+                        stepResults=[],
+                        testCaseKey=test_case.key,
+                        testCaseName=test_case.name,
+                        testExecutionStatus="error",
+                        generalErrorMessage=f"All agents failed. Last error from {agent_name}: {e}",
+                        start_timestamp=datetime.now().isoformat(),
+                        end_timestamp=datetime.now().isoformat(),
+                        system_description=f"Agent: {agent_name} (Failed - No Retry Available)",
+                        test_case=test_case
+                    )
+                    results.append(failed_result)
+
+                queue.task_done()
+                break  # Exit worker as agent is broken
+            queue.task_done()
+    except asyncio.CancelledError:
+        logger.info(f"Agent worker for {agent_id} cancelled.")
+    except Exception as e:
+        logger.exception(f"Unexpected error in agent worker {agent_id}: {e}")
 
 
 async def _execute_single_test(agent_id: str, test_case: TestCase,
@@ -350,26 +699,22 @@ async def _execute_single_test(agent_id: str, test_case: TestCase,
     artifacts = []
     start_timestamp = datetime.now()
     try:
-        completed_task = await _send_task_to_agent(agent_id, execution_request.model_dump_json(),
-                                                   task_description)
+        completed_task = await _send_task_to_agent(agent_id, execution_request.model_dump_json(), task_description)
         artifacts = _get_artifacts_from_task(completed_task, task_description)
     except Exception as e:
         _handle_exception(f"Failed to execute test case {test_case.key}. Error: {e}", 500)
     finally:
         end_timestamp = datetime.now()
 
+    agent_name = await agent_registry.get_name(agent_id)
     if not artifacts:
-        _handle_exception(f"No test case execution results received from agent {agent_registry[agent_id].name}", 500)
+        _handle_exception(f"No test case execution results received from agent {agent_name}", 500)
     text_results = _get_text_content_from_artifacts(artifacts, task_description)
     if not text_results:
-        _handle_exception(f"No test case execution information received from agent {agent_registry[agent_id].name}",
+        _handle_exception(f"No test case execution information received from agent {agent_name}",
                           500)
     user_prompt = f"""
-Your input are the following test case execution results:\n```\n{text_results}\n```
-
-Information you need to find: all data of the requested output JSON object.
-
-Result format is a JSON.
+Test case execution results:\n```{text_results}```
 """
     result = await _get_results_extractor_agent(TestExecutionResult).run(user_prompt)
     test_execution_result: TestExecutionResult = result.output
@@ -381,11 +726,53 @@ Result format is a JSON.
         test_execution_result.start_timestamp = start_timestamp.isoformat()
     if not test_execution_result.end_timestamp:
         test_execution_result.end_timestamp = end_timestamp.isoformat()
+    # Extract file artifacts from agent response - logs are included as file parts by the agent
     file_artifacts = _get_file_contents_from_artifacts(artifacts)
     test_execution_result.artifacts = file_artifacts
 
+    if not test_execution_result.system_description:
+        test_execution_result.system_description = f"Agent: {agent_name}, Environment: Standard Test Environment"
+
+    test_execution_result.test_case = test_case
+
     logger.info(f"Executed test case {test_case.key}. Status: {test_execution_result.testExecutionStatus}")
     return test_execution_result
+
+
+async def _request_incident_creation(
+        incident_input: IncidentCreationInput,
+        artifacts: List[FileWithBytes]
+) -> IncidentCreationResult:
+    """Request incident creation with all artifacts sent as file parts.
+    
+    Args:
+        incident_input: The incident creation input JSON.
+        artifacts: All file artifacts to send as file parts in the A2A message.
+        
+    Returns:
+        IncidentCreationResult containing the created incident information.
+    """
+    task_description = "Create incident report"
+    agent_id = await _choose_agent_id(task_description)
+
+    # Create message with JSON text part and ALL artifact file parts
+    message_parts = [TextPart(text=incident_input.model_dump_json())]
+
+    # Add ALL artifacts as file parts (agent will handle them)
+    for artifact in artifacts:
+        message_parts.append(FilePart(file=artifact))
+        logger.info(f"Adding artifact '{artifact.name}' as file part to incident creation message")
+
+    # Create the message
+    message = Message(parts=message_parts, message_id="", role='agent')
+
+    completed_task = await _send_task_to_agent_with_message(agent_id, message, task_description)
+
+    task_description = f"Incident creation for test case {incident_input.test_case.key}"
+    received_artifacts = _get_artifacts_from_task(completed_task, task_description)
+    text_content = _get_text_content_from_artifacts(received_artifacts, task_description)
+    result = IncidentCreationResult.model_validate_json(text_content)
+    return result
 
 
 async def _request_test_cases_generation(user_story_id) -> GeneratedTestCases:
@@ -417,10 +804,10 @@ async def _request_test_cases_classification(test_cases: List[TestCase], user_st
                                     f"Classification of test cases for the user story {user_story_id}")
 
 
-async def _request_test_cases_review(test_cases: List[TestCase]) -> list[Artifact]:
+async def _request_test_cases_review(test_cases: List[TestCase], user_story_id: str) -> list[Artifact]:
     task_description = "Review test cases"
     agent_id = await _choose_agent_id(task_description)
-    completed_task = await _send_task_to_agent(agent_id, f"Test cases:\n{test_cases}", task_description)
+    completed_task = await _send_task_to_agent(agent_id, f"Test cases:\n{test_cases}\nUser Story ID: {user_story_id}", task_description)
     return _get_artifacts_from_task(completed_task, "Review of test cases")
 
 
@@ -460,59 +847,124 @@ def _get_file_contents_from_artifacts(artifacts: list[Artifact]) -> List[FileWit
     return file_parts
 
 
-async def _send_task_to_agent(agent_id: str, input_data: str, task_description: str) -> Task | None:
-    agent_card = agent_registry.get(agent_id, None)
+async def _send_task_to_agent_with_message(agent_id: str, message: Message, task_description: str) -> Task | None:
+    """Send a custom message (with file parts) to an agent.
+
+    Execution logs are expected to arrive from agents as file parts in the task artifacts.
+    Interested parties should extract logs directly from artifacts using get_execution_logs_from_artifacts().
+
+    Args:
+        agent_id: ID of the agent to send the message to.
+        message: The A2A Message object to send (can contain text and file parts).
+        task_description: Description of the task for logging.
+
+    Returns:
+        The completed Task, or None if the task failed to complete.
+    """
+    agent_card = await agent_registry.get_card(agent_id)
     if not agent_card:
         raise ValueError(f"Agent with ID '{agent_id}' is not yet registered with his card")
 
-    async with httpx.AsyncClient(timeout=config.OrchestratorConfig.TASK_EXECUTION_TIMEOUT) as client:
-        client_config = ClientConfig(httpx_client=client)
-        client_factory = ClientFactory(config=client_config)
-        a2a_client = client_factory.create(card=agent_card)
+    # Set BUSY status
+    await agent_registry.update_status(agent_id, AgentStatus.BUSY)
 
-        response_iterator = a2a_client.send_message(new_agent_text_message(input_data))
-        start_time = time.time()
-        last_task = None
-        while (time_left := _get_time_left_for_task_completion_waiting(start_time)) > 0:
-            try:
-                response = await asyncio.wait_for(response_iterator.__anext__(), timeout=time_left)
-            except StopAsyncIteration:
-                if last_task and last_task.status.state in (TaskState.completed, TaskState.failed, TaskState.rejected):
-                    return last_task
-                _handle_exception(f"Task '{task_description}' iterator finished before completion.", 500)
-            except asyncio.TimeoutError:
-                _handle_exception(f"Task '{task_description}' timed out while waiting for completion.", 408)
+    try:
+        async with httpx.AsyncClient(timeout=config.OrchestratorConfig.TASK_EXECUTION_TIMEOUT) as client:
+            client_config = ClientConfig(httpx_client=client)
+            client_factory = ClientFactory(config=client_config)
+            a2a_client = client_factory.create(card=agent_card)
 
-            if isinstance(response, JSONRPCErrorResponse):
-                _handle_exception(f"Couldn't execute the task '{task_description}'. Root cause: {response.error}")
+            response_iterator = a2a_client.send_message(message)
+            start_time = time.time()
+            last_task = None
 
-            if isinstance(response, tuple):
-                task, _ = response
-                last_task = task
-                if task.status.state in (TaskState.completed, TaskState.failed, TaskState.rejected):
-                    logger.info(f"Task '{task_description}' was completed with status '{str(task.status.state)}'.")
-                    return task
-                else:
-                    logger.debug(
-                        f"Task for {task_description} is still in '{task.status.state}' state. Waiting for its "
-                        f"completion. Agent: '{agent_card.name}' (ID: {agent_id})")
-            elif isinstance(response, Message):
-                logger.info(
-                    f"Received a message from agent in the scope of the "
-                    f"task '{task_description}': {get_message_text(response)}")
+            while (time_left := _get_time_left_for_task_completion_waiting(start_time)) > 0:
+                try:
+                    response = await asyncio.wait_for(response_iterator.__anext__(), timeout=time_left)
+                except StopAsyncIteration:
+                    if last_task and last_task.status.state in (TaskState.completed, TaskState.failed, TaskState.rejected):
+                        await agent_registry.update_status(agent_id, AgentStatus.AVAILABLE)
+                        return last_task
+                    _handle_exception(f"Task '{task_description}' iterator finished before completion.", 500)
+                except asyncio.TimeoutError:
+                    logger.error(f"Task '{task_description}' timed out while waiting for completion.")
+                    # Get task ID if available for tracking
+                    stuck_task_id = last_task.id if last_task else None
+                    try:
+                        await agent_registry.update_status(
+                            agent_id, AgentStatus.BROKEN, BrokenReason.TASK_STUCK, stuck_task_id
+                        )
+                        await cancellation_queue.put((agent_id, time.time()))
+                    except Exception as ex:
+                        logger.exception(f"Error handling timeout for agent {agent_id}.")
+                        await agent_registry.update_status(
+                            agent_id, AgentStatus.BROKEN, BrokenReason.TASK_STUCK, stuck_task_id
+                        )
 
-        _handle_exception(f"Task for {task_description} wasn't complete within timeout.", 408)
-        return None
+                    _handle_exception(f"Task '{task_description}' timed out while waiting for completion.", 408)
+
+                if isinstance(response, JSONRPCErrorResponse):
+                    _handle_exception(f"Couldn't execute the task '{task_description}'. Root cause: {response.error}")
+
+                if isinstance(response, tuple):
+                    task, _ = response
+                    last_task = task
+                    if task.status.state in (TaskState.completed, TaskState.failed, TaskState.rejected):
+                        logger.info(f"Task '{task_description}' was completed with status '{str(task.status.state)}'.")
+                        await agent_registry.update_status(agent_id, AgentStatus.AVAILABLE)
+                        return task
+                    else:
+                        logger.debug(
+                            f"Task for {task_description} is still in '{task.status.state}' state. Waiting for its "
+                            f"completion. Agent: '{agent_card.name}' (ID: {agent_id})")
+                elif isinstance(response, Message):
+                    msg_text = get_message_text(response)
+                    logger.info(
+                        f"Received a message from agent in the scope of the "
+                        f"task '{task_description}': {msg_text}")
+
+            _handle_exception(f"Task for {task_description} wasn't complete within timeout.", 408)
+            return None
+
+    except Exception as e:
+        logger.exception(f"Error communicating with agent {agent_id}.")
+        # Connection/communication error likely means agent is offline
+        await agent_registry.update_status(agent_id, AgentStatus.BROKEN, BrokenReason.OFFLINE)
+        await cancellation_queue.put((agent_id, time.time()))
+        raise e
+
+
+async def _send_task_to_agent(agent_id: str, input_data: str, task_description: str) -> Task | None:
+    """Send a text message to an agent.
+
+    This is a convenience wrapper around _send_task_to_agent_with_message that
+    creates a simple text message from the input string.
+
+    Execution logs are expected to arrive from agents as file parts in the task artifacts.
+    Interested parties should extract logs directly from artifacts using get_execution_logs_from_artifacts().
+
+    Args:
+        agent_id: ID of the agent to send the message to.
+        input_data: The text content to send to the agent.
+        task_description: Description of the task for logging.
+
+    Returns:
+        The completed Task, or None if the task failed to complete.
+    """
+    message = new_agent_text_message(input_data)
+    return await _send_task_to_agent_with_message(agent_id, message, task_description)
 
 
 async def _choose_agent_id(agent_task_description):
-    if not agent_registry:
+    if await agent_registry.is_empty():
         _handle_exception("Orchestrator has currently no registered agents.", 404)
     agent_id = await _select_agent(agent_task_description)
     if not agent_id:
         _handle_exception(f"No agent found to handle the task '{agent_task_description}'.", 404)
+
+    agent_name = await agent_registry.get_name(agent_id)
     logger.info(
-        f"Selected agent '{agent_registry[agent_id].name}' (ID: {agent_id}) for task '{agent_task_description}'.")
+        f"Selected agent '{agent_name}' (ID: {agent_id}) for task '{agent_task_description}'.")
     return agent_id
 
 
@@ -557,16 +1009,21 @@ The list of all registered with you agents:\n{agents_info}
 
     result = await multi_discovery_agent.run(user_prompt)
     selected_agent_ids = result.output.ids or []
-    valid_agent_ids = [agent_id for agent_id in selected_agent_ids if agent_id in agent_registry]
+    valid_agent_ids = []
+    for agent_id in selected_agent_ids:
+        if await agent_registry.contains(agent_id):
+            valid_agent_ids.append(agent_id)
+
     for agent_id in valid_agent_ids:
-        agent_name = agent_registry[agent_id].name
+        agent_name = await agent_registry.get_name(agent_id)
         logger.info(f"Selected agent '{agent_name}' with ID '{agent_id}' for task '{task_description}'.")
     return valid_agent_ids
 
 
 async def _get_agents_info():
     agents_info = ""
-    for agent_id, card in agent_registry.items():
+    all_cards = await agent_registry.get_all_cards()
+    for agent_id, card in all_cards.items():
         agents_info += (f"- Name: {card.name}, ID: {agent_id}, Description: {card.description}, Skills: "
                         f"{"; ".join(skill.description for skill in card.skills)}\n")
     return agents_info
@@ -582,7 +1039,7 @@ The list of all registered with you agents:\n{agents_info}
 """
     result = await discovery_agent.run(user_prompt)
     selected_agent_id = result.output.id or None
-    if selected_agent_id and selected_agent_id in agent_registry:
+    if selected_agent_id and await agent_registry.contains(selected_agent_id):
         return selected_agent_id
     return None
 
@@ -604,12 +1061,52 @@ async def _fetch_agent_card(agent_base_url: str) -> AgentCard | None:
         return None
 
 
+async def _check_agent_reachability(agent_base_url: str) -> bool:
+    agent_card_url = f"{agent_base_url}/.well-known/agent-card.json"
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(agent_card_url,
+                                         timeout=config.OrchestratorConfig.AGENT_DISCOVERY_TIMEOUT_SECONDS)
+            return response.status_code == 200
+    except Exception:
+        return False
+
+
+async def _process_url_discovery(url: str):
+    existing_agent_id = await agent_registry.get_agent_id_by_url(url)
+    if existing_agent_id:
+        if await _check_agent_reachability(url):
+            status = await agent_registry.get_status(existing_agent_id)
+            if status == AgentStatus.BROKEN:
+                broken_reason, _ = await agent_registry.get_broken_context(existing_agent_id)
+                if broken_reason == BrokenReason.OFFLINE:
+                    logger.info(
+                        f"Agent {existing_agent_id} (URL: {url}) was OFFLINE "
+                        f"but is now responsive. Resetting to AVAILABLE."
+                    )
+                    await agent_registry.update_status(existing_agent_id, AgentStatus.AVAILABLE)
+        else:
+            logger.info(f"Agent {existing_agent_id} at {url} is unreachable. Removing from registry.")            
+            await agent_registry.remove(existing_agent_id)
+    else:        
+        agent_card = await _fetch_agent_card(url)
+        if agent_card:            
+            existing_agent_id = await agent_registry.get_agent_id_by_url(agent_card.url)
+            if existing_agent_id:
+                logger.debug(f"Agent with URL {agent_card.url} is already registered with ID {existing_agent_id}.")
+            else:                
+                new_agent_id = str(uuid4())
+                await agent_registry.register(new_agent_id, agent_card)
+                logger.info(f"Discovered and registered agent with URL: {agent_card.url}")
+
+
 async def _discover_agents():
     """
     Discovers remote agents by scanning a port range on each of the configured base URLs.
+    Checks reachability of existing agents and discovers new ones.
     """
-    agent_base_urls_str = config.REMOTE_EXECUTION_AGENT_HOSTS
-    port_range_str = config.AGENT_DISCOVERY_PORTS
+    agent_base_urls_str = config.OrchestratorConfig.REMOTE_EXECUTION_AGENT_HOSTS
+    port_range_str = config.OrchestratorConfig.AGENT_DISCOVERY_PORTS
 
     if not agent_base_urls_str or not port_range_str:
         logger.info("Agent discovery configuration is incomplete. "
@@ -634,24 +1131,8 @@ async def _discover_agents():
         logger.warning("No agent URLs were generated for discovery.")
         return
 
-    tasks = [_fetch_agent_card(url) for url in set(remote_agent_urls)]
-    found_urls = []
-    for agent_card in await asyncio.gather(*tasks):
-        if agent_card:
-            # Check if an agent with this URL is already registered
-            already_registered = False
-            for agent_id, existing_card in agent_registry.items():
-                if existing_card.url == agent_card.url:
-                    logger.info(f"Agent with URL {agent_card.url} is already registered with ID {agent_id}. Skipping.")
-                    already_registered = True
-                    break
-            if not already_registered:
-                agent_id = str(uuid4())
-                agent_registry[agent_id] = agent_card
-                found_urls.append(agent_card.url)
-
-    if found_urls:
-        logger.info(f"Discovered and pre-registered agents with following URLs: {', '.join(found_urls)}")
+    tasks = [_process_url_discovery(url) for url in set(remote_agent_urls)]
+    await asyncio.gather(*tasks)
 
 
 if __name__ == "__main__":

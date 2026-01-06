@@ -46,17 +46,21 @@ class AllureClient(TestReportingClientBase):
         test_result.start = int(
             datetime.fromisoformat(test_execution_result.start_timestamp.replace("Z", "+00:00")).timestamp() * 1000)
 
+        # Extract logs from artifacts if available using the common utility
+        logs_list = utils.get_execution_logs_from_artifacts(test_execution_result.artifacts)
+        logs = "\n\n".join(logs_list) if logs_list else None
+
         # Map test status
         if test_execution_result.testExecutionStatus == "passed":
             test_result.status = Status.PASSED
         elif test_execution_result.testExecutionStatus == "failed":
             test_result.status = Status.FAILED
             test_result.statusDetails = StatusDetails(message=test_execution_result.generalErrorMessage,
-                                                      trace=test_execution_result.logs)
+                                                      trace=logs)
         elif test_execution_result.testExecutionStatus == "error":
             test_result.status = Status.BROKEN
             test_result.statusDetails = StatusDetails(message=test_execution_result.generalErrorMessage,
-                                                      trace=test_execution_result.logs)
+                                                      trace=logs)
 
         # Add steps
         for step_result in test_execution_result.stepResults:
@@ -99,7 +103,7 @@ class AllureClient(TestReportingClientBase):
             subprocess.run(command, check=True, capture_output=True, text=True)
             logger.info("Allure report generated successfully.")
         except subprocess.CalledProcessError as e:
-            logger.error(f"Failed to generate Allure report: {e}")
+            logger.exception(f"Failed to generate Allure report.")
             logger.error(f"Stdout: {e.stdout}")
             logger.error(f"Stderr: {e.stderr}")
             raise

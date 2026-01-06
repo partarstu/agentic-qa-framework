@@ -7,6 +7,10 @@ steps:
   - name: 'gcr.io/cloud-builders/docker'
     args: [ 'build', '-t', 'agentic-qa-base:latest', '-f', 'Dockerfile.base', '.' ]
 
+  # Build the embedding-service image
+  - name: 'gcr.io/cloud-builders/docker'
+    args: [ 'build', '-t', 'gcr.io/$PROJECT_ID/embedding-service', '-f', 'services/embedding_service/Dockerfile', '.' ]
+
   # Build the orchestrator image
   - name: 'gcr.io/cloud-builders/docker'
     args: [ 'build', '-t', 'gcr.io/$PROJECT_ID/orchestrator', '-f', 'orchestrator/Dockerfile', '.' ]
@@ -27,6 +31,14 @@ steps:
   - name: 'gcr.io/cloud-builders/docker'
     args: [ 'build', '-t', 'gcr.io/$PROJECT_ID/test-case-review-agent', '-f', 'agents/test_case_review/Dockerfile', '.' ]
 
+  # Build the incident-creation-agent image
+  - name: 'gcr.io/cloud-builders/docker'
+    args: [ 'build', '-t', 'gcr.io/$PROJECT_ID/incident-creation-agent', '-f', 'agents/incident_creation/Dockerfile', '.' ]
+
+  # Build the jira-rag-agent image
+  - name: 'gcr.io/cloud-builders/docker'
+    args: [ 'build', '-t', 'gcr.io/$PROJECT_ID/jira-rag-agent', '-f', 'agents/jira_rag/Dockerfile', '.' ]
+
   # Push the images to Container Registry
   - name: 'gcr.io/cloud-builders/docker'
     args: [ 'push', 'gcr.io/$PROJECT_ID/orchestrator' ]
@@ -38,6 +50,12 @@ steps:
     args: [ 'push', 'gcr.io/$PROJECT_ID/test-case-classification-agent' ]
   - name: 'gcr.io/cloud-builders/docker'
     args: [ 'push', 'gcr.io/$PROJECT_ID/test-case-review-agent' ]
+  - name: 'gcr.io/cloud-builders/docker'
+    args: [ 'push', 'gcr.io/$PROJECT_ID/embedding-service' ]
+  - name: 'gcr.io/cloud-builders/docker'
+    args: [ 'push', 'gcr.io/$PROJECT_ID/incident-creation-agent' ]
+  - name: 'gcr.io/cloud-builders/docker'
+    args: [ 'push', 'gcr.io/$PROJECT_ID/jira-rag-agent' ]
 
   # Deploy to Cloud Run
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
@@ -61,7 +79,52 @@ steps:
       - '--port=9000'
       - '--args=--transport,sse,--port,9000,-vv'
       - '--add-volume=type=cloud-storage,name=jira-volume,bucket=$_BUCKET_NAME,mount-options=only-dir=$_JIRA_ATTACHMENTS_FOLDER'
-      - '--add-volume-mount=volume=jira-volume,mount-path=/tmp'
+      - '--add-volume-mount=volume=jira-volume,mount-path=$_JIRA_MCP_SERVER_ATTACHMENTS_MOUNT_PATH'
+      - '--concurrency=5'
+
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'beta'
+      - 'run'
+      - 'deploy'
+      - 'embedding-service'
+      - '--image=gcr.io/$PROJECT_ID/embedding-service'
+      - '--network=agent-network'
+      - '--subnet=agent-network'
+      - '--ingress=internal'
+      - '--vpc-egress=private-ranges-only'
+      - '--platform=managed'
+      - '--region=us-central1'
+      - '--allow-unauthenticated'
+      - '--memory=8Gi'
+      - '--max-instances=1'
+      - '--port=8080'
+      - '--concurrency=5'
+
+  # Deploy Qdrant Vector DB to Cloud Run
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'beta'
+      - 'run'
+      - 'deploy'
+      - 'qdrant-vector-db'
+      - '--image=qdrant/qdrant:latest'
+      - '--network=agent-network'
+      - '--subnet=agent-network'
+      - '--ingress=internal'
+      - '--vpc-egress=private-ranges-only'
+      - '--platform=managed'
+      - '--region=us-central1'
+      - '--allow-unauthenticated'
+      - '--memory=2Gi'
+      - '--cpu=1'
+      - '--max-instances=1'
+      - '--port=6333'
+      - '--add-volume=type=cloud-storage,name=qdrant-storage,bucket=$_BUCKET_NAME,mount-options=only-dir=$_QDRANT_STORAGE_FOLDER'
+      - '--add-volume-mount=volume=qdrant-storage,mount-path=/qdrant/storage'
+      - '--set-secrets=QDRANT__SERVICE__API_KEY=QDRANT_API_KEY:latest'
       - '--concurrency=5'
 
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
@@ -80,12 +143,14 @@ steps:
       - '--allow-unauthenticated'
       - '--memory=4Gi'
       - '--max-instances=1'
-      - '--concurrency=1'
+      - '--concurrency=5'
       - '--set-env-vars=^;^REMOTE_EXECUTION_AGENT_HOSTS=$_REMOTE_EXECUTION_AGENT_HOSTS'
-      - '--set-env-vars=AGENT_DISCOVERY_PORTS=443-443,GOOGLE_CLOUD_LOGGING_ENABLED=true,USE_CLOUD_STORAGE=true,CLOUD_STORAGE_BUCKET_NAME=$_BUCKET_NAME,JIRA_ATTACHMENTS_CLOUD_STORAGE_FOLDER=$_JIRA_ATTACHMENTS_FOLDER'
-      - '--set-secrets=GOOGLE_API_KEY=GOOGLE_API_KEY:latest,JIRA_API_TOKEN=JIRA_API_TOKEN:latest,JIRA_USERNAME=JIRA_USERNAME:latest,ZEPHYR_API_TOKEN=ZEPHYR_API_TOKEN:latest,JIRA_URL=JIRA_URL:latest,ZEPHYR_BASE_URL=ZEPHYR_BASE_URL:latest,ORCHESTRATOR_API_KEY=ORCHESTRATOR_API_KEY:latest'
+      - '--set-env-vars=AGENT_DISCOVERY_PORTS=443-443,GOOGLE_CLOUD_LOGGING_ENABLED=true,QDRANT_URL=$_QDRANT_URL,ATTACHMENTS_LOCAL_DESTINATION_FOLDER_PATH=$_LOCAL_ATTACHMENTS_MOUNT_PATH,MCP_SERVER_ATTACHMENTS_FOLDER_PATH=$_JIRA_MCP_SERVER_ATTACHMENTS_MOUNT_PATH'
+      - '--set-secrets=GOOGLE_API_KEY=GOOGLE_API_KEY:latest,JIRA_API_TOKEN=JIRA_API_TOKEN:latest,JIRA_USERNAME=JIRA_USERNAME:latest,ZEPHYR_API_TOKEN=ZEPHYR_API_TOKEN:latest,JIRA_URL=JIRA_URL:latest,ZEPHYR_BASE_URL=ZEPHYR_BASE_URL:latest,ORCHESTRATOR_API_KEY=ORCHESTRATOR_API_KEY:latest,QDRANT_API_KEY=QDRANT_API_KEY:latest'
       - '--add-volume=type=cloud-storage,name=gcs-allure-reports,bucket=$_ALLURE_REPORTS_BUCKET'
       - '--add-volume-mount=volume=gcs-allure-reports,mount-path=$_ALLURE_REPORTS_CONTAINER_PATH'
+      - '--add-volume=type=cloud-storage,name=jira-volume,bucket=$_BUCKET_NAME,mount-options=only-dir=$_JIRA_ATTACHMENTS_FOLDER'
+      - '--add-volume-mount=volume=jira-volume,mount-path=$_LOCAL_ATTACHMENTS_MOUNT_PATH'
       - '--timeout=$_ORCHESTRATOR_REQUEST_TIMEOUT'
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: gcloud
@@ -103,10 +168,12 @@ steps:
       - '--allow-unauthenticated'
       - '--memory=3Gi'
       - '--max-instances=1'
-      - '--concurrency=1'
+      - '--concurrency=2'
       - '--set-secrets=GOOGLE_API_KEY=GOOGLE_API_KEY:latest,JIRA_API_TOKEN=JIRA_API_TOKEN:latest,JIRA_USERNAME=JIRA_USERNAME:latest,ZEPHYR_API_TOKEN=ZEPHYR_API_TOKEN:latest,JIRA_URL=JIRA_URL:latest,JIRA_MCP_SERVER_URL=JIRA_MCP_SERVER_URL:latest,ZEPHYR_BASE_URL=ZEPHYR_BASE_URL:latest'
-      - '--set-env-vars=USE_CLOUD_STORAGE=true,GOOGLE_CLOUD_LOGGING_ENABLED=true,AGENT_BASE_URL=$_REQUIREMENTS_REVIEW_AGENT_BASE_URL,CLOUD_STORAGE_BUCKET_NAME=$_BUCKET_NAME,JIRA_ATTACHMENTS_CLOUD_STORAGE_FOLDER=$_JIRA_ATTACHMENTS_FOLDER,EXTERNAL_PORT=443'
+      - '--set-env-vars=GOOGLE_CLOUD_LOGGING_ENABLED=true,AGENT_BASE_URL=$_REQUIREMENTS_REVIEW_AGENT_BASE_URL,EXTERNAL_PORT=443,EMBEDDING_SERVICE_URL=$_EMBEDDING_SERVICE_URL,ATTACHMENTS_LOCAL_DESTINATION_FOLDER_PATH=$_LOCAL_ATTACHMENTS_MOUNT_PATH,MCP_SERVER_ATTACHMENTS_FOLDER_PATH=$_JIRA_MCP_SERVER_ATTACHMENTS_MOUNT_PATH'
       - '--port=8001'
+      - '--add-volume=type=cloud-storage,name=jira-volume,bucket=$_BUCKET_NAME,mount-options=only-dir=$_JIRA_ATTACHMENTS_FOLDER'
+      - '--add-volume-mount=volume=jira-volume,mount-path=$_LOCAL_ATTACHMENTS_MOUNT_PATH'
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: gcloud
     args:
@@ -123,10 +190,12 @@ steps:
       - '--allow-unauthenticated'
       - '--memory=3Gi'
       - '--max-instances=1'
-      - '--concurrency=1'
+      - '--concurrency=2'
       - '--set-secrets=GOOGLE_API_KEY=GOOGLE_API_KEY:latest,JIRA_API_TOKEN=JIRA_API_TOKEN:latest,JIRA_USERNAME=JIRA_USERNAME:latest,ZEPHYR_API_TOKEN=ZEPHYR_API_TOKEN:latest,JIRA_URL=JIRA_URL:latest,JIRA_MCP_SERVER_URL=JIRA_MCP_SERVER_URL:latest,ZEPHYR_BASE_URL=ZEPHYR_BASE_URL:latest'
-      - '--set-env-vars=USE_CLOUD_STORAGE=true,GOOGLE_CLOUD_LOGGING_ENABLED=true,AGENT_BASE_URL=$_TEST_CASE_GENERATION_AGENT_BASE_URL,CLOUD_STORAGE_BUCKET_NAME=$_BUCKET_NAME,JIRA_ATTACHMENTS_CLOUD_STORAGE_FOLDER=$_JIRA_ATTACHMENTS_FOLDER,EXTERNAL_PORT=443'
+      - '--set-env-vars=GOOGLE_CLOUD_LOGGING_ENABLED=true,AGENT_BASE_URL=$_TEST_CASE_GENERATION_AGENT_BASE_URL,EXTERNAL_PORT=443,EMBEDDING_SERVICE_URL=$_EMBEDDING_SERVICE_URL,ATTACHMENTS_LOCAL_DESTINATION_FOLDER_PATH=$_LOCAL_ATTACHMENTS_MOUNT_PATH,MCP_SERVER_ATTACHMENTS_FOLDER_PATH=$_JIRA_MCP_SERVER_ATTACHMENTS_MOUNT_PATH'
       - '--port=8001'
+      - '--add-volume=type=cloud-storage,name=jira-volume,bucket=$_BUCKET_NAME,mount-options=only-dir=$_JIRA_ATTACHMENTS_FOLDER'
+      - '--add-volume-mount=volume=jira-volume,mount-path=$_LOCAL_ATTACHMENTS_MOUNT_PATH'
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: gcloud
     args:
@@ -143,10 +212,12 @@ steps:
       - '--allow-unauthenticated'
       - '--memory=3Gi'
       - '--max-instances=1'
-      - '--concurrency=1'
+      - '--concurrency=2'
       - '--set-secrets=GOOGLE_API_KEY=GOOGLE_API_KEY:latest,JIRA_API_TOKEN=JIRA_API_TOKEN:latest,JIRA_USERNAME=JIRA_USERNAME:latest,ZEPHYR_API_TOKEN=ZEPHYR_API_TOKEN:latest,JIRA_URL=JIRA_URL:latest,JIRA_MCP_SERVER_URL=JIRA_MCP_SERVER_URL:latest,ZEPHYR_BASE_URL=ZEPHYR_BASE_URL:latest'
-      - '--set-env-vars=USE_CLOUD_STORAGE=true,GOOGLE_CLOUD_LOGGING_ENABLED=true,AGENT_BASE_URL=$_TEST_CASE_CLASSIFICATION_AGENT_BASE_URL,CLOUD_STORAGE_BUCKET_NAME=$_BUCKET_NAME,JIRA_ATTACHMENTS_CLOUD_STORAGE_FOLDER=$_JIRA_ATTACHMENTS_FOLDER,EXTERNAL_PORT=443'
+      - '--set-env-vars=GOOGLE_CLOUD_LOGGING_ENABLED=true,AGENT_BASE_URL=$_TEST_CASE_CLASSIFICATION_AGENT_BASE_URL,EXTERNAL_PORT=443,EMBEDDING_SERVICE_URL=$_EMBEDDING_SERVICE_URL,ATTACHMENTS_LOCAL_DESTINATION_FOLDER_PATH=$_LOCAL_ATTACHMENTS_MOUNT_PATH,MCP_SERVER_ATTACHMENTS_FOLDER_PATH=$_JIRA_MCP_SERVER_ATTACHMENTS_MOUNT_PATH'
       - '--port=8001'
+      - '--add-volume=type=cloud-storage,name=jira-volume,bucket=$_BUCKET_NAME,mount-options=only-dir=$_JIRA_ATTACHMENTS_FOLDER'
+      - '--add-volume-mount=volume=jira-volume,mount-path=$_LOCAL_ATTACHMENTS_MOUNT_PATH'
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: gcloud
     args:
@@ -163,13 +234,62 @@ steps:
       - '--allow-unauthenticated'
       - '--memory=3Gi'
       - '--max-instances=1'
-      - '--concurrency=1'
+      - '--concurrency=2'
       - '--set-secrets=GOOGLE_API_KEY=GOOGLE_API_KEY:latest,JIRA_API_TOKEN=JIRA_API_TOKEN:latest,JIRA_USERNAME=JIRA_USERNAME:latest,ZEPHYR_API_TOKEN=ZEPHYR_API_TOKEN:latest,JIRA_URL=JIRA_URL:latest,JIRA_MCP_SERVER_URL=JIRA_MCP_SERVER_URL:latest,ZEPHYR_BASE_URL=ZEPHYR_BASE_URL:latest'
-      - '--set-env-vars=USE_CLOUD_STORAGE=true,GOOGLE_CLOUD_LOGGING_ENABLED=true,AGENT_BASE_URL=$_TEST_CASE_REVIEW_AGENT_BASE_URL,CLOUD_STORAGE_BUCKET_NAME=$_BUCKET_NAME,JIRA_ATTACHMENTS_CLOUD_STORAGE_FOLDER=$_JIRA_ATTACHMENTS_FOLDER,EXTERNAL_PORT=443'
+      - '--set-env-vars=GOOGLE_CLOUD_LOGGING_ENABLED=true,AGENT_BASE_URL=$_TEST_CASE_REVIEW_AGENT_BASE_URL,EXTERNAL_PORT=443,EMBEDDING_SERVICE_URL=$_EMBEDDING_SERVICE_URL,ATTACHMENTS_LOCAL_DESTINATION_FOLDER_PATH=$_LOCAL_ATTACHMENTS_MOUNT_PATH,MCP_SERVER_ATTACHMENTS_FOLDER_PATH=$_JIRA_MCP_SERVER_ATTACHMENTS_MOUNT_PATH'
       - '--port=8001'
+      - '--add-volume=type=cloud-storage,name=jira-volume,bucket=$_BUCKET_NAME,mount-options=only-dir=$_JIRA_ATTACHMENTS_FOLDER'
+      - '--add-volume-mount=volume=jira-volume,mount-path=$_LOCAL_ATTACHMENTS_MOUNT_PATH'
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'beta'
+      - 'run'
+      - 'deploy'
+      - 'incident-creation-agent'
+      - '--image=gcr.io/$PROJECT_ID/incident-creation-agent'
+      - '--platform=managed'
+      - '--ingress=internal'
+      - '--network=agent-network'
+      - '--subnet=agent-network'
+      - '--vpc-egress=all-traffic'
+      - '--region=us-central1'
+      - '--allow-unauthenticated'
+      - '--memory=3Gi'
+      - '--max-instances=1'
+      - '--concurrency=2'
+      - '--set-secrets=GOOGLE_API_KEY=GOOGLE_API_KEY:latest,JIRA_API_TOKEN=JIRA_API_TOKEN:latest,JIRA_USERNAME=JIRA_USERNAME:latest,ZEPHYR_API_TOKEN=ZEPHYR_API_TOKEN:latest,JIRA_URL=JIRA_URL:latest,JIRA_MCP_SERVER_URL=JIRA_MCP_SERVER_URL:latest,ZEPHYR_BASE_URL=ZEPHYR_BASE_URL:latest,QDRANT_API_KEY=QDRANT_API_KEY:latest'
+      - '--set-env-vars=GOOGLE_CLOUD_LOGGING_ENABLED=true,AGENT_BASE_URL=$_INCIDENT_CREATION_AGENT_BASE_URL,EXTERNAL_PORT=443,EMBEDDING_SERVICE_URL=$_EMBEDDING_SERVICE_URL,QDRANT_URL=$_QDRANT_URL,QDRANT_PORT=443,ATTACHMENTS_LOCAL_DESTINATION_FOLDER_PATH=$_LOCAL_ATTACHMENTS_MOUNT_PATH,MCP_SERVER_ATTACHMENTS_FOLDER_PATH=$_JIRA_MCP_SERVER_ATTACHMENTS_MOUNT_PATH'
+      - '--add-volume=type=cloud-storage,name=jira-volume,bucket=$_BUCKET_NAME,mount-options=only-dir=$_JIRA_ATTACHMENTS_FOLDER'
+      - '--add-volume-mount=volume=jira-volume,mount-path=$_LOCAL_ATTACHMENTS_MOUNT_PATH'
+      - '--port=8001'
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - 'jira-rag-agent'
+      - '--image=gcr.io/$PROJECT_ID/jira-rag-agent'
+      - '--platform=managed'
+      - '--ingress=internal'
+      - '--network=agent-network'
+      - '--subnet=agent-network'
+      - '--vpc-egress=all-traffic'
+      - '--region=us-central1'
+      - '--allow-unauthenticated'
+      - '--memory=3Gi'
+      - '--max-instances=1'
+      - '--concurrency=2'
+      - '--set-secrets=GOOGLE_API_KEY=GOOGLE_API_KEY:latest,JIRA_API_TOKEN=JIRA_API_TOKEN:latest,JIRA_USERNAME=JIRA_USERNAME:latest,ZEPHYR_API_TOKEN=ZEPHYR_API_TOKEN:latest,JIRA_URL=JIRA_URL:latest,JIRA_MCP_SERVER_URL=JIRA_MCP_SERVER_URL:latest,ZEPHYR_BASE_URL=ZEPHYR_BASE_URL:latest,QDRANT_API_KEY=QDRANT_API_KEY:latest'
+      - '--set-env-vars=GOOGLE_CLOUD_LOGGING_ENABLED=true,AGENT_BASE_URL=$_JIRA_RAG_AGENT_BASE_URL,EXTERNAL_PORT=443,EMBEDDING_SERVICE_URL=$_EMBEDDING_SERVICE_URL,QDRANT_URL=$_QDRANT_URL,QDRANT_PORT=443,ATTACHMENTS_LOCAL_DESTINATION_FOLDER_PATH=$_LOCAL_ATTACHMENTS_MOUNT_PATH,MCP_SERVER_ATTACHMENTS_FOLDER_PATH=$_JIRA_MCP_SERVER_ATTACHMENTS_MOUNT_PATH'
+      - '--port=8001'
+      - '--add-volume=type=cloud-storage,name=jira-volume,bucket=$_BUCKET_NAME,mount-options=only-dir=$_JIRA_ATTACHMENTS_FOLDER'
+      - '--add-volume-mount=volume=jira-volume,mount-path=$_LOCAL_ATTACHMENTS_MOUNT_PATH'
 
 substitutions:
   _JIRA_ATTACHMENTS_FOLDER: 'jira'
+  _LOCAL_ATTACHMENTS_MOUNT_PATH: '/tmp'
+  _JIRA_MCP_SERVER_ATTACHMENTS_MOUNT_PATH: '/tmp'
   _BUCKET_NAME: ''
   _ALLURE_REPORTS_CONTAINER_PATH: '/app/allure-report'
   _ALLURE_REPORTS_BUCKET: ''
@@ -178,14 +298,22 @@ substitutions:
   _TEST_CASE_CLASSIFICATION_AGENT_BASE_URL: ''
   _TEST_CASE_GENERATION_AGENT_BASE_URL: ''
   _TEST_CASE_REVIEW_AGENT_BASE_URL: ''
+  _INCIDENT_CREATION_AGENT_BASE_URL: ''
+  _JIRA_RAG_AGENT_BASE_URL: ''
   _ORCHESTRATOR_REQUEST_TIMEOUT: '3500s'
+  _EMBEDDING_SERVICE_URL: ''
+  _QDRANT_URL: ''
+  _QDRANT_STORAGE_FOLDER: 'qdrant'
 
 images:
   - 'gcr.io/$PROJECT_ID/requirements-review-agent'
   - 'gcr.io/$PROJECT_ID/test-case-generation-agent'
   - 'gcr.io/$PROJECT_ID/test-case-classification-agent'
   - 'gcr.io/$PROJECT_ID/test-case-review-agent'
+  - 'gcr.io/$PROJECT_ID/incident-creation-agent'
+  - 'gcr.io/$PROJECT_ID/jira-rag-agent'
   - 'gcr.io/$PROJECT_ID/orchestrator'
+  - 'gcr.io/$PROJECT_ID/embedding-service'
 
 options:
   logging: CLOUD_LOGGING_ONLY

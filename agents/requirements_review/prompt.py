@@ -12,14 +12,13 @@ logger = utils.get_logger("reviewer.agent")
 
 class RequirementsReviewSystemPrompt(PromptBase):
     """
-    Loads a prompt template for instructions, replaces placeholders with actual values,
-    and provides the final prompt as a string.
+    Loads a prompt template for main orchestrator instructions.
     """
 
     def get_script_dir(self) -> Path:
         return Path(__file__).resolve().parent
 
-    def __init__(self, attachments_remote_folder_path: str, template_file_name: str = "prompt_template.txt"):
+    def __init__(self, attachments_remote_folder_path: str, template_file_name: str = "main_prompt_template.txt"):
         """
         Initializes the InstructionPrompt instance.
 
@@ -32,5 +31,28 @@ class RequirementsReviewSystemPrompt(PromptBase):
 
     def get_prompt(self) -> str:
         """Returns the formatted prompt as a string."""
-        logger.info("Generating requirements reviewer system prompt")
+        logger.info("Generating main requirements reviewer system prompt")
         return self.template.format(attachments_remote_folder_path=self.attachments_remote_folder_path)
+
+
+class RequirementsReviewWithAttachmentsPrompt(PromptBase):
+    """
+    Prompt for the sub-agent that reviews requirements with binary attachments.
+    """
+
+    def get_script_dir(self) -> Path:
+        return Path(__file__).resolve().parent
+
+    def __init__(self, template_file_name: str = "review_with_attachments_prompt.txt"):
+        """
+        Initializes the review with attachments prompt.
+
+        Args:
+            template_file_name: The name of the prompt template file.
+        """
+        super().__init__(template_file_name)
+
+    def get_prompt(self) -> str:
+        """Returns the prompt as a string."""
+        logger.info("Generating system prompt for sub-agent which performs requirements review with all attachments included")
+        return self.template

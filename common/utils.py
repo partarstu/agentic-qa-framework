@@ -6,11 +6,15 @@ import logging
 import os
 import mimetypes
 import sys
+import base64
 from pathlib import Path
+
+from a2a.types import FileWithBytes
 from pydantic_ai import BinaryContent
 import config
 
-logging_initialized=False
+logging_initialized = False
+
 
 def _initialize_logging():
     global logging_initialized
@@ -20,7 +24,8 @@ def _initialize_logging():
         client.setup_logging()
     else:
         logging.basicConfig(stream=sys.stdout, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    logging_initialized=True
+    logging_initialized = True
+
 
 def get_logger(name):
     if not logging_initialized:
@@ -46,26 +51,27 @@ def fetch_media_file_content_from_local(remote_file_path: str, attachments_folde
         raise RuntimeError(f"File {local_file_path} is not a media file or mime type could not be determined.")
 
 
-def fetch_media_file_content_from_gcs(remote_file_path: str, bucket_name: str, folder: str) -> BinaryContent:
-    from google.cloud import storage
-    file_name = Path(remote_file_path).name
-    if folder:
-        blob_name = f"{folder}/{file_name}"
-    else:
-        blob_name = file_name
-    storage_client = storage.Client()
-    bucket = storage_client.bucket(bucket_name)
-    blob = bucket.blob(blob_name)
+def get_execution_logs_from_artifacts(artifacts: list[FileWithBytes], log_filename_pattern: str = "logs") -> list[str]:
+    """Extract execution logs from file artifacts.
 
-    if not blob.exists():
-        raise RuntimeError(f"File {blob_name} does not exist in GCS bucket {bucket_name}.")
+    Args:
+        artifacts: A list of FileWithBytes objects representing file artifacts.
+        log_filename_pattern: Substring to match in artifact names to identify log files.
 
-    file_content = blob.download_as_bytes()
-    mime_type, _ = mimetypes.guess_type(file_name)
-    if mime_type and mime_type.startswith(("audio", "video", "image")):
-        return BinaryContent(
-            data=file_content,
-            media_type=mime_type or "application/octet-stream",
-        )
-    else:
-        raise RuntimeError(f"File {file_name} from GCS is not a media file or mime type could not be determined.")
+    Returns:
+        The log files content as a list of strings.
+    """
+    if not artifacts:
+        return []
+
+    logs = []
+    for artifact in artifacts:
+        if artifact.name and (log_filename_pattern.lower() in artifact.name.lower()) and (
+                artifact.name.endswith(".txt") or artifact.name.endswith(".log")) and artifact.bytes:
+            try:
+                logs.append(base64.b64decode(artifact.bytes).decode('utf-8'))
+            except (UnicodeDecodeError, ValueError) as e:
+                get_logger(__name__).warning(f"Failed to decode logs from artifact '{artifact.name}': {e}")
+                continue
+
+    return logs

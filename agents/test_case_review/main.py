@@ -5,7 +5,7 @@
 from pydantic_ai.mcp import MCPServerSSE
 
 import config
-from common.agent_base import AgentBase
+from common.agent_base import AgentBase, MCP_SERVER_ATTACHMENTS_FOLDER_PATH
 from agents.test_case_review.prompt import TestCaseReviewSystemPrompt
 from common import utils
 from common.models import TestCaseReviewRequest, TestCaseReviewFeedbacks
@@ -16,8 +16,12 @@ jira_mcp_server = MCPServerSSE(url=config.JIRA_MCP_SERVER_URL, timeout=config.MC
 
 
 class TestCaseReviewAgent(AgentBase):
+    __test__ = False
+
     def __init__(self):
-        instruction_prompt = TestCaseReviewSystemPrompt()
+        instruction_prompt = TestCaseReviewSystemPrompt(
+            attachments_remote_folder_path=MCP_SERVER_ATTACHMENTS_FOLDER_PATH
+        )
         super().__init__(
             agent_name=config.TestCaseReviewAgentConfig.OWN_NAME,
             base_url=config.AGENT_BASE_URL,
@@ -30,7 +34,7 @@ class TestCaseReviewAgent(AgentBase):
             instructions=instruction_prompt.get_prompt(),
             mcp_servers=[jira_mcp_server],
             description="Agent which reviews generated test cases for coherence, redundancy, and effectiveness.",
-            tools=[self.add_review_feedback, self.set_test_case_status_to_review_complete]
+            tools=[self.add_review_feedback, self.set_test_case_status_to_review_complete, self._fetch_attachments]
         )
 
     def get_thinking_budget(self) -> int:
@@ -42,7 +46,7 @@ class TestCaseReviewAgent(AgentBase):
     @staticmethod
     def add_review_feedback(test_case_key: str, feedback: str) -> str:
         """
-        Adds test case review feedback as a comment to the test case.
+        Adds feedback as a comment to the test case.
 
         Args:
             test_case_key: The key or ID of the test case.
