@@ -264,6 +264,12 @@ class AgentRegistry:
             return [aid for aid, status in self._statuses.items() 
                     if status != AgentStatus.BROKEN and aid in self._cards]
 
+    async def get_available_agents(self) -> List[str]:
+        """Get agents that are AVAILABLE for new tasks (not BUSY or BROKEN)."""
+        async with self._lock:
+            return [aid for aid, status in self._statuses.items() 
+                    if status == AgentStatus.AVAILABLE and aid in self._cards]
+
     async def get_agent_id_by_url(self, url: str) -> str | None:
         async with self._lock:
             for agent_id, card in self._cards.items():

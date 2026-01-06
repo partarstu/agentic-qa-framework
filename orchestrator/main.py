@@ -975,17 +975,54 @@ async def _send_task_to_agent(agent_id: str, input_data: str, task_description: 
     return await _send_task_to_agent_with_message(agent_id, message, task_description)
 
 
-async def _choose_agent_id(agent_task_description):
+async def _choose_agent_id(agent_task_description: str) -> str:
+    """Choose an AVAILABLE agent for the given task.
+    
+    If no agents are currently AVAILABLE (e.g., all are BUSY with other tasks),
+    this function will wait and retry until an agent becomes available or timeout.
+    
+    Args:
+        agent_task_description: Description of the task to be assigned.
+        
+    Returns:
+        The ID of the selected agent.
+        
+    Raises:
+        HTTPException: If no agents are registered or no suitable agent is found.
+    """
     if await agent_registry.is_empty():
         _handle_exception("Orchestrator has currently no registered agents.", 404)
-    agent_id = await _select_agent(agent_task_description)
-    if not agent_id:
-        _handle_exception(f"No agent found to handle the task '{agent_task_description}'.", 404)
-
-    agent_name = await agent_registry.get_name(agent_id)
-    logger.info(
-        f"Selected agent '{agent_name}' (ID: {agent_id}) for task '{agent_task_description}'.")
-    return agent_id
+    
+    # Retry with exponential backoff if all agents are busy
+    max_wait_time = config.OrchestratorConfig.TASK_EXECUTION_TIMEOUT
+    start_time = time.time()
+    wait_interval = 2  # Start with 2 second wait
+    max_wait_interval = 30  # Cap at 30 seconds between retries
+    
+    while (time.time() - start_time) < max_wait_time:
+        available_agents = await agent_registry.get_available_agents()
+        
+        if available_agents:
+            agent_id = await _select_agent(agent_task_description)
+            if agent_id:
+                agent_name = await agent_registry.get_name(agent_id)
+                logger.info(
+                    f"Selected agent '{agent_name}' (ID: {agent_id}) for task '{agent_task_description}'.")
+                return agent_id
+            else:
+                # There are available agents but none suitable for this task
+                _handle_exception(f"No suitable agent found to handle the task '{agent_task_description}'.", 404)
+        
+        # All agents are busy - wait and retry
+        logger.info(f"No available agents for task '{agent_task_description}'. "
+                    f"All agents are busy. Waiting {wait_interval}s before retry...")
+        await asyncio.sleep(wait_interval)
+        wait_interval = min(wait_interval * 1.5, max_wait_interval)  # Exponential backoff with cap
+    
+    # Timeout reached
+    _handle_exception(
+        f"Timeout waiting for an available agent to handle task '{agent_task_description}'. "
+        f"All agents have been busy for {max_wait_time} seconds.", 503)
 
 
 async def _get_jira_issue_key_from_request(request):
@@ -1046,7 +1083,10 @@ def _get_time_left_for_task_completion_waiting(start_time):
 
 
 async def _select_all_suitable_agent_ids(task_description: str) -> List[str]:
-    """Selects all suitable agents from the registry for a given task."""
+    """Selects all suitable agents from the registry for a given task.
+    
+    Only considers agents that are currently AVAILABLE for new tasks.
+    """
     agents_info = await _get_agents_info()
     user_prompt = f"""
 Target task description: "{task_description}".
@@ -1057,8 +1097,10 @@ The list of all registered with you agents:\n{agents_info}
     result = await multi_discovery_agent.run(user_prompt)
     selected_agent_ids = result.output.ids or []
     valid_agent_ids = []
+    available_agents = await agent_registry.get_available_agents()
     for agent_id in selected_agent_ids:
-        if await agent_registry.contains(agent_id):
+        # Verify agent exists AND is still AVAILABLE (status may have changed since discovery)
+        if await agent_registry.contains(agent_id) and agent_id in available_agents:
             valid_agent_ids.append(agent_id)
 
     for agent_id in valid_agent_ids:
@@ -1068,11 +1110,19 @@ The list of all registered with you agents:\n{agents_info}
 
 
 async def _get_agents_info():
+    """Get information about agents that are AVAILABLE for new tasks.
+    
+    Only returns agents with AVAILABLE status to ensure BUSY or BROKEN agents
+    are not selected for new tasks.
+    """
     agents_info = ""
+    available_agent_ids = await agent_registry.get_available_agents()
     all_cards = await agent_registry.get_all_cards()
-    for agent_id, card in all_cards.items():
-        agents_info += (f"- Name: {card.name}, ID: {agent_id}, Description: {card.description}, Skills: "
-                        f"{"; ".join(skill.description for skill in card.skills)}\n")
+    for agent_id in available_agent_ids:
+        card = all_cards.get(agent_id)
+        if card:
+            agents_info += (f"- Name: {card.name}, ID: {agent_id}, Description: {card.description}, Skills: "
+                            f"{"; ".join(skill.description for skill in card.skills)}\n")
     return agents_info
 
 
