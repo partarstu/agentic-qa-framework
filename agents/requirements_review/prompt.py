@@ -8,6 +8,11 @@ from common.prompt_base import PromptBase
 from common import utils
 
 logger = utils.get_logger("reviewer.agent")
+PROMPTS_ROOT = "system_prompts"
+
+
+def _get_prompts_root() -> Path:
+    return Path(__file__).resolve().parent.joinpath(PROMPTS_ROOT)
 
 
 class RequirementsReviewSystemPrompt(PromptBase):
@@ -16,7 +21,7 @@ class RequirementsReviewSystemPrompt(PromptBase):
     """
 
     def get_script_dir(self) -> Path:
-        return Path(__file__).resolve().parent
+        return _get_prompts_root()
 
     def __init__(self, attachments_remote_folder_path: str, template_file_name: str = "main_prompt_template.txt"):
         """
@@ -41,7 +46,7 @@ class RequirementsReviewWithAttachmentsPrompt(PromptBase):
     """
 
     def get_script_dir(self) -> Path:
-        return Path(__file__).resolve().parent
+        return _get_prompts_root()
 
     def __init__(self, template_file_name: str = "review_with_attachments_prompt.txt"):
         """
