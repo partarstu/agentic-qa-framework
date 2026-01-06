@@ -7,7 +7,7 @@ from typing import List, Sequence, Optional
 from fastapi import HTTPException
 from pydantic_ai.messages import ModelRequest, ToolReturnPart, UserPromptPart, ModelMessage, ModelResponse, \
     ToolCallPart, \
-    ThinkingPart, TextPart, SystemPromptPart, RetryPromptPart
+    ThinkingPart, TextPart, SystemPromptPart, RetryPromptPart, BinaryContent
 from pydantic_ai.models import (
     Model,
     KnownModelName,
@@ -95,17 +95,22 @@ class CustomLlmWrapper(WrapperModel):
             raise HTTPException(status_code=400, detail="Prompt injection attack detected.")
 
     @staticmethod
+    def _json_serializer(obj):
+        """Custom JSON serializer for objects not handled by default json encoder."""
+        if isinstance(obj, JsonSerializableModel):
+            return obj.model_dump()
+        if isinstance(obj, BinaryContent):
+            return f"<BinaryContent: media_type={obj.media_type}, identifier={obj.identifier}, size={len(obj.data)} bytes>"
+        if isinstance(obj, bytes):
+            return f"<bytes: {len(obj)}>"
+        if hasattr(obj, 'model_dump'):
+            return obj.model_dump()
+        raise TypeError(f"Object of type {obj.__class__.__name__} is not JSON serializable")
+
+    @staticmethod
     def _serialize_content(content) -> str:
-        """Serialize content to JSON, handling JsonSerializableModel instances."""
-        if isinstance(content, JsonSerializableModel):
-            return content.model_dump_json(indent=2)
-        if isinstance(content, list):
-            serialized = [
-                item.model_dump() if isinstance(item, JsonSerializableModel) else item
-                for item in content
-            ]
-            return json.dumps(serialized, indent=2)
-        return json.dumps(content, indent=2)
+        """Serialize content to JSON, handling JsonSerializableModel and BinaryContent instances."""
+        return json.dumps(content, indent=2, default=CustomLlmWrapper._json_serializer)
 
     def _log_model_request(self, message):
         if message.instructions and self.latest_instructions != message.instructions:
