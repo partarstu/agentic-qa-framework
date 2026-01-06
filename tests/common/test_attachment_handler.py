@@ -107,13 +107,22 @@ class TestIsSupportedMimeType:
         """Test common document MIME types are supported."""
         assert attachment_handler.is_supported_mime_type("application/pdf") is True
         assert attachment_handler.is_supported_mime_type("text/plain") is True
-        assert attachment_handler.is_supported_mime_type("text/csv") is True
 
     def test_unsupported_mime_types(self):
         """Test unsupported MIME types return False."""
         assert attachment_handler.is_supported_mime_type("application/zip") is False
         assert attachment_handler.is_supported_mime_type("application/x-rar") is False
         assert attachment_handler.is_supported_mime_type("application/octet-stream") is False
+
+    def test_types_not_in_config_whitelist(self):
+        """Test document types not in config.SUPPORTED_ATTACHMENT_MIME_TYPES are filtered."""
+        # These are in Pydantic AI's DocumentMediaType but not in the config whitelist
+        assert attachment_handler.is_supported_mime_type("application/vnd.openxmlformats-officedocument.wordprocessingml.document") is False  # .docx
+        assert attachment_handler.is_supported_mime_type("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet") is False  # .xlsx
+        assert attachment_handler.is_supported_mime_type("application/vnd.ms-excel") is False  # .xls
+        assert attachment_handler.is_supported_mime_type("text/csv") is False  # .csv
+        assert attachment_handler.is_supported_mime_type("text/html") is False  # .html
+        assert attachment_handler.is_supported_mime_type("text/markdown") is False  # .md
 
     def test_none_mime_type(self):
         """Test None MIME type returns False."""

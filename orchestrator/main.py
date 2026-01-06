@@ -1105,8 +1105,8 @@ async def _discover_agents():
     Discovers remote agents by scanning a port range on each of the configured base URLs.
     Checks reachability of existing agents and discovers new ones.
     """
-    agent_base_urls_str = config.REMOTE_EXECUTION_AGENT_HOSTS
-    port_range_str = config.AGENT_DISCOVERY_PORTS
+    agent_base_urls_str = config.OrchestratorConfig.REMOTE_EXECUTION_AGENT_HOSTS
+    port_range_str = config.OrchestratorConfig.AGENT_DISCOVERY_PORTS
 
     if not agent_base_urls_str or not port_range_str:
         logger.info("Agent discovery configuration is incomplete. "

@@ -34,7 +34,6 @@ UPDATE_RAG_DB_WEBHOOK_URL = f"{ORCHESTRATOR_URL}/update-rag-db"
 # Secrets
 JIRA_WEBHOOK_SECRET = os.environ.get("JIRA_WEBHOOK_SECRET")
 ZEPHYR_API_TOKEN = os.environ.get("ZEPHYR_API_TOKEN")
-
 XRAY_BASE_URL = os.environ.get("XRAY_BASE_URL")
 XRAY_CLIENT_ID = os.environ.get("XRAY_CLIENT_ID")
 XRAY_CLIENT_SECRET = os.environ.get("XRAY_CLIENT_SECRET")
@@ -44,11 +43,18 @@ XRAY_PRECONDITIONS_FIELD_ID = os.environ.get("XRAY_PRECONDITIONS_FIELD_ID", "Pre
 AGENT_BASE_URL = os.environ.get("AGENT_BASE_URL", "http://localhost")
 MCP_SERVER_ATTACHMENTS_FOLDER_PATH = os.environ.get("MCP_SERVER_ATTACHMENTS_FOLDER_PATH", "/tmp")
 ATTACHMENTS_LOCAL_DESTINATION_FOLDER_PATH = os.environ.get("ATTACHMENTS_LOCAL_DESTINATION_FOLDER_PATH", "/tmp")
-REMOTE_EXECUTION_AGENT_HOSTS = os.environ.get("REMOTE_EXECUTION_AGENT_HOSTS", AGENT_BASE_URL)
-AGENT_DISCOVERY_PORTS = os.environ.get("AGENT_DISCOVERY_PORTS", "8001-8007")
-
 JIRA_ATTACHMENT_SKIP_POSTFIX = os.environ.get("JIRA_ATTACHMENT_SKIP_POSTFIX", "_SKIP")
 MCP_SERVER_TIMEOUT_SECONDS = 30
+SUPPORTED_ATTACHMENT_MIME_TYPES: set[str] = {
+    # Images
+    "image/png", "image/jpeg", "image/gif", "image/webp",
+    # Documents
+    "application/pdf", "text/plain",
+    # Audio
+    "audio/mpeg", "audio/wav", "audio/flac", "audio/ogg", "audio/aac", "audio/aiff",
+    # Video
+    "video/mp4", "video/webm", "video/quicktime", "video/x-matroska", "video/x-flv", "video/mpeg", "video/x-ms-wmv", "video/3gpp"
+}
 
 # Test Management System
 ZEPHYR_COMMENTS_CUSTOM_FIELD_NAME = "Review Comments"
@@ -86,6 +92,8 @@ class OrchestratorConfig:
     INCOMING_REQUEST_WAIT_TIMEOUT = AGENT_DISCOVERY_TIMEOUT_SECONDS + 5
     MODEL_NAME = "google-gla:gemini-3-flash-preview"
     API_KEY = os.environ.get("ORCHESTRATOR_API_KEY")
+    AGENT_DISCOVERY_PORTS = os.environ.get("AGENT_DISCOVERY_PORTS", "8001-8007")
+    REMOTE_EXECUTION_AGENT_HOSTS = os.environ.get("REMOTE_EXECUTION_AGENT_HOSTS", AGENT_BASE_URL)
 
 
 # Requirements Review Agent

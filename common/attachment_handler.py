@@ -26,18 +26,24 @@ from common import utils
 
 logger = utils.get_logger("attachment_handler")
 
-# Collect all supported MIME types from Pydantic AI type annotations
-SUPPORTED_IMAGE_TYPES: set[str] = set(get_args(ImageMediaType))
-SUPPORTED_AUDIO_TYPES: set[str] = set(get_args(AudioMediaType))
-SUPPORTED_VIDEO_TYPES: set[str] = set(get_args(VideoMediaType))
-SUPPORTED_DOCUMENT_TYPES: set[str] = set(get_args(DocumentMediaType))
+# Collect all MIME types that Pydantic AI supports in its type annotations
+PYDANTIC_SUPPORTED_IMAGE_TYPES: set[str] = set(get_args(ImageMediaType))
+PYDANTIC_SUPPORTED_AUDIO_TYPES: set[str] = set(get_args(AudioMediaType))
+PYDANTIC_SUPPORTED_VIDEO_TYPES: set[str] = set(get_args(VideoMediaType))
+PYDANTIC_SUPPORTED_DOCUMENT_TYPES: set[str] = set(get_args(DocumentMediaType))
 
-SUPPORTED_MIME_TYPES: set[str] = (
-        SUPPORTED_IMAGE_TYPES
-        | SUPPORTED_AUDIO_TYPES
-        | SUPPORTED_VIDEO_TYPES
-        | SUPPORTED_DOCUMENT_TYPES
+PYDANTIC_SUPPORTED_MIME_TYPES: set[str] = (
+        PYDANTIC_SUPPORTED_IMAGE_TYPES
+        | PYDANTIC_SUPPORTED_AUDIO_TYPES
+        | PYDANTIC_SUPPORTED_VIDEO_TYPES
+        | PYDANTIC_SUPPORTED_DOCUMENT_TYPES
 )
+
+# Final supported MIME types: intersection of config-defined types and Pydantic AI types
+# This ensures we only allow types that are both:
+#   1. Supported by the actual model API (defined in config)
+#   2. Supported by Pydantic AI's type system
+SUPPORTED_MIME_TYPES: set[str] = config.SUPPORTED_ATTACHMENT_MIME_TYPES & PYDANTIC_SUPPORTED_MIME_TYPES
 
 
 def get_mime_type(file_path: str) -> str | None:
@@ -141,7 +147,8 @@ def fetch_all_attachments(attachment_paths: list[str], skip_postfix: str | None 
     1. Skips files with the configured skip postfix
     2. Fetches file bytes from local storage or GCS
     3. Detects MIME types (using extension or content-based detection)
-    4. Filters out unsupported MIME types
+    4. Filters out unsupported MIME types (including types like .docx, .xlsx that
+       Pydantic AI includes but Gemini API doesn't actually support)
     5. Returns a dictionary mapping filenames to BinaryContent objects
 
     Args:

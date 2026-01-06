@@ -68,3 +68,14 @@ async def test_prompt_injection_not_detected(mock_get_prompt_guard, custom_llm, 
         await custom_llm.request(messages, None, None)
     
     mock_wrapped_model.request.assert_called_once()
+
+def test_serialize_content_with_binary_content(custom_llm):
+    from pydantic_ai.messages import BinaryContent
+    binary_content = BinaryContent(data=b"test data", media_type="application/pdf", identifier="test.pdf")
+    content = {"file": binary_content}
+    serialized = custom_llm._serialize_content(content)
+    # Check that serialization worked and contains our custom string representation
+    assert "BinaryContent" in serialized
+    assert "test.pdf" in serialized
+    assert "application/pdf" in serialized
+    assert "size=9 bytes" in serialized

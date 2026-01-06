@@ -101,9 +101,7 @@ class RagUpdateResult(BaseAgentResult):
 
 
 class RequirementsReviewFeedback(BaseAgentResult):
-    """Result of requirements review."""
-
-    suggested_improvements: List[str] = Field(description="List of improvements suggested by the review")
+    suggested_improvements: List[str] = Field(description="List of improvements suggested by the requirements review")
 
 
 class AcceptanceCriteriaItem(JsonSerializableModel):
@@ -170,13 +168,11 @@ class TestCaseReviewRequest(JsonSerializableModel):
 
 class TestCaseReviewFeedback(JsonSerializableModel):
     test_case_id: str = Field(description="The ID or key of the test case which was reviewed")
-    review_feedback: str = Field(description="Test case review feedback")
+    review_feedback: List[str] = Field(description="List of improvements suggested by the test case review")
 
 
 class TestCaseReviewFeedbacks(BaseAgentResult):
-    """Result of test case review."""
-    review_feedbacks: list[TestCaseReviewFeedback] = Field(description="A dictionary where the key is the test case ID/key and the "
-                                                                       "value is the review feedback of this test case")
+    review_feedbacks: list[TestCaseReviewFeedback] = Field(description="A list of test case review feedbacks")
 
 
 class TestExecutionRequest(JsonSerializableModel):
@@ -203,16 +199,15 @@ class TestExecutionResult(JsonSerializableModel):
     generalErrorMessage: str = Field(description=
                                      "General error message if the test execution failed (e.g. preconditions failed)")
     artifacts: Optional[List[FileWithBytes]] = Field(
-        default=None, description="Optional dictionary of artifacts generated during execution (e.g., screenshots, "
-                                  "reports, stack traces etc.)")
+        default=None, description="Optional dictionary of artifacts generated during "
+                                  "execution (e.g., screenshots, reports, stack traces etc.)")
     start_timestamp: str = Field(description="Timestamp when the test execution started")
     end_timestamp: str = Field(description="Timestamp when the test execution ended")
     system_description: Optional[str] = Field(default=None, description="Description of the system on which the agent "
-                                                                        "executed the test case.")
+                                                                        "executed the test case")
     incident_creation_result: Optional["IncidentCreationResult"] = Field(
-        default=None, description="Result of the incident creation process if the test failed.")
-    test_case: Optional["TestCase"] = Field(
-        default=None, description="The full test case object that was executed.")
+        default=None, description="Result of the incident creation process if the test failed")
+    test_case: Optional["TestCase"] = Field(default=None, description="The full test case object that was executed")
 
 
 class TestCaseKeys(JsonSerializableModel):
@@ -227,7 +222,7 @@ class ClassifiedTestCases(BaseAgentResult):
 
 class ProjectExecutionRequest(JsonSerializableModel):
     """Request to trigger test execution for a project."""
-    project_key: str = Field(description="The key of the project for which all tests should be executed.")
+    project_key: str = Field(description="The key of the project for which all tests should be executed")
 
 
 class AggregatedTestResults(JsonSerializableModel):
@@ -236,11 +231,11 @@ class AggregatedTestResults(JsonSerializableModel):
 
 
 class SelectedAgent(JsonSerializableModel):
-    id: str = Field(description="ID of the agent that is most suitable for the task execution.")
+    id: str = Field(description="ID of the agent that is most suitable for the task execution")
 
 
 class SelectedAgents(JsonSerializableModel):
-    ids: List[str] = Field(description="The IDs of all agents that are suitable for the task execution.")
+    ids: List[str] = Field(description="The IDs of all agents that are suitable for the task execution")
 
 
 class IncidentCreationInput(JsonSerializableModel):
