@@ -52,6 +52,7 @@ class TaskRecord:
     start_time: datetime
     end_time: datetime | None = None
     error_message: str | None = None
+    agent_logs: List[str] | None = None
     
     @property
     def duration_ms(self) -> int | None:
@@ -71,7 +72,8 @@ class TaskRecord:
             "start_time": self.start_time.isoformat(),
             "end_time": self.end_time.isoformat() if self.end_time else None,
             "duration_ms": self.duration_ms,
-            "error_message": self.error_message
+            "error_message": self.error_message,
+            "agent_logs": self.agent_logs
         }
 
 
@@ -131,6 +133,13 @@ class TaskHistory:
         async with self._lock:
             return list(reversed(self._tasks))
     
+    async def update_logs(self, task_id: str, logs: List[str]) -> None:
+        """Update task with agent logs."""
+        async with self._lock:
+            if task_id in self._tasks_by_id:
+                task = self._tasks_by_id[task_id]
+                task.agent_logs = logs
+
     async def get_by_id(self, task_id: str) -> TaskRecord | None:
         """Get a specific task by ID."""
         async with self._lock:

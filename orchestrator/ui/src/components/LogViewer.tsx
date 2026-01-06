@@ -42,7 +42,7 @@ export function LogViewer({ logs, isLoading }: LogViewerProps) {
       <div className="bg-slate-800/50 rounded-xl p-6 border border-slate-700 mt-6">
         <h2 className="text-xl font-semibold mb-4 flex items-center gap-2">
           <Terminal className="w-5 h-5 text-indigo-400" />
-          Application Logs
+          Orchestrator Logs
         </h2>
         <div className="h-64 bg-slate-900 rounded animate-pulse"></div>
       </div>
@@ -54,7 +54,7 @@ export function LogViewer({ logs, isLoading }: LogViewerProps) {
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-xl font-semibold flex items-center gap-2">
           <Terminal className="w-5 h-5 text-indigo-400" />
-          Application Logs ({filteredLogs?.length || 0})
+          Orchestrator Logs ({filteredLogs?.length || 0})
         </h2>
         
         <div className="flex items-center gap-4">

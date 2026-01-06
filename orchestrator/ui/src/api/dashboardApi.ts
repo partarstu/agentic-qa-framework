@@ -44,9 +44,9 @@ export const dashboardApi = {
   /**
    * Get recent application logs.
    */
-  async getLogs(limit: number = 100, level?: string): Promise<LogEntry[]> {
+  async getLogs(limit: number = 100, level?: string, taskId?: string, agentId?: string): Promise<LogEntry[]> {
     const response = await apiClient.get<LogEntry[]>('/logs', {
-      params: { limit, level },
+      params: { limit, level, task_id: taskId, agent_id: agentId },
     });
     return response.data;
   },

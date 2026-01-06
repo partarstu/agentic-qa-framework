@@ -1,4 +1,6 @@
+import { useState } from 'react';
 import { ClipboardList, CheckCircle, XCircle, Clock, Loader2 } from 'lucide-react';
+import { LogModal } from './LogModal';
 import type { TaskInfo } from '../types/dashboard';
 
 interface TaskListProps {
@@ -7,6 +9,8 @@ interface TaskListProps {
 }
 
 export function TaskList({ tasks, isLoading }: TaskListProps) {
+  const [selectedTask, setSelectedTask] = useState<string | null>(null);
+
   const formatDuration = (ms: number | null) => {
     if (ms === null) return '-';
     if (ms < 1000) return `${ms}ms`;
@@ -61,49 +65,63 @@ export function TaskList({ tasks, isLoading }: TaskListProps) {
   }
 
   return (
-    <div className="bg-slate-800/50 rounded-xl p-6 border border-slate-700 mt-6">
-      <h2 className="text-xl font-semibold mb-4 flex items-center gap-2">
-        <ClipboardList className="w-5 h-5 text-indigo-400" />
-        Recent Tasks ({tasks?.length || 0})
-      </h2>
-      
-      {!tasks || tasks.length === 0 ? (
-        <p className="text-slate-400 text-center py-8">No tasks recorded yet</p>
-      ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="text-slate-400 text-left border-b border-slate-700">
-                <th className="pb-3 font-medium">Status</th>
-                <th className="pb-3 font-medium">Description</th>
-                <th className="pb-3 font-medium">Agent</th>
-                <th className="pb-3 font-medium">Started</th>
-                <th className="pb-3 font-medium">Duration</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-700/50">
-              {tasks.map((task) => (
-                <tr key={task.task_id} className="hover:bg-slate-700/30 transition-colors">
-                  <td className="py-3">
-                    <div className="flex items-center gap-2">
-                      {getStatusIcon(task.status)}
-                      <span className={`px-2 py-0.5 text-xs rounded border ${getStatusBadgeClass(task.status)}`}>
-                        {task.status}
-                      </span>
-                    </div>
-                  </td>
-                  <td className="py-3 max-w-xs truncate text-slate-200" title={task.description}>
-                    {task.description}
-                  </td>
-                  <td className="py-3 text-slate-300">{task.agent_name}</td>
-                  <td className="py-3 text-slate-400">{formatTime(task.start_time)}</td>
-                  <td className="py-3 text-slate-400">{formatDuration(task.duration_ms)}</td>
+    <>
+      <div className="bg-slate-800/50 rounded-xl p-6 border border-slate-700 mt-6">
+        <h2 className="text-xl font-semibold mb-4 flex items-center gap-2">
+          <ClipboardList className="w-5 h-5 text-indigo-400" />
+          Recent Tasks ({tasks?.length || 0})
+        </h2>
+        
+        {!tasks || tasks.length === 0 ? (
+          <p className="text-slate-400 text-center py-8">No tasks recorded yet</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-slate-400 text-left border-b border-slate-700">
+                  <th className="pb-3 font-medium">Status</th>
+                  <th className="pb-3 font-medium">Description</th>
+                  <th className="pb-3 font-medium">Agent</th>
+                  <th className="pb-3 font-medium">Started</th>
+                  <th className="pb-3 font-medium">Duration</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody className="divide-y divide-slate-700/50">
+                {tasks.map((task) => (
+                  <tr 
+                    key={task.task_id} 
+                    className="hover:bg-slate-700/30 transition-colors cursor-pointer"
+                    onClick={() => setSelectedTask(task.task_id)}
+                  >
+                    <td className="py-3">
+                      <div className="flex items-center gap-2">
+                        {getStatusIcon(task.status)}
+                        <span className={`px-2 py-0.5 text-xs rounded border ${getStatusBadgeClass(task.status)}`}>
+                          {task.status}
+                        </span>
+                      </div>
+                    </td>
+                    <td className="py-3 max-w-xs truncate text-slate-200" title={task.description}>
+                      {task.description}
+                    </td>
+                    <td className="py-3 text-slate-300">{task.agent_name}</td>
+                    <td className="py-3 text-slate-400">{formatTime(task.start_time)}</td>
+                    <td className="py-3 text-slate-400">{formatDuration(task.duration_ms)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+      {selectedTask && (
+        <LogModal
+          isOpen={true}
+          onClose={() => setSelectedTask(null)}
+          taskId={selectedTask}
+          title="Task Execution Logs"
+        />
       )}
-    </div>
+    </>
   );
 }

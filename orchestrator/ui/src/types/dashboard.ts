@@ -67,4 +67,6 @@ export interface LogEntry {
   level: string;
   logger: string;
   message: string;
+  task_id?: string | null;
+  agent_id?: string | null;
 }

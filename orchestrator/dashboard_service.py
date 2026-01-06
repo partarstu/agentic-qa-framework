@@ -14,7 +14,7 @@ from orchestrator.models import (
     AgentRegistry, AgentStatus, TaskHistory, ErrorHistory,
     ORCHESTRATOR_START_TIME, agent_registry, task_history, error_history
 )
-from orchestrator.memory_log_handler import memory_log_handler
+from orchestrator.memory_log_handler import memory_log_handler, LogEntry
 
 logger = utils.get_logger("orchestrator_dashboard")
 
@@ -120,10 +120,97 @@ class OrchestratorDashboardService:
         errors = await self.errors.get_recent(limit)
         return [error.to_dict() for error in errors]
 
-    async def get_logs(self, limit: int = 100, level: str | None = None) -> List[Dict[str, Any]]:
-        """Returns recent application logs."""
-        log_entries = memory_log_handler.get_logs(limit=limit, level=level)
-        return [entry.to_dict() for entry in log_entries]
+    async def get_logs(self, limit: int = 100, level: str | None = None,
+                       task_id: str | None = None, agent_id: str | None = None) -> List[Dict[str, Any]]:
+        """Returns recent application logs.
+        
+        When task_id or agent_id is provided, returns only agent execution logs
+        from task artifacts. When neither is provided, returns orchestrator logs only.
+        """
+        result_entries: List[LogEntry] = []
+        
+        # If task_id is provided, return only agent logs from that specific task
+        if task_id:
+            task_record = await self.tasks.get_by_id(task_id)
+            if task_record and task_record.agent_logs:
+                result_entries = self._parse_agent_logs(
+                    task_record.agent_logs, task_id, task_record.agent_id
+                )
+        
+        # If agent_id is provided (and no task_id), return agent logs from all tasks of this agent
+        elif agent_id:
+            all_tasks = await self.tasks.get_all()
+            # Filter tasks for this agent
+            agent_tasks = [t for t in all_tasks if t.agent_id == agent_id]
+            for task in agent_tasks:  # Check all tasks for this agent
+                if task.agent_logs:
+                    result_entries.extend(
+                        self._parse_agent_logs(task.agent_logs, task.task_id, agent_id)
+                    )
+        
+        # If neither task_id nor agent_id is provided, return orchestrator logs only
+        else:
+            result_entries = memory_log_handler.get_logs(limit=limit, level=level)
+        
+        # Filter by level if specified and we have agent logs
+        if level and (task_id or agent_id):
+            level_upper = level.upper()
+            result_entries = [log for log in result_entries if log.level == level_upper]
+        
+        # Sort by timestamp
+        result_entries.sort(key=lambda x: x.timestamp)
+        
+        # Apply limit - take the last 'limit' items (most recent)
+        limited_logs = result_entries[-limit:]
+        
+        return [entry.to_dict() for entry in limited_logs]
+
+    def _parse_agent_logs(self, raw_logs: List[str], task_id: str, agent_id: str) -> List[LogEntry]:
+        """Parse raw agent log strings into LogEntry objects.
+           We'll try to extract timestamp/level if possible, otherwise use placeholders.
+        """
+        entries = []
+        for log_chunk in raw_logs:
+            # Agent logs might be one big string or lines
+            lines = log_chunk.splitlines()
+            for line in lines:
+                if not line.strip(): continue
+                
+                # Simple parsing logic - can be improved if agent log format is known
+                # Default values
+                timestamp = datetime.now().isoformat()
+                level = "INFO"
+                logger_name = f"agent.{agent_id}"
+                message = line
+                
+                # Simple heuristic: "2023-..." at start
+                parts = line.split(" - ", 3)
+                if len(parts) >= 3:
+                     # Attempt to parse: timestamp - name - level - message
+                     # or: timestamp - level - message
+                     try:
+                         # Just check if first part looks like date?
+                         # For now, just keep the line as message and use task completion time? 
+                         # Actually, using current time for historical logs is confusing.
+                         # Ideally agent logs have timestamps. 
+                         pass
+                     except:
+                         pass
+                
+                # If the line contains typical log levels
+                if "ERROR" in line: level = "ERROR"
+                elif "WARNING" in line: level = "WARNING"
+                elif "DEBUG" in line: level = "DEBUG"
+                
+                entries.append(LogEntry(
+                    timestamp=timestamp, 
+                    level=level, 
+                    logger_name=logger_name, 
+                    message=message,
+                    task_id=task_id,
+                    agent_id=agent_id
+                ))
+        return entries
 
 
 # Global service instance

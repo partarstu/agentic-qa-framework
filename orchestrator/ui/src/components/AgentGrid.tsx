@@ -1,4 +1,6 @@
+import { useState } from 'react';
 import { Server, Wifi, WifiOff, Loader2 } from 'lucide-react';
+import { LogModal } from './LogModal';
 import type { AgentInfo } from '../types/dashboard';
 
 interface AgentGridProps {
@@ -7,6 +9,8 @@ interface AgentGridProps {
 }
 
 export function AgentGrid({ agents, isLoading }: AgentGridProps) {
+  const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
+
   if (isLoading) {
     return (
       <div className="bg-slate-800/50 rounded-xl p-6 border border-slate-700">
@@ -74,7 +78,8 @@ export function AgentGrid({ agents, isLoading }: AgentGridProps) {
         {agents.map((agent) => (
           <div
             key={agent.id}
-            className={`bg-slate-700/30 rounded-lg p-4 border border-slate-600/50 transition-all hover:border-slate-500 ${
+            onClick={() => setSelectedAgent(agent.id)}
+            className={`bg-slate-700/30 rounded-lg p-4 border border-slate-600/50 transition-all hover:border-slate-500 cursor-pointer ${
               agent.status === 'AVAILABLE' ? 'status-available' : agent.status === 'BUSY' ? 'status-busy' : ''
             }`}
           >
@@ -107,6 +112,15 @@ export function AgentGrid({ agents, isLoading }: AgentGridProps) {
           </div>
         ))}
       </div>
+
+      {selectedAgent && (
+        <LogModal
+          isOpen={true}
+          onClose={() => setSelectedAgent(null)}
+          agentId={selectedAgent}
+          title="Agent Execution Logs"
+        />
+      )}
     </div>
   );
 }

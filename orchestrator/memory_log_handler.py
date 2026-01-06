@@ -21,13 +21,17 @@ class LogEntry:
     level: str
     logger_name: str
     message: str
+    task_id: str | None = None
+    agent_id: str | None = None
     
     def to_dict(self) -> dict:
         return {
             "timestamp": self.timestamp,
             "level": self.level,
             "logger": self.logger_name,
-            "message": self.message
+            "message": self.message,
+            "task_id": self.task_id,
+            "agent_id": self.agent_id
         }
 
 
@@ -66,20 +70,25 @@ class MemoryLogHandler(logging.Handler):
                 timestamp=datetime.fromtimestamp(record.created).isoformat(),
                 level=record.levelname,
                 logger_name=record.name,
-                message=self.format(record)
+                message=self.format(record),
+                task_id=getattr(record, "task_id", None),
+                agent_id=getattr(record, "agent_id", None)
             )
             with self._buffer_lock:
                 self._buffer.append(entry)
         except Exception:
             self.handleError(record)
     
-    def get_logs(self, limit: int = 100, level: str | None = None) -> List[LogEntry]:
+    def get_logs(self, limit: int = 100, level: str | None = None, 
+                 task_id: str | None = None, agent_id: str | None = None) -> List[LogEntry]:
         """
         Get the most recent log entries.
         
         Args:
             limit: Maximum number of entries to return.
             level: Filter by log level (e.g., 'INFO', 'ERROR').
+            task_id: Filter by task ID.
+            agent_id: Filter by agent ID.
         
         Returns:
             List of LogEntry objects, newest first.
@@ -91,6 +100,12 @@ class MemoryLogHandler(logging.Handler):
         if level:
             level_upper = level.upper()
             logs = [log for log in logs if log.level == level_upper]
+            
+        if task_id:
+            logs = [log for log in logs if log.task_id == task_id]
+            
+        if agent_id:
+            logs = [log for log in logs if log.agent_id == agent_id]
         
         # Return newest first, limited
         return list(reversed(logs[-limit:]))
