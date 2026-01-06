@@ -1,6 +1,9 @@
+import { useState, useEffect } from 'react';
 import { useQuery, QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Cpu, RefreshCw } from 'lucide-react';
 import { dashboardApi } from './api/dashboardApi';
+import { onConnectionStatusChange } from './api/client';
+import { Toast } from './components/Toast';
 import { SummaryCards, TaskSummaryCards } from './components/SummaryCards';
 import { AgentGrid } from './components/AgentGrid';
 import { TaskList } from './components/TaskList';
@@ -49,6 +52,15 @@ function Dashboard() {
   const handleRefresh = () => {
     queryClient.invalidateQueries();
   };
+
+  const [isOffline, setIsOffline] = useState(false);
+
+  useEffect(() => {
+    const unsubscribe = onConnectionStatusChange((isOnline) => {
+      setIsOffline(!isOnline);
+    });
+    return unsubscribe;
+  }, []);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
@@ -101,6 +113,10 @@ function Dashboard() {
         {/* Log Viewer */}
         <LogViewer logs={logs} isLoading={logsLoading} />
       </main>
+
+      {isOffline && (
+        <Toast message="Connection to Orchestrator lost. Reconnecting..." />
+      )}
 
       {/* Footer */}
       <footer className="py-6 text-center text-slate-500 text-sm">
