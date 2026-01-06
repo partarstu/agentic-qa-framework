@@ -3,8 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
-import traceback
 import time
+import traceback
 from collections import defaultdict
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -19,7 +19,6 @@ from a2a.types import TaskState, AgentCard, Artifact, Task, JSONRPCErrorResponse
     Message, TaskIdParams
 from a2a.utils import new_agent_text_message, get_message_text
 from fastapi import FastAPI, Request, HTTPException, Security, Depends, Query
-from fastapi.responses import JSONResponse
 from fastapi.security import APIKeyHeader
 from fastapi.staticfiles import StaticFiles
 from pydantic_ai import Agent
@@ -33,14 +32,12 @@ from common.models import SelectedAgent, GeneratedTestCases, TestCase, ProjectEx
 from common.services.test_management_system_client_provider import get_test_management_client
 from common.services.test_reporting_client_base_provider import get_test_reporting_client
 from common.services.vector_db_service import VectorDbService
-
-# Import models and state from the models module
+from orchestrator.dashboard_service import dashboard_service
+from orchestrator.memory_log_handler import setup_memory_logging
 from orchestrator.models import (
     AgentStatus, BrokenReason, TaskStatus, TaskRecord, ErrorRecord,
-    agent_registry, task_history, error_history, ORCHESTRATOR_START_TIME
+    agent_registry, task_history, error_history
 )
-from orchestrator.memory_log_handler import setup_memory_logging, memory_log_handler
-from orchestrator.dashboard_service import dashboard_service
 
 MAX_RETRIES = 3
 
@@ -131,10 +128,12 @@ async def get_recent_errors(limit: int = Query(default=20, le=50)):
 @orchestrator_app.get("/api/dashboard/logs")
 async def get_logs(
     limit: int = Query(default=100, le=500),
-    level: Optional[str] = Query(default=None, description="Filter by log level (INFO, WARNING, ERROR)")
+    level: Optional[str] = Query(default=None, description="Filter by log level (INFO, WARNING, ERROR)"),
+    task_id: Optional[str] = Query(default=None, description="Filter by task ID"),
+    agent_id: Optional[str] = Query(default=None, description="Filter by agent ID")
 ):
     """Get recent application logs."""
-    return await dashboard_service.get_logs(limit=limit, level=level)
+    return await dashboard_service.get_logs(limit=limit, level=level, task_id=task_id, agent_id=agent_id)
 
 
 async def _retry_cancellation_task():
@@ -783,6 +782,22 @@ def _get_file_contents_from_artifacts(artifacts: list[Artifact]) -> List[FileWit
     return file_parts
 
 
+async def _save_agent_logs_from_task(task: Task, internal_task_id: str) -> None:
+    """Extract and save agent logs from task artifacts.
+    
+    Args:
+        task: The completed Task containing artifacts with potential logs.
+        internal_task_id: The internal task ID for tracking in task history.
+    """
+    try:
+        file_artifacts = _get_file_contents_from_artifacts(task.artifacts)
+        agent_logs = utils.get_execution_logs_from_artifacts(file_artifacts)
+        if agent_logs:
+            await task_history.update_logs(internal_task_id, agent_logs)
+    except Exception as e:
+        logger.warning(f"Failed to extract logs for task {internal_task_id}: {e}")
+
+
 async def _send_task_to_agent_with_message(agent_id: str, message: Message, task_description: str) -> Task | None:
     """Send a custom message (with file parts) to an agent.
 
@@ -843,13 +858,15 @@ async def _send_task_to_agent_with_message(agent_id: str, message: Message, task
                             status=final_status, 
                             end_time=datetime.now()
                         )
+                        await _save_agent_logs_from_task(last_task, internal_task_id)
+
                         await agent_registry.update_status(agent_id, AgentStatus.AVAILABLE)
                         await agent_registry.set_current_task(agent_id, None)
                         return last_task
                     await task_history.update(internal_task_id, TaskStatus.FAILED, datetime.now(), "Iterator finished before completion")
                     _handle_exception(f"Task '{task_description}' iterator finished before completion.", 500, internal_task_id, agent_id)
                 except asyncio.TimeoutError:
-                    logger.error(f"Task '{task_description}' timed out while waiting for completion.")
+                    logger.error(f"Task '{task_description}' timed out while waiting for completion.", extra={"task_id": internal_task_id, "agent_id": agent_id})
                     # Update task history
                     await task_history.update(internal_task_id, TaskStatus.FAILED, datetime.now(), "Task timed out")
                     # Get task ID if available for tracking
@@ -860,8 +877,8 @@ async def _send_task_to_agent_with_message(agent_id: str, message: Message, task
                         )
                         await agent_registry.set_current_task(agent_id, None)
                         await cancellation_queue.put((agent_id, time.time()))
-                    except Exception as ex:
-                        logger.exception(f"Error handling timeout for agent {agent_id}.")
+                    except Exception:
+                        logger.exception(f"Error handling timeout for agent {agent_id}.", extra={"task_id": internal_task_id, "agent_id": agent_id})
                         await agent_registry.update_status(
                             agent_id, AgentStatus.BROKEN, BrokenReason.TASK_STUCK, stuck_task_id
                         )
@@ -876,30 +893,33 @@ async def _send_task_to_agent_with_message(agent_id: str, message: Message, task
                     task, _ = response
                     last_task = task
                     if task.status.state in (TaskState.completed, TaskState.failed, TaskState.rejected):
-                        logger.info(f"Task '{task_description}' was completed with status '{str(task.status.state)}'.")
+                        logger.info(f"Task '{task_description}' was completed with status '{str(task.status.state)}'.", extra={"task_id": internal_task_id, "agent_id": agent_id})
                         # Update task history
                         final_status = TaskStatus.COMPLETED if task.status.state == TaskState.completed else TaskStatus.FAILED
                         error_msg = get_message_text(task.status.message) if task.status.state != TaskState.completed else None
                         await task_history.update(internal_task_id, final_status, datetime.now(), error_msg)
+                        
+                        await _save_agent_logs_from_task(task, internal_task_id)
+
                         await agent_registry.update_status(agent_id, AgentStatus.AVAILABLE)
                         await agent_registry.set_current_task(agent_id, None)
                         return task
                     else:
                         logger.debug(
                             f"Task for {task_description} is still in '{task.status.state}' state. Waiting for its "
-                            f"completion. Agent: '{agent_card.name}' (ID: {agent_id})")
+                            f"completion. Agent: '{agent_card.name}' (ID: {agent_id})", extra={"task_id": internal_task_id, "agent_id": agent_id})
                 elif isinstance(response, Message):
                     msg_text = get_message_text(response)
                     logger.info(
                         f"Received a message from agent in the scope of the "
-                        f"task '{task_description}': {msg_text}")
+                        f"task '{task_description}': {msg_text}", extra={"task_id": internal_task_id, "agent_id": agent_id})
 
             await task_history.update(internal_task_id, TaskStatus.FAILED, datetime.now(), "Timeout waiting for completion")
             _handle_exception(f"Task for {task_description} wasn't complete within timeout.", 408, internal_task_id, agent_id)
             return None
 
     except Exception as e:
-        logger.exception(f"Error communicating with agent {agent_id}.")
+        logger.exception(f"Error communicating with agent {agent_id}.", extra={"task_id": internal_task_id, "agent_id": agent_id})
         await task_history.update(internal_task_id, TaskStatus.FAILED, datetime.now(), str(e))
         # Connection/communication error likely means agent is offline
         await agent_registry.update_status(agent_id, AgentStatus.BROKEN, BrokenReason.OFFLINE)

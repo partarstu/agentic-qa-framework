@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import base64
+import logging
 from abc import ABC, abstractmethod
 from contextlib import asynccontextmanager
 from typing import Type, List, Sequence, Optional
@@ -12,7 +13,7 @@ import uvicorn
 from a2a.server.apps import A2AFastAPIApplication
 from a2a.server.request_handlers import DefaultRequestHandler
 from a2a.server.tasks import InMemoryTaskStore
-from a2a.types import AgentCard, AgentCapabilities, Message, FilePart, FileWithBytes
+from a2a.types import AgentCard, AgentCapabilities, Message, FilePart, FileWithBytes, Part
 from a2a.utils import get_message_text, new_agent_text_message
 from fastapi import FastAPI
 from pydantic import BaseModel
@@ -29,6 +30,7 @@ from pydantic_ai.usage import UsageLimits
 import config
 from common import utils
 from common.agent_executor import DefaultAgentExecutor
+from common.agent_log_capture import AgentLogCaptureHandler, create_log_file_part
 from common.custom_llm_wrapper import CustomLlmWrapper
 from common.models import JsonSerializableModel
 from common.services.vector_db_service import VectorDbService
@@ -128,14 +130,29 @@ class AgentBase(ABC):
     async def run(self, received_message: Message) -> Message:
         self.latest_received_message = received_message
         received_request = self._get_all_received_contents(received_message)
+        
+        # Set up log capture for this execution
+        log_handler = AgentLogCaptureHandler()
+        log_handler.setLevel(config.LOG_LEVEL)
+        root_logger = logging.getLogger()
+        root_logger.addHandler(log_handler)
+        
         logger.info("Got a task to execute, starting execution.")
         try:
             result = await self._get_agent_execution_result(received_request)
             logger.info("Completed execution of the task.")
             self._log_llm_comments_if_result_incomplete(result.output)
-            return self._get_text_message_from_results(result)
+            
+            # Get captured logs
+            captured_logs = log_handler.get_logs()
+            root_logger.removeHandler(log_handler)
+            
+            return self._get_message_with_logs(result, captured_logs)
         except Exception as e:
             logger.exception(f"Error during agent execution: {e}")
+            # Get captured logs even on error
+            captured_logs = log_handler.get_logs()
+            root_logger.removeHandler(log_handler)
             raise
 
     def _log_llm_comments_if_result_incomplete(self, output: BaseModel | None) -> None:
@@ -302,3 +319,38 @@ class AgentBase(ABC):
             return new_agent_text_message(text="\n".join(text_parts), context_id=context_id, task_id=task_id)
         else:
             return new_agent_text_message(text=str(output), context_id=context_id, task_id=task_id)
+
+    def _get_message_with_logs(self, result: AgentRunResult, captured_logs: str, 
+                                context_id: str = None, task_id: str = None) -> Message:
+        """Create a message with text result and log file artifact.
+        
+        Args:
+            result: The agent execution result.
+            captured_logs: The captured log content.
+            context_id: Optional context ID for the message.
+            task_id: Optional task ID for the message.
+            
+        Returns:
+            A Message containing both text output and log file artifact.
+        """
+        # Get the base text message
+        base_message = self._get_text_message_from_results(result, context_id, task_id)
+        
+        # If no logs captured, return the base message
+        if not captured_logs or not captured_logs.strip():
+            return base_message
+        
+        # Create log file part
+        log_file = create_log_file_part(captured_logs, self.agent_name)
+        log_part = Part(root=FilePart(file=log_file))
+        
+        # Add log part to the message
+        new_parts = list(base_message.parts) + [log_part]
+        
+        return Message(
+            parts=new_parts,
+            message_id=base_message.message_id,
+            role=base_message.role,
+            context_id=base_message.context_id,
+            task_id=base_message.task_id
+        )
