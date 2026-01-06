@@ -20,10 +20,14 @@ Watch a demo of the project in action:
     * Test Case Classification
     * Test Case Review
     * UI Test Execution
+    * Incident Creation (automatic bug reporting for failed tests)
+    * Jira RAG Update (vector database synchronization for semantic search)
 * **Prompt Injection Protection:** Built-in safeguards to detect and prevent prompt injection attacks.
 * **A2A and MCP - compliant:** Adheres to the specifications of Agent2Agent and Model Context protocols.
 * **Orchestration Layer:** A central orchestrator manages agent registration, task routing, and workflow execution.
 * **Integration with External Systems:** Supports integration with Jira by utilizing its MCP server.
+* **Vector Database Integration:** Uses Qdrant for semantic search capabilities, enabling intelligent duplicate detection and RAG-based features.
+* **Embedding Service:** Dedicated microservice for generating text embeddings using SentenceTransformer models.
 * **Test Management System Integration:** Integrates with Zephyr for operations related to test case management.
 * **Test Reporting:** Generates detailed Allure reports for test execution results.
 * **Extensible:** Designed for easy addition of new agents, tools, and integrations.
@@ -115,7 +119,7 @@ EXTERNAL_PORT=8001 # Default: 8001. The externally accessible port for the agent
 
 # Agent Discovery (for remote agents)
 REMOTE_EXECUTION_AGENT_HOSTS=http://localhost # Default: http://localhost. Comma-separated URLs of remote agent hosts.
-AGENT_DISCOVERY_PORTS=8001-8006 # Default: 8001-8006. Port range for agent discovery.
+AGENT_DISCOVERY_PORTS=8001-8007 # Default: 8001-8007. Port range for agent discovery.
 
 # Google Cloud Storage (via Volume Mounts)
 # In cloud deployments, GCS buckets are mounted as local folders via Cloud Run volume mounts.
@@ -140,6 +144,23 @@ ALLURE_REPORT_DIR=allure-report # Default: allure-report. Directory for generate
 TOP_P=1.0 # Default: 1.0. Top-p sampling parameter for models.
 TEMPERATURE=0.0 # Default: 0.0. Temperature parameter for models.
 
+# Qdrant Vector Database (for RAG and semantic search)
+QDRANT_URL=http://localhost # Default: http://localhost. URL of the Qdrant server.
+QDRANT_PORT=6333 # Default: 6333. Port of the Qdrant server.
+QDRANT_API_KEY= # Optional. API key for Qdrant authentication.
+QDRANT_COLLECTION_NAME=jira_issues # Default: jira_issues. Name of the main collection for Jira issues.
+QDRANT_METADATA_COLLECTION_NAME=rag_metadata # Default: rag_metadata. Name of the collection for RAG metadata.
+RAG_MIN_SIMILARITY_SCORE=0.7 # Default: 0.7. Minimum similarity score for vector search results.
+RAG_MAX_RESULTS=5 # Default: 5. Maximum number of results to return from vector search.
+RAG_EMBEDDING_MODEL=Qwen/Qwen3-Embedding-0.6B # Default: Qwen/Qwen3-Embedding-0.6B. SentenceTransformer model for embeddings.
+EMBEDDING_SERVICE_URL= # Optional. URL of the embedding service for remote embedding generation.
+EMBEDDING_SERVICE_TIMEOUT_SECONDS=60.0 # Default: 60.0. Timeout for embedding service requests.
+
+# Incident Creation Agent Configuration
+INCIDENT_AGENT_MIN_SIMILARITY_SCORE=0.7 # Default: 0.7. Minimum score for duplicate detection.
+ISSUE_PRIORITY_FIELD_ID=priority # Default: priority. Jira field ID for issue priority.
+ISSUE_SEVERITY_FIELD_NAME=customfield_10124 # Default: customfield_10124. Jira custom field name for severity.
+
 # Prompt Injection Detection
 PROMPT_INJECTION_CHECK_ENABLED=False # Default: False. Set to "True" to enable prompt injection detection.
 PROMPT_GUARD_PROVIDER=protect_ai # Default: protect_ai. The provider for prompt injection detection.
@@ -148,7 +169,7 @@ PROMPT_INJECTION_MODEL_NAME=ProtectAI/deberta-v3-base-prompt-injection-v2 # Defa
 
 **Note on Local Models:**
 If you are running the orchestrator or agents locally (not in a Docker container deployed to the cloud), you must manually download the necessary models:
-1. **Prompt Injection Detection Model:** Required if `PROMPT_INJECTION_CHECK_ENABLED` is set to `True`. Run `scripts/download_model.py`.
+1. **Prompt Injection Detection Model:** Required if `PROMPT_INJECTION_CHECK_ENABLED` is set to `True`. Run `scripts/download_prompt_guard_model.py`.
 2. **Embedding Model:** Required for agents using Vector DB (e.g. Incident Creation, Jira RAG Update) and Orchestrator. Run `scripts/download_embedding_model.py`.
 
 When deploying to cloud environments via Docker, the model downloads are handled automatically as part of the Docker image build process.
@@ -159,6 +180,8 @@ ORCHESTRATOR_MODEL_NAME=google-gla:gemini-2.5-flash
 REQUIREMENTS_REVIEW_AGENT_MODEL_NAME=google-gla:gemini-2.5-pro
 TEST_CASE_CLASSIFICATION_AGENT_MODEL_NAME=google-gla:gemini-2.5-flash
 TEST_CASE_GENERATION_AGENT_MODEL_NAME=google-gla:gemini-2.5-flash
+INCIDENT_CREATION_AGENT_MODEL_NAME=google-gla:gemini-2.5-flash
+JIRA_RAG_UPDATE_AGENT_MODEL_NAME=google-gla:gemini-2.5-flash
 TEST_CASE_REVIEW_AGENT_MODEL_NAME=google-gla:gemini-2.5-pro
 ```
 
@@ -202,7 +225,20 @@ To run the Jira MCP server, you will need Docker installed.
 
 ### Starting agents locally
 
-1. **Start Individual Agents:**
+1. **Start Qdrant Vector Database (required for RAG features):**
+   The Incident Creation and Jira RAG Update agents require a running Qdrant instance for vector database operations.
+   ```bash
+   scripts/start_qdrant.bat
+   ```
+   This script will start Qdrant in a Docker container on port 6333.
+
+2. **Start the Embedding Service (optional):**
+   If you want to use a dedicated embedding service instead of loading the model in each agent:
+   ```bash
+   python services/embedding_service/main.py
+   ```
+
+3. **Start Individual Agents:**
    Open separate terminal windows for each agent you want to run:
 
     * **Requirements Review Agent:**
@@ -221,8 +257,16 @@ To run the Jira MCP server, you will need Docker installed.
       ```bash
       python agents/test_case_review/main.py
       ```
+    * **Incident Creation Agent:**
+      ```bash
+      python agents/incident_creation/main.py
+      ```
+    * **Jira RAG Update Agent:**
+      ```bash
+      python agents/jira_rag/main.py
+      ```
 
-2. **Start the Orchestrator:**
+4. **Start the Orchestrator:**
    ```bash
    python orchestrator/main.py
    ```
@@ -288,6 +332,8 @@ gcloud builds submit --config 'path/to/your/cloudbuild.yaml' --substitutions "`^
 * `_TEST_CASE_GENERATION_AGENT_BASE_URL`: The URL of the deployed Test Case Generation Agent.
 * `_TEST_CASE_CLASSIFICATION_AGENT_BASE_URL`: The URL of the deployed Test Case Classification Agent.
 * `_TEST_CASE_REVIEW_AGENT_BASE_URL`: The URL of the deployed Test Case Review Agent.
+* `_INCIDENT_CREATION_AGENT_BASE_URL`: The URL of the deployed Incident Creation Agent.
+* `_JIRA_RAG_UPDATE_AGENT_BASE_URL`: The URL of the deployed Jira RAG Update Agent.
 * `_REMOTE_EXECUTION_AGENT_HOSTS`: A comma-separated list of URLs for all deployed agents that the orchestrator will
   interact with.
 
@@ -329,7 +375,8 @@ You can trigger the execution of automated tests for a specific project.
 
 * **Execute Tests:**
   Send a POST request to `/execute-tests` with a JSON payload containing the `project_key` of the Jira project. This
-  will execute all test cases labeled as "automated" within that project.
+  will execute all test cases labeled as "automated" within that project. For any failed tests, the orchestrator will
+  automatically trigger incident creation using the Incident Creation Agent.
 
   Example payload:
   ```json
@@ -338,6 +385,38 @@ You can trigger the execution of automated tests for a specific project.
   }
   ```
   The results will be reported back to Zephyr and an Allure report will be generated.
+
+### Updating the RAG Vector Database
+
+To keep the vector database synchronized with Jira issues for duplicate detection:
+
+* **Update RAG DB:**
+  Send a POST request to `/update-rag-db` with a JSON payload containing the `project_key` of the Jira project. This
+  will sync all bug issues from Jira to the Qdrant vector database, enabling semantic search for duplicate detection.
+
+  Example payload:
+  ```json
+  {
+      "project_key": "SCRUM"
+  }
+  ```
+
+## Running Tests
+
+The project includes a comprehensive test suite. To run the tests:
+
+```bash
+# Run all tests
+pytest
+
+# Run tests with verbose output
+pytest -v
+
+# Run tests for a specific module
+pytest tests/agents/
+pytest tests/orchestrator/
+pytest tests/common/
+```
 
 ## Contributing
 
