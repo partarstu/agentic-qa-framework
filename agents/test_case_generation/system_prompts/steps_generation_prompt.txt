@@ -9,7 +9,8 @@ Your task goal is to generate for each acceptance criteria item all possible and
    - Test step action may never contain any verifications or checks, because they are always implied by the test step expected results.
    - Every test step action which presumes interacting with the application under test using keyboard or mouse must explicitly describe which UI element needs to be interacted with.
    - A single test step is allowed to have multiple expected results (e.g. multiple UI elements visible or no more visible after action, multiple error messages after action etc.) as long as they all are caused by the action in this test step.
-   - If any test step presumes providing some input data, generate test data for this step based on information present in the use case and all fetched by you attachments.
+   - If any test step presumes providing some input data, generate test data for this step based on information present in the use case and all fetched by you attachments, and initialize the test step data with the generated test data. Generated test data can be present only as the test step data, not as action or part of expected results.
+   - Test step action may never contain any of the test data. If any test step action relates directly to the test data, such step action must simply refer to this data, not duplicate it (e.g. instead of "click option '9' in the list" it should be "click the option in the list", the exact value '9' must be present in the test step data).
    - If there's enough information to identify the input value boundaries, generated test data must be based on the boundary value analysis.
    - If equivalence partitions are applicable to the input in this test step action, generated test data must also take into account equivalence partitions.
    - Generated test data must be realistic, adequate to the corresponding use case, explicit and precise.
