@@ -108,7 +108,7 @@ class DashboardAuthConfig:
 
 # Requirements Review Agent
 class RequirementsReviewAgentConfig:
-    THINKING_BUDGET = 5000
+    THINKING_BUDGET = 1000
     OWN_NAME = "Jira Requirements Reviewer"
     PORT = int(os.environ.get("PORT", "8001"))
     EXTERNAL_PORT = int(os.environ.get("EXTERNAL_PORT", PORT))
@@ -200,5 +200,5 @@ class QdrantConfig:
     EMBEDDING_MODEL_PATH = os.path.join(LOCAL_MODELS_PATH, "embedding_model")
     EMBEDDING_SERVICE_URL = os.environ.get("EMBEDDING_SERVICE_URL")
     EMBEDDING_SERVICE_TIMEOUT_SECONDS = float(os.environ.get("EMBEDDING_SERVICE_TIMEOUT_SECONDS", "60.0"))
-    VALID_STATUSES = os.environ.get("JIRA_VALID_STATUSES", "To Do,In Progress,Done").split(",")
+    VALID_STATUSES = os.environ.get("JIRA_VALID_STATUSES", "To Do,In Review,Ready for Development,In Progress,Done").split(",")
     BUG_ISSUE_TYPE = os.environ.get("JIRA_BUG_ISSUE_TYPE", "Bug")

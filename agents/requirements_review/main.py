@@ -77,7 +77,7 @@ class RequirementsReviewAgent(AgentBase):
         logger.info("Starting requirements review with %d attachments", len(attachments_content))
         result = await self.review_agent.run(user_message_parts)
         feedback: RequirementsReviewFeedback = result.output
-        logger.info(f"Generated {len(feedback.suggested_improvements)} improvement suggestions")
+        logger.info(f"Generated improvement suggestions as a feedback")
         return feedback
 
 

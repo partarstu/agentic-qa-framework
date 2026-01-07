@@ -81,7 +81,7 @@ class VectorDbService:
 
     async def _ensure_collection(self):
         if not await self.client.collection_exists(self.collection_name):
-            # We dynamically detect the vector size by embedding a dummy string
+            # Dynamically detect the vector size by embedding a dummy string
             dummy_vec = await self._get_embedding("test")
             vector_size = len(dummy_vec)
 

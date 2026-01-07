@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2025 Taras Paruta (partarstu@gmail.com)
 #
 # SPDX-License-Identifier: Apache-2.0
-
+import time
 from typing import List, Optional
 
 from pydantic_ai.mcp import MCPServerSSE
@@ -16,6 +16,8 @@ from common.models import JiraIssue, ProjectMetadata, RagUpdateResult
 
 logger = utils.get_logger("jira_rag_update_agent")
 
+EXECUTION_DELAY_SECONDS = 60
+DEFAULT_LAST_UPDATE = "1970-01-01T00:00:00Z"
 RAG_COLLECTION = getattr(config.QdrantConfig, "TICKETS_COLLECTION_NAME", "jira_issues")
 METADATA_COLLECTION = getattr(config.QdrantConfig, "METADATA_COLLECTION_NAME", "rag_metadata")
 VALID_STATUSES = getattr(config.QdrantConfig, "VALID_STATUSES", ["To Do", "In Progress", "Done"])
@@ -30,8 +32,7 @@ class JiraRagAgent(AgentBase):
         self.metadata_db = VectorDbService(METADATA_COLLECTION)
 
         instruction_prompt = JiraRagUpdateSystemPrompt(
-            valid_statuses=VALID_STATUSES,
-            bug_issue_type=BUG_ISSUE_TYPE,
+            valid_statuses=VALID_STATUSES
         )
 
         super().__init__(
@@ -69,20 +70,28 @@ class JiraRagAgent(AgentBase):
 
     async def get_last_update_timestamp(self, project_key: str) -> str:
         """Retrieves the timestamp of the last project update from the metadata DB.
-        Returns '1970-01-01 00:00' if not found."""
+
+        Args:
+            project_key: The key of the project for which the timestamp needs to be retrieved.
+        """
         try:
             project_new_id = self._key_to_int(project_key)
             points = await self.metadata_db.retrieve(point_ids=[project_new_id])
             if points and points[0].payload:
-                return points[0].payload.get("last_update", "1970-01-01 00:00")
-            return "1970-01-01 00:00"
+                return points[0].payload.get("last_update", DEFAULT_LAST_UPDATE)
+            return DEFAULT_LAST_UPDATE
         except Exception:
             logger.exception("Error fetching last update")
             raise
 
-    async def save_last_update_timestamp(self, project_key: str, timestamp: str) -> str:
-        """Saves the timestamp of the last project update."""
+    async def save_last_update_timestamp(self, project_key: str) -> str:
+        """Saves the current timestamp as the last project update timestamp in the metadata DB.
+
+         Args:
+            project_key: The key of the project for which the current timestamp needs to be saved.
+        """
         try:
+            timestamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - EXECUTION_DELAY_SECONDS))
             metadata = ProjectMetadata(project_key=project_key, last_update=timestamp)
             await self.metadata_db.upsert(data=metadata)
             return "Timestamp saved."
@@ -92,6 +101,9 @@ class JiraRagAgent(AgentBase):
 
     async def upsert_issues(self, issues: List[JiraIssue]) -> str:
         """Upserts a list of Jira issues into the vector DB.
+
+         Args:
+            issues: The list of Jira issues which need to be upserted.
         """
         count = 0
         try:
@@ -115,15 +127,15 @@ class JiraRagAgent(AgentBase):
             raise
 
     async def search_issues(
-        self,
-        query_text: str,
-        limit: int = 10,
-        score_threshold: float = 0.7,
-        issue_type: Optional[str] = None,
-        status: Optional[str] = None,
-        project_key: Optional[str] = None,
-        updated_after: Optional[str] = None,
-        updated_before: Optional[str] = None,
+            self,
+            query_text: str,
+            limit: int = 10,
+            score_threshold: float = 0.7,
+            issue_type: Optional[str] = None,
+            status: Optional[str] = None,
+            project_key: Optional[str] = None,
+            updated_after: Optional[str] = None,
+            updated_before: Optional[str] = None,
     ) -> List[dict]:
         """Searches for Jira issues in the vector DB with optional payload filters.
 

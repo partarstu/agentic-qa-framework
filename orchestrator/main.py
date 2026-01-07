@@ -398,7 +398,7 @@ async def update_rag_db(request: ProjectExecutionRequest, api_key: str = Depends
     try:
         task_description = "Update RAG Vector DB with Jira issues"
         agent_id = await _choose_agent_id(task_description)
-        completed_task = await _send_task_to_agent(agent_id, f"Sync Jira bugs for project {project_key}",
+        completed_task = await _send_task_to_agent(agent_id, f"Sync all Jira issues for project '{project_key}'",
                                                    task_description)
 
         _validate_task_status(completed_task, task_description)
