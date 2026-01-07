@@ -5,12 +5,12 @@
 from collections import defaultdict
 from typing import List, Dict, Any
 
-from dateutil import parser
 import httpx
+from dateutil import parser
 
 import config
 from common import utils
-from common.models import TestCase, TestStep, TestExecutionResult, DuplicateDetectionResult
+from common.models import TestCase, TestStep, TestExecutionResult
 from common.services.test_management_base import TestManagementClientBase
 
 TEST_FOR_EXECUTION_READY_STATUS_NAME = "Approved"
@@ -299,7 +299,7 @@ class ZephyrClient(TestManagementClientBase):
                 comment = result.generalErrorMessage if result.testExecutionStatus != 'passed' else ""
                 if result.incident_creation_result:
                     if result.incident_creation_result.incident_key:
-                        comment += f"\n\nIncident created: {result.incident_creation_result.incident_key}"
+                        comment += f"<br>Incident created: {result.incident_creation_result.incident_key}"
                     if result.incident_creation_result.duplicates:
                         duplicates = result.incident_creation_result.duplicates
                         duplicates_string = ", ".join([d.issue_key for d in duplicates])
@@ -328,8 +328,12 @@ class ZephyrClient(TestManagementClientBase):
                 if execution_id and result.incident_creation_result:
                     if result.incident_creation_result.incident_id:
                         self._link_issue_to_test_execution(client, execution_id, result.incident_creation_result.incident_id)
+                    if result.incident_creation_result.duplicates:
+                        for duplicate in result.incident_creation_result.duplicates:
+                            if duplicate.issue_id:
+                                self._link_issue_to_test_execution(client, execution_id, duplicate.issue_id)
 
-    def _link_issue_to_test_execution(self, client: httpx.Client, test_execution_id: int, issue_id: int) -> None:
+    def _link_issue_to_test_execution(self, client: httpx.Client, test_execution_id: int, issue_id: int | str) -> None:
         url = f"{self.base_url}/testexecutions/{test_execution_id}/links/issues"
         logger.info(f"Linking issue {issue_id} to test execution {test_execution_id} via {url}")
         response = client.post(url, headers=self.headers, json={"issueId": issue_id}, timeout=CLIENT_TIMEOUT)
@@ -416,7 +420,7 @@ class ZephyrClient(TestManagementClientBase):
         try:
             timestamp = parser.parse(timestamp_str)
             return timestamp.strftime("%Y-%m-%dT%H:%M:%SZ")
-        except ValueError as e:
+        except ValueError:
             logger.exception(f"Could not parse timestamp '{timestamp_str}'.")
             raise
 

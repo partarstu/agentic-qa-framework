@@ -249,6 +249,7 @@ class IncidentCreationInput(JsonSerializableModel):
 
 
 class DuplicateDetectionResult(JsonSerializableModel):
+    issue_id: str = Field(description="The numeric issue ID of existing incident Jira issue, which is a candidate for duplicate")
     issue_key: str = Field(description="The key of existing incident Jira issue, which is a candidate for duplicate")
     is_duplicate: bool = Field(description="True if the candidate is indeed a duplicate")
     message: str = Field(description="Elaborate Justification of the decision about being or not being a duplicate")

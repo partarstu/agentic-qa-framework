@@ -498,7 +498,7 @@ async def _request_incident_creation_for_failed_tests(
                 f"Incident creation completed for test case {result.testCaseKey}. "
                 f"Incident key: {incident_result.incident_key if incident_result else 'N/A'}"
             )
-        except Exception as e:
+        except Exception:
             logger.exception(f"Failed to create incident for test case {result.testCaseKey}.")
 
     # Execute all incident creations in parallel
@@ -660,7 +660,7 @@ async def _execute_single_test(agent_id: str, test_case: TestCase,
     artifacts = []
     start_timestamp = datetime.now()
     try:
-        completed_task = await _send_task_to_agent(agent_id, execution_request.model_dump_json(), task_description)
+        completed_task = await _send_task_to_agent(execution_request.model_dump_json(), task_description)
         artifacts = _get_artifacts_from_task(completed_task, task_description)
     except Exception as e:
         _handle_exception(f"Failed to execute test case {test_case.key}. Error: {e}", 500)
@@ -954,7 +954,7 @@ async def _send_task_to_agent(input_data: str, task_description: str) -> Task | 
     return await _send_task_to_agent_with_message(message, task_description)
 
 
-async def _wait_and_reserve_agent(task_description: str) -> tuple[str, AgentCard]:
+async def _wait_and_reserve_agent(task_description: str) -> tuple[str, AgentCard] | None:
     """Wait for an available agent and atomically reserve it.
 
     This function handles the waiting loop outside the lock, and only holds
@@ -1007,6 +1007,7 @@ async def _wait_and_reserve_agent(task_description: str) -> tuple[str, AgentCard
     # Timeout reached
     _handle_exception(f"Timeout waiting for an available agent to handle task '{task_description}'. "
                       f"All agents have been busy for {max_wait_time} seconds.", 503)
+    return None
 
 
 async def _get_jira_issue_key_from_request(request):
