@@ -57,46 +57,85 @@
         <div class="mermaid-container overflow-x-auto">
             <div class="mermaid">
 graph TD
-    subgraph "Workflow 3: Test Execution & Reporting"
-        TE1[API Call<br>/execute-tests] --> TE2[Fetch ready for automated execution TCs <br>from Test Mgmt System];
-        TE2 --> TE3[Group TCs by their type];
-        TE3 --> TE4[For each test type, Select ALL<br>Suitable Execution Agents];
-        TE4 --> TE5[Distribute TCs Among Agents in parallel];
-        TE5 --> TE6[Send Execution Tasks for each selected agent in parallel];
-        TE6 --> TE7[Wait & Gather Execution Results];
-        TE7 --> TE8{Analyze Agent Responses};
-        TE8 --> TE9[Create Test Execution Results in<br>Test Mgmt System];
-        TE9 --> TE10[Generate Test Execution Reports];
-        TE10 --> TE11((End));
+    subgraph "Workflow 5: RAG Database Update"
+        RAG1[API Call<br>/update-rag-db] --> RAG2[Select Agent for<br>'Update RAG Vector DB'];
+        RAG2 --> RAG3[Send Sync Task<br>for project issues];
+        RAG3 --> RAG4[Agent syncs Jira issues<br>to Vector DB];
+        RAG4 --> RAG5[Return update summary];
+        RAG5 --> RAG6((End));
     end
 
-    subgraph "Workflow 2: Test Case Generation, Review and Classification"
+    subgraph "Workflow 4: Incident Creation"
+        IC1[Failed Test<br>Execution Result] --> IC2[Prepare Incident Creation Input<br>with TC details & artifacts];
+        IC2 --> IC3[Select Agent for<br>'Create incident report'];
+        IC3 --> IC4[Send A2A Message<br>with text & file parts];
+        IC4 --> IC5[Agent creates incident<br>in Jira with attachments];
+        IC5 --> IC6[Return Incident Key];
+        IC6 --> IC7((End));
+    end
+
+    subgraph "Workflow 3: Test Execution & Reporting"
+        TE1[API Call<br>/execute-tests] --> TE2[Fetch ready for automated execution TCs<br>from Test Mgmt System];
+        TE2 --> TE3[Group TCs by their labels];
+        TE3 --> TE4[For each label, Select ALL<br>Suitable Execution Agents];
+        TE4 --> TE5[Create agent worker pool<br>for each label];
+        TE5 --> TE6[Distribute TCs among agents<br>via async queue];
+        TE6 --> TE7[Execute TCs in parallel<br>across agent workers];
+        TE7 --> TE8[Wait & Gather<br>Execution Results];
+        TE8 --> TE9{Any Failed Tests?};
+        TE9 -- Yes --> TE10[Request Incident Creation<br>for each failed TC in parallel];
+        TE10 --> IC1;
+        TE9 -- No --> TE11;
+        TE10 -.-> TE11[Create Test Execution Results in<br>Test Mgmt System];
+        TE11 --> TE12[Generate Test Execution Reports<br>using Allure];
+        TE12 --> TE13((End));
+    end
+
+    subgraph "Workflow 2: Test Case Generation, Classification & Review"
         TCG1[Jira Webhook<br>/story-ready-for-test-case-generation] --> TCG2[Extract User Story ID];
         TCG2 --> TCG3[Select Agent for<br>'Generate test cases'];
         TCG3 --> TCG4[Send Generation Task];
         TCG4 --> TCG5[Wait & Receive Generated TCs];
         TCG5 --> TCG6[Select Agent for<br>'Classify test cases'];
         TCG6 --> TCG7[Send Classification Task];
-        TCG7 --> TCG8[Wait for Completion];
+        TCG7 --> TCG8[Wait for Classification Completion];
         TCG8 --> TCG9[Select Agent for<br>'Review test cases'];
         TCG9 --> TCG10[Send Review Task];
-        TCG10 --> TCG11[Wait for Completion];
+        TCG10 --> TCG11[Wait for Review Completion];
         TCG11 --> TCG12((End));
     end
 
     subgraph "Workflow 1: Requirements Review"
-        J1[Jira Webhook<br>/new-requirements-available] --> J2[Extract User Story ID];
-        J2 --> J3[Select Agent for<br>'Review Jira user story'];
-        J3 --> J4[Send Review Task to Agent];
-        J4 --> J5[Wait for Task Completion];
-        J5 --> J6((End));
+        RR1[Jira Webhook<br>/new-requirements-available] --> RR2[Extract User Story ID];
+        RR2 --> RR3[Select Agent for<br>'Review Jira user story'];
+        RR3 --> RR4[Send Review Task<br>to Agent];
+        RR4 --> RR5[Wait for Task Completion];
+        RR5 --> RR6((End));
     end
 
     subgraph "System Startup & Agent Discovery"
-        A[Orchestrator Starts] --> B{Periodic Agent Discovery};
+        A[Orchestrator Starts] --> B[Initial Agent Discovery];
         B --> C[Scan Configured Agent URLs];
         C --> D{Fetch Agent Cards};
-        D -- Success --> E[Add/Update Agent in Registry];
+        D -- Success --> E[Add/Update Agent in Registry<br>Status: AVAILABLE];
+        D -- Failure --> F[Mark Agent as BROKEN<br>Reason: OFFLINE];
+        E --> G{Periodic Discovery Loop};
+        F --> G;
+        G --> C;
+    end
+
+    subgraph "Agent Recovery & Health Monitoring"
+        AR1[Broken Agent<br>Detected] --> AR2{Check Broken Reason};
+        AR2 -- OFFLINE --> AR3[Attempt to fetch<br>Agent Card];
+        AR2 -- TASK_STUCK --> AR4[Attempt to cancel<br>stuck task];
+        AR3 -- Success --> AR5[Mark Agent AVAILABLE];
+        AR3 -- Failure --> AR6[Retry after 60s];
+        AR4 -- Success --> AR5;
+        AR4 -- Failure --> AR7{Is agent reachable?};
+        AR7 -- Yes --> AR5;
+        AR7 -- No --> AR8[Update to OFFLINE<br>Retry after 60s];
+        AR6 --> AR1;
+        AR8 --> AR1;
     end
             </div>
         </div>
