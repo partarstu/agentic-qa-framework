@@ -96,6 +96,7 @@ def _validate_api_key(api_key: str = Security(api_key_header)):
     if config.OrchestratorConfig.API_KEY and api_key != config.OrchestratorConfig.API_KEY:
         raise HTTPException(status_code=401, detail="Unauthorized: Invalid API Key")
 
+
 orchestrator_app = FastAPI(lifespan=lifespan)
 
 
@@ -153,11 +154,11 @@ async def get_recent_errors(limit: int = Query(default=20, le=50), _: str = Depe
 
 @orchestrator_app.get("/api/dashboard/logs")
 async def get_logs(
-    limit: int = Query(default=100, le=500),
-    level: Optional[str] = Query(default=None, description="Filter by log level (INFO, WARNING, ERROR)"),
-    task_id: Optional[str] = Query(default=None, description="Filter by task ID"),
-    agent_id: Optional[str] = Query(default=None, description="Filter by agent ID"),
-    _: str = Depends(dashboard_auth)
+        limit: int = Query(default=100, le=500),
+        level: Optional[str] = Query(default=None, description="Filter by log level (INFO, WARNING, ERROR)"),
+        task_id: Optional[str] = Query(default=None, description="Filter by task ID"),
+        agent_id: Optional[str] = Query(default=None, description="Filter by agent ID"),
+        _: str = Depends(dashboard_auth)
 ):
     """Get recent application logs."""
     return await dashboard_service.get_logs(limit=limit, level=level, task_id=task_id, agent_id=agent_id)
@@ -820,15 +821,6 @@ async def _save_agent_logs_from_task(task: Task, internal_task_id: str) -> None:
 async def _send_task_to_agent_with_message(message: Message, task_description: str) -> Task | None:
     """Send a custom message (with file parts) to an agent.
 
-    This function handles the complete agent task lifecycle:
-    1. Selects an available agent and atomically marks it as BUSY
-    2. Sends the task to the agent
-    3. Waits for completion
-    4. Releases the agent (back to AVAILABLE or BROKEN) on any exit path
-
-    Execution logs are expected to arrive from agents as file parts in the task artifacts.
-    Interested parties should extract logs directly from artifacts using get_execution_logs_from_artifacts().
-
     Args:
         message: The A2A Message object to send (can contain text and file parts).
         task_description: Description of the task for agent selection and logging.
@@ -836,21 +828,15 @@ async def _send_task_to_agent_with_message(message: Message, task_description: s
     Returns:
         The completed Task, or None if the task failed to complete.
     """
-    # Select and reserve an agent atomically
-    agent_id = await _choose_agent_id(task_description)
-    
-    internal_task_id = str(uuid4())
-    try:
-        agent_card = await agent_registry.get_card(agent_id)
-        if not agent_card:
-            # Agent not found - release it back to available and raise
-            await agent_registry.update_status(agent_id, AgentStatus.AVAILABLE)
-            await agent_registry.set_current_task(agent_id, None)
-            raise ValueError(f"Agent with ID '{agent_id}' is not yet registered with his card")
 
+    internal_task_id = str(uuid4())
+    agent_id = None
+    try:
+        # Wait for an agent and reserve it atomically
+        agent_id, agent_card = await _wait_and_reserve_agent(task_description)
         task_start_time = datetime.now()
         agent_name = await agent_registry.get_name(agent_id)
-        
+
         # Record task start in history
         task_record = TaskRecord(
             task_id=internal_task_id,
@@ -861,8 +847,6 @@ async def _send_task_to_agent_with_message(message: Message, task_description: s
             start_time=task_start_time
         )
         await task_history.add(task_record)
-        
-        # Track the current task
         await agent_registry.set_current_task(agent_id, internal_task_id)
 
         async with httpx.AsyncClient(timeout=config.OrchestratorConfig.TASK_EXECUTION_TIMEOUT) as client:
@@ -873,7 +857,6 @@ async def _send_task_to_agent_with_message(message: Message, task_description: s
             response_iterator = a2a_client.send_message(message)
             start_time = time.time()
             last_task = None
-
             while (time_left := _get_time_left_for_task_completion_waiting(start_time)) > 0:
                 try:
                     response = await asyncio.wait_for(response_iterator.__anext__(), timeout=time_left)
@@ -881,13 +864,8 @@ async def _send_task_to_agent_with_message(message: Message, task_description: s
                     if last_task and last_task.status.state in (TaskState.completed, TaskState.failed, TaskState.rejected):
                         # Update task history with completion
                         final_status = TaskStatus.COMPLETED if last_task.status.state == TaskState.completed else TaskStatus.FAILED
-                        await task_history.update(
-                            internal_task_id, 
-                            status=final_status, 
-                            end_time=datetime.now()
-                        )
+                        await task_history.update(internal_task_id, status=final_status, end_time=datetime.now())
                         await _save_agent_logs_from_task(last_task, internal_task_id)
-
                         await agent_registry.update_status(agent_id, AgentStatus.AVAILABLE)
                         await agent_registry.set_current_task(agent_id, None)
                         return last_task
@@ -897,10 +875,9 @@ async def _send_task_to_agent_with_message(message: Message, task_description: s
                     await agent_registry.set_current_task(agent_id, None)
                     _handle_exception(f"Task '{task_description}' iterator finished before completion.", 500, internal_task_id, agent_id)
                 except asyncio.TimeoutError:
-                    logger.error(f"Task '{task_description}' timed out while waiting for completion.", extra={"task_id": internal_task_id, "agent_id": agent_id})
-                    # Update task history
+                    logger.error(f"Task '{task_description}' timed out while waiting for completion.",
+                                 extra={"task_id": internal_task_id, "agent_id": agent_id})
                     await task_history.update(internal_task_id, TaskStatus.FAILED, datetime.now(), "Task timed out")
-                    # Get task ID if available for tracking
                     stuck_task_id = last_task.id if last_task else None
                     await agent_registry.update_status(
                         agent_id, AgentStatus.BROKEN, BrokenReason.TASK_STUCK, stuck_task_id
@@ -914,32 +891,30 @@ async def _send_task_to_agent_with_message(message: Message, task_description: s
                     # Release agent as AVAILABLE since this is a task-level error
                     await agent_registry.update_status(agent_id, AgentStatus.AVAILABLE)
                     await agent_registry.set_current_task(agent_id, None)
-                    _handle_exception(f"Couldn't execute the task '{task_description}'. Root cause: {response.error}", 500, internal_task_id, agent_id)
+                    _handle_exception(f"Couldn't execute the task '{task_description}'. Root cause: {response.error}", 500,
+                                      internal_task_id, agent_id)
 
                 if isinstance(response, tuple):
                     task, _ = response
                     last_task = task
                     if task.status.state in (TaskState.completed, TaskState.failed, TaskState.rejected):
-                        logger.info(f"Task '{task_description}' was completed with status '{str(task.status.state)}'.", extra={"task_id": internal_task_id, "agent_id": agent_id})
-                        # Update task history
+                        logger.info(f"Task '{task_description}' was completed with status '{str(task.status.state)}'.",
+                                    extra={"task_id": internal_task_id, "agent_id": agent_id})
                         final_status = TaskStatus.COMPLETED if task.status.state == TaskState.completed else TaskStatus.FAILED
                         error_msg = get_message_text(task.status.message) if task.status.state != TaskState.completed else None
                         await task_history.update(internal_task_id, final_status, datetime.now(), error_msg)
-                        
                         await _save_agent_logs_from_task(task, internal_task_id)
-
                         await agent_registry.update_status(agent_id, AgentStatus.AVAILABLE)
                         await agent_registry.set_current_task(agent_id, None)
                         return task
                     else:
-                        logger.debug(
-                            f"Task for {task_description} is still in '{task.status.state}' state. Waiting for its "
-                            f"completion. Agent: '{agent_card.name}' (ID: {agent_id})", extra={"task_id": internal_task_id, "agent_id": agent_id})
+                        logger.debug(f"Task for {task_description} is still in '{task.status.state}' state. Waiting for its "
+                                     f"completion. Agent: '{agent_card.name}' (ID: {agent_id})",
+                                     extra={"task_id": internal_task_id, "agent_id": agent_id})
                 elif isinstance(response, Message):
                     msg_text = get_message_text(response)
-                    logger.info(
-                        f"Received a message from agent in the scope of the "
-                        f"task '{task_description}': {msg_text}", extra={"task_id": internal_task_id, "agent_id": agent_id})
+                    logger.info(f"Received a message from agent in the scope of the "
+                                f"task '{task_description}': {msg_text}", extra={"task_id": internal_task_id, "agent_id": agent_id})
 
             await task_history.update(internal_task_id, TaskStatus.FAILED, datetime.now(), "Timeout waiting for completion")
             # Release agent as BROKEN since we hit overall timeout
@@ -968,12 +943,6 @@ async def _send_task_to_agent_with_message(message: Message, task_description: s
 async def _send_task_to_agent(input_data: str, task_description: str) -> Task | None:
     """Send a text message to an agent.
 
-    This is a convenience wrapper around _send_task_to_agent_with_message that
-    creates a simple text message from the input string.
-    
-    The function handles the complete agent lifecycle: selecting an agent,
-    sending the task, and releasing the agent on completion or failure.
-
     Args:
         input_data: The text content to send to the agent.
         task_description: Description of the task for agent selection and logging.
@@ -985,62 +954,59 @@ async def _send_task_to_agent(input_data: str, task_description: str) -> Task | 
     return await _send_task_to_agent_with_message(message, task_description)
 
 
-async def _choose_agent_id(agent_task_description: str) -> str:
-    """Choose an AVAILABLE agent for the given task and atomically mark it as BUSY.
-    
-    This function is protected by agent_selection_lock to ensure that only one task
-    can select and reserve an agent at a time. This prevents race conditions where
-    multiple concurrent tasks could select the same agent.
-    
-    If no agents are currently AVAILABLE (e.g., all are BUSY with other tasks),
-    this function will wait and retry until an agent becomes available or timeout.
-    
+async def _wait_and_reserve_agent(task_description: str) -> tuple[str, AgentCard]:
+    """Wait for an available agent and atomically reserve it.
+
+    This function handles the waiting loop outside the lock, and only holds
+    the lock during the atomic check-select-reserve operation.
+
     Args:
-        agent_task_description: Description of the task to be assigned.
-        
+        task_description: Description of the task to be assigned.
+
     Returns:
-        The ID of the selected agent (already marked as BUSY).
+        Tuple of (agent_id, agent_card) for the reserved agent.
         
     Raises:
-        HTTPException: If no agents are registered or no suitable agent is found.
+        HTTPException: If no agents are registered, no suitable agent found, 
+                       or timeout waiting for an available agent.
     """
     if await agent_registry.is_empty():
         _handle_exception("Orchestrator has currently no registered agents.", 404)
-    
-    # Retry with exponential backoff if all agents are busy
+
     max_wait_time = config.OrchestratorConfig.TASK_EXECUTION_TIMEOUT
     start_time = time.time()
-    wait_interval = 2  # Start with 2 second wait
-    max_wait_interval = 30  # Cap at 30 seconds between retries
-    
+    wait_interval = 2
+    max_wait_interval = 30
+
     while (time.time() - start_time) < max_wait_time:
-        # Use lock to ensure atomic agent selection and reservation
+        # Try to atomically select and reserve an agent
         async with agent_selection_lock:
             available_agent_ids = await agent_registry.get_available_agents()
             if available_agent_ids:
-                agent_id = await _select_agent(agent_task_description, available_agent_ids)
+                agent_id = await _select_agent(task_description, available_agent_ids)
                 if agent_id:
-                    # Atomically mark as BUSY before releasing the lock
-                    await agent_registry.update_status(agent_id, AgentStatus.BUSY)
-                    agent_name = await agent_registry.get_name(agent_id)
-                    logger.info(
-                        f"Selected and reserved agent '{agent_name}' (ID: {agent_id}) "
-                        f"for task '{agent_task_description}'.")
-                    return agent_id
+                    # Double-check agent is still available (might have changed during _select_agent)
+                    current_status = await agent_registry.get_status(agent_id)
+                    if current_status == AgentStatus.AVAILABLE:
+                        agent_card = await agent_registry.get_card(agent_id)
+                        if agent_card:
+                            # Atomically mark as BUSY before releasing the lock
+                            await agent_registry.update_status(agent_id, AgentStatus.BUSY)
+                            agent_name = await agent_registry.get_name(agent_id)
+                            logger.info(f"Reserved agent '{agent_name}' (ID: {agent_id}) for task '{task_description}'")
+                            return agent_id, agent_card
                 else:
-                    # There are available agents but none suitable for this task
-                    _handle_exception(f"No suitable agent found to handle the task '{agent_task_description}'.", 404)
-        
-        # All agents are busy - wait and retry (outside the lock to allow other tasks to proceed)
-        logger.info(f"No available agents for task '{agent_task_description}'. "
+                    _handle_exception(f"No suitable agent found to handle the task '{task_description}'.", 404)
+
+        # No agent was reserved - wait and retry (outside the lock)
+        logger.info(f"No available agents for task '{task_description}'. "
                     f"All agents are busy. Waiting {wait_interval}s before retry...")
         await asyncio.sleep(wait_interval)
         wait_interval = min(wait_interval * 1.5, max_wait_interval)  # Exponential backoff with cap
-    
+
     # Timeout reached
-    _handle_exception(
-        f"Timeout waiting for an available agent to handle task '{agent_task_description}'. "
-        f"All agents have been busy for {max_wait_time} seconds.", 503)
+    _handle_exception(f"Timeout waiting for an available agent to handle task '{task_description}'. "
+                      f"All agents have been busy for {max_wait_time} seconds.", 503)
 
 
 async def _get_jira_issue_key_from_request(request):
@@ -1052,10 +1018,10 @@ async def _get_jira_issue_key_from_request(request):
 
 
 def _handle_exception(
-    message: str, 
-    status_code: int = 500,
-    task_id: str | None = None,
-    agent_id: str | None = None
+        message: str,
+        status_code: int = 500,
+        task_id: str | None = None,
+        agent_id: str | None = None
 ) -> HTTPException:
     """Handle an exception by logging it and recording it for the dashboard.
     
@@ -1066,7 +1032,7 @@ def _handle_exception(
         agent_id: Optional agent ID related to the error.
     """
     logger.exception(message)
-    
+
     # Record error for dashboard (run in background to avoid blocking)
     error_record = ErrorRecord(
         error_id=str(uuid4()),
@@ -1079,7 +1045,7 @@ def _handle_exception(
     )
     # Schedule the async add without waiting
     asyncio.create_task(error_history.add(error_record))
-    
+
     raise HTTPException(status_code=status_code, detail=message)
 
 
@@ -1159,7 +1125,7 @@ async def _select_agent(task_description: str, available_agent_ids: List[str]) -
     agents_info = await _get_agents_info(available_agent_ids)
     if not agents_info:
         return None
-    
+
     user_prompt = f"""
 Target task description: "{task_description}".
 
@@ -1195,7 +1161,7 @@ async def _check_agent_reachability(agent_base_url: str) -> bool:
     try:
         async with httpx.AsyncClient() as client:
             response = await client.get(agent_card_url,
-                                         timeout=config.OrchestratorConfig.AGENT_DISCOVERY_TIMEOUT_SECONDS)
+                                        timeout=config.OrchestratorConfig.AGENT_DISCOVERY_TIMEOUT_SECONDS)
             return response.status_code == 200
     except Exception:
         return False
@@ -1215,15 +1181,15 @@ async def _process_url_discovery(url: str):
                     )
                     await agent_registry.update_status(existing_agent_id, AgentStatus.AVAILABLE)
         else:
-            logger.info(f"Agent {existing_agent_id} at {url} is unreachable. Removing from registry.")            
+            logger.info(f"Agent {existing_agent_id} at {url} is unreachable. Removing from registry.")
             await agent_registry.remove(existing_agent_id)
-    else:        
+    else:
         agent_card = await _fetch_agent_card(url)
-        if agent_card:            
+        if agent_card:
             existing_agent_id = await agent_registry.get_agent_id_by_url(agent_card.url)
             if existing_agent_id:
                 logger.debug(f"Agent with URL {agent_card.url} is already registered with ID {existing_agent_id}.")
-            else:                
+            else:
                 new_agent_id = str(uuid4())
                 await agent_registry.register(new_agent_id, agent_card)
                 logger.info(f"Discovered and registered agent with URL: {agent_card.url}")
@@ -1274,14 +1240,16 @@ STATIC_FILES_DIR = Path(__file__).parent / "static"
 if STATIC_FILES_DIR.exists():
     # Mount static files (JS, CSS, assets)
     orchestrator_app.mount("/assets", StaticFiles(directory=STATIC_FILES_DIR / "assets"), name="assets")
-    
+
+
     # Serve index.html for the root path
     @orchestrator_app.get("/")
     async def serve_dashboard():
         """Serve the dashboard UI."""
         from fastapi.responses import FileResponse
         return FileResponse(STATIC_FILES_DIR / "index.html")
-    
+
+
     # Catch-all route for SPA client-side routing (must be last)
     @orchestrator_app.get("/{full_path:path}")
     async def serve_spa(full_path: str):
@@ -1298,7 +1266,6 @@ if STATIC_FILES_DIR.exists():
         return FileResponse(STATIC_FILES_DIR / "index.html")
 else:
     logger.info("Dashboard UI static files not found. UI will not be available.")
-
 
 if __name__ == "__main__":
     uvicorn.run(orchestrator_app, host=config.ORCHESTRATOR_HOST, port=config.ORCHESTRATOR_PORT)
