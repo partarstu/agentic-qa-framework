@@ -52,6 +52,7 @@ setup_memory_logging("orchestrator")
 # Initialize Vector DB Service for Orchestrator
 vector_db_service = VectorDbService(getattr(config.QdrantConfig, "COLLECTION_NAME", "jira_issues"))
 execution_lock = asyncio.Lock()
+agent_selection_lock = asyncio.Lock()  # Ensures atomic agent selection and reservation
 cancellation_queue = asyncio.Queue()
 
 API_KEY_NAME = "X-API-Key"
@@ -352,8 +353,7 @@ async def review_jira_requirements(request: Request, api_key: str = Depends(_val
     logger.info("Received an event from Jira, requesting requirements review from an agent.")
     user_story_id = await _get_jira_issue_key_from_request(request)
     task_description = "Review the Jira user story"
-    agent_id = await _choose_agent_id(task_description)
-    completed_task = await _send_task_to_agent(agent_id, f"Jira user story with key {user_story_id}",
+    completed_task = await _send_task_to_agent(f"Jira user story with key {user_story_id}",
                                                task_description)
     _validate_task_status(completed_task, f"Review of the user story {user_story_id}")
     logger.info("Received response from an agent, requirements review seems to be complete.")
@@ -397,8 +397,7 @@ async def update_rag_db(request: ProjectExecutionRequest, api_key: str = Depends
     logger.info(f"Starting RAG update for project {project_key}")
     try:
         task_description = "Update RAG Vector DB with Jira issues"
-        agent_id = await _choose_agent_id(task_description)
-        completed_task = await _send_task_to_agent(agent_id, f"Sync all Jira issues for project '{project_key}'",
+        completed_task = await _send_task_to_agent(f"Sync all Jira issues for project '{project_key}'",
                                                    task_description)
 
         _validate_task_status(completed_task, task_description)
@@ -714,7 +713,6 @@ async def _request_incident_creation(
         IncidentCreationResult containing the created incident information.
     """
     task_description = "Create incident report"
-    agent_id = await _choose_agent_id(task_description)
 
     # Create message with JSON text part and ALL artifact file parts
     message_parts = [TextPart(text=incident_input.model_dump_json())]
@@ -727,7 +725,7 @@ async def _request_incident_creation(
     # Create the message
     message = Message(parts=message_parts, message_id="", role='agent')
 
-    completed_task = await _send_task_to_agent_with_message(agent_id, message, task_description)
+    completed_task = await _send_task_to_agent_with_message(message, task_description)
 
     task_description = f"Incident creation for test case {incident_input.test_case.key}"
     received_artifacts = _get_artifacts_from_task(completed_task, task_description)
@@ -738,9 +736,7 @@ async def _request_incident_creation(
 
 async def _request_test_cases_generation(user_story_id) -> GeneratedTestCases:
     task_description = "Generate test cases"
-    agent_id = await _choose_agent_id(task_description)
-    completed_task = await _send_task_to_agent(agent_id,
-                                               f"Jira user story with key {user_story_id}",
+    completed_task = await _send_task_to_agent(f"Jira user story with key {user_story_id}",
                                                task_description)
     task_description = f"Generation of test cases for the user story {user_story_id}"
     received_artifacts = _get_artifacts_from_task(completed_task, task_description)
@@ -758,17 +754,14 @@ def _get_artifacts_from_task(task: Task, task_description: str) -> list[Artifact
 
 async def _request_test_cases_classification(test_cases: List[TestCase], user_story_id: str) -> list[Artifact]:
     task_description = "Classify test cases"
-    agent_id = await _choose_agent_id(task_description)
-    completed_task = await _send_task_to_agent(agent_id,
-                                               f"Test cases:\n{test_cases}", task_description)
+    completed_task = await _send_task_to_agent(f"Test cases:\n{test_cases}", task_description)
     return _get_artifacts_from_task(completed_task,
                                     f"Classification of test cases for the user story {user_story_id}")
 
 
 async def _request_test_cases_review(test_cases: List[TestCase], user_story_id: str) -> list[Artifact]:
     task_description = "Review test cases"
-    agent_id = await _choose_agent_id(task_description)
-    completed_task = await _send_task_to_agent(agent_id, f"Test cases:\n{test_cases}\nUser Story ID: {user_story_id}", task_description)
+    completed_task = await _send_task_to_agent(f"Test cases:\n{test_cases}\nUser Story ID: {user_story_id}", task_description)
     return _get_artifacts_from_task(completed_task, "Review of test cases")
 
 
@@ -824,45 +817,54 @@ async def _save_agent_logs_from_task(task: Task, internal_task_id: str) -> None:
         logger.warning(f"Failed to extract logs for task {internal_task_id}: {e}")
 
 
-async def _send_task_to_agent_with_message(agent_id: str, message: Message, task_description: str) -> Task | None:
+async def _send_task_to_agent_with_message(message: Message, task_description: str) -> Task | None:
     """Send a custom message (with file parts) to an agent.
+
+    This function handles the complete agent task lifecycle:
+    1. Selects an available agent and atomically marks it as BUSY
+    2. Sends the task to the agent
+    3. Waits for completion
+    4. Releases the agent (back to AVAILABLE or BROKEN) on any exit path
 
     Execution logs are expected to arrive from agents as file parts in the task artifacts.
     Interested parties should extract logs directly from artifacts using get_execution_logs_from_artifacts().
 
     Args:
-        agent_id: ID of the agent to send the message to.
         message: The A2A Message object to send (can contain text and file parts).
-        task_description: Description of the task for logging.
+        task_description: Description of the task for agent selection and logging.
 
     Returns:
         The completed Task, or None if the task failed to complete.
     """
-    agent_card = await agent_registry.get_card(agent_id)
-    if not agent_card:
-        raise ValueError(f"Agent with ID '{agent_id}' is not yet registered with his card")
-
-    # Generate a unique task ID for tracking
+    # Select and reserve an agent atomically
+    agent_id = await _choose_agent_id(task_description)
+    
     internal_task_id = str(uuid4())
-    task_start_time = datetime.now()
-    agent_name = await agent_registry.get_name(agent_id)
-    
-    # Record task start in history
-    task_record = TaskRecord(
-        task_id=internal_task_id,
-        agent_id=agent_id,
-        agent_name=agent_name,
-        description=task_description,
-        status=TaskStatus.RUNNING,
-        start_time=task_start_time
-    )
-    await task_history.add(task_record)
-    
-    # Set BUSY status and track current task
-    await agent_registry.update_status(agent_id, AgentStatus.BUSY)
-    await agent_registry.set_current_task(agent_id, internal_task_id)
-
     try:
+        agent_card = await agent_registry.get_card(agent_id)
+        if not agent_card:
+            # Agent not found - release it back to available and raise
+            await agent_registry.update_status(agent_id, AgentStatus.AVAILABLE)
+            await agent_registry.set_current_task(agent_id, None)
+            raise ValueError(f"Agent with ID '{agent_id}' is not yet registered with his card")
+
+        task_start_time = datetime.now()
+        agent_name = await agent_registry.get_name(agent_id)
+        
+        # Record task start in history
+        task_record = TaskRecord(
+            task_id=internal_task_id,
+            agent_id=agent_id,
+            agent_name=agent_name,
+            description=task_description,
+            status=TaskStatus.RUNNING,
+            start_time=task_start_time
+        )
+        await task_history.add(task_record)
+        
+        # Track the current task
+        await agent_registry.set_current_task(agent_id, internal_task_id)
+
         async with httpx.AsyncClient(timeout=config.OrchestratorConfig.TASK_EXECUTION_TIMEOUT) as client:
             client_config = ClientConfig(httpx_client=client)
             client_factory = ClientFactory(config=client_config)
@@ -890,6 +892,9 @@ async def _send_task_to_agent_with_message(agent_id: str, message: Message, task
                         await agent_registry.set_current_task(agent_id, None)
                         return last_task
                     await task_history.update(internal_task_id, TaskStatus.FAILED, datetime.now(), "Iterator finished before completion")
+                    # Release agent as AVAILABLE since this is a protocol issue, not agent issue
+                    await agent_registry.update_status(agent_id, AgentStatus.AVAILABLE)
+                    await agent_registry.set_current_task(agent_id, None)
                     _handle_exception(f"Task '{task_description}' iterator finished before completion.", 500, internal_task_id, agent_id)
                 except asyncio.TimeoutError:
                     logger.error(f"Task '{task_description}' timed out while waiting for completion.", extra={"task_id": internal_task_id, "agent_id": agent_id})
@@ -897,22 +902,18 @@ async def _send_task_to_agent_with_message(agent_id: str, message: Message, task
                     await task_history.update(internal_task_id, TaskStatus.FAILED, datetime.now(), "Task timed out")
                     # Get task ID if available for tracking
                     stuck_task_id = last_task.id if last_task else None
-                    try:
-                        await agent_registry.update_status(
-                            agent_id, AgentStatus.BROKEN, BrokenReason.TASK_STUCK, stuck_task_id
-                        )
-                        await agent_registry.set_current_task(agent_id, None)
-                        await cancellation_queue.put((agent_id, time.time()))
-                    except Exception:
-                        logger.exception(f"Error handling timeout for agent {agent_id}.", extra={"task_id": internal_task_id, "agent_id": agent_id})
-                        await agent_registry.update_status(
-                            agent_id, AgentStatus.BROKEN, BrokenReason.TASK_STUCK, stuck_task_id
-                        )
-
+                    await agent_registry.update_status(
+                        agent_id, AgentStatus.BROKEN, BrokenReason.TASK_STUCK, stuck_task_id
+                    )
+                    await agent_registry.set_current_task(agent_id, None)
+                    await cancellation_queue.put((agent_id, time.time()))
                     _handle_exception(f"Task '{task_description}' timed out while waiting for completion.", 408, internal_task_id, agent_id)
 
                 if isinstance(response, JSONRPCErrorResponse):
                     await task_history.update(internal_task_id, TaskStatus.FAILED, datetime.now(), str(response.error))
+                    # Release agent as AVAILABLE since this is a task-level error
+                    await agent_registry.update_status(agent_id, AgentStatus.AVAILABLE)
+                    await agent_registry.set_current_task(agent_id, None)
                     _handle_exception(f"Couldn't execute the task '{task_description}'. Root cause: {response.error}", 500, internal_task_id, agent_id)
 
                 if isinstance(response, tuple):
@@ -941,42 +942,55 @@ async def _send_task_to_agent_with_message(agent_id: str, message: Message, task
                         f"task '{task_description}': {msg_text}", extra={"task_id": internal_task_id, "agent_id": agent_id})
 
             await task_history.update(internal_task_id, TaskStatus.FAILED, datetime.now(), "Timeout waiting for completion")
+            # Release agent as BROKEN since we hit overall timeout
+            await agent_registry.update_status(agent_id, AgentStatus.BROKEN, BrokenReason.TASK_STUCK)
+            await agent_registry.set_current_task(agent_id, None)
+            await cancellation_queue.put((agent_id, time.time()))
             _handle_exception(f"Task for {task_description} wasn't complete within timeout.", 408, internal_task_id, agent_id)
             return None
 
+    except HTTPException:
+        # HTTPException is raised by _handle_exception, agent status already handled above
+        raise
     except Exception as e:
         logger.exception(f"Error communicating with agent {agent_id}.", extra={"task_id": internal_task_id, "agent_id": agent_id})
-        await task_history.update(internal_task_id, TaskStatus.FAILED, datetime.now(), str(e))
+        try:
+            await task_history.update(internal_task_id, TaskStatus.FAILED, datetime.now(), str(e))
+        except Exception:
+            pass  # Task history update failed, but we must still release the agent
         # Connection/communication error likely means agent is offline
         await agent_registry.update_status(agent_id, AgentStatus.BROKEN, BrokenReason.OFFLINE)
         await agent_registry.set_current_task(agent_id, None)
         await cancellation_queue.put((agent_id, time.time()))
-        raise e
+        raise
 
 
-async def _send_task_to_agent(agent_id: str, input_data: str, task_description: str) -> Task | None:
+async def _send_task_to_agent(input_data: str, task_description: str) -> Task | None:
     """Send a text message to an agent.
 
     This is a convenience wrapper around _send_task_to_agent_with_message that
     creates a simple text message from the input string.
-
-    Execution logs are expected to arrive from agents as file parts in the task artifacts.
-    Interested parties should extract logs directly from artifacts using get_execution_logs_from_artifacts().
+    
+    The function handles the complete agent lifecycle: selecting an agent,
+    sending the task, and releasing the agent on completion or failure.
 
     Args:
-        agent_id: ID of the agent to send the message to.
         input_data: The text content to send to the agent.
-        task_description: Description of the task for logging.
+        task_description: Description of the task for agent selection and logging.
 
     Returns:
         The completed Task, or None if the task failed to complete.
     """
     message = new_agent_text_message(input_data)
-    return await _send_task_to_agent_with_message(agent_id, message, task_description)
+    return await _send_task_to_agent_with_message(message, task_description)
 
 
 async def _choose_agent_id(agent_task_description: str) -> str:
-    """Choose an AVAILABLE agent for the given task.
+    """Choose an AVAILABLE agent for the given task and atomically mark it as BUSY.
+    
+    This function is protected by agent_selection_lock to ensure that only one task
+    can select and reserve an agent at a time. This prevents race conditions where
+    multiple concurrent tasks could select the same agent.
     
     If no agents are currently AVAILABLE (e.g., all are BUSY with other tasks),
     this function will wait and retry until an agent becomes available or timeout.
@@ -985,7 +999,7 @@ async def _choose_agent_id(agent_task_description: str) -> str:
         agent_task_description: Description of the task to be assigned.
         
     Returns:
-        The ID of the selected agent.
+        The ID of the selected agent (already marked as BUSY).
         
     Raises:
         HTTPException: If no agents are registered or no suitable agent is found.
@@ -1000,19 +1014,24 @@ async def _choose_agent_id(agent_task_description: str) -> str:
     max_wait_interval = 30  # Cap at 30 seconds between retries
     
     while (time.time() - start_time) < max_wait_time:
-        available_agent_ids = await agent_registry.get_available_agents()
-        if available_agent_ids:
-            agent_id = await _select_agent(agent_task_description, available_agent_ids)
-            if agent_id:
-                agent_name = await agent_registry.get_name(agent_id)
-                logger.info(
-                    f"Selected agent '{agent_name}' (ID: {agent_id}) for task '{agent_task_description}'.")
-                return agent_id
-            else:
-                # There are available agents but none suitable for this task
-                _handle_exception(f"No suitable agent found to handle the task '{agent_task_description}'.", 404)
+        # Use lock to ensure atomic agent selection and reservation
+        async with agent_selection_lock:
+            available_agent_ids = await agent_registry.get_available_agents()
+            if available_agent_ids:
+                agent_id = await _select_agent(agent_task_description, available_agent_ids)
+                if agent_id:
+                    # Atomically mark as BUSY before releasing the lock
+                    await agent_registry.update_status(agent_id, AgentStatus.BUSY)
+                    agent_name = await agent_registry.get_name(agent_id)
+                    logger.info(
+                        f"Selected and reserved agent '{agent_name}' (ID: {agent_id}) "
+                        f"for task '{agent_task_description}'.")
+                    return agent_id
+                else:
+                    # There are available agents but none suitable for this task
+                    _handle_exception(f"No suitable agent found to handle the task '{agent_task_description}'.", 404)
         
-        # All agents are busy - wait and retry
+        # All agents are busy - wait and retry (outside the lock to allow other tasks to proceed)
         logger.info(f"No available agents for task '{agent_task_description}'. "
                     f"All agents are busy. Waiting {wait_interval}s before retry...")
         await asyncio.sleep(wait_interval)
