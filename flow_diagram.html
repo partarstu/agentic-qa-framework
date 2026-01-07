@@ -75,19 +75,19 @@ graph TD
     end
 
     subgraph "Workflow 3: Test Execution & Reporting"
-        TE1[API Call<br>/execute-tests] --> TE2[Fetch ready for automated execution TCs<br>from Test Mgmt System];
-        TE2 --> TE3[Group TCs by their labels];
-        TE3 --> TE4[For each label, Select ALL<br>Suitable Execution Agents];
-        TE4 --> TE5[Create agent worker pool<br>for each label];
-        TE5 --> TE6[Distribute TCs among agents<br>via async queue];
-        TE6 --> TE7[Execute TCs in parallel<br>across agent workers];
-        TE7 --> TE8[Wait & Gather<br>Execution Results];
+        TE1[API Call /execute-tests] --> TE2[Fetch TCs ready for execution];
+        TE2 --> TE3[Group TCs by labels];
+        TE3 --> TE4[Select Execution Agents for each label];
+        TE4 --> TE5[Create agent worker pool];
+        TE5 --> TE6[Distribute TCs via async queue];
+        TE6 --> TE7[Execute TCs in parallel];
+        TE7 --> TE8[Gather Execution Results];
         TE8 --> TE9{Any Failed Tests?};
-        TE9 -- Yes --> TE10[Request Incident Creation<br>for each failed TC in parallel];
+        TE9 -- Yes --> TE10[Request Incident Creation];
         TE10 --> IC1;
         TE9 -- No --> TE11;
-        TE10 -.-> TE11[Create Test Execution Results in<br>Test Mgmt System];
-        TE11 --> TE12[Generate Test Execution Reports<br>using Allure];
+        TE10 -.-> TE11[Create Results in Test Mgmt System];
+        TE11 --> TE12[Generate Allure Reports];
         TE12 --> TE13((End));
     end
 

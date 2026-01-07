@@ -995,12 +995,12 @@ async def _wait_and_reserve_agent(task_description: str) -> tuple[str, AgentCard
                             agent_name = await agent_registry.get_name(agent_id)
                             logger.info(f"Reserved agent '{agent_name}' (ID: {agent_id}) for task '{task_description}'")
                             return agent_id, agent_card
-                else:
-                    _handle_exception(f"No suitable agent found to handle the task '{task_description}'.", 404)
+                # If _select_agent returned None, it means no suitable agent is currently
+                # available. Continue waiting - the suitable agent might become available later.
 
         # No agent was reserved - wait and retry (outside the lock)
-        logger.info(f"No available agents for task '{task_description}'. "
-                    f"All agents are busy. Waiting {wait_interval}s before retry...")
+        logger.info(f"No suitable available agent for task '{task_description}'. "
+                    f"Waiting {wait_interval}s before retry...")
         await asyncio.sleep(wait_interval)
         wait_interval = min(wait_interval * 1.5, max_wait_interval)  # Exponential backoff with cap
 
@@ -1136,8 +1136,11 @@ The list of all registered with you agents:\n{agents_info}
     selected_agent_id = result.output.id or None
     # Verify the selected agent is in our available list
     if selected_agent_id and selected_agent_id in available_agent_ids:
+        logger.info(f"Selected agent ID: {selected_agent_id} for task: '{task_description}'")
         return selected_agent_id
-    return None
+    else:
+        logger.info(f"Model returned invalid agent ID: {selected_agent_id} for task: '{task_description}'")
+        return None
 
 
 async def _fetch_agent_card(agent_base_url: str) -> AgentCard | None:
