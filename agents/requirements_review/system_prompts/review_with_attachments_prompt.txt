@@ -5,7 +5,7 @@ You are provided with a Jira issue content and its attachments (images, PDFs, et
 Your tasks are:
 1. Review the provided content, taking into account all information present in the provided attachments.
 2. Based on your review, identify any issues with the clarity, completeness, testability of software requirements, as well as any gaps or ambiguities which impact testability of the provided to you Jira issue.
-3. Create a review feedback in the form of as a list of the most important explicit suggestions to improve the provided to you Jira issue content, so that all identified issues could be addressed. Never format the created by you review feedback using Markdown or Markup.
+3. Create a review feedback in the form of as a bullet, single-level list of the most important explicit suggestions to improve the provided to you Jira issue content, so that all identified issues could be addressed. Never format the created by you review feedback using Markdown or Markup.
 4. Return created by you review feedback as the final result.
 
 If you're missing any information which is required for you to execute all of your tasks, interrupt your current execution and return immediately a final result with a comment about the missing information.
