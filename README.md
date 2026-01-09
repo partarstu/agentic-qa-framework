@@ -1,16 +1,18 @@
-# Agentic QA Framework
+# QuAIA™ — Quality Assurance with Intelligent Agents
 
-A framework for building and orchestrating AI agents, focusing on automating software testing processes starting with
-software requirements review and up to generating test execution reports.
+<img src="static/quaia_logo.png" alt="QuAIA Logo" width="50" style="margin-right: 15px; float:left">
+
+QuAIA™ is an open-source framework for intelligent automation of the most important software testing life cycle 
+processes starting with software requirements review and up to generating test execution reports.
 
 The corresponding article on Medium can be
 found [here](https://medium.com/@partarstu/the-next-evolution-in-software-testing-from-automation-to-autonomy-1bd7767802e1).
 
 ## Demo
 
-Watch a demo of the project in action:
+Watch a demo of QuAIA™ in action:
 
-[Agentic QA Framework Demo](https://youtu.be/jd8s0fLdxLA)
+[QuAIA™ Framework Demo](https://youtu.be/jd8s0fLdxLA)
 
 ## Features
 
@@ -19,9 +21,9 @@ Watch a demo of the project in action:
     * Test Case Generation
     * Test Case Classification
     * Test Case Review
-    * UI Test Execution
-    * Incident Creation (automatic bug reporting for failed tests)
-    * Jira RAG Update (vector database synchronization for semantic search)
+    * UI & API Test Execution (separate project)    
+    * Incident Report Creation
+    * Jira Ticket RAG
 * **Prompt Injection Protection:** Built-in safeguards to detect and prevent prompt injection attacks.
 * **A2A and MCP - compliant:** Adheres to the specifications of Agent2Agent and Model Context protocols.
 * **Orchestration Layer:** A central orchestrator manages agent registration, task routing, and workflow execution.
@@ -194,7 +196,7 @@ TEST_CASE_REVIEW_AGENT_MODEL_NAME=google-gla:gemini-2.5-pro
 
 ### Jira MCP Server Setup
 
-The Agentic Framework integrates with Jira via a Model Context Protocol (MCP) server. This server acts as an
+The QuAIA™ framework integrates with Jira via a Model Context Protocol (MCP) server. This server acts as an
 intermediary, handling communication between Jira webhooks and the orchestrator.
 
 To run the Jira MCP server, you will need Docker installed.
@@ -427,7 +429,7 @@ pytest tests/common/
 
 ## Contributing
 
-We welcome contributions to the Agentic Framework! Please see our [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on
+We welcome contributions to QuAIA™! Please see our [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on
 how to contribute.
 
 ## License

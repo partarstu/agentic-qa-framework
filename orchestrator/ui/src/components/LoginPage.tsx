@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from 'react';
-import { Cpu, Lock, User, AlertCircle, Eye, EyeOff } from 'lucide-react';
+import { Lock, User, AlertCircle, Eye, EyeOff } from 'lucide-react';
+import quaiaLogo from '../assets/quaia_logo.png';
 import { useAuth } from '../context/AuthContext';
 
 export function LoginPage() {
@@ -33,10 +34,10 @@ export function LoginPage() {
       <div className="w-full max-w-md">
         {/* Logo and Title */}
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-indigo-500 to-purple-600 mb-4 shadow-lg shadow-indigo-500/30">
-            <Cpu className="w-8 h-8 text-white" />
+          <div className="inline-flex items-center justify-center mb-4">
+            <img src={quaiaLogo} alt="QuAIA Logo" className="w-20" />
           </div>
-          <h1 className="text-2xl font-bold text-white mb-2">Orchestrator Dashboard</h1>
+          <h1 className="text-2xl font-bold text-white mb-2">QuAIA™ Dashboard</h1>
           <p className="text-slate-400">Sign in to access the monitoring dashboard</p>
         </div>
 
@@ -125,7 +126,7 @@ export function LoginPage() {
 
         {/* Footer */}
         <p className="text-center text-slate-500 text-sm mt-6">
-          Agentic QA Framework • Orchestrator Dashboard
+          QuAIA™ • Quality Assurance with Intelligent Agents
         </p>
       </div>
     </div>

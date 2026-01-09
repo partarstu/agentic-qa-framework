@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useQuery, QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { Cpu, LogOut } from 'lucide-react';
+import { LogOut } from 'lucide-react';
+import quaiaLogo from './assets/quaia_logo.png';
 import { dashboardApi } from './api/dashboardApi';
 import { onConnectionStatusChange, onAuthStatusChange } from './api/client';
 import { AuthProvider, useAuth } from './context/AuthContext';
@@ -70,12 +71,10 @@ function Dashboard() {
         <div className="max-w-7xl mx-auto px-6 py-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center">
-                <Cpu className="w-6 h-6 text-white" />
-              </div>
+              <img src={quaiaLogo} alt="QuAIA Logo" className="w-10" />
               <div>
-                <h1 className="text-xl font-bold text-white">Orchestrator Dashboard</h1>
-                <p className="text-xs text-slate-400">Real-time monitoring</p>
+                <h1 className="text-xl font-bold text-white">QuAIA™ Dashboard</h1>
+                <p className="text-xs text-slate-400">Quality Assurance with Intelligent Agents</p>
               </div>
             </div>
             
@@ -126,7 +125,7 @@ function Dashboard() {
 
       {/* Footer */}
       <footer className="py-6 text-center text-slate-500 text-sm">
-        Agentic QA Framework • Orchestrator Dashboard
+        QuAIA™ • Quality Assurance with Intelligent Agents
       </footer>
     </div>
   );
