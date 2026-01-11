@@ -3,6 +3,18 @@
 # SPDX-License-Identifier: Apache-2.0
 
 steps:
+  # Pull the external mcp-atlassian image from GitHub Container Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args: [ 'pull', 'ghcr.io/sooperset/mcp-atlassian:0.11.12' ]
+
+  # Tag the external image for Google Container Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args: [ 'tag', 'ghcr.io/sooperset/mcp-atlassian:0.11.12', 'gcr.io/$PROJECT_ID/mcp-atlassian:latest' ]
+
+  # Push the mcp-atlassian image to internal Container Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args: [ 'push', 'gcr.io/$PROJECT_ID/mcp-atlassian:latest' ]
+
   # Build the base image
   - name: 'gcr.io/cloud-builders/docker'
     args: [ 'build', '-t', 'agentic-qa-base:latest', '-f', 'Dockerfile.base', '.' ]
@@ -65,7 +77,7 @@ steps:
       - 'run'
       - 'deploy'
       - 'jira-mcp-server'
-      - '--image=mcp/atlassian:latest'
+      - '--image=gcr.io/$PROJECT_ID/mcp-atlassian:latest'
       - '--network=agent-network'
       - '--subnet=agent-network'
       - '--ingress=internal'
