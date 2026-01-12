@@ -93,7 +93,7 @@ steps:
       - '--args=--transport,sse,--port,9000,-v'
       - '--add-volume=type=cloud-storage,name=jira-volume,bucket=$_BUCKET_NAME,mount-options=only-dir=$_JIRA_ATTACHMENTS_FOLDER'
       - '--add-volume-mount=volume=jira-volume,mount-path=$_JIRA_MCP_SERVER_ATTACHMENTS_MOUNT_PATH'
-      - '--concurrency=5'
+      - '--concurrency=100'
 
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: gcloud

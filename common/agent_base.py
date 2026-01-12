@@ -148,9 +148,10 @@ class AgentBase(ABC):
             root_logger.removeHandler(log_handler)
             return self._get_message_with_logs(result, captured_logs)
         except Exception as e:
-            logger.exception(f"Error during agent execution: {e}")
+            logger.exception(f"Error during agent execution.")
+            captured_logs = log_handler.get_logs()
             root_logger.removeHandler(log_handler)
-            raise
+            return self._get_error_message_with_logs(e, captured_logs, received_message.context_id, received_message.task_id)
 
     def _log_llm_comments_if_result_incomplete(self, output: BaseModel | None | str) -> None:
         """Logs LLM comments if the agent result appears empty or incomplete.
@@ -227,10 +228,6 @@ class AgentBase(ABC):
     @staticmethod
     def _fetch_attachments(attachment_paths: list[str]) -> dict[str, BinaryContent]:
         """Fetches and all attachments, returning them as binary content for multimodal processing.
-
-        This method processes downloaded attachments, filtering out:
-        - Files with the configured skip postfix
-        - Files with unsupported MIME types
 
         Args:
             attachment_paths: List of file paths to the downloaded attachments.
@@ -312,30 +309,26 @@ class AgentBase(ABC):
     def _get_message_with_logs(self, result: AgentRunResult, captured_logs: str,
                                context_id: str = None, task_id: str = None) -> Message:
         """Create a message with text result and log file artifact.
-        
-        Args:
-            result: The agent execution result.
-            captured_logs: The captured log content.
-            context_id: Optional context ID for the message.
-            task_id: Optional task ID for the message.
-            
-        Returns:
-            A Message containing both text output and log file artifact.
         """
-        # Get the base text message
         base_message = self._get_text_message_from_results(result, context_id, task_id)
-
-        # If no logs captured, return the base message
         if not captured_logs or not captured_logs.strip():
             return base_message
+        return self._get_final_message_with_logs(base_message, captured_logs)
 
-        # Create log file part
-        log_file = create_log_file_part(captured_logs, self.agent_name)
-        log_part = Part(root=FilePart(file=log_file))
+    def _get_error_message_with_logs(self, exception: Exception, captured_logs: str,
+                                     context_id: str = None, task_id: str = None) -> Message:
+        """Create a message with error details and log file artifact.
+        """
+        error_text = f"Agent execution failed with error: {exception}"
+        base_message = new_agent_text_message(text=error_text, context_id=context_id, task_id=task_id)
+        if not captured_logs or not captured_logs.strip():
+            return base_message
+        return self._get_final_message_with_logs(base_message, captured_logs)
 
-        # Add log part to the message
+    def _get_final_message_with_logs(self, base_message: Message, captured_logs: str) -> Message:
+        log_file_with_bytes = create_log_file_part(captured_logs, self.agent_name)
+        log_part = Part(root=FilePart(file=log_file_with_bytes))
         new_parts = list(base_message.parts) + [log_part]
-
         return Message(
             parts=new_parts,
             message_id=base_message.message_id,

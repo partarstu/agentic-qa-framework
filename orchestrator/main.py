@@ -783,22 +783,27 @@ Result format: a list of all found test case issue keys as a lift of strings.
     return result.output or None
 
 
-def _get_text_content_from_artifacts(artifacts: list[Artifact], task_description, any_content_expected=True) -> str:
+def _get_text_content_from_artifacts(artifacts: list[Artifact] | None, task_description, any_content_expected=True) -> str:
     text_parts: List[str] = []
-    for part in artifacts[0].parts:
-        if isinstance(part.root, TextPart):
-            text_parts.append(part.root.text)
+    if artifacts:
+        for artifact in artifacts:
+            for part in artifact.parts:
+                if isinstance(part.root, TextPart):
+                    text_parts.append(part.root.text)
     if any_content_expected and (not text_parts):
         _handle_exception(f"Received no text results from the agent after it executed {task_description}.")
     test_case_generation_results = "\n".join(text_parts)
     return test_case_generation_results
 
 
-def _get_file_contents_from_artifacts(artifacts: list[Artifact]) -> List[FileWithBytes]:
+def _get_file_contents_from_artifacts(artifacts: list[Artifact] | None) -> List[FileWithBytes]:
     file_parts: List[FileWithBytes] = []
-    for part in artifacts[0].parts:
-        if isinstance(part.root, FilePart):
-            file_parts.append(part.root.file)
+    if not artifacts:
+        return file_parts
+    for artifact in artifacts:
+        for part in artifact.parts:
+            if isinstance(part.root, FilePart):
+                file_parts.append(part.root.file)
     return file_parts
 
 
