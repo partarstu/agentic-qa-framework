@@ -29,6 +29,7 @@ from pydantic_ai.usage import UsageLimits
 
 import config
 from common import utils
+from jira import JIRA
 from common.agent_executor import DefaultAgentExecutor
 from common.agent_log_capture import AgentLogCaptureHandler, create_log_file_part
 from common.custom_llm_wrapper import CustomLlmWrapper
@@ -342,3 +343,35 @@ class AgentBase(ABC):
             context_id=base_message.context_id,
             task_id=base_message.task_id
         )
+
+    @staticmethod
+    def add_jira_comment(issue_key: str, comment: str) -> str:
+        """
+        Adds a comment (e.g. a review feedback et.) to a Jira issue.
+
+        Args:
+            issue_key: The key of the Jira issue (e.g., 'PROJ-123').
+            comment: The text of the comment to add.
+
+        Returns:
+            A success message or an error message.
+        """
+
+        if not config.JIRA_BASE_URL or not config.JIRA_USER or not config.JIRA_TOKEN:
+            logger.error(f"Jira configuration is missing (JIRA_URL, JIRA_USERNAME, or JIRA_API_TOKEN).")
+            raise RuntimeError(f"Jira configuration is missing (JIRA_URL, JIRA_USERNAME, or JIRA_API_TOKEN).")
+        jira = JIRA(
+            server=config.JIRA_BASE_URL,
+            basic_auth=(config.JIRA_USER, config.JIRA_TOKEN)
+        )
+
+        try:
+            created_comment = jira.add_comment(issue_key, comment)
+        except Exception:
+            logger.exception(f"Failed to add Jira comment.")
+            raise
+        if not created_comment:
+            logger.error(f"Couldn't create a comment for Jira issue {issue_key}")
+            raise RuntimeError(f"Couldn't create a comment for Jira issue {issue_key}")
+        logger.info(f"Added comment to {issue_key}.")
+        return f"Successfully added comment to issue {issue_key}."
