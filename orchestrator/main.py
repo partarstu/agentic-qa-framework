@@ -838,7 +838,7 @@ async def _send_task_to_agent_with_message(message: Message, task_description: s
     agent_id = None
     try:
         # Wait for an agent and reserve it atomically
-        agent_id, agent_card = await _wait_and_reserve_agent(task_description)
+        agent_id, agent_card = await _wait_and_reserve_agent(task_description, internal_task_id)
         task_start_time = datetime.now()
         agent_name = await agent_registry.get_name(agent_id)
 
@@ -959,7 +959,7 @@ async def _send_task_to_agent(input_data: str, task_description: str) -> Task | 
     return await _send_task_to_agent_with_message(message, task_description)
 
 
-async def _wait_and_reserve_agent(task_description: str) -> tuple[str, AgentCard] | None:
+async def _wait_and_reserve_agent(task_description: str, task_id: str | None = None) -> tuple[str, AgentCard] | None:
     """Wait for an available agent and atomically reserve it.
 
     This function handles the waiting loop outside the lock, and only holds
@@ -967,6 +967,7 @@ async def _wait_and_reserve_agent(task_description: str) -> tuple[str, AgentCard
 
     Args:
         task_description: Description of the task to be assigned.
+        task_id: Optional ID of the task for logging purposes.
 
     Returns:
         Tuple of (agent_id, agent_card) for the reserved agent.
@@ -976,7 +977,7 @@ async def _wait_and_reserve_agent(task_description: str) -> tuple[str, AgentCard
                        or timeout waiting for an available agent.
     """
     if await agent_registry.is_empty():
-        _handle_exception("Orchestrator has currently no registered agents.", 404)
+        _handle_exception("Orchestrator has currently no registered agents.", 404, task_id=task_id)
 
     max_wait_time = config.OrchestratorConfig.TASK_EXECUTION_TIMEOUT
     start_time = time.time()
@@ -988,7 +989,7 @@ async def _wait_and_reserve_agent(task_description: str) -> tuple[str, AgentCard
         async with agent_selection_lock:
             available_agent_ids = await agent_registry.get_available_agents()
             if available_agent_ids:
-                agent_id = await _select_agent(task_description, available_agent_ids)
+                agent_id = await _select_agent(task_description, available_agent_ids, task_id)
                 if agent_id:
                     # Double-check agent is still available (might have changed during _select_agent)
                     current_status = await agent_registry.get_status(agent_id)
@@ -998,20 +999,21 @@ async def _wait_and_reserve_agent(task_description: str) -> tuple[str, AgentCard
                             # Atomically mark as BUSY before releasing the lock
                             await agent_registry.update_status(agent_id, AgentStatus.BUSY)
                             agent_name = await agent_registry.get_name(agent_id)
-                            logger.info(f"Reserved agent '{agent_name}' (ID: {agent_id}) for task '{task_description}'")
+                            logger.info(f"Reserved agent '{agent_name}' (ID: {agent_id}) for task '{task_description}'",
+                                        extra={"task_id": task_id, "agent_id": agent_id})
                             return agent_id, agent_card
                 # If _select_agent returned None, it means no suitable agent is currently
                 # available. Continue waiting - the suitable agent might become available later.
 
         # No agent was reserved - wait and retry (outside the lock)
         logger.info(f"No suitable available agent for task '{task_description}'. "
-                    f"Waiting {wait_interval}s before retry...")
+                    f"Waiting {wait_interval}s before retry...", extra={"task_id": task_id})
         await asyncio.sleep(wait_interval)
         wait_interval = min(wait_interval * 1.5, max_wait_interval)  # Exponential backoff with cap
 
     # Timeout reached
     _handle_exception(f"Timeout waiting for an available agent to handle task '{task_description}'. "
-                      f"All agents have been busy for {max_wait_time} seconds.", 503)
+                      f"All agents have been busy for {max_wait_time} seconds.", 503, task_id=task_id)
     return None
 
 
@@ -1118,12 +1120,13 @@ async def _get_agents_info(available_agent_ids: List[str]) -> str:
     return agents_info
 
 
-async def _select_agent(task_description: str, available_agent_ids: List[str]) -> str | None:
+async def _select_agent(task_description: str, available_agent_ids: List[str], task_id: str | None = None) -> str | None:
     """Selects the best agent from the available agents to handle a given task.
     
     Args:
         task_description: Description of the task to be assigned.
         available_agent_ids: List of agent IDs that are currently AVAILABLE.
+        task_id: Optional ID of the task for logging purposes.
         
     Returns:
         The ID of the selected agent, or None if no suitable agent found.
@@ -1141,10 +1144,10 @@ The list of all registered with you agents:\n{agents_info}
     selected_agent_id = result.output.id or None
     # Verify the selected agent is in our available list
     if selected_agent_id and selected_agent_id in available_agent_ids:
-        logger.info(f"Selected agent ID: {selected_agent_id} for task: '{task_description}'")
+        logger.info(f"Selected agent ID: {selected_agent_id} for task: '{task_description}'", extra={"task_id": task_id})
         return selected_agent_id
     else:
-        logger.info(f"Model returned invalid agent ID: {selected_agent_id} for task: '{task_description}'")
+        logger.info(f"Model returned invalid agent ID: {selected_agent_id} for task: '{task_description}'", extra={"task_id": task_id})
         return None
 
 
