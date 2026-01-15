@@ -12,7 +12,7 @@ found [here](https://medium.com/@partarstu/the-next-evolution-in-software-testin
 
 Watch a demo of QuAIA™ in action:
 
-[QuAIA™ Framework Demo](https://youtu.be/jd8s0fLdxLA)
+[QuAIA™ Framework Demo](https://youtu.be/LUf6ydlKfIU)
 
 ## Features
 
