@@ -11,3 +11,5 @@ mcp/jira/.env
 substitutions.yaml
 /local_models/
 test_main.py
+**/node_modules/
+orchestrator/static/

@@ -1,6 +1,29 @@
 # SPDX-FileCopyrightText: 2025 Taras Paruta (partarstu@gmail.com)
 #
 # SPDX-License-Identifier: Apache-2.0
+
+# =============================================================================
+# Stage 1: Build the React UI
+# =============================================================================
+FROM node:20-alpine AS ui-builder
+
+WORKDIR /ui
+
+# Copy package files first for better caching
+COPY orchestrator/ui/package*.json ./
+
+# Install dependencies
+RUN npm ci
+
+# Copy source code
+COPY orchestrator/ui/ ./
+
+# Build the production bundle
+RUN npm run build
+
+# =============================================================================
+# Stage 2: Build the final image
+# =============================================================================
 FROM agentic-qa-base:latest
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -30,8 +53,12 @@ RUN mkdir "allure-report"
 ARG WORK_DIR=/app
 WORKDIR ${WORK_DIR}
 
+# Copy Python application
 COPY orchestrator/ ${WORK_DIR}/orchestrator
 COPY common/ ${WORK_DIR}/common
 COPY config.py ${WORK_DIR}/config.py
+
+# Copy built UI from the ui-builder stage
+COPY --from=ui-builder /ui/dist ${WORK_DIR}/orchestrator/static
 
 CMD ["gunicorn", "-w", "1", "-k", "uvicorn.workers.UvicornWorker", "orchestrator.main:orchestrator_app"]

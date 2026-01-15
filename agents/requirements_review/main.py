@@ -45,7 +45,7 @@ class RequirementsReviewAgent(AgentBase):
             mcp_servers=[jira_mcp_server],
             deps_type=JiraUserStory,
             description="Agent which does the review of requirements including Jira user stories",
-            tools=[self._review_with_attachments]
+            tools=[self._review_with_attachments, self.add_jira_comment]
         )
 
     def get_thinking_budget(self) -> int:
@@ -77,7 +77,7 @@ class RequirementsReviewAgent(AgentBase):
         logger.info("Starting requirements review with %d attachments", len(attachments_content))
         result = await self.review_agent.run(user_message_parts)
         feedback: RequirementsReviewFeedback = result.output
-        logger.info(f"Generated {len(feedback.suggested_improvements)} improvement suggestions")
+        logger.info(f"Generated improvement suggestions as a feedback")
         return feedback
 
 

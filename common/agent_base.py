@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import base64
+import logging
 from abc import ABC, abstractmethod
 from contextlib import asynccontextmanager
 from typing import Type, List, Sequence, Optional
@@ -12,7 +13,7 @@ import uvicorn
 from a2a.server.apps import A2AFastAPIApplication
 from a2a.server.request_handlers import DefaultRequestHandler
 from a2a.server.tasks import InMemoryTaskStore
-from a2a.types import AgentCard, AgentCapabilities, Message, FilePart, FileWithBytes
+from a2a.types import AgentCard, AgentCapabilities, Message, FilePart, FileWithBytes, Part
 from a2a.utils import get_message_text, new_agent_text_message
 from fastapi import FastAPI
 from pydantic import BaseModel
@@ -20,7 +21,7 @@ from pydantic_ai import Agent, Tool
 from pydantic_ai.agent import AgentRunResult
 from pydantic_ai.mcp import MCPServerSSE
 from pydantic_ai.messages import BinaryContent, UserContent
-from pydantic_ai.models.google import GoogleModelSettings
+from pydantic_ai.models.gemini import GeminiModelSettings
 from pydantic_ai.models.groq import GroqModelSettings
 from pydantic_ai.settings import ModelSettings
 from pydantic_ai.tools import AgentDepsT, ToolFuncEither
@@ -28,7 +29,9 @@ from pydantic_ai.usage import UsageLimits
 
 import config
 from common import utils
+from jira import JIRA
 from common.agent_executor import DefaultAgentExecutor
+from common.agent_log_capture import AgentLogCaptureHandler, create_log_file_part
 from common.custom_llm_wrapper import CustomLlmWrapper
 from common.models import JsonSerializableModel
 from common.services.vector_db_service import VectorDbService
@@ -91,9 +94,10 @@ class AgentBase(ABC):
 
     def get_default_model_settings(self, model_name: str) -> ModelSettings:
         if model_name.startswith("google"):
-            return GoogleModelSettings(top_p=config.TOP_P, temperature=config.TEMPERATURE,
-                                       google_thinking_config={'include_thoughts': True,
-                                                               'thinking_budget': self.get_thinking_budget()})
+            return GeminiModelSettings(
+                top_p=config.TOP_P,
+                temperature=config.TEMPERATURE,
+                gemini_thinking_config={'include_thoughts': True, 'thinking_budget': self.get_thinking_budget()})
         elif model_name.startswith("groq"):
             return GroqModelSettings(top_p=config.TOP_P, temperature=config.TEMPERATURE)
         else:
@@ -128,22 +132,29 @@ class AgentBase(ABC):
     async def run(self, received_message: Message) -> Message:
         self.latest_received_message = received_message
         received_request = self._get_all_received_contents(received_message)
+
+        # Set up log capture for this execution
+        log_handler = AgentLogCaptureHandler()
+        log_handler.setLevel(config.LOG_LEVEL)
+        root_logger = logging.getLogger()
+        root_logger.addHandler(log_handler)
+
         logger.info("Got a task to execute, starting execution.")
         try:
             result = await self._get_agent_execution_result(received_request)
             logger.info("Completed execution of the task.")
             self._log_llm_comments_if_result_incomplete(result.output)
-            return self._get_text_message_from_results(result)
+            captured_logs = log_handler.get_logs()
+            root_logger.removeHandler(log_handler)
+            return self._get_message_with_logs(result, captured_logs)
         except Exception as e:
-            logger.exception(f"Error during agent execution: {e}")
-            raise
+            logger.exception(f"Error during agent execution.")
+            captured_logs = log_handler.get_logs()
+            root_logger.removeHandler(log_handler)
+            return self._get_error_message_with_logs(e, captured_logs, received_message.context_id, received_message.task_id)
 
-    def _log_llm_comments_if_result_incomplete(self, output: BaseModel | None) -> None:
+    def _log_llm_comments_if_result_incomplete(self, output: BaseModel | None | str) -> None:
         """Logs LLM comments if the agent result appears empty or incomplete.
-
-        This method checks if the result from the agent seems empty or null,
-        and if so, logs the `llm_comments` field (if present) as a warning
-        to help debug situations where the LLM couldn't fully complete the task.
 
         Args:
             output: The output from the agent execution.
@@ -167,10 +178,6 @@ class AgentBase(ABC):
     @staticmethod
     def _check_if_result_incomplete(output: BaseModel) -> bool:
         """Checks if the agent result appears to be empty or incomplete.
-
-        A result is considered incomplete if all its primary data fields
-        (excluding metadata fields like llm_comments) are empty, null, or
-        contain only empty collections.
 
         Args:
             output: The output model from the agent execution.
@@ -221,10 +228,6 @@ class AgentBase(ABC):
     @staticmethod
     def _fetch_attachments(attachment_paths: list[str]) -> dict[str, BinaryContent]:
         """Fetches and all attachments, returning them as binary content for multimodal processing.
-
-        This method processes downloaded attachments, filtering out:
-        - Files with the configured skip postfix
-        - Files with unsupported MIME types
 
         Args:
             attachment_paths: List of file paths to the downloaded attachments.
@@ -302,3 +305,66 @@ class AgentBase(ABC):
             return new_agent_text_message(text="\n".join(text_parts), context_id=context_id, task_id=task_id)
         else:
             return new_agent_text_message(text=str(output), context_id=context_id, task_id=task_id)
+
+    def _get_message_with_logs(self, result: AgentRunResult, captured_logs: str,
+                               context_id: str = None, task_id: str = None) -> Message:
+        """Create a message with text result and log file artifact.
+        """
+        base_message = self._get_text_message_from_results(result, context_id, task_id)
+        if not captured_logs or not captured_logs.strip():
+            return base_message
+        return self._get_final_message_with_logs(base_message, captured_logs)
+
+    def _get_error_message_with_logs(self, exception: Exception, captured_logs: str,
+                                     context_id: str = None, task_id: str = None) -> Message:
+        """Create a message with error details and log file artifact.
+        """
+        error_text = f"Agent execution failed with error: {exception}"
+        base_message = new_agent_text_message(text=error_text, context_id=context_id, task_id=task_id)
+        if not captured_logs or not captured_logs.strip():
+            return base_message
+        return self._get_final_message_with_logs(base_message, captured_logs)
+
+    def _get_final_message_with_logs(self, base_message: Message, captured_logs: str) -> Message:
+        log_file_with_bytes = create_log_file_part(captured_logs, self.agent_name)
+        log_part = Part(root=FilePart(file=log_file_with_bytes))
+        new_parts = list(base_message.parts) + [log_part]
+        return Message(
+            parts=new_parts,
+            message_id=base_message.message_id,
+            role=base_message.role,
+            context_id=base_message.context_id,
+            task_id=base_message.task_id
+        )
+
+    @staticmethod
+    def add_jira_comment(issue_key: str, comment: str) -> str:
+        """
+        Adds a comment (e.g. a review feedback et.) to a Jira issue.
+
+        Args:
+            issue_key: The key of the Jira issue (e.g., 'PROJ-123').
+            comment: The text of the comment to add.
+
+        Returns:
+            A success message or an error message.
+        """
+
+        if not config.JIRA_BASE_URL or not config.JIRA_USER or not config.JIRA_TOKEN:
+            logger.error(f"Jira configuration is missing (JIRA_URL, JIRA_USERNAME, or JIRA_API_TOKEN).")
+            raise RuntimeError(f"Jira configuration is missing (JIRA_URL, JIRA_USERNAME, or JIRA_API_TOKEN).")
+        jira = JIRA(
+            server=config.JIRA_BASE_URL,
+            basic_auth=(config.JIRA_USER, config.JIRA_TOKEN)
+        )
+
+        try:
+            created_comment = jira.add_comment(issue_key, comment)
+        except Exception:
+            logger.exception(f"Failed to add Jira comment.")
+            raise
+        if not created_comment:
+            logger.error(f"Couldn't create a comment for Jira issue {issue_key}")
+            raise RuntimeError(f"Couldn't create a comment for Jira issue {issue_key}")
+        logger.info(f"Added comment to {issue_key}.")
+        return f"Successfully added comment to issue {issue_key}."

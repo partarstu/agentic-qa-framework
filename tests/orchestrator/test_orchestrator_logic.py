@@ -83,12 +83,12 @@ async def test_select_agent(clear_registry, mock_agent_card):
     with patch.object(discovery_agent, "run", new_callable=AsyncMock) as mock_run:
         mock_run.return_value = mock_result
         
-        agent_id = await _select_agent("some task")
+        agent_id = await _select_agent("some task", ["test-id"])
         assert agent_id == "test-id"
 
 @pytest.mark.asyncio
 async def test_select_agent_none_found(clear_registry):
-    agent_id = await _select_agent("some task")
+    agent_id = await _select_agent("some task", [])
     assert agent_id is None
 
 @pytest.mark.asyncio

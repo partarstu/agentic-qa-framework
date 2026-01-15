@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Orchestrator Execution Flow Diagram</title>
+    <title>QuAIA™ - Orchestration Flow Diagram</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         body {
@@ -50,53 +50,69 @@
 </head>
 <body class="bg-gray-100 p-4 sm:p-6 md:p-8">
     <div class="max-w-7xl mx-auto bg-white rounded-xl shadow-lg p-6">
-        <h1 class="text-2xl sm:text-3xl font-bold text-gray-800 mb-2 text-center">Agentic QA Framework Orchestration Flow</h1>
-        <p class="text-gray-600 mb-6 text-center">This diagram visualizes the primary workflows and interactions within the framework.</p>
+        <h4 class="text-1xl sm:text-2xl font-bold text-gray-800 mb-2 text-center">QuAIA™ Orchestration Flow</h4>
 
         <!-- Mermaid Diagram Container -->
         <div class="mermaid-container overflow-x-auto">
             <div class="mermaid">
 graph TD
-    subgraph "Workflow 3: Test Execution & Reporting"
-        TE1[API Call<br>/execute-tests] --> TE2[Fetch ready for automated execution TCs <br>from Test Mgmt System];
-        TE2 --> TE3[Group TCs by their type];
-        TE3 --> TE4[For each test type, Select ALL<br>Suitable Execution Agents];
-        TE4 --> TE5[Distribute TCs Among Agents in parallel];
-        TE5 --> TE6[Send Execution Tasks for each selected agent in parallel];
-        TE6 --> TE7[Wait & Gather Execution Results];
-        TE7 --> TE8{Analyze Agent Responses};
-        TE8 --> TE9[Create Test Execution Results in<br>Test Mgmt System];
-        TE9 --> TE10[Generate Test Execution Reports];
-        TE10 --> TE11((End));
+    subgraph "Workflow 4: RAG Database Update"
+        RAG1[API call<br>/update-rag-db] --> RAG2[Select agent for<br>'Update RAG Vector DB'];
+        RAG2 --> RAG3[Send sync task<br>for project tickets];
+        RAG3 --> RAG4[Agent syncs tickets<br>to Vector DB];
+        RAG4 --> RAG5[Return update summary];
+        RAG5 --> RAG6((End));
     end
 
-    subgraph "Workflow 2: Test Case Generation, Review and Classification"
-        TCG1[Jira Webhook<br>/story-ready-for-test-case-generation] --> TCG2[Extract User Story ID];
-        TCG2 --> TCG3[Select Agent for<br>'Generate test cases'];
-        TCG3 --> TCG4[Send Generation Task];
-        TCG4 --> TCG5[Wait & Receive Generated TCs];
-        TCG5 --> TCG6[Select Agent for<br>'Classify test cases'];
-        TCG6 --> TCG7[Send Classification Task];
-        TCG7 --> TCG8[Wait for Completion];
-        TCG8 --> TCG9[Select Agent for<br>'Review test cases'];
-        TCG9 --> TCG10[Send Review Task];
-        TCG10 --> TCG11[Wait for Completion];
+    subgraph "Workflow 3: Test Execution and Reporting"
+        TE1[API call /execute-tests] --> TE2[Fetch TCs which are ready for automated execution];
+        TE2 --> TE3["Group TCs by type (UI, API etc.)"];
+        TE3 --> TE4[Distribute each test type to dedicated execution agents swarm];
+        TE4 --> TE7[Each agent swarm executes tests];
+        TE7 --> TE8[Gather execution results];
+        TE8 --> TE9{"Any failed tests?"};
+        TE9 -- Yes --> TE11[Delegate handling incidents to the dedicated agents];
+        TE9 -- No --> TE16[Create test execution results in Test Mgmt System];
+        TE11 --> TE13[Each agent identifies if<br>the incident is already reported];
+        TE13 -- Yes --> TE14[Each agent returns existing<br>incident report IDs/Keys];
+        TE13 -- No --> TE15[Each agent creates an incident report<br>in Test Mgmt System with all attachments];
+        TE14 --> TE16;
+        TE15 --> TE16;
+        TE16 --> TE17[Generate Allure reports];
+        TE17 --> TE18((End));
+    end
+
+    subgraph "Workflow 2: Test Case Generation, Classification and Review"
+        TCG1[Webhook<br>/story-ready-for-test-case-generation] --> TCG2[Extract user story ID];
+        TCG2 --> TCG3[Select agent for<br>'Generate test cases'];
+        TCG3 --> TCG4[Send generation task];
+        TCG4 --> TCG5[Wait and receive generated TCs];
+        TCG5 --> TCG6[Select agent for<br>'Classify test cases'];
+        TCG6 --> TCG7[Send classification task];
+        TCG7 --> TCG8[Wait for classification completion];
+        TCG8 --> TCG9[Select agent for<br>'Review test cases'];
+        TCG9 --> TCG10[Send review task];
+        TCG10 --> TCG11[Wait for review completion];
         TCG11 --> TCG12((End));
     end
 
     subgraph "Workflow 1: Requirements Review"
-        J1[Jira Webhook<br>/new-requirements-available] --> J2[Extract User Story ID];
-        J2 --> J3[Select Agent for<br>'Review Jira user story'];
-        J3 --> J4[Send Review Task to Agent];
-        J4 --> J5[Wait for Task Completion];
-        J5 --> J6((End));
+        RR1[Webhook<br>/new-requirements-available] --> RR2[Extract user story ID];
+        RR2 --> RR3[Select agent for<br>'Review user story'];
+        RR3 --> RR4[Send review task<br>to agent];
+        RR4 --> RR5[Wait for task completion];
+        RR5 --> RR6((End));
     end
 
-    subgraph "System Startup & Agent Discovery"
-        A[Orchestrator Starts] --> B{Periodic Agent Discovery};
-        B --> C[Scan Configured Agent URLs];
-        C --> D{Fetch Agent Cards};
-        D -- Success --> E[Add/Update Agent in Registry];
+    subgraph "System Startup and Agent Discovery"
+        A[Orchestrator starts] --> B[Initial agent discovery];
+        B --> C[Scan configured agent URLs];
+        C --> D{Fetch agent cards};
+        D -- Success --> E[Add/update agent in registry<br>Status: AVAILABLE];
+        D -- Failure --> F[Mark agent as BROKEN<br>Reason: OFFLINE];
+        E --> G{Periodic discovery loop};
+        F --> G;
+        G --> C;
     end
             </div>
         </div>

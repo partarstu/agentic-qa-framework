@@ -3,19 +3,19 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI Agentic Framework Architectural Diagram</title>
+    <title>QuAIA™ - Architectural Diagram</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         body {
             font-family: 'Inter', sans-serif;
-            background-color: #f8fafc; /* slate-50 */
+            background-color: #f8fafc;
         }
         .mermaid svg {
             margin: 0 auto;
             display: block;
         }
         h1, h2 {
-            color: #1e293b; /* slate-800 */
+            color: #1e293b;
         }
     </style>
     <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -25,81 +25,132 @@
 <body class="p-4 sm:p-6 md:p-8">
     <div class="max-w-7xl mx-auto">
         <header class="text-center mb-8">
-            <h1 class="text-3xl md:text-4xl font-bold tracking-tight">Agentic QA Framework Architectural Diagram</h1>
+            <h1 class="text-3xl md:text-4xl font-bold tracking-tight">QuAIA™ - Architectural Diagram</h1>
+            <p class="text-slate-600 mt-2">Quality Assurance with Intelligent Agents — AI Agent Orchestration System for Automating Testing Life Cycle</p>
         </header>
 
         <div class="bg-white p-6 rounded-2xl shadow-lg border border-slate-200">
             <div class="mermaid w-full overflow-auto">
-graph LR
-    subgraph "System Boundary"
-        direction TB
-        UserRequest["User Request / Trigger"] --> Orchestrator
+flowchart TD
+    Triggers["<b>Triggers</b><br/>Jira Webhooks / REST API / UI Dashboard"]
+    Orchestrator["<b>Orchestrator</b><br/>(FastAPI + A2A Protocol)"]
 
-        subgraph "Orchestration & Communication"
-            Orchestrator["Orchestrator (orchestrator/main.py)"]
-            A2A["<b>A2A Protocol SDK</b>"]
-            Orchestrator -- "Uses to call Agents" --> A2A
-        end
-
-        subgraph "Agent Layer"
-            subgraph "Agents"
-                ReqReview["1. Requirements Review"]
-                Classification["2. Test Case Classification"]
-                Generation["3. Test Case Generation"]
-                CaseReview["4. Test Case Review"]
-                UITest["5. UI Test Execution"]
-            end
-        end
-
-        %% Hub-and-spoke communication
-        A2A -- "Sends Request / Receives Result" <--> ReqReview
-        A2A -- "Sends Request / Receives Result" <--> Classification
-        A2A -- "Sends Request / Receives Result" <--> Generation
-        A2A -- "Sends Request / Receives Result" <--> CaseReview
-        A2A -- "Sends Request / Receives Result" <--> UITest
-
-        subgraph "Core Dependencies"
-            LLM["Large Language Model (LLM)"]
-            Reporting["Reporting Service<br/>(Allure)"]
-            MCP["<b>Model Context Protocol (MCP)</b><br/>Protocol for Jira Access"]
-        end
-
-        %% Styling
-        style MCP fill:#eef2ff,stroke:#4f46e5,stroke-width:2px,stroke-dasharray: 5 5
-        style A2A fill:#dcfce7,stroke:#16a34a,stroke-width:2px
-
-        %% Agent interactions with internal dependencies
-        ReqReview -- "Interacts with" --> LLM
-        Classification -- "Interacts with" --> LLM
-        Generation -- "Interacts with" --> LLM
-        CaseReview -- "Interacts with" --> LLM
-        UITest -- "Interacts with" --> LLM
-
-        %% Orchestrator interaction with Reporting
-        Orchestrator -- "Sends Data" --> Reporting
+    subgraph Agents["<b>AI Agents</b>"]
+        direction LR
+        A1["1. Requirements<br/>Review"] 
+        A2["2. Test Case<br/>Generation"]
+        A3["3. Test Case<br/>Classification"]
+        A4["4. Test Case<br/>Review"]
+        A5["5. UI Test"]
+        A6["6. API Test"]
+        A7["7. Incident<br/>Creation"]
+        A8["8. Jira RAG"]
     end
 
-    subgraph "External Systems"
-        direction TB
-        Jira["Ticketing System<br/>(Jira)"]
-        Zephyr["Test Management System<br/>(Zephyr)"]
+    subgraph Bottom[" "]
+        direction LR
+        LLM["<b>LLM</b><br/>(e.g. Gemini)"]
+        MCP["<b>Jira MCP</b><br/>Server"]
+        Jira["<b>Jira</b>"]
+        TMS["<b>Zephyr/Xray</b>"]
+        Qdrant["<b>Qdrant</b><br/>Vector DB"]
+        Allure["<b>Allure</b><br/>Reports"]
     end
 
-    %% Agent interactions with external systems
-    ReqReview -- "Uses MCP to access & comment on" --> Jira
-    Generation -- "Uses MCP to access" --> Jira
-    CaseReview -- "Uses MCP to access" --> Jira
+    %% Main flow
+    Triggers --> Orchestrator
+    Orchestrator --> Agents
+    Agents --> LLM
+    Agents --> MCP
+    MCP <--> Jira
+    Agents --> TMS
+    TMS <--> Jira
+    A7 --> Qdrant
+    A8 --> Qdrant
+    Orchestrator --> Allure
 
-    Classification -- "Adds Labels to Test Cases in" --> Zephyr
-    Generation -- "Creates/Fetches Test Cases in" --> Zephyr
-    CaseReview -- "Adds review feedback to" --> Zephyr
+    %% Styling
+    style Triggers fill:#f0f9ff,stroke:#0ea5e9,stroke-width:2px
+    style Orchestrator fill:#fef3c7,stroke:#f59e0b,stroke-width:2px
+    style LLM fill:#e0e7ff,stroke:#6366f1,stroke-width:2px
+    style MCP fill:#eef2ff,stroke:#4f46e5,stroke-width:2px,stroke-dasharray: 5 5
+    style Qdrant fill:#fce7f3,stroke:#ec4899,stroke-width:2px
+    style Allure fill:#dcfce7,stroke:#16a34a,stroke-width:2px
+    style A7 fill:#fed7aa,stroke:#f97316,stroke-width:1px
+    style A8 fill:#fed7aa,stroke:#f97316,stroke-width:1px
+    style Bottom fill:none,stroke:none
+            </div>
+        </div>
+        
+        <div class="mt-8 bg-white p-6 rounded-2xl shadow-lg border border-slate-200">
+            <h2 class="text-xl font-semibold mb-4">Legend</h2>
+            <div class="grid grid-cols-2 md:grid-cols-5 gap-4 text-sm">
+                <div class="flex items-center gap-2">
+                    <div class="w-4 h-4 rounded" style="background: #fef3c7; border: 2px solid #f59e0b;"></div>
+                    <span>Orchestrator</span>
+                </div>
+                <div class="flex items-center gap-2">
+                    <div class="w-4 h-4 rounded" style="background: #e0e7ff; border: 2px solid #6366f1;"></div>
+                    <span>LLM (Gemini)</span>
+                </div>
+                <div class="flex items-center gap-2">
+                    <div class="w-4 h-4 rounded" style="background: #eef2ff; border: 2px dashed #4f46e5;"></div>
+                    <span>MCP Protocol</span>
+                </div>
+                <div class="flex items-center gap-2">
+                    <div class="w-4 h-4 rounded" style="background: #fce7f3; border: 2px solid #ec4899;"></div>
+                    <span>Vector DB</span>
+                </div>
+                <div class="flex items-center gap-2">
+                    <div class="w-4 h-4 rounded" style="background: #fed7aa; border: 2px solid #f97316;"></div>
+                    <span>Maintenance Agents</span>
+                </div>
+            </div>
+        </div>
+        
+        <div class="mt-8 bg-white p-6 rounded-2xl shadow-lg border border-slate-200">
+            <h2 class="text-xl font-semibold mb-4">Component Summary</h2>
+            <div class="grid md:grid-cols-2 gap-6 text-sm">
+                <div>
+                    <h3 class="font-semibold text-slate-800 mb-2">Agents (8 Total)</h3>
+                    <ul class="list-disc list-inside text-slate-600 space-y-1">
+                        <li><strong>Requirements Review:</strong> Reviews Jira user stories for completeness</li>
+                        <li><strong>Test Case Generation:</strong> Creates test cases from acceptance criteria</li>
+                        <li><strong>Test Case Classification:</strong> Adds labels to categorize test cases</li>
+                        <li><strong>Test Case Review:</strong> Reviews generated test cases for quality</li>
+                        <li><strong>UI Test Execution:</strong> Executes automated UI tests (Java-based remote service)</li>
+                        <li><strong>API Test Execution:</strong> Executes automated API tests (Java-based remote service)</li>
+                        <li><strong>Incident Creation:</strong> Creates bug reports with duplicate detection</li>
+                        <li><strong>Jira RAG:</strong> Synchronizes Jira issues to vector database</li>
+                    </ul>
+                </div>
+                <div>
+                    <h3 class="font-semibold text-slate-800 mb-2">Key Technologies</h3>
+                    <ul class="list-disc list-inside text-slate-600 space-y-1">
+                        <li><strong>A2A Protocol:</strong> Agent-to-Agent communication standard</li>
+                        <li><strong>MCP:</strong> Model Context Protocol for Jira integration</li>
+                        <li><strong>Pydantic AI:</strong> LLM integration framework</li>
+                        <li><strong>FastAPI:</strong> Web framework for all services</li>
+                        <li><strong>Qdrant:</strong> Vector database for semantic search</li>
+                        <li><strong>SentenceTransformers:</strong> Text embedding generation</li>
+                        <li><strong>Allure:</strong> Test reporting framework</li>
+                    </ul>
+                </div>
             </div>
         </div>
     </div>
 
     <script type="module">
         import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
-        mermaid.initialize({ startOnLoad: true });
+        mermaid.initialize({ 
+            startOnLoad: true,
+            theme: 'default',
+            flowchart: {
+                useMaxWidth: true,
+                htmlLabels: true,
+                curve: 'basis'
+            }
+        });
     </script>
 </body>
 </html>

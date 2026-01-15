@@ -1,4 +1,4 @@
-# Contributing to this project
+# Contributing to QuAIA™
 
 Contributions to the current project should be made in the form of GitHub pull requests (PRs). Each pull request must be reviewed by
 repository's owner or any of the core contributors. If you need to refer to the reviewer explicitly, just type @ and reviewer's name in 

@@ -1,4 +1,4 @@
-pydantic-ai==1.39.0
+pydantic-ai==1.41.0
 a2a-sdk==0.3.22
 allure-python-commons==2.15.2
 python-dotenv==1.2.1
@@ -18,3 +18,5 @@ qdrant-client==1.16.2
 einops==0.8.1
 python-magic==0.4.27
 python-magic-bin==0.4.14; sys_platform == 'win32'
+PyJWT==2.10.1
+jira==3.10.5

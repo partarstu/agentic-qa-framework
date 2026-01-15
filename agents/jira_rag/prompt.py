@@ -18,7 +18,6 @@ class JiraRagUpdateSystemPrompt(PromptBase):
     def __init__(
         self,
         valid_statuses: list[str],
-        bug_issue_type: str,
         template_file_name: str = "prompt_template.txt",
     ):
         """
@@ -26,17 +25,14 @@ class JiraRagUpdateSystemPrompt(PromptBase):
 
         Args:
             valid_statuses: List of valid issue statuses for the RAG DB.
-            bug_issue_type: The issue type to filter for (e.g., 'Bug').
             template_file_name: The name of the prompt template file.
         """
         super().__init__(template_file_name)
         self.valid_statuses = valid_statuses
-        self.bug_issue_type = bug_issue_type
 
     def get_prompt(self) -> str:
         """Returns the formatted prompt string with substituted values."""
         logger.info("Generating Jira RAG update system prompt")
         return self.template.format(
-            valid_statuses=self.valid_statuses,
-            bug_issue_type=self.bug_issue_type,
+            valid_statuses=self.valid_statuses
         )

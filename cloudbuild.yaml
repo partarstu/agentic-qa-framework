@@ -3,6 +3,18 @@
 # SPDX-License-Identifier: Apache-2.0
 
 steps:
+  # Pull the external mcp-atlassian image from GitHub Container Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args: [ 'pull', 'ghcr.io/sooperset/mcp-atlassian:0.11.12' ]
+
+  # Tag the external image for Google Container Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args: [ 'tag', 'ghcr.io/sooperset/mcp-atlassian:0.11.12', 'gcr.io/$PROJECT_ID/mcp-atlassian:latest' ]
+
+  # Push the mcp-atlassian image to internal Container Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args: [ 'push', 'gcr.io/$PROJECT_ID/mcp-atlassian:latest' ]
+
   # Build the base image
   - name: 'gcr.io/cloud-builders/docker'
     args: [ 'build', '-t', 'agentic-qa-base:latest', '-f', 'Dockerfile.base', '.' ]
@@ -65,7 +77,7 @@ steps:
       - 'run'
       - 'deploy'
       - 'jira-mcp-server'
-      - '--image=mcp/atlassian:latest'
+      - '--image=gcr.io/$PROJECT_ID/mcp-atlassian:latest'
       - '--network=agent-network'
       - '--subnet=agent-network'
       - '--ingress=internal'
@@ -76,11 +88,12 @@ steps:
       - '--memory=1Gi'
       - '--max-instances=1'
       - '--set-secrets=JIRA_API_TOKEN=JIRA_API_TOKEN:latest,JIRA_USERNAME=JIRA_USERNAME:latest,JIRA_URL=JIRA_URL:latest'
+      - '--set-env-vars=MCP_LOGGING_STDOUT=true,DISABLE_JIRA_MARKUP_TRANSLATION=true'      
       - '--port=9000'
-      - '--args=--transport,sse,--port,9000,-vv'
+      - '--args=--transport,sse,--port,9000,-v'
       - '--add-volume=type=cloud-storage,name=jira-volume,bucket=$_BUCKET_NAME,mount-options=only-dir=$_JIRA_ATTACHMENTS_FOLDER'
       - '--add-volume-mount=volume=jira-volume,mount-path=$_JIRA_MCP_SERVER_ATTACHMENTS_MOUNT_PATH'
-      - '--concurrency=5'
+      - '--concurrency=100'
 
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: gcloud
@@ -145,8 +158,8 @@ steps:
       - '--max-instances=1'
       - '--concurrency=5'
       - '--set-env-vars=^;^REMOTE_EXECUTION_AGENT_HOSTS=$_REMOTE_EXECUTION_AGENT_HOSTS'
-      - '--set-env-vars=AGENT_DISCOVERY_PORTS=443-443,GOOGLE_CLOUD_LOGGING_ENABLED=true,QDRANT_URL=$_QDRANT_URL,ATTACHMENTS_LOCAL_DESTINATION_FOLDER_PATH=$_LOCAL_ATTACHMENTS_MOUNT_PATH,MCP_SERVER_ATTACHMENTS_FOLDER_PATH=$_JIRA_MCP_SERVER_ATTACHMENTS_MOUNT_PATH'
-      - '--set-secrets=GOOGLE_API_KEY=GOOGLE_API_KEY:latest,JIRA_API_TOKEN=JIRA_API_TOKEN:latest,JIRA_USERNAME=JIRA_USERNAME:latest,ZEPHYR_API_TOKEN=ZEPHYR_API_TOKEN:latest,JIRA_URL=JIRA_URL:latest,ZEPHYR_BASE_URL=ZEPHYR_BASE_URL:latest,ORCHESTRATOR_API_KEY=ORCHESTRATOR_API_KEY:latest,QDRANT_API_KEY=QDRANT_API_KEY:latest'
+      - '--set-env-vars=AGENT_DISCOVERY_PORTS=443-443,GOOGLE_CLOUD_LOGGING_ENABLED=true,QDRANT_URL=$_QDRANT_URL,ATTACHMENTS_LOCAL_DESTINATION_FOLDER_PATH=$_LOCAL_ATTACHMENTS_MOUNT_PATH,MCP_SERVER_ATTACHMENTS_FOLDER_PATH=$_JIRA_MCP_SERVER_ATTACHMENTS_MOUNT_PATH,DASHBOARD_JWT_EXPIRE_HOURS=24'
+      - '--set-secrets=GOOGLE_API_KEY=GOOGLE_API_KEY:latest,JIRA_API_TOKEN=JIRA_API_TOKEN:latest,JIRA_USERNAME=JIRA_USERNAME:latest,ZEPHYR_API_TOKEN=ZEPHYR_API_TOKEN:latest,JIRA_URL=JIRA_URL:latest,ZEPHYR_BASE_URL=ZEPHYR_BASE_URL:latest,ORCHESTRATOR_API_KEY=ORCHESTRATOR_API_KEY:latest,QDRANT_API_KEY=QDRANT_API_KEY:latest,DASHBOARD_USERNAME=DASHBOARD_USERNAME:latest,DASHBOARD_PASSWORD=DASHBOARD_PASSWORD:latest,DASHBOARD_JWT_SECRET=DASHBOARD_JWT_SECRET:latest'
       - '--add-volume=type=cloud-storage,name=gcs-allure-reports,bucket=$_ALLURE_REPORTS_BUCKET'
       - '--add-volume-mount=volume=gcs-allure-reports,mount-path=$_ALLURE_REPORTS_CONTAINER_PATH'
       - '--add-volume=type=cloud-storage,name=jira-volume,bucket=$_BUCKET_NAME,mount-options=only-dir=$_JIRA_ATTACHMENTS_FOLDER'
