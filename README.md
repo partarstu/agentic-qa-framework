@@ -24,6 +24,19 @@ Watch a demo of QuAIA™ in action:
     * UI & API Test Execution (separate project)    
     * Incident Report Creation
     * Jira Ticket RAG
+* **Web UI Monitoring Dashboard:** Real-time monitoring interface for:
+    * Agent status visualization (AVAILABLE, BUSY, BROKEN states)
+    * Task history with execution details and duration
+    * Error log viewer with filtering capabilities
+    * Agent execution logs accessible per task
+    * Summary statistics (uptime, task counts, agent health)
+* **Agent State Management:** Intelligent agent lifecycle management with:
+    * Automatic status tracking (AVAILABLE → BUSY → AVAILABLE/BROKEN)
+    * Broken agent detection with reason classification (OFFLINE, TASK_STUCK)
+    * Automatic recovery mechanism with task cancellation support
+    * Concurrency-safe agent selection with atomic reservation
+* **Agent Log Capture:** Captures execution logs from agents and returns them as artifacts for debugging and monitoring.
+* **JWT Authentication:** Secure dashboard access with configurable credentials and token expiration.
 * **Prompt Injection Protection:** Built-in safeguards to detect and prevent prompt injection attacks.
 * **A2A and MCP - compliant:** Adheres to the specifications of Agent2Agent and Model Context protocols.
 * **Orchestration Layer:** A central orchestrator manages agent registration, task routing, and workflow execution.
@@ -47,6 +60,37 @@ When an event occurs (e.g., a Jira webhook indicating new requirements), the orc
 4. Monitors the task execution and collects results.
 5. Triggers subsequent agents or workflows as needed (e.g., after test case generation, trigger test case
    classification).
+
+### Agent State Management
+
+The orchestrator maintains detailed state information for each registered agent:
+
+| Status | Description |
+|--------|-------------|
+| **AVAILABLE** | Agent is ready to accept new tasks. |
+| **BUSY** | Agent is currently executing a task. |
+| **BROKEN** | Agent is unavailable due to being OFFLINE or having a TASK_STUCK. |
+
+**Broken Agent Classification:**
+- `OFFLINE`: Agent is not responding to health checks.
+- `TASK_STUCK`: Agent is responsive but a task timed out.
+
+### Concurrency and Agent Selection
+
+The orchestrator uses atomic agent selection with a lock-based mechanism to prevent race conditions when multiple tasks
+compete for the same available agents. Key features include:
+
+* **Atomic Reservation:** Agent selection and status update happen within a single lock to prevent double-booking.
+* **Wait-and-Retry:** If no suitable agent is available, the orchestrator waits with exponential backoff.
+* **LLM-Based Selection Caching:** The orchestrator caches LLM decisions for agent sets to avoid redundant API calls.
+
+### Broken Agent Recovery
+
+A background task continuously monitors broken agents and attempts recovery:
+
+1. For `OFFLINE` agents: Periodically checks if the agent responds to card fetch requests.
+2. For `TASK_STUCK` agents: Attempts to cancel the stuck task using the A2A protocol before marking the agent as available.
+3. Agents that remain unrecoverable for 24 hours are given up on.
 
 For a visual representation of the system's architecture and data flow, please refer to the following diagrams:
 
@@ -280,6 +324,56 @@ To run the Jira MCP server, you will need Docker installed.
    python orchestrator/main.py
    ```
 
+### Web UI Monitoring Dashboard
+
+The orchestrator includes a built-in web UI for monitoring agent status, tasks, and logs in real-time.
+
+#### Accessing the Dashboard
+
+Once the orchestrator is running, navigate to `http://localhost:8000/` (or your configured orchestrator URL) to
+access the dashboard. You will be prompted to log in with your configured credentials.
+
+**Default Credentials:**
+- Username: `admin`
+- Password: `admin`
+
+> **⚠️ Important:** Change the default credentials in production by setting the `DASHBOARD_USERNAME`, `DASHBOARD_PASSWORD`, and `DASHBOARD_JWT_SECRET` environment variables.
+
+#### Dashboard Features
+
+* **Summary View:** Displays orchestrator uptime, total tasks processed, success/failure rates, and agent health overview.
+* **Agent Grid:** Shows all registered agents with their current status (AVAILABLE, BUSY, BROKEN), capabilities, and last activity.
+* **Task History:** Lists recent tasks with execution details, duration, assigned agent, and status. Click on a task to view its execution logs.
+* **Error Log:** Displays recent errors with context, including traceback snippets and related task/agent information.
+* **Log Viewer:** Filterable log viewer supporting level filtering (INFO, WARNING, ERROR) and task/agent-specific log queries.
+
+#### Starting the UI Development Server (For Development Only)
+
+If you want to run the UI in development mode with hot-reloading:
+
+```bash
+cd orchestrator/ui
+npm install
+npm run dev
+```
+
+The development server runs on port 5173 with a proxy to the orchestrator backend.
+
+#### Building the UI for Production
+
+To build the UI and integrate it with the orchestrator:
+
+```bash
+cd orchestrator/ui
+# Windows
+start.bat
+
+# Linux/macOS
+./start.sh
+```
+
+This will build the React application and copy the static files to `orchestrator/static/` for serving by the orchestrator.
+
 ### Deployment to Google Cloud Run
 
 This project is already configured for deployment to Google Cloud Run. The `cloudbuild.yaml` file orchestrates the
@@ -409,6 +503,27 @@ To keep the vector database synchronized with Jira issues for duplicate detectio
       "project_key": "SCRUM"
   }
   ```
+
+### Dashboard API Endpoints
+
+The dashboard exposes REST API endpoints for programmatic access to monitoring data. All dashboard endpoints require JWT authentication.
+
+**Authentication:**
+
+* `POST /api/auth/login` - Authenticate and receive a JWT token.
+  ```json
+  {"username": "admin", "password": "admin"}
+  ```
+* `POST /api/auth/logout` - Logout (client-side token removal).
+* `GET /api/auth/verify` - Verify if the current token is valid.
+
+**Dashboard Data:**
+
+* `GET /api/dashboard/summary` - Get high-level statistics (uptime, task counts, agent health).
+* `GET /api/dashboard/agents` - Get detailed status of all registered agents.
+* `GET /api/dashboard/tasks?limit=50` - Get recent tasks with execution details.
+* `GET /api/dashboard/errors?limit=20` - Get recent errors with context.
+* `GET /api/dashboard/logs?limit=100&level=ERROR&task_id=xxx&agent_id=yyy` - Get filtered application logs.
 
 ## Running Tests
 
