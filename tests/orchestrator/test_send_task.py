@@ -20,6 +20,7 @@ def mock_registry():
         mock.contains = AsyncMock()
         mock.get_valid_agents = AsyncMock()
         mock.get_broken_context = AsyncMock(return_value=(None, None))
+        mock.set_current_task = AsyncMock()
         yield mock
 
 @pytest.mark.asyncio
@@ -27,8 +28,10 @@ async def test_send_task_success(mock_registry):
     mock_registry.get_card = AsyncMock(return_value=MagicMock())
     
     with patch("orchestrator.main.httpx.AsyncClient") as mock_client_cls, \
-         patch("orchestrator.main.ClientFactory") as mock_factory_cls:
-         
+         patch("orchestrator.main.ClientFactory") as mock_factory_cls, \
+         patch("orchestrator.main._wait_and_reserve_agent", new_callable=AsyncMock) as mock_reserve:
+
+        mock_reserve.return_value = ("agent-1", MagicMock())
         mock_a2a_client = MagicMock()
         mock_factory_cls.return_value.create.return_value = mock_a2a_client
         
@@ -40,10 +43,10 @@ async def test_send_task_success(mock_registry):
 
         mock_a2a_client.send_message.return_value = response_generator()
         
-        task = await _send_task_to_agent("agent-1", "input", "desc")
+        task = await _send_task_to_agent("input", "desc")
         
         assert task.status.state == TaskState.completed
-        mock_registry.update_status.assert_any_call("agent-1", AgentStatus.BUSY)
+        # _wait_and_reserve_agent handles reservation, so we just check if registry was updated by the main flow (e.g. releasing agent)
         mock_registry.update_status.assert_any_call("agent-1", AgentStatus.AVAILABLE)
 
 @pytest.mark.asyncio
@@ -52,8 +55,10 @@ async def test_send_task_timeout(mock_registry):
     
     with patch("orchestrator.main.httpx.AsyncClient"), \
          patch("orchestrator.main.ClientFactory") as mock_factory_cls, \
-         patch("orchestrator.main.config.OrchestratorConfig.TASK_EXECUTION_TIMEOUT", 0.1):
+         patch("orchestrator.main.config.OrchestratorConfig.TASK_EXECUTION_TIMEOUT", 0.1), \
+         patch("orchestrator.main._wait_and_reserve_agent", new_callable=AsyncMock) as mock_reserve:
          
+        mock_reserve.return_value = ("agent-1", MagicMock())
         mock_a2a_client = MagicMock()
         mock_factory_cls.return_value.create.return_value = mock_a2a_client
         
@@ -66,7 +71,7 @@ async def test_send_task_timeout(mock_registry):
         
         from fastapi import HTTPException
         with pytest.raises(HTTPException) as exc:
-            await _send_task_to_agent("agent-1", "input", "desc")
+            await _send_task_to_agent("input", "desc")
         
         assert exc.value.status_code == 408
         # Check that update_status was called with BROKEN status and TASK_STUCK reason

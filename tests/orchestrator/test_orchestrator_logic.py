@@ -59,8 +59,8 @@ async def test_fetch_agent_card_failure():
 
 @pytest.mark.asyncio
 async def test_discover_agents_success(clear_registry, mock_agent_card):
-    with patch("config.REMOTE_EXECUTION_AGENT_HOSTS", "http://localhost"), \
-         patch("config.AGENT_DISCOVERY_PORTS", "8001-8001"), \
+    with patch("config.OrchestratorConfig.REMOTE_EXECUTION_AGENT_HOSTS", "http://localhost"), \
+         patch("config.OrchestratorConfig.AGENT_DISCOVERY_PORTS", "8001-8001"), \
          patch("orchestrator.main._fetch_agent_card", return_value=mock_agent_card):
         
         await _discover_agents()
@@ -96,8 +96,8 @@ async def test_discover_agents_existing_reachable(clear_registry, mock_agent_car
     # Pre-register the agent
     await agent_registry.register("existing-id", mock_agent_card)
 
-    with patch("config.REMOTE_EXECUTION_AGENT_HOSTS", "http://localhost"), \
-         patch("config.AGENT_DISCOVERY_PORTS", "8001-8001"), \
+    with patch("config.OrchestratorConfig.REMOTE_EXECUTION_AGENT_HOSTS", "http://localhost"), \
+         patch("config.OrchestratorConfig.AGENT_DISCOVERY_PORTS", "8001-8001"), \
          patch("orchestrator.main._fetch_agent_card", return_value=mock_agent_card) as mock_fetch, \
          patch("orchestrator.main._check_agent_reachability", return_value=True) as mock_check:
         
@@ -116,8 +116,8 @@ async def test_discover_agents_existing_unreachable(clear_registry, mock_agent_c
     # Pre-register the agent
     await agent_registry.register("existing-id", mock_agent_card)
 
-    with patch("config.REMOTE_EXECUTION_AGENT_HOSTS", "http://localhost"), \
-         patch("config.AGENT_DISCOVERY_PORTS", "8001-8001"), \
+    with patch("config.OrchestratorConfig.REMOTE_EXECUTION_AGENT_HOSTS", "http://localhost"), \
+         patch("config.OrchestratorConfig.AGENT_DISCOVERY_PORTS", "8001-8001"), \
          patch("orchestrator.main._fetch_agent_card", return_value=mock_agent_card) as mock_fetch, \
          patch("orchestrator.main._check_agent_reachability", return_value=False) as mock_check:
         
@@ -134,8 +134,8 @@ async def test_discover_agents_existing_recovery(clear_registry, mock_agent_card
     await agent_registry.register("existing-id", mock_agent_card)
     await agent_registry.update_status("existing-id", AgentStatus.BROKEN, BrokenReason.OFFLINE)
 
-    with patch("config.REMOTE_EXECUTION_AGENT_HOSTS", "http://localhost"), \
-         patch("config.AGENT_DISCOVERY_PORTS", "8001-8001"), \
+    with patch("config.OrchestratorConfig.REMOTE_EXECUTION_AGENT_HOSTS", "http://localhost"), \
+         patch("config.OrchestratorConfig.AGENT_DISCOVERY_PORTS", "8001-8001"), \
          patch("orchestrator.main._fetch_agent_card", return_value=mock_agent_card), \
          patch("orchestrator.main._check_agent_reachability", return_value=True):
         
@@ -148,8 +148,8 @@ async def test_discover_agents_existing_recovery(clear_registry, mock_agent_card
 async def test_discover_agents_fetches_new(clear_registry, mock_agent_card):
     # Registry empty
     
-    with patch("config.REMOTE_EXECUTION_AGENT_HOSTS", "http://localhost"), \
-         patch("config.AGENT_DISCOVERY_PORTS", "8001-8001"), \
+    with patch("config.OrchestratorConfig.REMOTE_EXECUTION_AGENT_HOSTS", "http://localhost"), \
+         patch("config.OrchestratorConfig.AGENT_DISCOVERY_PORTS", "8001-8001"), \
          patch("orchestrator.main._fetch_agent_card", return_value=mock_agent_card) as mock_fetch:
         
         await _discover_agents()

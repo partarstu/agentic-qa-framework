@@ -10,7 +10,7 @@ def mock_config(monkeypatch):
     monkeypatch.setattr(config.RequirementsReviewAgentConfig, "PORT", 8001)
     monkeypatch.setattr(config.RequirementsReviewAgentConfig, "EXTERNAL_PORT", 8001)
     monkeypatch.setattr(config.RequirementsReviewAgentConfig, "PROTOCOL", "http")
-    monkeypatch.setattr(config.RequirementsReviewAgentConfig, "MODEL_NAME", "test-model")
+    monkeypatch.setattr(config.RequirementsReviewAgentConfig, "MODEL_NAME", "test")
     monkeypatch.setattr(config.RequirementsReviewAgentConfig, "THINKING_BUDGET", 100)
     monkeypatch.setattr(config.RequirementsReviewAgentConfig, "MAX_REQUESTS_PER_TASK", 5)
     monkeypatch.setattr(config, "AGENT_BASE_URL", "http://localhost")

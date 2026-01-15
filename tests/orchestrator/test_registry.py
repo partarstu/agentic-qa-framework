@@ -1,7 +1,7 @@
 
 import pytest
 import asyncio
-from orchestrator.main import AgentRegistry, AgentStatus, BrokenReason
+from orchestrator.models import AgentRegistry, AgentStatus, BrokenReason
 from a2a.types import AgentCard, AgentCapabilities
 
 @pytest.fixture
