@@ -101,7 +101,7 @@ For a visual representation of the system's architecture and data flow, please r
 
 ### Prerequisites
 
-* Python 3.13+
+* Python 3.14+
 * Docker
 * `pip` (Python package installer)
 * `virtualenv` (or `conda` for environment management)
