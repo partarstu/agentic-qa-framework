@@ -10,7 +10,7 @@ if %errorlevel% neq 0 (
 
 set CONTAINER_NAME=qdrant
 set IMAGE_NAME=qdrant/qdrant
-set PORT_MAPPING=6333:6333
+set PORT_MAPPING=6333:6333 -p 6334:6334
 set VOLUME_NAME=qdrant_data
 set VOLUME_MAPPING=/qdrant/storage
 

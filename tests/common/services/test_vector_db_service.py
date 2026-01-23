@@ -45,6 +45,7 @@ def vector_db_service(mock_qdrant_client, mock_sentence_transformer):
     with patch("common.services.vector_db_service.config.QdrantConfig") as mock_config:
         mock_config.URL = "http://localhost"
         mock_config.PORT = 6333
+        mock_config.GRPC_PORT = 6334
         mock_config.API_KEY = None
         mock_config.TIMEOUT_SECONDS = 30.0
         mock_config.EMBEDDING_MODEL = "test_model"
@@ -52,6 +53,29 @@ def vector_db_service(mock_qdrant_client, mock_sentence_transformer):
         mock_config.EMBEDDING_MODEL_PATH = None
         
         return VectorDbService("test_collection")
+
+def test_init(mock_qdrant_client):
+    with patch("common.services.vector_db_service.config.QdrantConfig") as mock_config:
+        mock_config.URL = "http://localhost"
+        mock_config.PORT = 6333
+        mock_config.GRPC_PORT = 6334
+        mock_config.API_KEY = "test_key"
+        mock_config.TIMEOUT_SECONDS = 30.0
+        mock_config.EMBEDDING_MODEL = "test_model"
+        mock_config.EMBEDDING_SERVICE_URL = None
+        
+        VectorDbService("test_collection")
+        
+        # Verify AsyncQdrantClient was initialized with expected parameters including gRPC
+        from common.services.vector_db_service import AsyncQdrantClient
+        AsyncQdrantClient.assert_called_with(
+            url="http://localhost",
+            port=6333,
+            grpc_port=6334,
+            prefer_grpc=True,
+            api_key="test_key",
+            timeout=30.0
+        )
 
 @pytest.mark.asyncio
 async def test_ensure_collection_exists(vector_db_service, mock_qdrant_client):

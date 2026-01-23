@@ -23,6 +23,10 @@ steps:
   - name: 'gcr.io/cloud-builders/docker'
     args: [ 'build', '-t', 'gcr.io/$PROJECT_ID/embedding-service', '-f', 'services/embedding_service/Dockerfile', '.' ]
 
+  # Build the prompt-guard-service image
+  - name: 'gcr.io/cloud-builders/docker'
+    args: [ 'build', '-t', 'gcr.io/$PROJECT_ID/prompt-guard-service', '-f', 'services/prompt_guard_service/Dockerfile', '.' ]
+
   # Build the orchestrator image
   - name: 'gcr.io/cloud-builders/docker'
     args: [ 'build', '-t', 'gcr.io/$PROJECT_ID/orchestrator', '-f', 'orchestrator/Dockerfile', '.' ]
@@ -64,6 +68,8 @@ steps:
     args: [ 'push', 'gcr.io/$PROJECT_ID/test-case-review-agent' ]
   - name: 'gcr.io/cloud-builders/docker'
     args: [ 'push', 'gcr.io/$PROJECT_ID/embedding-service' ]
+  - name: 'gcr.io/cloud-builders/docker'
+    args: [ 'push', 'gcr.io/$PROJECT_ID/prompt-guard-service' ]
   - name: 'gcr.io/cloud-builders/docker'
     args: [ 'push', 'gcr.io/$PROJECT_ID/incident-creation-agent' ]
   - name: 'gcr.io/cloud-builders/docker'
@@ -115,6 +121,26 @@ steps:
       - '--port=8080'
       - '--concurrency=5'
 
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'beta'
+      - 'run'
+      - 'deploy'
+      - 'prompt-guard-service'
+      - '--image=gcr.io/$PROJECT_ID/prompt-guard-service'
+      - '--network=agent-network'
+      - '--subnet=agent-network'
+      - '--ingress=internal'
+      - '--vpc-egress=private-ranges-only'
+      - '--platform=managed'
+      - '--region=us-central1'
+      - '--allow-unauthenticated'
+      - '--memory=2Gi'
+      - '--max-instances=1'
+      - '--port=8080'
+      - '--concurrency=5'
+
   # Deploy Qdrant Vector DB to Cloud Run
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: gcloud
@@ -134,7 +160,8 @@ steps:
       - '--memory=2Gi'
       - '--cpu=1'
       - '--max-instances=1'
-      - '--port=6333'
+      - '--use-http2'
+      - '--port=6334'
       - '--add-volume=type=cloud-storage,name=qdrant-storage,bucket=$_BUCKET_NAME,mount-options=only-dir=$_QDRANT_STORAGE_FOLDER'
       - '--add-volume-mount=volume=qdrant-storage,mount-path=/qdrant/storage'
       - '--set-secrets=QDRANT__SERVICE__API_KEY=QDRANT_API_KEY:latest'
@@ -158,7 +185,7 @@ steps:
       - '--max-instances=1'
       - '--concurrency=5'
       - '--set-env-vars=^;^REMOTE_EXECUTION_AGENT_HOSTS=$_REMOTE_EXECUTION_AGENT_HOSTS'
-      - '--set-env-vars=AGENT_DISCOVERY_PORTS=443-443,GOOGLE_CLOUD_LOGGING_ENABLED=true,QDRANT_URL=$_QDRANT_URL,ATTACHMENTS_LOCAL_DESTINATION_FOLDER_PATH=$_LOCAL_ATTACHMENTS_MOUNT_PATH,MCP_SERVER_ATTACHMENTS_FOLDER_PATH=$_JIRA_MCP_SERVER_ATTACHMENTS_MOUNT_PATH,DASHBOARD_JWT_EXPIRE_HOURS=24'
+      - '--set-env-vars=AGENT_DISCOVERY_PORTS=443-443,GOOGLE_CLOUD_LOGGING_ENABLED=true,QDRANT_URL=$_QDRANT_URL,QDRANT_GRPC_PORT=443,ATTACHMENTS_LOCAL_DESTINATION_FOLDER_PATH=$_LOCAL_ATTACHMENTS_MOUNT_PATH,MCP_SERVER_ATTACHMENTS_FOLDER_PATH=$_JIRA_MCP_SERVER_ATTACHMENTS_MOUNT_PATH,DASHBOARD_JWT_EXPIRE_HOURS=24'
       - '--set-secrets=GOOGLE_API_KEY=GOOGLE_API_KEY:latest,JIRA_API_TOKEN=JIRA_API_TOKEN:latest,JIRA_USERNAME=JIRA_USERNAME:latest,ZEPHYR_API_TOKEN=ZEPHYR_API_TOKEN:latest,JIRA_URL=JIRA_URL:latest,ZEPHYR_BASE_URL=ZEPHYR_BASE_URL:latest,ORCHESTRATOR_API_KEY=ORCHESTRATOR_API_KEY:latest,QDRANT_API_KEY=QDRANT_API_KEY:latest,DASHBOARD_USERNAME=DASHBOARD_USERNAME:latest,DASHBOARD_PASSWORD=DASHBOARD_PASSWORD:latest,DASHBOARD_JWT_SECRET=DASHBOARD_JWT_SECRET:latest'
       - '--add-volume=type=cloud-storage,name=gcs-allure-reports,bucket=$_ALLURE_REPORTS_BUCKET'
       - '--add-volume-mount=volume=gcs-allure-reports,mount-path=$_ALLURE_REPORTS_CONTAINER_PATH'
@@ -183,7 +210,7 @@ steps:
       - '--max-instances=1'
       - '--concurrency=2'
       - '--set-secrets=GOOGLE_API_KEY=GOOGLE_API_KEY:latest,JIRA_API_TOKEN=JIRA_API_TOKEN:latest,JIRA_USERNAME=JIRA_USERNAME:latest,ZEPHYR_API_TOKEN=ZEPHYR_API_TOKEN:latest,JIRA_URL=JIRA_URL:latest,JIRA_MCP_SERVER_URL=JIRA_MCP_SERVER_URL:latest,ZEPHYR_BASE_URL=ZEPHYR_BASE_URL:latest'
-      - '--set-env-vars=GOOGLE_CLOUD_LOGGING_ENABLED=true,AGENT_BASE_URL=$_REQUIREMENTS_REVIEW_AGENT_BASE_URL,EXTERNAL_PORT=443,EMBEDDING_SERVICE_URL=$_EMBEDDING_SERVICE_URL,ATTACHMENTS_LOCAL_DESTINATION_FOLDER_PATH=$_LOCAL_ATTACHMENTS_MOUNT_PATH,MCP_SERVER_ATTACHMENTS_FOLDER_PATH=$_JIRA_MCP_SERVER_ATTACHMENTS_MOUNT_PATH'
+      - '--set-env-vars=GOOGLE_CLOUD_LOGGING_ENABLED=true,AGENT_BASE_URL=$_REQUIREMENTS_REVIEW_AGENT_BASE_URL,EXTERNAL_PORT=443,EMBEDDING_SERVICE_URL=$_EMBEDDING_SERVICE_URL,PROMPT_GUARD_SERVICE_URL=$_PROMPT_GUARD_SERVICE_URL,ATTACHMENTS_LOCAL_DESTINATION_FOLDER_PATH=$_LOCAL_ATTACHMENTS_MOUNT_PATH,MCP_SERVER_ATTACHMENTS_FOLDER_PATH=$_JIRA_MCP_SERVER_ATTACHMENTS_MOUNT_PATH'
       - '--port=8001'
       - '--add-volume=type=cloud-storage,name=jira-volume,bucket=$_BUCKET_NAME,mount-options=only-dir=$_JIRA_ATTACHMENTS_FOLDER'
       - '--add-volume-mount=volume=jira-volume,mount-path=$_LOCAL_ATTACHMENTS_MOUNT_PATH'
@@ -205,7 +232,7 @@ steps:
       - '--max-instances=1'
       - '--concurrency=2'
       - '--set-secrets=GOOGLE_API_KEY=GOOGLE_API_KEY:latest,JIRA_API_TOKEN=JIRA_API_TOKEN:latest,JIRA_USERNAME=JIRA_USERNAME:latest,ZEPHYR_API_TOKEN=ZEPHYR_API_TOKEN:latest,JIRA_URL=JIRA_URL:latest,JIRA_MCP_SERVER_URL=JIRA_MCP_SERVER_URL:latest,ZEPHYR_BASE_URL=ZEPHYR_BASE_URL:latest'
-      - '--set-env-vars=GOOGLE_CLOUD_LOGGING_ENABLED=true,AGENT_BASE_URL=$_TEST_CASE_GENERATION_AGENT_BASE_URL,EXTERNAL_PORT=443,EMBEDDING_SERVICE_URL=$_EMBEDDING_SERVICE_URL,ATTACHMENTS_LOCAL_DESTINATION_FOLDER_PATH=$_LOCAL_ATTACHMENTS_MOUNT_PATH,MCP_SERVER_ATTACHMENTS_FOLDER_PATH=$_JIRA_MCP_SERVER_ATTACHMENTS_MOUNT_PATH'
+      - '--set-env-vars=GOOGLE_CLOUD_LOGGING_ENABLED=true,AGENT_BASE_URL=$_TEST_CASE_GENERATION_AGENT_BASE_URL,EXTERNAL_PORT=443,EMBEDDING_SERVICE_URL=$_EMBEDDING_SERVICE_URL,PROMPT_GUARD_SERVICE_URL=$_PROMPT_GUARD_SERVICE_URL,ATTACHMENTS_LOCAL_DESTINATION_FOLDER_PATH=$_LOCAL_ATTACHMENTS_MOUNT_PATH,MCP_SERVER_ATTACHMENTS_FOLDER_PATH=$_JIRA_MCP_SERVER_ATTACHMENTS_MOUNT_PATH'
       - '--port=8001'
       - '--add-volume=type=cloud-storage,name=jira-volume,bucket=$_BUCKET_NAME,mount-options=only-dir=$_JIRA_ATTACHMENTS_FOLDER'
       - '--add-volume-mount=volume=jira-volume,mount-path=$_LOCAL_ATTACHMENTS_MOUNT_PATH'
@@ -227,7 +254,7 @@ steps:
       - '--max-instances=1'
       - '--concurrency=2'
       - '--set-secrets=GOOGLE_API_KEY=GOOGLE_API_KEY:latest,JIRA_API_TOKEN=JIRA_API_TOKEN:latest,JIRA_USERNAME=JIRA_USERNAME:latest,ZEPHYR_API_TOKEN=ZEPHYR_API_TOKEN:latest,JIRA_URL=JIRA_URL:latest,JIRA_MCP_SERVER_URL=JIRA_MCP_SERVER_URL:latest,ZEPHYR_BASE_URL=ZEPHYR_BASE_URL:latest'
-      - '--set-env-vars=GOOGLE_CLOUD_LOGGING_ENABLED=true,AGENT_BASE_URL=$_TEST_CASE_CLASSIFICATION_AGENT_BASE_URL,EXTERNAL_PORT=443,EMBEDDING_SERVICE_URL=$_EMBEDDING_SERVICE_URL,ATTACHMENTS_LOCAL_DESTINATION_FOLDER_PATH=$_LOCAL_ATTACHMENTS_MOUNT_PATH,MCP_SERVER_ATTACHMENTS_FOLDER_PATH=$_JIRA_MCP_SERVER_ATTACHMENTS_MOUNT_PATH'
+      - '--set-env-vars=GOOGLE_CLOUD_LOGGING_ENABLED=true,AGENT_BASE_URL=$_TEST_CASE_CLASSIFICATION_AGENT_BASE_URL,EXTERNAL_PORT=443,EMBEDDING_SERVICE_URL=$_EMBEDDING_SERVICE_URL,PROMPT_GUARD_SERVICE_URL=$_PROMPT_GUARD_SERVICE_URL,ATTACHMENTS_LOCAL_DESTINATION_FOLDER_PATH=$_LOCAL_ATTACHMENTS_MOUNT_PATH,MCP_SERVER_ATTACHMENTS_FOLDER_PATH=$_JIRA_MCP_SERVER_ATTACHMENTS_MOUNT_PATH'
       - '--port=8001'
       - '--add-volume=type=cloud-storage,name=jira-volume,bucket=$_BUCKET_NAME,mount-options=only-dir=$_JIRA_ATTACHMENTS_FOLDER'
       - '--add-volume-mount=volume=jira-volume,mount-path=$_LOCAL_ATTACHMENTS_MOUNT_PATH'
@@ -249,7 +276,7 @@ steps:
       - '--max-instances=1'
       - '--concurrency=2'
       - '--set-secrets=GOOGLE_API_KEY=GOOGLE_API_KEY:latest,JIRA_API_TOKEN=JIRA_API_TOKEN:latest,JIRA_USERNAME=JIRA_USERNAME:latest,ZEPHYR_API_TOKEN=ZEPHYR_API_TOKEN:latest,JIRA_URL=JIRA_URL:latest,JIRA_MCP_SERVER_URL=JIRA_MCP_SERVER_URL:latest,ZEPHYR_BASE_URL=ZEPHYR_BASE_URL:latest'
-      - '--set-env-vars=GOOGLE_CLOUD_LOGGING_ENABLED=true,AGENT_BASE_URL=$_TEST_CASE_REVIEW_AGENT_BASE_URL,EXTERNAL_PORT=443,EMBEDDING_SERVICE_URL=$_EMBEDDING_SERVICE_URL,ATTACHMENTS_LOCAL_DESTINATION_FOLDER_PATH=$_LOCAL_ATTACHMENTS_MOUNT_PATH,MCP_SERVER_ATTACHMENTS_FOLDER_PATH=$_JIRA_MCP_SERVER_ATTACHMENTS_MOUNT_PATH'
+      - '--set-env-vars=GOOGLE_CLOUD_LOGGING_ENABLED=true,AGENT_BASE_URL=$_TEST_CASE_REVIEW_AGENT_BASE_URL,EXTERNAL_PORT=443,EMBEDDING_SERVICE_URL=$_EMBEDDING_SERVICE_URL,PROMPT_GUARD_SERVICE_URL=$_PROMPT_GUARD_SERVICE_URL,ATTACHMENTS_LOCAL_DESTINATION_FOLDER_PATH=$_LOCAL_ATTACHMENTS_MOUNT_PATH,MCP_SERVER_ATTACHMENTS_FOLDER_PATH=$_JIRA_MCP_SERVER_ATTACHMENTS_MOUNT_PATH'
       - '--port=8001'
       - '--add-volume=type=cloud-storage,name=jira-volume,bucket=$_BUCKET_NAME,mount-options=only-dir=$_JIRA_ATTACHMENTS_FOLDER'
       - '--add-volume-mount=volume=jira-volume,mount-path=$_LOCAL_ATTACHMENTS_MOUNT_PATH'
@@ -272,7 +299,7 @@ steps:
       - '--max-instances=1'
       - '--concurrency=2'
       - '--set-secrets=GOOGLE_API_KEY=GOOGLE_API_KEY:latest,JIRA_API_TOKEN=JIRA_API_TOKEN:latest,JIRA_USERNAME=JIRA_USERNAME:latest,ZEPHYR_API_TOKEN=ZEPHYR_API_TOKEN:latest,JIRA_URL=JIRA_URL:latest,JIRA_MCP_SERVER_URL=JIRA_MCP_SERVER_URL:latest,ZEPHYR_BASE_URL=ZEPHYR_BASE_URL:latest,QDRANT_API_KEY=QDRANT_API_KEY:latest'
-      - '--set-env-vars=GOOGLE_CLOUD_LOGGING_ENABLED=true,AGENT_BASE_URL=$_INCIDENT_CREATION_AGENT_BASE_URL,EXTERNAL_PORT=443,EMBEDDING_SERVICE_URL=$_EMBEDDING_SERVICE_URL,QDRANT_URL=$_QDRANT_URL,QDRANT_PORT=443,ATTACHMENTS_LOCAL_DESTINATION_FOLDER_PATH=$_LOCAL_ATTACHMENTS_MOUNT_PATH,MCP_SERVER_ATTACHMENTS_FOLDER_PATH=$_JIRA_MCP_SERVER_ATTACHMENTS_MOUNT_PATH'
+      - '--set-env-vars=GOOGLE_CLOUD_LOGGING_ENABLED=true,AGENT_BASE_URL=$_INCIDENT_CREATION_AGENT_BASE_URL,EXTERNAL_PORT=443,EMBEDDING_SERVICE_URL=$_EMBEDDING_SERVICE_URL,PROMPT_GUARD_SERVICE_URL=$_PROMPT_GUARD_SERVICE_URL,QDRANT_URL=$_QDRANT_URL,QDRANT_PORT=443,QDRANT_GRPC_PORT=443,ATTACHMENTS_LOCAL_DESTINATION_FOLDER_PATH=$_LOCAL_ATTACHMENTS_MOUNT_PATH,MCP_SERVER_ATTACHMENTS_FOLDER_PATH=$_JIRA_MCP_SERVER_ATTACHMENTS_MOUNT_PATH'
       - '--add-volume=type=cloud-storage,name=jira-volume,bucket=$_BUCKET_NAME,mount-options=only-dir=$_JIRA_ATTACHMENTS_FOLDER'
       - '--add-volume-mount=volume=jira-volume,mount-path=$_LOCAL_ATTACHMENTS_MOUNT_PATH'
       - '--port=8001'
@@ -294,7 +321,7 @@ steps:
       - '--max-instances=1'
       - '--concurrency=2'
       - '--set-secrets=GOOGLE_API_KEY=GOOGLE_API_KEY:latest,JIRA_API_TOKEN=JIRA_API_TOKEN:latest,JIRA_USERNAME=JIRA_USERNAME:latest,ZEPHYR_API_TOKEN=ZEPHYR_API_TOKEN:latest,JIRA_URL=JIRA_URL:latest,JIRA_MCP_SERVER_URL=JIRA_MCP_SERVER_URL:latest,ZEPHYR_BASE_URL=ZEPHYR_BASE_URL:latest,QDRANT_API_KEY=QDRANT_API_KEY:latest'
-      - '--set-env-vars=GOOGLE_CLOUD_LOGGING_ENABLED=true,AGENT_BASE_URL=$_JIRA_RAG_AGENT_BASE_URL,EXTERNAL_PORT=443,EMBEDDING_SERVICE_URL=$_EMBEDDING_SERVICE_URL,QDRANT_URL=$_QDRANT_URL,QDRANT_PORT=443,ATTACHMENTS_LOCAL_DESTINATION_FOLDER_PATH=$_LOCAL_ATTACHMENTS_MOUNT_PATH,MCP_SERVER_ATTACHMENTS_FOLDER_PATH=$_JIRA_MCP_SERVER_ATTACHMENTS_MOUNT_PATH'
+      - '--set-env-vars=GOOGLE_CLOUD_LOGGING_ENABLED=true,AGENT_BASE_URL=$_JIRA_RAG_AGENT_BASE_URL,EXTERNAL_PORT=443,EMBEDDING_SERVICE_URL=$_EMBEDDING_SERVICE_URL,PROMPT_GUARD_SERVICE_URL=$_PROMPT_GUARD_SERVICE_URL,QDRANT_URL=$_QDRANT_URL,QDRANT_PORT=443,QDRANT_GRPC_PORT=443,ATTACHMENTS_LOCAL_DESTINATION_FOLDER_PATH=$_LOCAL_ATTACHMENTS_MOUNT_PATH,MCP_SERVER_ATTACHMENTS_FOLDER_PATH=$_JIRA_MCP_SERVER_ATTACHMENTS_MOUNT_PATH'
       - '--port=8001'
       - '--add-volume=type=cloud-storage,name=jira-volume,bucket=$_BUCKET_NAME,mount-options=only-dir=$_JIRA_ATTACHMENTS_FOLDER'
       - '--add-volume-mount=volume=jira-volume,mount-path=$_LOCAL_ATTACHMENTS_MOUNT_PATH'
@@ -315,6 +342,7 @@ substitutions:
   _JIRA_RAG_AGENT_BASE_URL: ''
   _ORCHESTRATOR_REQUEST_TIMEOUT: '3500s'
   _EMBEDDING_SERVICE_URL: ''
+  _PROMPT_GUARD_SERVICE_URL: ''
   _QDRANT_URL: ''
   _QDRANT_STORAGE_FOLDER: 'qdrant'
 
@@ -327,6 +355,7 @@ images:
   - 'gcr.io/$PROJECT_ID/jira-rag-agent'
   - 'gcr.io/$PROJECT_ID/orchestrator'
   - 'gcr.io/$PROJECT_ID/embedding-service'
+  - 'gcr.io/$PROJECT_ID/prompt-guard-service'
 
 options:
   logging: CLOUD_LOGGING_ONLY

@@ -24,6 +24,8 @@ class VectorDbService:
         self.client = AsyncQdrantClient(
             url=getattr(config.QdrantConfig, "URL", "http://localhost"),
             port=getattr(config.QdrantConfig, "PORT", 6333),
+            grpc_port=getattr(config.QdrantConfig, "GRPC_PORT", 6334),
+            prefer_grpc=True,
             api_key=getattr(config.QdrantConfig, "API_KEY", None),
             timeout=getattr(config.QdrantConfig, "TIMEOUT_SECONDS", 30.0),
         )
