@@ -11,7 +11,7 @@ COPY services/embedding_service/ ${WORK_DIR}/embedding_service
 COPY common/ ${WORK_DIR}/common
 COPY config.py ${WORK_DIR}/config.py
 COPY scripts/download_embedding_model.py ${WORK_DIR}/scripts/download_embedding_model.py
-RUN pip install --no-cache-dir -r ${WORK_DIR}/services/embedding_service/requirements.txt
+RUN pip install --no-cache-dir -r ${WORK_DIR}/embedding_service/requirements.txt
 
 # Download model
 RUN python ${WORK_DIR}/scripts/download_embedding_model.py
