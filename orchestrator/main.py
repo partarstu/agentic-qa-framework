@@ -838,7 +838,7 @@ async def _send_task_to_agent_with_message(message: Message, task_description: s
     agent_id = None
     try:
         # Wait for an agent and reserve it atomically
-        agent_id, agent_card = await _wait_and_reserve_agent(task_description, internal_task_id)
+        agent_id, agent_card = await reserve_agent_waiting_if_needed(task_description, internal_task_id)
         task_start_time = datetime.now()
         agent_name = await agent_registry.get_name(agent_id)
 
@@ -959,7 +959,7 @@ async def _send_task_to_agent(input_data: str, task_description: str) -> Task | 
     return await _send_task_to_agent_with_message(message, task_description)
 
 
-async def _wait_and_reserve_agent(task_description: str, task_id: str | None = None) -> tuple[str, AgentCard] | None:
+async def reserve_agent_waiting_if_needed(task_description: str, task_id: str | None = None) -> tuple[str, AgentCard] | None:
     """Wait for an available agent and atomically reserve it.
 
     This function handles the waiting loop outside the lock, and only holds
@@ -981,8 +981,8 @@ async def _wait_and_reserve_agent(task_description: str, task_id: str | None = N
 
     max_wait_time = config.OrchestratorConfig.TASK_EXECUTION_TIMEOUT
     start_time = time.time()
-    wait_interval = 2
-    max_wait_interval = 30
+    wait_interval = 30
+    max_wait_interval = 60
 
     while (time.time() - start_time) < max_wait_time:
         # Try to atomically select and reserve an agent
