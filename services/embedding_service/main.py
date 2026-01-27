@@ -1,12 +1,11 @@
 import os
-from typing import List
 
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
+from sentence_transformers import SentenceTransformer
 
 import config
-from sentence_transformers import SentenceTransformer
 from common import utils
 
 logger = utils.get_logger("embedding_service")
@@ -49,7 +48,7 @@ class EmbeddingRequest(BaseModel):
 
 
 class EmbeddingResponse(BaseModel):
-    embedding: List[float]
+    embedding: list[float]
 
 
 @app.get("/health")
@@ -64,7 +63,7 @@ async def get_embedding(request: EmbeddingRequest):
         embedding = model.encode(request.text)
         return EmbeddingResponse(embedding=embedding.tolist())
     except Exception as e:
-        logger.exception(f"Error generating embedding.")
+        logger.exception("Error generating embedding.")
         raise HTTPException(status_code=500, detail=str(e))
 
 

@@ -12,18 +12,19 @@ for multimodal processing by Pydantic AI agents.
 import mimetypes
 from pathlib import Path
 from typing import get_args
+
 try:
     import magic
 except ImportError:
     import warnings
-    warnings.warn("python-magic not available, MIME detection will rely on file extensions only.")
+    warnings.warn("python-magic not available, MIME detection will rely on file extensions only.", stacklevel=2)
     magic = None
 from pydantic_ai.messages import (
-    BinaryContent,
-    ImageMediaType,
     AudioMediaType,
-    VideoMediaType,
+    BinaryContent,
     DocumentMediaType,
+    ImageMediaType,
+    VideoMediaType,
 )
 
 import config

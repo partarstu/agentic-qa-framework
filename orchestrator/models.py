@@ -11,10 +11,10 @@ logic and the dashboard service, avoiding circular imports.
 
 import asyncio
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from typing import Dict, List, Any
+from typing import Any
 
 from a2a.types import AgentCard
 
@@ -52,16 +52,16 @@ class TaskRecord:
     start_time: datetime
     end_time: datetime | None = None
     error_message: str | None = None
-    agent_logs: List[str] | None = None
-    
+    agent_logs: list[str] | None = None
+
     @property
     def duration_ms(self) -> int | None:
         """Calculate duration in milliseconds."""
         if self.end_time and self.start_time:
             return int((self.end_time - self.start_time).total_seconds() * 1000)
         return None
-    
-    def to_dict(self) -> Dict[str, Any]:
+
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
         return {
             "task_id": self.task_id,
@@ -87,8 +87,8 @@ class ErrorRecord:
     agent_id: str | None = None
     module: str | None = None
     traceback_snippet: str | None = None
-    
-    def to_dict(self) -> Dict[str, Any]:
+
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
         return {
             "error_id": self.error_id,
@@ -103,19 +103,19 @@ class ErrorRecord:
 
 class TaskHistory:
     """Thread-safe ring buffer for task history."""
-    
+
     def __init__(self, max_size: int = 100):
         self._tasks: deque[TaskRecord] = deque(maxlen=max_size)
         self._lock = asyncio.Lock()
-        self._tasks_by_id: Dict[str, TaskRecord] = {}
-    
+        self._tasks_by_id: dict[str, TaskRecord] = {}
+
     async def add(self, task: TaskRecord) -> None:
         """Add a new task record."""
         async with self._lock:
             self._tasks.append(task)
             self._tasks_by_id[task.task_id] = task
-    
-    async def update(self, task_id: str, status: TaskStatus, 
+
+    async def update(self, task_id: str, status: TaskStatus,
                      end_time: datetime | None = None,
                      error_message: str | None = None) -> None:
         """Update an existing task record."""
@@ -127,13 +127,13 @@ class TaskHistory:
                     task.end_time = end_time
                 if error_message:
                     task.error_message = error_message
-    
-    async def get_all(self) -> List[TaskRecord]:
+
+    async def get_all(self) -> list[TaskRecord]:
         """Get all task records, newest first."""
         async with self._lock:
             return list(reversed(self._tasks))
-    
-    async def update_logs(self, task_id: str, logs: List[str]) -> None:
+
+    async def update_logs(self, task_id: str, logs: list[str]) -> None:
         """Update task with agent logs."""
         async with self._lock:
             if task_id in self._tasks_by_id:
@@ -148,22 +148,22 @@ class TaskHistory:
 
 class ErrorHistory:
     """Thread-safe ring buffer for error history."""
-    
+
     def __init__(self, max_size: int = 50):
         self._errors: deque[ErrorRecord] = deque(maxlen=max_size)
         self._lock = asyncio.Lock()
-    
+
     async def add(self, error: ErrorRecord) -> None:
         """Add a new error record."""
         async with self._lock:
             self._errors.append(error)
-    
-    async def get_all(self) -> List[ErrorRecord]:
+
+    async def get_all(self) -> list[ErrorRecord]:
         """Get all error records, newest first."""
         async with self._lock:
             return list(reversed(self._errors))
-    
-    async def get_recent(self, limit: int = 10) -> List[ErrorRecord]:
+
+    async def get_recent(self, limit: int = 10) -> list[ErrorRecord]:
         """Get the most recent N errors."""
         async with self._lock:
             return list(reversed(list(self._errors)[-limit:]))
@@ -171,13 +171,13 @@ class ErrorHistory:
 
 class AgentRegistry:
     """Registry for managing agent cards and their statuses."""
-    
+
     def __init__(self):
-        self._cards: Dict[str, AgentCard] = {}
-        self._statuses: Dict[str, AgentStatus] = {}
-        self._broken_reasons: Dict[str, BrokenReason] = {}
-        self._stuck_task_ids: Dict[str, str] = {}  # agent_id -> last stuck task_id
-        self._current_tasks: Dict[str, str] = {}  # agent_id -> current task_id
+        self._cards: dict[str, AgentCard] = {}
+        self._statuses: dict[str, AgentStatus] = {}
+        self._broken_reasons: dict[str, BrokenReason] = {}
+        self._stuck_task_ids: dict[str, str] = {}  # agent_id -> last stuck task_id
+        self._current_tasks: dict[str, str] = {}  # agent_id -> current task_id
         self._lock = asyncio.Lock()
 
     async def get_card(self, agent_id: str) -> AgentCard | None:
@@ -247,7 +247,7 @@ class AgentRegistry:
             self._stuck_task_ids.pop(agent_id, None)
             self._current_tasks.pop(agent_id, None)
 
-    async def get_all_cards(self) -> Dict[str, AgentCard]:
+    async def get_all_cards(self) -> dict[str, AgentCard]:
         async with self._lock:
             return self._cards.copy()
 
@@ -259,15 +259,15 @@ class AgentRegistry:
         async with self._lock:
             return agent_id in self._cards
 
-    async def get_valid_agents(self) -> List[str]:
+    async def get_valid_agents(self) -> list[str]:
         async with self._lock:
-            return [aid for aid, status in self._statuses.items() 
+            return [aid for aid, status in self._statuses.items()
                     if status != AgentStatus.BROKEN and aid in self._cards]
 
-    async def get_available_agents(self) -> List[str]:
+    async def get_available_agents(self) -> list[str]:
         """Get agents that are AVAILABLE for new tasks (not BUSY or BROKEN)."""
         async with self._lock:
-            return [aid for aid, status in self._statuses.items() 
+            return [aid for aid, status in self._statuses.items()
                     if status == AgentStatus.AVAILABLE and aid in self._cards]
 
     async def get_agent_id_by_url(self, url: str) -> str | None:
@@ -277,7 +277,7 @@ class AgentRegistry:
                     return agent_id
             return None
 
-    async def get_broken_agents(self) -> Dict[str, tuple[BrokenReason | None, str | None]]:
+    async def get_broken_agents(self) -> dict[str, tuple[BrokenReason | None, str | None]]:
         async with self._lock:
             result = {}
             for agent_id, status in self._statuses.items():

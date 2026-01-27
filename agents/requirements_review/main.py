@@ -2,19 +2,20 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+from typing import TYPE_CHECKING
+
 from pydantic_ai import Agent
 from pydantic_ai.mcp import MCPServerSSE
-from pydantic_ai.messages import BinaryContent
 
 import config
-from common.agent_base import AgentBase, MCP_SERVER_ATTACHMENTS_FOLDER_PATH
-from agents.requirements_review.prompt import (
-    RequirementsReviewSystemPrompt,
-    RequirementsReviewWithAttachmentsPrompt
-)
+from agents.requirements_review.prompt import RequirementsReviewSystemPrompt, RequirementsReviewWithAttachmentsPrompt
 from common import utils
+from common.agent_base import MCP_SERVER_ATTACHMENTS_FOLDER_PATH, AgentBase
 from common.custom_llm_wrapper import CustomLlmWrapper
 from common.models import JiraUserStory, RequirementsReviewFeedback
+
+if TYPE_CHECKING:
+    from pydantic_ai.messages import BinaryContent
 
 logger = utils.get_logger("reviewer_agent")
 jira_mcp_server = MCPServerSSE(url=config.JIRA_MCP_SERVER_URL, timeout=config.MCP_SERVER_TIMEOUT_SECONDS)
@@ -57,11 +58,11 @@ class RequirementsReviewAgent(AgentBase):
     async def _review_with_attachments(self, jira_issue_content: str, attachment_paths: list[str]) -> RequirementsReviewFeedback:
         """
         Reviews a Jira issue, taking into account all its attachments.
-        
+
         Args:
             jira_issue_content: The complete content of the Jira issue.
             attachment_paths: List of file paths to the downloaded attachments.
-            
+
         Returns:
             Requirements review feedback with improvement suggestions.
         """
@@ -77,7 +78,7 @@ class RequirementsReviewAgent(AgentBase):
         logger.info("Starting requirements review with %d attachments", len(attachments_content))
         result = await self.review_agent.run(user_message_parts)
         feedback: RequirementsReviewFeedback = result.output
-        logger.info(f"Generated improvement suggestions as a feedback")
+        logger.info("Generated improvement suggestions as a feedback")
         return feedback
 
 

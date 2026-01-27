@@ -83,11 +83,11 @@ class ProtectAiPromptGuard(PromptGuard):
             response = requests.post(f"{PROMPT_GUARD_SERVICE_URL}/check", json=payload, timeout=30)
             response.raise_for_status()
             result = response.json()
-            
+
             is_injection = result.get("is_injection", False)
             if is_injection:
                 logger.warning(f"Remote service detected prompt injection in prompt: {prompt.prompt[:50]}...")
-            
+
             return is_injection
 
         except Exception as e:

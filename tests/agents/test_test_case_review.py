@@ -1,13 +1,15 @@
 
-import pytest
-from unittest.mock import MagicMock, patch
 import sys
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 # Mock MCPServerSSE before importing the module
 with patch("pydantic_ai.mcp.MCPServerSSE"):
     from agents.test_case_review.main import TestCaseReviewAgent
 
 from common.services.test_management_base import TestManagementClientBase
+
 
 @pytest.fixture
 def mock_config():
@@ -40,9 +42,9 @@ def test_agent_init(agent, mock_config):
 def test_add_review_feedback(mock_get_client, agent):
     mock_client = MagicMock(spec=TestManagementClientBase)
     mock_get_client.return_value = mock_client
-    
+
     result = agent.add_review_feedback("TEST-1", "Feedback")
-    
+
     mock_client.add_test_case_review_comment.assert_called_once_with("TEST-1", "Feedback")
     assert "Successfully added" in result
 
@@ -50,8 +52,8 @@ def test_add_review_feedback(mock_get_client, agent):
 def test_set_test_case_status(mock_get_client, agent):
     mock_client = MagicMock(spec=TestManagementClientBase)
     mock_get_client.return_value = mock_client
-    
+
     result = agent.set_test_case_status_to_review_complete("PROJ", "TEST-1")
-    
+
     mock_client.change_test_case_status.assert_called_once_with("PROJ", "TEST-1", "Review Complete")
     assert "Successfully set status" in result

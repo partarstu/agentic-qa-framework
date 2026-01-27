@@ -3,8 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from pathlib import Path
-from common.prompt_base import PromptBase
+
 from common import utils
+from common.prompt_base import PromptBase
 
 logger = utils.get_logger("test_case_classification_prompt")
 

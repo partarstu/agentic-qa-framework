@@ -2,11 +2,9 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-import asyncio
-from typing import List
 
-from qdrant_client import AsyncQdrantClient, models
 import httpx
+from qdrant_client import AsyncQdrantClient, models
 
 import config
 from common import utils
@@ -30,7 +28,7 @@ class VectorDbService:
         if not self.embedding_service_url:
             logger.warning("EMBEDDING_SERVICE_URL is not configured. Vector operations requiring embeddings will fail.")
 
-    async def _get_embedding(self, text: str) -> List[float]:
+    async def _get_embedding(self, text: str) -> list[float]:
         if not self.embedding_service_url:
             raise ValueError("EMBEDDING_SERVICE_URL is not configured.")
 
@@ -62,14 +60,14 @@ class VectorDbService:
                     vectors_config=models.VectorParams(size=vector_size, distance=models.Distance.COSINE)
                 )
             except Exception as e:
-                # Handle race condition where collection is created concurrently                
+                # Handle race condition where collection is created concurrently
                 if "already exists" in str(e).lower() or "conflict" in str(e).lower():
                     logger.info(f"Collection {self.collection_name} already exists (race condition handled).")
                 else:
                     raise e
 
     async def search(self, query_text: str, limit: int = 5, score_threshold: float = 0.7, query_filter: models.Filter | None = None,
-                     ) -> List[models.ScoredPoint]:
+                     ) -> list[models.ScoredPoint]:
         """Search for similar vectors in the collection.
 
         Args:

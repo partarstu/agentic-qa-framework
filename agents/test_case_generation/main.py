@@ -8,18 +8,19 @@ from pydantic_ai.messages import BinaryContent
 
 import config
 from agents.test_case_generation.prompt import (
-    TestCaseGenerationSystemPrompt,
     AcExtractionPrompt,
     StepsGenerationPrompt,
     TestCaseCreationPrompt,
+    TestCaseGenerationSystemPrompt,
 )
 from common import utils
-from common.agent_base import AgentBase, MCP_SERVER_ATTACHMENTS_FOLDER_PATH
+from common.agent_base import MCP_SERVER_ATTACHMENTS_FOLDER_PATH, AgentBase
 from common.custom_llm_wrapper import CustomLlmWrapper
 from common.models import (
-    JiraUserStory,
+    AcceptanceCriteriaList,
     GeneratedTestCases,
-    AcceptanceCriteriaList, TestStepsSequenceList,
+    JiraUserStory,
+    TestStepsSequenceList,
 )
 from common.services.test_management_system_client_provider import get_test_management_client
 
@@ -139,7 +140,7 @@ Test Step Sequences:
             f"Jira Issue content:\n{jira_issue_content}"
         ]
         # Add attachment identifiers as context
-        if attachments_content:                   
+        if attachments_content:
             for filename, binary_content in attachments_content.items():
                 user_message_parts.append(f"Attachment: {filename}")
                 user_message_parts.append(binary_content)

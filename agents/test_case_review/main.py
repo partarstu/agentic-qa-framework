@@ -2,20 +2,21 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+from typing import TYPE_CHECKING
+
 from pydantic_ai import Agent
 from pydantic_ai.mcp import MCPServerSSE
-from pydantic_ai.messages import BinaryContent
 
 import config
-from common.agent_base import AgentBase, MCP_SERVER_ATTACHMENTS_FOLDER_PATH
-from agents.test_case_review.prompt import (
-    TestCaseReviewSystemPrompt,
-    TestCaseReviewWithAttachmentsPrompt
-)
+from agents.test_case_review.prompt import TestCaseReviewSystemPrompt, TestCaseReviewWithAttachmentsPrompt
 from common import utils
-from common.models import TestCaseReviewRequest, TestCaseReviewFeedbacks, TestCase
-from common.services.test_management_system_client_provider import get_test_management_client
+from common.agent_base import MCP_SERVER_ATTACHMENTS_FOLDER_PATH, AgentBase
 from common.custom_llm_wrapper import CustomLlmWrapper
+from common.models import TestCase, TestCaseReviewFeedbacks, TestCaseReviewRequest
+from common.services.test_management_system_client_provider import get_test_management_client
+
+if TYPE_CHECKING:
+    from pydantic_ai.messages import BinaryContent
 
 logger = utils.get_logger("test_case_review_agent")
 jira_mcp_server = MCPServerSSE(url=config.JIRA_MCP_SERVER_URL, timeout=config.MCP_SERVER_TIMEOUT_SECONDS)

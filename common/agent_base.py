@@ -5,17 +5,18 @@
 import base64
 import logging
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 from contextlib import asynccontextmanager
-from typing import Type, List, Sequence, Optional
 from urllib.parse import urlparse
 
 import uvicorn
 from a2a.server.apps import A2AFastAPIApplication
 from a2a.server.request_handlers import DefaultRequestHandler
 from a2a.server.tasks import InMemoryTaskStore
-from a2a.types import AgentCard, AgentCapabilities, Message, FilePart, FileWithBytes, Part
+from a2a.types import AgentCapabilities, AgentCard, FilePart, FileWithBytes, Message, Part
 from a2a.utils import get_message_text, new_agent_text_message
 from fastapi import FastAPI
+from jira import JIRA
 from pydantic import BaseModel
 from pydantic_ai import Agent, Tool
 from pydantic_ai.agent import AgentRunResult
@@ -29,7 +30,6 @@ from pydantic_ai.usage import UsageLimits
 
 import config
 from common import utils
-from jira import JIRA
 from common.agent_executor import DefaultAgentExecutor
 from common.agent_log_capture import AgentLogCaptureHandler, create_log_file_part
 from common.custom_llm_wrapper import CustomLlmWrapper
@@ -53,14 +53,14 @@ class AgentBase(ABC):
             port: int,
             external_port: int,
             model_name: str,
-            output_type: Type[BaseModel],
+            output_type: type[BaseModel],
             instructions: str,
-            mcp_servers: List[MCPServerSSE],
+            mcp_servers: list[MCPServerSSE],
             model_settings: ModelSettings = None,
-            deps_type: Type[BaseModel] = None,
+            deps_type: type[BaseModel] | None = None,
             description: str = "",
             tools: Sequence[Tool[AgentDepsT] | ToolFuncEither[AgentDepsT, ...]] = (),
-            vector_db_collection_name: Optional[str] = None
+            vector_db_collection_name: str | None = None
     ):
         self.agent_name = agent_name
         self.base_url = base_url
@@ -124,7 +124,7 @@ class AgentBase(ABC):
             output_retries=MAX_RETRIES
         )
 
-    async def _get_agent_execution_result(self, received_request: List[UserContent]) -> AgentRunResult:
+    async def _get_agent_execution_result(self, received_request: list[UserContent]) -> AgentRunResult:
         usage_limits = UsageLimits(tool_calls_limit=self.get_max_requests_per_task())
         async with self.agent:
             return await self.agent.run(received_request, usage_limits=usage_limits)
@@ -148,7 +148,7 @@ class AgentBase(ABC):
             root_logger.removeHandler(log_handler)
             return self._get_message_with_logs(result, captured_logs)
         except Exception as e:
-            logger.exception(f"Error during agent execution.")
+            logger.exception("Error during agent execution.")
             captured_logs = log_handler.get_logs()
             root_logger.removeHandler(log_handler)
             return self._get_error_message_with_logs(e, captured_logs, received_message.context_id, received_message.task_id)
@@ -190,7 +190,7 @@ class AgentBase(ABC):
 
         # Get all field names, excluding llm_comments which is metadata
         field_names = [
-            name for name in output.model_fields.keys()
+            name for name in output.model_fields
             if name != "llm_comments"
         ]
 
@@ -202,7 +202,7 @@ class AgentBase(ABC):
             if value is None:
                 continue
             # Check if it's a non-empty collection
-            if isinstance(value, (list, dict, set)):
+            if isinstance(value, list | dict | set):
                 if len(value) > 0:
                     return False
             # Check if it's a non-empty string
@@ -263,9 +263,8 @@ class AgentBase(ABC):
         async def combined_lifespan(app: FastAPI):
             # `self` is captured from the outer scope
             if original_lifespan:
-                async with original_lifespan(app):
-                    async with self._lifespan(app):
-                        yield
+                async with original_lifespan(app), self._lifespan(app):
+                    yield
             else:
                 async with self._lifespan(app):
                     yield
@@ -279,9 +278,9 @@ class AgentBase(ABC):
         uvicorn.run(self.a2a_server, host=host, port=self.port)
 
     @staticmethod
-    def _get_all_received_contents(received_message) -> List[UserContent]:
+    def _get_all_received_contents(received_message) -> list[UserContent]:
         text_content: str = get_message_text(received_message)
-        files_content: List[BinaryContent] = []
+        files_content: list[BinaryContent] = []
         for part in received_message.parts:
             if isinstance(part, FilePart):
                 file = part.file
@@ -289,11 +288,11 @@ class AgentBase(ABC):
                     mime_type = file.mime_type
                     content = base64.b64decode(file.bytes)
                     files_content.append(BinaryContent(data=content, media_type=mime_type))
-        all_contents: List[UserContent] = [text_content, *files_content]
+        all_contents: list[UserContent] = [text_content, *files_content]
         return all_contents
 
     @staticmethod
-    def _get_text_message_from_results(result: AgentRunResult, context_id: str = None, task_id: str = None) -> Message:
+    def _get_text_message_from_results(result: AgentRunResult, context_id: str | None = None, task_id: str | None = None) -> Message:
         output = result.output
         if isinstance(output, JsonSerializableModel):
             return new_agent_text_message(text=output.model_dump_json(), context_id=context_id, task_id=task_id)
@@ -307,7 +306,7 @@ class AgentBase(ABC):
             return new_agent_text_message(text=str(output), context_id=context_id, task_id=task_id)
 
     def _get_message_with_logs(self, result: AgentRunResult, captured_logs: str,
-                               context_id: str = None, task_id: str = None) -> Message:
+                               context_id: str | None = None, task_id: str | None = None) -> Message:
         """Create a message with text result and log file artifact.
         """
         base_message = self._get_text_message_from_results(result, context_id, task_id)
@@ -316,7 +315,7 @@ class AgentBase(ABC):
         return self._get_final_message_with_logs(base_message, captured_logs)
 
     def _get_error_message_with_logs(self, exception: Exception, captured_logs: str,
-                                     context_id: str = None, task_id: str = None) -> Message:
+                                     context_id: str | None = None, task_id: str | None = None) -> Message:
         """Create a message with error details and log file artifact.
         """
         error_text = f"Agent execution failed with error: {exception}"
@@ -328,7 +327,7 @@ class AgentBase(ABC):
     def _get_final_message_with_logs(self, base_message: Message, captured_logs: str) -> Message:
         log_file_with_bytes = create_log_file_part(captured_logs, self.agent_name)
         log_part = Part(root=FilePart(file=log_file_with_bytes))
-        new_parts = list(base_message.parts) + [log_part]
+        new_parts = [*list(base_message.parts), log_part]
         return Message(
             parts=new_parts,
             message_id=base_message.message_id,
@@ -351,8 +350,8 @@ class AgentBase(ABC):
         """
 
         if not config.JIRA_BASE_URL or not config.JIRA_USER or not config.JIRA_TOKEN:
-            logger.error(f"Jira configuration is missing (JIRA_URL, JIRA_USERNAME, or JIRA_API_TOKEN).")
-            raise RuntimeError(f"Jira configuration is missing (JIRA_URL, JIRA_USERNAME, or JIRA_API_TOKEN).")
+            logger.error("Jira configuration is missing (JIRA_URL, JIRA_USERNAME, or JIRA_API_TOKEN).")
+            raise RuntimeError("Jira configuration is missing (JIRA_URL, JIRA_USERNAME, or JIRA_API_TOKEN).")
         jira = JIRA(
             server=config.JIRA_BASE_URL,
             basic_auth=(config.JIRA_USER, config.JIRA_TOKEN)
@@ -361,7 +360,7 @@ class AgentBase(ABC):
         try:
             created_comment = jira.add_comment(issue_key, comment)
         except Exception:
-            logger.exception(f"Failed to add Jira comment.")
+            logger.exception("Failed to add Jira comment.")
             raise
         if not created_comment:
             logger.error(f"Couldn't create a comment for Jira issue {issue_key}")

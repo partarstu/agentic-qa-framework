@@ -3,8 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from pathlib import Path
-from common.prompt_base import PromptBase
+
 from common import utils
+from common.prompt_base import PromptBase
 
 logger = utils.get_logger("jira_rag_update_prompt")
 

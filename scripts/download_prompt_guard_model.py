@@ -16,10 +16,13 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Import config before transformers to ensure HF_HOME is set
-from config import PROMPT_INJECTION_CHECK_ENABLED, PROMPT_INJECTION_DETECTION_MODEL_PATH, \
-    PROMPT_INJECTION_DETECTION_MODEL_NAME  # noqa: E402
+from config import (  # noqa: I001
+    PROMPT_INJECTION_CHECK_ENABLED,
+    PROMPT_INJECTION_DETECTION_MODEL_NAME,
+    PROMPT_INJECTION_DETECTION_MODEL_PATH,
+)
 
-from transformers import AutoTokenizer, AutoModelForSequenceClassification  # noqa: E402
+from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
 if __name__ == "__main__":
     if not PROMPT_INJECTION_CHECK_ENABLED:

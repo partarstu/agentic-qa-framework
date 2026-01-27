@@ -3,23 +3,22 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from abc import ABC, abstractmethod
-from typing import List, Dict
 
 from common.models import TestCase, TestExecutionResult
 
 
 class TestManagementClientBase(ABC):
     @abstractmethod
-    def create_test_cases(self, test_cases: List[TestCase], project_key: str, user_story_id:int) -> List[str]:
+    def create_test_cases(self, test_cases: list[TestCase], project_key: str, user_story_id:int) -> list[str]:
         raise NotImplementedError
 
     @abstractmethod
-    def add_labels_to_test_case(self, test_case_id: str, labels: List[str]) -> None:
+    def add_labels_to_test_case(self, test_case_id: str, labels: list[str]) -> None:
         raise NotImplementedError
 
     @abstractmethod
-    def fetch_ready_for_execution_test_cases_by_labels(self, project_key: str, target_labels: List[str], max_results=100) -> Dict[
-        str, List[TestCase]]:
+    def fetch_ready_for_execution_test_cases_by_labels(self, project_key: str, target_labels: list[str], max_results=100) -> dict[
+        str, list[TestCase]]:
         raise NotImplementedError
 
     @abstractmethod
@@ -27,11 +26,11 @@ class TestManagementClientBase(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def create_test_execution(self, test_execution_results: List[TestExecutionResult], project_key: str, version_id: str) -> None:
+    def create_test_execution(self, test_execution_results: list[TestExecutionResult], project_key: str, version_id: str) -> None:
         raise NotImplementedError
 
     @abstractmethod
-    def create_test_plan(self, project_key: str, name: str, description: str = None) -> str:
+    def create_test_plan(self, project_key: str, name: str, description: str | None = None) -> str:
         raise NotImplementedError
 
     @abstractmethod
@@ -43,9 +42,9 @@ class TestManagementClientBase(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def fetch_linked_issues(self, test_case_key: str) -> List[Dict]:
+    def fetch_linked_issues(self, test_case_key: str) -> list[dict]:
         raise NotImplementedError
 
     @abstractmethod
-    def link_issue_to_test_case(self, test_case_key: str, issue_id: int, link_type: str) -> None:       
+    def link_issue_to_test_case(self, test_case_key: str, issue_id: int, link_type: str) -> None:
         raise NotImplementedError

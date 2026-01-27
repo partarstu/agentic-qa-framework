@@ -1,13 +1,15 @@
 
-import pytest
-from unittest.mock import MagicMock, patch
 import sys
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 # Mock MCPServerSSE before importing the module
 with patch("pydantic_ai.mcp.MCPServerSSE"):
     from agents.test_case_classification.main import TestCaseClassificationAgent
 
 from common.services.test_management_base import TestManagementClientBase
+
 
 @pytest.fixture
 def mock_config():
@@ -40,8 +42,8 @@ def test_agent_init(agent, mock_config):
 def test_add_labels_to_test_case(mock_get_client, agent):
     mock_client = MagicMock(spec=TestManagementClientBase)
     mock_get_client.return_value = mock_client
-    
+
     result = agent.add_labels_to_test_case("TEST-1", ["L1", "L2"])
-    
+
     mock_client.add_labels_to_test_case.assert_called_once_with("TEST-1", ["L1", "L2"])
     assert "Successfully added labels" in result

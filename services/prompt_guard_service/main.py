@@ -1,12 +1,11 @@
 import os
 import threading
-from typing import Optional
 
-import uvicorn
 import torch
+import uvicorn
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from transformers import AutoTokenizer, AutoModelForSequenceClassification, pipeline
+from transformers import AutoModelForSequenceClassification, AutoTokenizer, pipeline
 
 import config
 from common import utils
@@ -21,7 +20,7 @@ MODEL_PATH = config.PROMPT_INJECTION_DETECTION_MODEL_PATH
 
 class PromptGuardRequest(BaseModel):
     prompt: str
-    prompt_description: Optional[str] = ""
+    prompt_description: str | None = ""
     threshold: float
 
 class PromptGuardResponse(BaseModel):
@@ -52,25 +51,22 @@ class ProtectAiPromptGuard:
             logger.info("Prompt Guard model initialized successfully")
         except Exception as e:
             logger.exception("Failed to load model and tokenizer")
-            raise RuntimeError(f"Failed to load model and tokenizer: {str(e)}")
+            raise RuntimeError(f"Failed to load model and tokenizer: {e!s}")
 
     def is_injection(self, prompt_text: str, prompt_description: str, threshold: float) -> bool:
         tokens = self.tokenizer.encode(prompt_text)
-        if len(tokens) <= MAX_TOKEN_LENGTH:
-            chunks = [prompt_text]
-        else:
-            chunks = self._split_prompt_into_chunks(tokens)
-        
+        chunks = [prompt_text] if len(tokens) <= MAX_TOKEN_LENGTH else self._split_prompt_into_chunks(tokens)
+
         if prompt_description:
             chunks = [f"{prompt_description}{chunk}" for chunk in chunks]
 
         results = self.classifier(chunks)
 
         positive_detections = []
-        for chunk, result in zip(chunks, results):
+        for chunk, result in zip(chunks, results, strict=False):
             if result.get('label', '').lower() != 'safe' and result.get('score', 0.0) >= threshold:
                 positive_detections.append({'result': result, 'chunk': chunk})
-        
+
         if positive_detections:
             logger.warning("Got positive prompt injection identification results:")
             for detection in positive_detections:

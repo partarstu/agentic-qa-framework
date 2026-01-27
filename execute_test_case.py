@@ -8,9 +8,9 @@ import json
 import time
 
 import httpx
-from a2a.client import ClientFactory, ClientConfig, minimal_agent_card
-from a2a.types import JSONRPCErrorResponse, Task, Artifact, TextPart, TaskState, Message
-from a2a.utils import new_agent_text_message, get_message_text
+from a2a.client import ClientConfig, ClientFactory, minimal_agent_card
+from a2a.types import Artifact, JSONRPCErrorResponse, Message, TaskState, TextPart
+from a2a.utils import get_message_text, new_agent_text_message
 
 import config
 from common import utils
@@ -30,7 +30,7 @@ async def load_test_case(test_case_key: str) -> TestCase:
         if not test_case:
             raise ValueError(f"Test case with key '{test_case_key}' not found.")
         return test_case
-    except Exception as e:
+    except Exception:
         logger.exception(f"Failed to load test case '{test_case_key}'")
         raise
 
@@ -68,7 +68,7 @@ async def send_test_case_to_agent(agent_port: int, test_case: TestCase):
                     else:
                         logger.error(f"Task '{task_description}' iterator finished before completion.")
                     break  # Exit while loop
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     logger.error(f"Task '{task_description}' timed out while waiting for completion.")
                     break  # Exit while loop
 
@@ -98,7 +98,7 @@ async def send_test_case_to_agent(agent_port: int, test_case: TestCase):
                 status_message = get_message_text(
                     completed_task.status.message) if completed_task.status.message else "No details provided."
                 logger.error(f"Task for {task_description} has an unexpected status "
-                             f"'{str(completed_task.status.state)}'. Root cause: {status_message}")
+                             f"'{completed_task.status.state!s}'. Root cause: {status_message}")
                 return
 
             logger.info("Retrieving agent's response.")
@@ -143,11 +143,11 @@ async def main():
     try:
         from dotenv import load_dotenv
         load_dotenv()
-        
+
         test_case = await load_test_case(args.test_case_key)
         await send_test_case_to_agent(args.agent_port, test_case)
     except Exception:
-        logger.exception(f"An error occurred.")
+        logger.exception("An error occurred.")
 
 
 if __name__ == "__main__":

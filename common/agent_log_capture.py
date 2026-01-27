@@ -13,7 +13,6 @@ import base64
 import logging
 import threading
 from collections import deque
-from typing import List
 
 from a2a.types import FileWithBytes
 
@@ -21,7 +20,7 @@ from a2a.types import FileWithBytes
 class AgentLogCaptureHandler(logging.Handler):
     """
     A logging handler that captures log records in memory during agent execution.
-    
+
     This handler is designed to be attached temporarily to a logger during agent
     task execution, then detached and its logs extracted to be returned as artifacts.
     """
@@ -46,17 +45,17 @@ class AgentLogCaptureHandler(logging.Handler):
     def get_logs(self) -> str:
         """
         Get all captured logs as a single string.
-        
+
         Returns:
             All captured log entries joined by newlines.
         """
         with self._lock:
             return "\n".join(self._buffer)
 
-    def get_logs_list(self) -> List[str]:
+    def get_logs_list(self) -> list[str]:
         """
         Get all captured logs as a list of strings.
-        
+
         Returns:
             List of log entry strings.
         """
@@ -72,7 +71,7 @@ class AgentLogCaptureHandler(logging.Handler):
 class AgentLogCapture:
     """
     Context manager for capturing logs during agent execution.
-    
+
     Usage:
         with AgentLogCapture("my_agent") as capture:
             # ... agent execution code ...
@@ -82,7 +81,7 @@ class AgentLogCapture:
     def __init__(self, logger_name: str):
         """
         Initialize the log capture context.
-        
+
         Args:
             logger_name: Name of the logger to capture logs from.
         """
@@ -108,7 +107,7 @@ class AgentLogCapture:
         """Get captured logs as a string."""
         return self.handler.get_logs()
 
-    def get_logs_list(self) -> List[str]:
+    def get_logs_list(self) -> list[str]:
         """Get captured logs as a list."""
         return self.handler.get_logs_list()
 
@@ -120,11 +119,11 @@ class AgentLogCapture:
 def create_log_file_part(logs: str, agent_name: str) -> "FileWithBytes":
     """
     Create a FilePart containing agent execution logs.
-    
+
     Args:
         logs: The log content as a string.
         agent_name: Name of the agent (used in filename).
-        
+
     Returns:
         A FileWithBytes object containing the logs.
     """

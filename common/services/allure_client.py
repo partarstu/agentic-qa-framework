@@ -9,10 +9,9 @@ import subprocess
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import List
 
 from allure_commons.logger import AllureFileLogger
-from allure_commons.model2 import TestResult, TestStepResult, StatusDetails, Status, Attachment
+from allure_commons.model2 import Attachment, Status, StatusDetails, TestResult, TestStepResult
 
 import config
 from common import utils
@@ -31,7 +30,7 @@ class AllureClient(TestReportingClientBase):
         os.makedirs(self.results_dir, exist_ok=True)
         self.file_logger = AllureFileLogger(self.results_dir)
 
-    def generate_report(self, test_execution_results: List[TestExecutionResult]):
+    def generate_report(self, test_execution_results: list[TestExecutionResult]):
         logger.info("Generating Allure report...")
         self._clean_directories()
         for test_execution_result in test_execution_results:
@@ -103,7 +102,7 @@ class AllureClient(TestReportingClientBase):
             subprocess.run(command, check=True, capture_output=True, text=True)
             logger.info("Allure report generated successfully.")
         except subprocess.CalledProcessError as e:
-            logger.exception(f"Failed to generate Allure report.")
+            logger.exception("Failed to generate Allure report.")
             logger.error(f"Stdout: {e.stdout}")
             logger.error(f"Stderr: {e.stderr}")
             raise

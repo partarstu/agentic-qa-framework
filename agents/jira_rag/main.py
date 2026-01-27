@@ -2,7 +2,6 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 import time
-from typing import List, Optional
 
 from pydantic_ai.mcp import MCPServerSSE
 from qdrant_client import models as qdrant_models
@@ -11,8 +10,8 @@ import config
 from agents.jira_rag.prompt import JiraRagUpdateSystemPrompt
 from common import utils
 from common.agent_base import AgentBase
-from common.services.vector_db_service import VectorDbService
 from common.models import JiraIssue, ProjectMetadata, RagUpdateResult
+from common.services.vector_db_service import VectorDbService
 
 logger = utils.get_logger("jira_rag_update_agent")
 
@@ -99,7 +98,7 @@ class JiraRagAgent(AgentBase):
             logger.exception("Error saving last update")
             raise
 
-    async def upsert_issues(self, issues: List[JiraIssue]) -> str:
+    async def upsert_issues(self, issues: list[JiraIssue]) -> str:
         """Upserts a list of Jira issues into the vector DB.
 
          Args:
@@ -115,7 +114,7 @@ class JiraRagAgent(AgentBase):
             logger.exception("Error upserting issues")
             raise
 
-    async def delete_issues(self, issue_ids: List[int]) -> str:
+    async def delete_issues(self, issue_ids: list[int]) -> str:
         """Deletes a list of Jira issues from the vector DB by their numeric IDs."""
         try:
             if not issue_ids:
@@ -131,12 +130,12 @@ class JiraRagAgent(AgentBase):
             query_text: str,
             limit: int = 10,
             score_threshold: float = 0.7,
-            issue_type: Optional[str] = None,
-            status: Optional[str] = None,
-            project_key: Optional[str] = None,
-            updated_after: Optional[str] = None,
-            updated_before: Optional[str] = None,
-    ) -> List[dict]:
+            issue_type: str | None = None,
+            status: str | None = None,
+            project_key: str | None = None,
+            updated_after: str | None = None,
+            updated_before: str | None = None,
+    ) -> list[dict]:
         """Searches for Jira issues in the vector DB with optional payload filters.
 
         Args:

@@ -3,14 +3,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from collections import defaultdict
-from typing import List, Dict, Any
+from typing import Any
 
 import httpx
 from dateutil import parser
 
 import config
 from common import utils
-from common.models import TestCase, TestStep, TestExecutionResult
+from common.models import TestCase, TestExecutionResult, TestStep
 from common.services.test_management_base import TestManagementClientBase
 
 TEST_FOR_EXECUTION_READY_STATUS_NAME = "Approved"
@@ -70,7 +70,7 @@ class ZephyrClient(TestManagementClientBase):
             self._update_test_case(client, tc_url, test_case_data)
             logger.info(f"Successfully added review comment to test case {test_case_key}.")
 
-    def create_test_cases(self, test_cases: List[TestCase], project_key: str, user_story_id: int) -> List[str]:
+    def create_test_cases(self, test_cases: list[TestCase], project_key: str, user_story_id: int) -> list[str]:
         """
         Creates test cases in Zephyr.
 
@@ -132,7 +132,7 @@ class ZephyrClient(TestManagementClientBase):
                     logger.info(f"Successfully linked test case {tc_key} to Jira issue {user_story_id}")
         return created_test_case_keys
 
-    def add_labels_to_test_case(self, test_case_key: str, labels: List[str]) -> None:
+    def add_labels_to_test_case(self, test_case_key: str, labels: list[str]) -> None:
         """
         Adds labels to an existing test case.
 
@@ -152,8 +152,8 @@ class ZephyrClient(TestManagementClientBase):
             self._update_test_case(client, tc_url, test_case_data)
             logger.info(f"Successfully added labels to test case {test_case_key}.")
 
-    def fetch_ready_for_execution_test_cases_by_labels(self, project_key: str, target_labels: List[str],
-                                                       max_results=100) -> Dict[str, List[TestCase]]:
+    def fetch_ready_for_execution_test_cases_by_labels(self, project_key: str, target_labels: list[str],
+                                                       max_results=100) -> dict[str, list[TestCase]]:
         """
         Fetches test cases with status 'Approved' that have specific labels.
 
@@ -254,8 +254,8 @@ class ZephyrClient(TestManagementClientBase):
         logger.info(f"Found status ID '{target_status_id}' for status name '{status_name}'.")
         return target_status_id
 
-    def create_test_execution(self, test_execution_results: List[TestExecutionResult], project_key: str,
-                              test_cycle_key: str, version_id: str = None) -> None:
+    def create_test_execution(self, test_execution_results: list[TestExecutionResult], project_key: str,
+                              test_cycle_key: str, version_id: str | None = None) -> None:
         """
         Creates test executions in Zephyr based on the provided test execution results.
 
@@ -348,7 +348,7 @@ class ZephyrClient(TestManagementClientBase):
         step_data = test_step_response.json()
         return step_data
 
-    def create_test_plan(self, project_key: str, name: str, description: str = None) -> str:
+    def create_test_plan(self, project_key: str, name: str, description: str | None = None) -> str:
         """
         Creates a new test cycle in Zephyr.
 
@@ -386,7 +386,7 @@ class ZephyrClient(TestManagementClientBase):
         test_step_response.raise_for_status()
         logger.debug(f"Successfully fetched test steps for {tc['key']}.")
         step_data = test_step_response.json()
-        steps: List[TestStep] = []
+        steps: list[TestStep] = []
         for step in step_data.get('values', []):
             inline_data = step.get('inline', {})
             steps.append(TestStep(
@@ -431,7 +431,7 @@ class ZephyrClient(TestManagementClientBase):
             test_case_data = self._get_test_case_data(client, url)
             return self._parse_tc_json(client, None, test_case_data)
 
-    def fetch_linked_issues(self, test_case_key: str) -> List[Any]:
+    def fetch_linked_issues(self, test_case_key: str) -> list[Any]:
         """
         Fetches Jira issues linked to a test case.
 
