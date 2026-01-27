@@ -55,117 +55,149 @@ steps:
   - name: 'gcr.io/cloud-builders/docker'
     args: [ 'build', '-t', 'gcr.io/$PROJECT_ID/jira-rag-agent', '-f', 'agents/jira_rag/Dockerfile', '.' ]
 
-  # Push the images to Container Registry
+  # Push the orchestrator image to Container Registry
   - name: 'gcr.io/cloud-builders/docker'
     args: [ 'push', 'gcr.io/$PROJECT_ID/orchestrator' ]
+
+  # Push the requirements-review-agent image to Container Registry
   - name: 'gcr.io/cloud-builders/docker'
     args: [ 'push', 'gcr.io/$PROJECT_ID/requirements-review-agent' ]
+
+  # Push the test-case-generation-agent image to Container Registry
   - name: 'gcr.io/cloud-builders/docker'
     args: [ 'push', 'gcr.io/$PROJECT_ID/test-case-generation-agent' ]
+
+  # Push the test-case-classification-agent image to Container Registry
   - name: 'gcr.io/cloud-builders/docker'
     args: [ 'push', 'gcr.io/$PROJECT_ID/test-case-classification-agent' ]
+
+  # Push the test-case-review-agent image to Container Registry
   - name: 'gcr.io/cloud-builders/docker'
     args: [ 'push', 'gcr.io/$PROJECT_ID/test-case-review-agent' ]
+
+  # Push the embedding-service image to Container Registry
   - name: 'gcr.io/cloud-builders/docker'
     args: [ 'push', 'gcr.io/$PROJECT_ID/embedding-service' ]
+
+  # Push the prompt-guard-service image to Container Registry
   - name: 'gcr.io/cloud-builders/docker'
     args: [ 'push', 'gcr.io/$PROJECT_ID/prompt-guard-service' ]
+
+  # Push the incident-creation-agent image to Container Registry
   - name: 'gcr.io/cloud-builders/docker'
     args: [ 'push', 'gcr.io/$PROJECT_ID/incident-creation-agent' ]
+
+  # Push the jira-rag-agent image to Container Registry
   - name: 'gcr.io/cloud-builders/docker'
     args: [ 'push', 'gcr.io/$PROJECT_ID/jira-rag-agent' ]
 
-  # Deploy to Cloud Run
+  # Deploy to Cloud Run jira-mcp-server
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
-    entrypoint: gcloud
+    entrypoint: 'bash'
     args:
-      - 'beta'
-      - 'run'
-      - 'deploy'
-      - 'jira-mcp-server'
-      - '--image=gcr.io/$PROJECT_ID/mcp-atlassian:latest'
-      - '--network=agent-network'
-      - '--subnet=agent-network'
-      - '--ingress=internal'
-      - '--vpc-egress=private-ranges-only'
-      - '--platform=managed'
-      - '--region=us-central1'
-      - '--allow-unauthenticated'
-      - '--memory=1Gi'
-      - '--max-instances=1'
-      - '--set-secrets=JIRA_API_TOKEN=JIRA_API_TOKEN:latest,JIRA_USERNAME=JIRA_USERNAME:latest,JIRA_URL=JIRA_URL:latest'
-      - '--set-env-vars=MCP_LOGGING_STDOUT=true,DISABLE_JIRA_MARKUP_TRANSLATION=true'      
-      - '--port=9000'
-      - '--args=--transport,sse,--port,9000,-v'
-      - '--add-volume=type=cloud-storage,name=jira-volume,bucket=$_BUCKET_NAME,mount-options=only-dir=$_JIRA_ATTACHMENTS_FOLDER'
-      - '--add-volume-mount=volume=jira-volume,mount-path=$_JIRA_MCP_SERVER_ATTACHMENTS_MOUNT_PATH'
-      - '--concurrency=100'
+      - '-c'
+      - |
+        if [ "$_DEPLOY_ALL_SERVICES" = "true" ] || [ "$_DEPLOY_JIRA_MCP" = "true" ]; then
+          gcloud beta run deploy jira-mcp-server \
+            --image=gcr.io/$PROJECT_ID/mcp-atlassian:latest \
+            --network=agent-network \
+            --subnet=agent-network \
+            --ingress=internal \
+            --vpc-egress=private-ranges-only \
+            --platform=managed \
+            --region=us-central1 \
+            --allow-unauthenticated \
+            --memory=1Gi \
+            --max-instances=1 \
+            --set-secrets=JIRA_API_TOKEN=JIRA_API_TOKEN:latest,JIRA_USERNAME=JIRA_USERNAME:latest,JIRA_URL=JIRA_URL:latest \
+            --set-env-vars=MCP_LOGGING_STDOUT=true,DISABLE_JIRA_MARKUP_TRANSLATION=true \
+            --port=9000 \
+            --args=--transport,sse,--port,9000,-v \
+            --add-volume=type=cloud-storage,name=jira-volume,bucket=$_BUCKET_NAME,mount-options=only-dir=$_JIRA_ATTACHMENTS_FOLDER \
+            --add-volume-mount=volume=jira-volume,mount-path=$_JIRA_MCP_SERVER_ATTACHMENTS_MOUNT_PATH \
+            --concurrency=100
+        else
+          echo "Skipping jira-mcp-server deployment (variable _DEPLOY_JIRA_MCP and _DEPLOY_ALL_SERVICES are not true)"
+        fi
 
+  # Deploy to Cloud Run embedding-service
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
-    entrypoint: gcloud
+    entrypoint: 'bash'
     args:
-      - 'beta'
-      - 'run'
-      - 'deploy'
-      - 'embedding-service'
-      - '--image=gcr.io/$PROJECT_ID/embedding-service'
-      - '--network=agent-network'
-      - '--subnet=agent-network'
-      - '--ingress=internal'
-      - '--vpc-egress=private-ranges-only'
-      - '--platform=managed'
-      - '--region=us-central1'
-      - '--allow-unauthenticated'
-      - '--memory=8Gi'
-      - '--max-instances=1'
-      - '--port=8080'
-      - '--concurrency=5'
+      - '-c'
+      - |
+        if [ "$_DEPLOY_ALL_SERVICES" = "true" ] || [ "$_DEPLOY_EMBEDDING_SERVICE" = "true" ]; then
+          gcloud beta run deploy embedding-service \
+            --image=gcr.io/$PROJECT_ID/embedding-service \
+            --network=agent-network \
+            --subnet=agent-network \
+            --ingress=internal \
+            --vpc-egress=private-ranges-only \
+            --platform=managed \
+            --region=us-central1 \
+            --allow-unauthenticated \
+            --memory=8Gi \
+            --max-instances=1 \
+            --port=8080 \
+            --concurrency=5
+        else
+          echo "Skipping embedding-service deployment (variable _DEPLOY_EMBEDDING_SERVICE and _DEPLOY_ALL_SERVICES are not true)"
+        fi
 
+  # Deploy to Cloud Run prompt-guard-service
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
-    entrypoint: gcloud
+    entrypoint: 'bash'
     args:
-      - 'beta'
-      - 'run'
-      - 'deploy'
-      - 'prompt-guard-service'
-      - '--image=gcr.io/$PROJECT_ID/prompt-guard-service'
-      - '--network=agent-network'
-      - '--subnet=agent-network'
-      - '--ingress=internal'
-      - '--vpc-egress=private-ranges-only'
-      - '--platform=managed'
-      - '--region=us-central1'
-      - '--allow-unauthenticated'
-      - '--memory=2Gi'
-      - '--max-instances=1'
-      - '--port=8080'
-      - '--concurrency=5'
+      - '-c'
+      - |
+        if [ "$_DEPLOY_ALL_SERVICES" = "true" ] || [ "$_DEPLOY_PROMPT_GUARD" = "true" ]; then
+          gcloud beta run deploy prompt-guard-service \
+            --image=gcr.io/$PROJECT_ID/prompt-guard-service \
+            --network=agent-network \
+            --subnet=agent-network \
+            --ingress=internal \
+            --vpc-egress=private-ranges-only \
+            --platform=managed \
+            --region=us-central1 \
+            --allow-unauthenticated \
+            --memory=2Gi \
+            --max-instances=1 \
+            --port=8080 \
+            --concurrency=5
+        else
+          echo "Skipping prompt-guard-service deployment (variable _DEPLOY_PROMPT_GUARD and _DEPLOY_ALL_SERVICES are not true)"
+        fi
+
 
   # Deploy Qdrant Vector DB to Cloud Run
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
-    entrypoint: gcloud
+    entrypoint: 'bash'
     args:
-      - 'beta'
-      - 'run'
-      - 'deploy'
-      - 'qdrant-vector-db'
-      - '--image=qdrant/qdrant:v1.16.3'
-      - '--network=agent-network'
-      - '--subnet=agent-network'
-      - '--vpc-egress=private-ranges-only'
-      - '--platform=managed'
-      - '--region=us-central1'
-      - '--allow-unauthenticated'
-      - '--memory=2Gi'
-      - '--cpu=1'
-      - '--max-instances=1'
-      - '--use-http2'
-      - '--port=6334'
-      - '--add-volume=type=cloud-storage,name=qdrant-storage,bucket=$_BUCKET_NAME,mount-options=only-dir=$_QDRANT_STORAGE_FOLDER'
-      - '--add-volume-mount=volume=qdrant-storage,mount-path=/qdrant/storage'
-      - '--set-secrets=QDRANT__SERVICE__API_KEY=QDRANT_API_KEY:latest'
-      - '--concurrency=5'
+      - '-c'
+      - |
+        if [ "$_DEPLOY_ALL_SERVICES" = "true" ] || [ "$_DEPLOY_QDRANT" = "true" ]; then
+          gcloud beta run deploy qdrant-vector-db \
+            --image=qdrant/qdrant:v1.16.3 \
+            --network=agent-network \
+            --subnet=agent-network \
+            --vpc-egress=private-ranges-only \
+            --platform=managed \
+            --region=us-central1 \
+            --allow-unauthenticated \
+            --memory=2Gi \
+            --cpu=1 \
+            --max-instances=1 \
+            --use-http2 \
+            --port=6334 \
+            --add-volume=type=cloud-storage,name=qdrant-storage,bucket=$_BUCKET_NAME,mount-options=only-dir=$_QDRANT_STORAGE_FOLDER \
+            --add-volume-mount=volume=qdrant-storage,mount-path=/qdrant/storage \
+            --set-secrets=QDRANT__SERVICE__API_KEY=QDRANT_API_KEY:latest \
+            --concurrency=5
+        else
+          echo "Skipping qdrant-vector-db deployment (variable _DEPLOY_QDRANT and _DEPLOY_ALL_SERVICES are not true)"
+        fi
 
+  # Deploy to Cloud Run orchestrator
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: gcloud
     args:
@@ -191,6 +223,8 @@ steps:
       - '--add-volume=type=cloud-storage,name=jira-volume,bucket=$_BUCKET_NAME,mount-options=only-dir=$_JIRA_ATTACHMENTS_FOLDER'
       - '--add-volume-mount=volume=jira-volume,mount-path=$_LOCAL_ATTACHMENTS_MOUNT_PATH'
       - '--timeout=$_ORCHESTRATOR_REQUEST_TIMEOUT'
+
+  # Deploy to Cloud Run requirements-review-agent
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: gcloud
     args:
@@ -213,6 +247,8 @@ steps:
       - '--port=8001'
       - '--add-volume=type=cloud-storage,name=jira-volume,bucket=$_BUCKET_NAME,mount-options=only-dir=$_JIRA_ATTACHMENTS_FOLDER'
       - '--add-volume-mount=volume=jira-volume,mount-path=$_LOCAL_ATTACHMENTS_MOUNT_PATH'
+
+  # Deploy to Cloud Run test-case-generation-agent
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: gcloud
     args:
@@ -235,6 +271,8 @@ steps:
       - '--port=8001'
       - '--add-volume=type=cloud-storage,name=jira-volume,bucket=$_BUCKET_NAME,mount-options=only-dir=$_JIRA_ATTACHMENTS_FOLDER'
       - '--add-volume-mount=volume=jira-volume,mount-path=$_LOCAL_ATTACHMENTS_MOUNT_PATH'
+
+  # Deploy to Cloud Run test-case-classification-agent
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: gcloud
     args:
@@ -257,6 +295,8 @@ steps:
       - '--port=8001'
       - '--add-volume=type=cloud-storage,name=jira-volume,bucket=$_BUCKET_NAME,mount-options=only-dir=$_JIRA_ATTACHMENTS_FOLDER'
       - '--add-volume-mount=volume=jira-volume,mount-path=$_LOCAL_ATTACHMENTS_MOUNT_PATH'
+
+  # Deploy to Cloud Run test-case-review-agent
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: gcloud
     args:
@@ -279,6 +319,8 @@ steps:
       - '--port=8001'
       - '--add-volume=type=cloud-storage,name=jira-volume,bucket=$_BUCKET_NAME,mount-options=only-dir=$_JIRA_ATTACHMENTS_FOLDER'
       - '--add-volume-mount=volume=jira-volume,mount-path=$_LOCAL_ATTACHMENTS_MOUNT_PATH'
+
+  # Deploy to Cloud Run incident-creation-agent
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: gcloud
     args:
@@ -302,6 +344,8 @@ steps:
       - '--add-volume=type=cloud-storage,name=jira-volume,bucket=$_BUCKET_NAME,mount-options=only-dir=$_JIRA_ATTACHMENTS_FOLDER'
       - '--add-volume-mount=volume=jira-volume,mount-path=$_LOCAL_ATTACHMENTS_MOUNT_PATH'
       - '--port=8001'
+
+  # Deploy to Cloud Run jira-rag-agent
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: gcloud
     args:
@@ -326,6 +370,11 @@ steps:
       - '--add-volume-mount=volume=jira-volume,mount-path=$_LOCAL_ATTACHMENTS_MOUNT_PATH'
 
 substitutions:
+  _DEPLOY_ALL_SERVICES: 'false'
+  _DEPLOY_JIRA_MCP: 'false'
+  _DEPLOY_EMBEDDING_SERVICE: 'false'
+  _DEPLOY_PROMPT_GUARD: 'false'
+  _DEPLOY_QDRANT: 'false'
   _JIRA_ATTACHMENTS_FOLDER: 'jira'
   _LOCAL_ATTACHMENTS_MOUNT_PATH: '/tmp'
   _JIRA_MCP_SERVER_ATTACHMENTS_MOUNT_PATH: '/tmp'
