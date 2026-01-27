@@ -93,7 +93,7 @@ def test_allure_client_generate_report(tmp_path):
     # Create the reports directory in the temporary path
     reports_dir = tmp_path / "reports"
     reports_dir.mkdir()
-    
+
     client = AllureClient(str(reports_dir))
     with patch("common.services.allure_client.utils.get_logger"), patch("subprocess.run"):
         client.generate_report([])

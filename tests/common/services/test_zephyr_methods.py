@@ -67,5 +67,5 @@ def test_link_issue_to_test_case(mock_post, zephyr_client):
     zephyr_client.link_issue_to_test_case("TC-123", 10001, "Relates")
 
     assert mock_post.called
-    args, kwargs = mock_post.call_args
+    _, kwargs = mock_post.call_args
     assert kwargs['json'] == {"issueId": 10001, "type": "Relates"}

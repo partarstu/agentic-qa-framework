@@ -273,10 +273,7 @@ class ZephyrClient(TestManagementClientBase):
                 test_script_results = []
                 for step_result in result.stepResults:
                     step_status = "Pass" if step_result.success else "Fail"
-                    if step_result.errorMessage:
-                        actual_result_comment = step_result.errorMessage
-                    else:
-                        actual_result_comment = step_result.actualResults
+                    actual_result_comment = step_result.errorMessage or step_result.actualResults
                     test_script_results.append({
                         "statusName": step_status,
                         "actualResult": actual_result_comment

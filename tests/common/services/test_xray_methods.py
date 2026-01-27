@@ -59,7 +59,7 @@ def test_create_test_execution(mock_request, xray_client):
     xray_client.create_test_execution(results, "PROJ", "PLAN-1")
     assert mock_request.called
     # Check if correct URL was hit
-    args, kwargs = mock_request.call_args
+    args, _ = mock_request.call_args
     assert "import/execution" in args[1]
 
 @patch("httpx.Client.post")

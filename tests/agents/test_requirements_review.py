@@ -30,7 +30,7 @@ def test_requirements_review_agent_init(mock_super_init, mock_prompt_cls, mock_c
     agent = RequirementsReviewAgent()
 
     mock_super_init.assert_called_once()
-    args, kwargs = mock_super_init.call_args
+    _, kwargs = mock_super_init.call_args
     assert kwargs["agent_name"] == "Test Agent"
     assert kwargs["instructions"] == "system prompt"
 
