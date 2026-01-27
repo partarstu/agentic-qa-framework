@@ -4,6 +4,7 @@ import os
 
 # Set dummy API key for OpenAI provider
 os.environ["OPENAI_API_KEY"] = "dummy"
+os.environ["GOOGLE_API_KEY"] = "dummy"
 
 # Mock sentence_transformers to avoid loading models during test collection
 mock_sentence_transformers = MagicMock()
