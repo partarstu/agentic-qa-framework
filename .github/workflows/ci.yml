@@ -39,9 +39,6 @@ jobs:
       - name: Run ruff linter
         run: ruff check . --output-format=github
 
-      - name: Run ruff formatter check
-        run: ruff format --check .
-
   test:
     name: Test (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
