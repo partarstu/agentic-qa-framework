@@ -21,6 +21,7 @@ expertise in working with agentic systems.
 * Never duplicate existing functionality. If you've noticed any existing logic or functionality which you need for your implementation, 
   always reuse it. If reusing it directly can't be done, always extract it so that it's accessible (inheritance or composition) and then 
   reuse it.
+* Never commit changes you've made into git unless explicitly asked by the user.
 * Write code that is clear and readable. Prioritize clarity over cleverness; avoid overly complex one-liners or list comprehensions.
 * Strictly adhere to PEP 8 naming conventions: `snake_case` for functions, methods, variables, and modules; `PascalCase`
   for classes; and `SCREAMING_SNAKE_CASE` for constants.
