@@ -1,0 +1,71 @@
+# SPDX-FileCopyrightText: 2025 Taras Paruta (partarstu@gmail.com)
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# Ruff configuration for the Agentic QA Framework
+# https://docs.astral.sh/ruff/configuration/
+
+line-length = 120
+target-version = "py313"
+
+# Exclude directories from linting
+exclude = [
+    ".git",
+    ".venv",
+    "__pycache__",
+    ".pytest_cache",
+    ".ruff_cache",
+    "node_modules",
+    "orchestrator/ui/node_modules",
+    "allure-report",
+    "allure-results",
+    "local_models",
+]
+
+[lint]
+# Enable recommended rule sets
+select = [
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "F",      # Pyflakes
+    "I",      # isort
+    "B",      # flake8-bugbear
+    "C4",     # flake8-comprehensions
+    "UP",     # pyupgrade
+    "SIM",    # flake8-simplify
+    "TCH",    # flake8-type-checking
+    "RUF",    # Ruff-specific rules
+]
+
+# Ignore specific rules
+ignore = [
+    "E501",   # Line too long (handled by formatter)
+    "B008",   # Do not perform function calls in argument defaults
+    "B904",   # Within an except clause, raise exceptions with `raise ... from err`
+    "RUF012", # Mutable class attributes should be annotated with `typing.ClassVar`
+]
+
+# Allow autofix for all enabled rules
+fixable = ["ALL"]
+unfixable = []
+
+[lint.per-file-ignores]
+# Tests can use assertions and have unused imports for fixtures
+"tests/**/*.py" = ["S101", "F401"]
+"conftest.py" = ["F401"]
+
+[lint.isort]
+known-first-party = ["agents", "common", "orchestrator", "config"]
+
+[format]
+# Use double quotes for strings
+quote-style = "double"
+
+# Indent with spaces
+indent-style = "space"
+
+# Respect magic trailing comma
+skip-magic-trailing-comma = false
+
+# Auto-detect the appropriate line ending
+line-ending = "auto"

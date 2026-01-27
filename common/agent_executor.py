@@ -5,10 +5,12 @@
 from a2a.server.agent_execution import AgentExecutor, RequestContext
 from a2a.server.events import EventQueue
 from a2a.types import (
-    TaskStatus,
+    Message,
+    TaskArtifactUpdateEvent,
     TaskState,
+    TaskStatus,
     TaskStatusUpdateEvent,
-    TaskArtifactUpdateEvent, Message, )
+)
 from a2a.utils import new_agent_text_message, new_artifact
 
 from common import utils
@@ -50,13 +52,13 @@ class DefaultAgentExecutor(AgentExecutor):
 
         except Exception as e:
             logger.exception(f"Error executing task {task_id}: {e}")
-            error_message = f"An error occurred: {str(e)}"
+            error_message = f"An error occurred: {e!s}"
             await self._update_task_status(context, event_queue, TaskState.failed,
                                            final=True, message=error_message)
 
     @staticmethod
     async def _update_task_status(context: RequestContext, event_queue: EventQueue, state: TaskState, final=False,
-                                  message: str = None):
+                                  message: str | None = None):
         status = TaskStatus(state=state)
         if message:
             status.message = new_agent_text_message(message)

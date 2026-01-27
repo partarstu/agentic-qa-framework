@@ -16,8 +16,13 @@ expertise in working with agentic systems.
   solution.
 * Every time you work with OS-specific commands, check the OS version and type in order to know which commands are
   correct.
-* Write code that is clear, readable, and follows the principles of [PEP 8](https://peps.python.org/pep-0008/).
-  Prioritize clarity over cleverness; avoid overly complex one-liners or list comprehensions.
+* Never reformat the code which you haven't modified!
+* Before implementing anything, always let the user know what you plan to do and ask the user to confirm it.
+* Never duplicate existing functionality. If you've noticed any existing logic or functionality which you need for your implementation, 
+  always reuse it. If reusing it directly can't be done, always extract it so that it's accessible (inheritance or composition) and then 
+  reuse it.
+* Never commit changes you've made into git unless explicitly asked by the user.
+* Write code that is clear and readable. Prioritize clarity over cleverness; avoid overly complex one-liners or list comprehensions.
 * Strictly adhere to PEP 8 naming conventions: `snake_case` for functions, methods, variables, and modules; `PascalCase`
   for classes; and `SCREAMING_SNAKE_CASE` for constants.
 * Use type hints for all function signatures (arguments and return values) to improve code clarity, enable static
@@ -36,9 +41,7 @@ expertise in working with agentic systems.
   code.
 * Avoid bare `except:` blocks. Always catch specific exceptions. Never let exceptions pass silently; at a minimum, log
   the exception to ensure errors are not ignored.
-* Write docstrings for all public modules, classes, and functions, following
-  the [PEP 257](https://peps.python.org/pep-0257/) conventions. Use comments to explain the *why*, not the *what*, of
-  non-obvious code.
+* Write docstrings for all public modules, classes, and functions, following the PEP 257 conventions. Use comments to explain the *why*, not the *what*, of non-obvious code.
 * Use `asyncio` for high-level, I/O-bound tasks, such as network requests or database interactions, to achieve high
   concurrency with a single thread.
 * Use `threading` for I/O-bound tasks where `asyncio` is not suitable or when integrating with blocking libraries.

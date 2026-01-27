@@ -1,6 +1,6 @@
 fastapi
 uvicorn
-sentence-transformers
+sentence-transformers==5.2.2
 pydantic
 python-dotenv
-einops
+einops==0.8.2

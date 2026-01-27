@@ -1,13 +1,16 @@
-import pytest
-from unittest.mock import MagicMock, patch, AsyncMock
 import sys
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 # Mock MCPServerSSE
 with patch("pydantic_ai.mcp.MCPServerSSE"):
     from agents.incident_creation.main import IncidentCreationAgent
 
-from common.models import IncidentCreationInput, IncidentCreationResult, DuplicateDetectionResult, TestCase
 from a2a.types import FileWithBytes
+
+from common.models import DuplicateDetectionResult, IncidentCreationInput, IncidentCreationResult, TestCase
+
 
 @pytest.fixture
 def mock_config():
@@ -31,9 +34,9 @@ def agent(mock_config):
     with patch("agents.incident_creation.prompt.IncidentCreationPrompt.get_prompt", return_value="Prompt"), \
          patch("agents.incident_creation.prompt.DuplicateDetectionPrompt.get_prompt", return_value="Dup Prompt"), \
          patch("agents.incident_creation.main.Agent") as mock_agent_cls:
-        
+
         mock_agent_cls.side_effect = lambda *args, **kwargs: MagicMock()
-        
+
         agent_inst = IncidentCreationAgent()
         agent_inst.vector_db_service = AsyncMock() # Mock the vector DB service
         yield agent_inst
@@ -64,12 +67,12 @@ async def test_search_duplicates_in_rag(agent):
         issue_priority_field_id="priority",
         issue_severity_field_name="Severity"
     )
-    
+
     # Create incident description
     incident_description = f"""Test Case: {input_data.test_case.key}
 Error Description: {input_data.test_execution_result}
 System: {input_data.system_description}"""
-    
+
     # Mock Vector DB search with a valid JiraIssue payload
     mock_hit = MagicMock()
     mock_hit.payload = {
@@ -99,8 +102,8 @@ async def test_link_issue_to_test_case_tool(agent):
     with patch("agents.incident_creation.main.get_test_management_client") as mock_get_client:
         mock_client = MagicMock()
         mock_get_client.return_value = mock_client
-        
+
         result = await agent._link_issue_to_test_case("TC-123", 10001, "Relates")
-        
+
         assert "Successfully linked" in result
         mock_client.link_issue_to_test_case.assert_called_with("TC-123", 10001, "Relates")

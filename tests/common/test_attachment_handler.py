@@ -5,9 +5,9 @@
 """Unit tests for the attachment_handler module."""
 
 from pathlib import Path
-from unittest.mock import patch, MagicMock
-import pytest
+from unittest.mock import MagicMock, patch
 
+import pytest
 from pydantic_ai.messages import BinaryContent
 
 from common import attachment_handler
@@ -137,9 +137,9 @@ class TestFetchAllAttachments:
     def test_fetch_valid_attachments(self, mock_fetch_bytes):
         """Test fetching valid attachments returns BinaryContent list."""
         mock_fetch_bytes.return_value = (b"fake image data", "image.png")
-        
+
         result = attachment_handler.fetch_all_attachments(["path/to/image.png"])
-        
+
         assert len(result) == 1
         assert "image.png" in result
         assert isinstance(result["image.png"], BinaryContent)
@@ -151,9 +151,9 @@ class TestFetchAllAttachments:
     def test_skip_files_with_postfix(self, mock_fetch_bytes):
         """Test files with skip postfix are not included."""
         mock_fetch_bytes.return_value = (b"fake data", "image_SKIP.png")
-        
+
         result = attachment_handler.fetch_all_attachments(["path/to/image_SKIP.png"])
-        
+
         assert len(result) == 0
         mock_fetch_bytes.assert_not_called()
 
@@ -162,9 +162,9 @@ class TestFetchAllAttachments:
     def test_skip_unsupported_mime_types(self, mock_fetch_bytes):
         """Test files with unsupported MIME types are not included."""
         mock_fetch_bytes.return_value = (b"fake zip data", "archive.zip")
-        
+
         result = attachment_handler.fetch_all_attachments(["path/to/archive.zip"])
-        
+
         assert len(result) == 0
 
     @patch.object(attachment_handler, "_fetch_file_bytes")
@@ -174,18 +174,18 @@ class TestFetchAllAttachments:
         def side_effect(path):
             filename = Path(path).name
             return (b"fake data", filename)
-        
+
         mock_fetch_bytes.side_effect = side_effect
-        
+
         paths = [
             "path/to/image.png",
             "path/to/mockup_SKIP.jpg",
             "path/to/archive.zip",
             "path/to/document.pdf"
         ]
-        
+
         result = attachment_handler.fetch_all_attachments(paths)
-        
+
         assert len(result) == 2
         assert "image.png" in result
         assert "document.pdf" in result
@@ -195,9 +195,9 @@ class TestFetchAllAttachments:
     def test_handle_fetch_errors_gracefully(self, mock_fetch_bytes):
         """Test errors during fetch are handled gracefully."""
         mock_fetch_bytes.side_effect = RuntimeError("File not found")
-        
+
         result = attachment_handler.fetch_all_attachments(["path/to/missing.png"])
-        
+
         assert len(result) == 0
 
     def test_empty_attachment_list(self):

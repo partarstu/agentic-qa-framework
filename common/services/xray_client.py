@@ -3,13 +3,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from collections import defaultdict
-from typing import List, Dict, Any
+from typing import Any
 
 import httpx
 
 import config
 from common import utils
-from common.models import TestCase, TestStep, TestExecutionResult
+from common.models import TestCase, TestExecutionResult, TestStep
 from common.services.test_management_base import TestManagementClientBase
 
 logger = utils.get_logger(__name__)
@@ -70,7 +70,7 @@ class XrayClient(TestManagementClientBase):
                             "content": [{"type": "paragraph", "content": [{"type": "text", "text": comment}]}]}}
         self._execute_jira_request("POST", endpoint, json=payload)
 
-    def create_test_cases(self, test_cases: List[TestCase], project_key: str, user_story_id: str) -> List[str]:
+    def create_test_cases(self, test_cases: list[TestCase], project_key: str, user_story_id: str) -> list[str]:
         logger.info(f"Creating {len(test_cases)} test cases in project {project_key}")
 
         issue_updates = []
@@ -110,18 +110,18 @@ class XrayClient(TestManagementClientBase):
         logger.info(f"Successfully created {len(created_test_case_keys)} test cases.")
         return created_test_case_keys
 
-    def fetch_test_cases_by_jira_issue(self, issue_key: str) -> List[TestCase]:
+    def fetch_test_cases_by_jira_issue(self, issue_key: str) -> list[TestCase]:
         jql = f"'parent' = {issue_key} AND issuetype = 'Test'"
         return self._fetch_test_cases_by_jql(jql)
 
-    def add_labels_to_test_case(self, test_case_key: str, labels: List[str]) -> None:
+    def add_labels_to_test_case(self, test_case_key: str, labels: list[str]) -> None:
         logger.info(f"Adding labels {labels} to test case {test_case_key}")
         endpoint = f"issue/{test_case_key}"
         payload = {"update": {"labels": [{"add": label} for label in labels]}}
         self._execute_jira_request("PUT", endpoint, json=payload)
 
-    def fetch_ready_for_execution_test_cases_by_labels(self, project_key: str, target_labels: List[str],
-                                                       max_results=100) -> Dict[str, List[TestCase]]:
+    def fetch_ready_for_execution_test_cases_by_labels(self, project_key: str, target_labels: list[str],
+                                                       max_results=100) -> dict[str, list[TestCase]]:
         jql = f"project = {project_key} AND labels in ({', '.join(f'"{label}"' for label in target_labels)})"
         test_cases = self._fetch_test_cases_by_jql(jql)
         test_cases_by_label = defaultdict(list)
@@ -144,8 +144,8 @@ class XrayClient(TestManagementClientBase):
         payload = {"transition": {"id": transition_id}}
         self._execute_jira_request("POST", endpoint, json=payload)
 
-    def create_test_execution(self, test_execution_results: List[TestExecutionResult], project_key: str,
-                              test_plan_key: str, version_id: str = None) -> None:
+    def create_test_execution(self, test_execution_results: list[TestExecutionResult], project_key: str,
+                              test_plan_key: str, version_id: str | None = None) -> None:
         logger.info(f"Creating test execution for test plan {test_plan_key}")
 
         from datetime import datetime
@@ -202,8 +202,8 @@ class XrayClient(TestManagementClientBase):
 
         self._execute_xray_request("POST", "import/execution", json=payload)
 
-    def create_test_plan(self, project_key: str, name: str, description: str = None,
-                         test_case_keys: List[str] = None) -> str:
+    def create_test_plan(self, project_key: str, name: str, description: str | None = None,
+                         test_case_keys: list[str] | None = None) -> str:
         logger.info(f"Creating test plan '{name}' in project {project_key}")
 
         mutation = """
@@ -218,7 +218,7 @@ class XrayClient(TestManagementClientBase):
         }
         """
 
-        test_plan_input: Dict[str, Any] = {
+        test_plan_input: dict[str, Any] = {
             "jira": {
                 "fields": {
                     "project": {"key": project_key},
@@ -246,7 +246,7 @@ class XrayClient(TestManagementClientBase):
             raise ValueError(f"Test case with key {test_case_key} not found.")
         return results[0]
 
-    def _fetch_test_cases_by_jql(self, jql: str, max_results=100) -> List[TestCase]:
+    def _fetch_test_cases_by_jql(self, jql: str, max_results=100) -> list[TestCase]:
         query = f"""
         query getTests($jql: String!, $limit: Int!) {{
             getTests(jql: $jql, limit: $limit) {{
@@ -304,9 +304,9 @@ class XrayClient(TestManagementClientBase):
             response.raise_for_status()
             return response.text.strip().replace('"', '')
 
-    def _execute_graphql_query(self, query: str, variables: Dict = None):
+    def _execute_graphql_query(self, query: str, variables: dict | None = None):
         graphql_url = f"{self.base_url}/api/v2/graphql"
-        payload: Dict[str, Any] = {"query": query}
+        payload: dict[str, Any] = {"query": query}
         if variables:
             payload["variables"] = variables
 
@@ -332,7 +332,7 @@ class XrayClient(TestManagementClientBase):
             response.raise_for_status()
             return response.json() if response.status_code != 204 else None
 
-    def _add_steps_to_test_case(self, issue_id: str, steps: List[TestStep]):
+    def _add_steps_to_test_case(self, issue_id: str, steps: list[TestStep]):
         logger.info(f"Adding {len(steps)} steps to test case {issue_id}")
         mutation = """
         mutation updateTestSteps($issueId: String!, $steps: [TestStepInput!]!) {
@@ -367,7 +367,7 @@ class XrayClient(TestManagementClientBase):
 
         self._execute_graphql_query(mutation, variables)
 
-    def fetch_linked_issues(self, test_case_key: str) -> List[Dict]:
+    def fetch_linked_issues(self, test_case_key: str) -> list[dict]:
         logger.info(f"Fetching linked issues for test case {test_case_key}")
         issue_data = self._execute_jira_request("GET", f"issue/{test_case_key}?fields=issuelinks")
         linked_issues = []

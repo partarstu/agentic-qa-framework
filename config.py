@@ -6,8 +6,9 @@
 Centralized configuration for the application.
 """
 
-from dotenv import load_dotenv
 import os
+
+from dotenv import load_dotenv
 
 load_dotenv()
 
@@ -81,6 +82,7 @@ PROMPT_INJECTION_MIN_SCORE = float(os.environ.get("PROMPT_INJECTION_MIN_SCORE", 
 LOCAL_MODELS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "local_models")
 PROMPT_INJECTION_DETECTION_MODEL_PATH = os.path.join(LOCAL_MODELS_PATH, "prompt_detection_model")
 PROMPT_INJECTION_DETECTION_MODEL_NAME = os.environ.get("PROMPT_INJECTION_MODEL_NAME", "ProtectAI/deberta-v3-base-prompt-injection-v2")
+PROMPT_GUARD_SERVICE_URL = os.environ.get("PROMPT_GUARD_SERVICE_URL")
 
 
 # Orchestrator
@@ -191,6 +193,7 @@ class QdrantConfig:
     API_KEY = os.environ.get("QDRANT_API_KEY")
     TIMEOUT_SECONDS = float(os.environ.get("QDRANT_TIMEOUT_SECONDS", "30.0"))
     PORT = int(os.environ.get("QDRANT_PORT", "6333"))
+    GRPC_PORT = int(os.environ.get("QDRANT_GRPC_PORT", "6334"))
     COLLECTION_NAME = os.environ.get("QDRANT_COLLECTION_NAME", "jira_issues")
     TICKETS_COLLECTION_NAME = os.environ.get("QDRANT_TICKETS_COLLECTION_NAME", "jira_issues")
     METADATA_COLLECTION_NAME = os.environ.get("QDRANT_METADATA_COLLECTION_NAME", "rag_metadata")

@@ -2,15 +2,16 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-import logging
-import os
-import mimetypes
-import sys
 import base64
+import logging
+import mimetypes
+import os
+import sys
 from pathlib import Path
 
 from a2a.types import FileWithBytes
 from pydantic_ai import BinaryContent
+
 import config
 
 logging_initialized = False

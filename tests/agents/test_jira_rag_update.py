@@ -2,10 +2,13 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
-from unittest.mock import MagicMock, patch, AsyncMock
+
 from agents.jira_rag.main import JiraRagAgent
 from common.models import JiraIssue
+
 
 @pytest.fixture
 def mock_db_service():
@@ -35,12 +38,12 @@ async def test_upsert_issues(agent):
             project_key="TEST_PROJ",
         )
     ]
-    
+
     result = await agent.upsert_issues(issues)
-    
+
     assert "Upserted 1 issues" in result
     agent.issues_db.upsert.assert_called_once()
-    
+
     # Verify arguments
     call_args = agent.issues_db.upsert.call_args
     # call_args.kwargs['data'] should be a JiraIssue

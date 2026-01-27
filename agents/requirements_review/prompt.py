@@ -4,8 +4,8 @@
 
 from pathlib import Path
 
-from common.prompt_base import PromptBase
 from common import utils
+from common.prompt_base import PromptBase
 
 logger = utils.get_logger("reviewer.agent")
 PROMPTS_ROOT = "system_prompts"

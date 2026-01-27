@@ -1,6 +1,8 @@
 
 import pytest
-from common.models import JsonSerializableModel, JiraUserStory
+
+from common.models import JiraUserStory, JsonSerializableModel
+
 
 def test_json_serializable_model_str():
     class TestModel(JsonSerializableModel):

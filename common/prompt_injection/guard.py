@@ -2,12 +2,10 @@ import threading
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
+import requests
+
 from common import utils
-from config import PROMPT_INJECTION_DETECTION_MODEL_PATH
-
-SLIDING_WINDOW_SIZE = 128
-MAX_TOKEN_LENGTH = 512
-
+from config import PROMPT_GUARD_SERVICE_URL
 
 logger = utils.get_logger("prompt_guard")
 
@@ -40,48 +38,28 @@ class PromptGuard(ABC):
 
 class ProtectAiPromptGuard(PromptGuard):
     """
-    A singleton class to detect prompt injection attacks using a pre-trained guard model.
+    A client class to detect prompt injection attacks using a remote guard service.
     """
     _instance: 'ProtectAiPromptGuard' = None
     _lock = threading.Lock()
-    _allow_init = False
 
     @staticmethod
     def get_instance() -> 'ProtectAiPromptGuard':
         if not ProtectAiPromptGuard._instance:
             with ProtectAiPromptGuard._lock:
                 if not ProtectAiPromptGuard._instance:
-                    ProtectAiPromptGuard._allow_init = True
                     ProtectAiPromptGuard._instance = ProtectAiPromptGuard()
-                    ProtectAiPromptGuard._allow_init = False
         return ProtectAiPromptGuard._instance
 
     def __init__(self):
         """
-        Initializes the guard by loading the model and tokenizer.
+        Initializes the guard client.
         """
-        if not ProtectAiPromptGuard._allow_init:
-            raise RuntimeError("Use get_instance() to get the instance of this class.")
-        try:
-            import torch
-            from transformers import AutoTokenizer, AutoModelForSequenceClassification, pipeline
-            
-            self._initialized = True
-            # Load the tokenizer from the local path where it was pre-downloaded
-            self.tokenizer = AutoTokenizer.from_pretrained(PROMPT_INJECTION_DETECTION_MODEL_PATH)
-            self.classifier = pipeline(
-                "text-classification",
-                # Load the model from the local path where it was pre-downloaded
-                model=AutoModelForSequenceClassification.from_pretrained(PROMPT_INJECTION_DETECTION_MODEL_PATH),
-                tokenizer=self.tokenizer,
-                device=torch.device("cuda" if torch.cuda.is_available() else "cpu"),
-            )
-        except Exception as e:
-            raise RuntimeError(f"Failed to load model and tokenizer: {str(e)}")
+        pass
 
     def is_injection(self, prompt: GuardPrompt, threshold: float) -> bool:
         """
-        Checks if a prompt is a prompt injection attempt.
+        Checks if a prompt is a prompt injection attempt by calling the remote service.
 
         Args:
             prompt: The prompt to check.
@@ -93,39 +71,30 @@ class ProtectAiPromptGuard(PromptGuard):
         if not isinstance(prompt, GuardPrompt):
             raise TypeError(f"Prompt must be a GuardPrompt, got {type(prompt)}")
 
-        prompt_text = prompt.prompt
-        if not isinstance(prompt_text, str):
-            raise TypeError(f"Prompt text must be a string, got {type(prompt_text)}")
+        if not PROMPT_GUARD_SERVICE_URL:
+             raise RuntimeError("PROMPT_GUARD_SERVICE_URL is not set in configuration")
 
-        tokens = self.tokenizer.encode(prompt_text)
-        if len(tokens) <= MAX_TOKEN_LENGTH:
-            chunks = [prompt_text]
-        else:
-            chunks = self._split_prompt_into_chunks(tokens)
-        if prompt.prompt_description:
-            chunks = [f"{prompt.prompt_description}{chunk}" for chunk in chunks]
+        try:
+            payload = {
+                "prompt": prompt.prompt,
+                "prompt_description": prompt.prompt_description,
+                "threshold": threshold
+            }
+            response = requests.post(f"{PROMPT_GUARD_SERVICE_URL}/check", json=payload, timeout=30)
+            response.raise_for_status()
+            result = response.json()
 
-        results = self.classifier(chunks)
+            is_injection = result.get("is_injection", False)
+            if is_injection:
+                logger.warning(f"Remote service detected prompt injection in prompt: {prompt.prompt[:50]}...")
 
-        positive_detections = []
-        for chunk, result in zip(chunks, results):
-            if result.get('label', '').lower() != 'safe' and result.get('score', 0.0) >= threshold:
-                positive_detections.append({'result': result, 'chunk': chunk})
-        if positive_detections:
-            logger.warning("Got positive prompt injection identification results:")
-            for detection in positive_detections:
-                logger.warning(f"  Result: {detection['result']}, Chunk: '{detection['chunk']}'")
-            return True
-        return False
+            return is_injection
 
-    def _split_prompt_into_chunks(self, tokens):
-        chunks = []
-        for i in range(0, len(tokens), MAX_TOKEN_LENGTH - SLIDING_WINDOW_SIZE):
-            chunk = tokens[i:(i + MAX_TOKEN_LENGTH)]
-            chunks.append(self.tokenizer.decode(chunk, skip_special_tokens=True))
-        if len(chunks) > 1 and chunks[-1] in chunks[-2]:
-            chunks.pop()
-        return chunks
+        except Exception as e:
+            logger.exception(f"Error calling prompt guard service: {e}")
+            # If the service is unreachable, we might want to block (fail closed) or allow (fail open).
+            # Assuming fail-closed for security: treat error as potential injection or just raise.
+            raise RuntimeError(f"Failed to check prompt injection: {e}")
 
 
 class PromptGuardFactory:

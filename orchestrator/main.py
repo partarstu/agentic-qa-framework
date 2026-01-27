@@ -6,19 +6,28 @@ import asyncio
 import time
 import traceback
 from collections import defaultdict
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional
 from uuid import uuid4
 
 import httpx
 import uvicorn
-from a2a.client import ClientFactory, ClientConfig
-from a2a.types import TaskState, AgentCard, Artifact, Task, JSONRPCErrorResponse, TextPart, FilePart, FileWithBytes, \
-    Message, TaskIdParams
-from a2a.utils import new_agent_text_message, get_message_text
-from fastapi import FastAPI, Request, HTTPException, Security, Depends, Query
+from a2a.client import ClientConfig, ClientFactory
+from a2a.types import (
+    AgentCard,
+    Artifact,
+    FilePart,
+    FileWithBytes,
+    JSONRPCErrorResponse,
+    Message,
+    Task,
+    TaskIdParams,
+    TaskState,
+    TextPart,
+)
+from a2a.utils import get_message_text, new_agent_text_message
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Security
 from fastapi.security import APIKeyHeader
 from fastapi.staticfiles import StaticFiles
 from pydantic_ai import Agent
@@ -27,17 +36,33 @@ from pydantic_ai.settings import ModelSettings
 import config
 from common import utils
 from common.custom_llm_wrapper import CustomLlmWrapper
-from common.models import SelectedAgent, GeneratedTestCases, TestCase, ProjectExecutionRequest, TestExecutionResult, \
-    TestExecutionRequest, SelectedAgents, JsonSerializableModel, IncidentCreationInput, IncidentCreationResult
+from common.models import (
+    GeneratedTestCases,
+    IncidentCreationInput,
+    IncidentCreationResult,
+    JsonSerializableModel,
+    ProjectExecutionRequest,
+    SelectedAgent,
+    SelectedAgents,
+    TestCase,
+    TestExecutionRequest,
+    TestExecutionResult,
+)
 from common.services.test_management_system_client_provider import get_test_management_client
 from common.services.test_reporting_client_base_provider import get_test_reporting_client
 from common.services.vector_db_service import VectorDbService
-from orchestrator.auth import auth_service, dashboard_auth, LoginRequest, TokenResponse
+from orchestrator.auth import LoginRequest, TokenResponse, auth_service, dashboard_auth
 from orchestrator.dashboard_service import dashboard_service
 from orchestrator.memory_log_handler import setup_memory_logging
 from orchestrator.models import (
-    AgentStatus, BrokenReason, TaskStatus, TaskRecord, ErrorRecord,
-    agent_registry, task_history, error_history
+    AgentStatus,
+    BrokenReason,
+    ErrorRecord,
+    TaskRecord,
+    TaskStatus,
+    agent_registry,
+    error_history,
+    task_history,
 )
 
 MAX_RETRIES = 3
@@ -155,9 +180,9 @@ async def get_recent_errors(limit: int = Query(default=20, le=50), _: str = Depe
 @orchestrator_app.get("/api/dashboard/logs")
 async def get_logs(
         limit: int = Query(default=100, le=500),
-        level: Optional[str] = Query(default=None, description="Filter by log level (INFO, WARNING, ERROR)"),
-        task_id: Optional[str] = Query(default=None, description="Filter by task ID"),
-        agent_id: Optional[str] = Query(default=None, description="Filter by agent ID"),
+        level: str | None = Query(default=None, description="Filter by log level (INFO, WARNING, ERROR)"),
+        task_id: str | None = Query(default=None, description="Filter by task ID"),
+        agent_id: str | None = Query(default=None, description="Filter by agent ID"),
         _: str = Depends(dashboard_auth)
 ):
     """Get recent application logs."""
@@ -166,7 +191,7 @@ async def get_logs(
 
 async def _retry_cancellation_task():
     """Background task to recover broken agents.
-    
+
     This task handles two types of broken agents differently:
     - OFFLINE: Agent was unreachable. Recovery = agent responds to card fetch.
     - TASK_STUCK: Agent is reachable but a task timed out. Recovery = cancel the stuck task first.
@@ -247,18 +272,18 @@ async def _retry_cancellation_task():
 
         except asyncio.CancelledError:
             break
-        except Exception as e:
-            logger.exception(f"Error in broken agent recovery task.")
+        except Exception:
+            logger.exception("Error in broken agent recovery task.")
             await asyncio.sleep(5)
 
 
 async def _cancel_agent_task(agent_card: AgentCard, task_id: str) -> bool:
     """Attempt to cancel a task on an agent using the A2A protocol.
-    
+
     Args:
         agent_card: The agent's card containing connection info.
         task_id: The ID of the task to cancel.
-        
+
     Returns:
         True if cancellation was successful or acknowledged, False otherwise.
     """
@@ -461,7 +486,7 @@ async def _generate_test_report(all_execution_results, project_key, test_managem
 
 
 async def _request_incident_creation_for_failed_tests(
-        all_execution_results: List[TestExecutionResult],
+        all_execution_results: list[TestExecutionResult],
 ) -> None:
     """
     Process all failed test execution results and create incidents for each.
@@ -528,7 +553,7 @@ async def _group_test_cases_by_labels(automated_test_cases):
     return grouped_test_cases
 
 
-async def _select_execution_agents_for_each_test_label(labels: List[str]) -> Dict[str, List[str]]:
+async def _select_execution_agents_for_each_test_label(labels: list[str]) -> dict[str, list[str]]:
     if await agent_registry.is_empty():
         logger.warning("Agent registry is empty. Cannot select any execution agents.")
         return {label: [] for label in labels}
@@ -536,7 +561,7 @@ async def _select_execution_agents_for_each_test_label(labels: List[str]) -> Dic
     tasks = [_select_all_suitable_agent_ids(f"Execute tests having the following label: {label}") for label in labels]
     results = await asyncio.gather(*tasks, return_exceptions=True)
     label_agent_mapping = {}
-    for label, result in zip(labels, results):
+    for label, result in zip(labels, results, strict=False):
         if isinstance(result, Exception):
             logger.error(f"Failed to select agents for label '{label}': {result}")
             label_agent_mapping[label] = []
@@ -549,8 +574,8 @@ async def _select_execution_agents_for_each_test_label(labels: List[str]) -> Dic
     return label_agent_mapping
 
 
-async def _execute_test_group(test_type: str, test_cases: List[TestCase],
-                              agent_ids: List[str]) -> List[TestExecutionResult]:
+async def _execute_test_group(test_type: str, test_cases: list[TestCase],
+                              agent_ids: list[str]) -> list[TestExecutionResult]:
     # Filter agents that are actually in the registry
     valid_agent_ids = []
     for aid in agent_ids:
@@ -572,7 +597,7 @@ async def _execute_test_group(test_type: str, test_cases: List[TestCase],
     for tc in test_cases:
         queue.put_nowait((tc, test_type))
 
-    results: List[TestExecutionResult] = []
+    results: list[TestExecutionResult] = []
     workers = []
     for agent_id in valid_agent_ids:
         workers.append(asyncio.create_task(_agent_worker(agent_id, queue, results, valid_agent_ids)))
@@ -590,7 +615,7 @@ async def _execute_test_group(test_type: str, test_cases: List[TestCase],
     return results
 
 
-async def _agent_worker(agent_id: str, queue: asyncio.Queue, results: List[TestExecutionResult], pool_agent_ids: List[str]):
+async def _agent_worker(agent_id: str, queue: asyncio.Queue, results: list[TestExecutionResult], pool_agent_ids: list[str]):
     logger.info(f"Agent worker started for agent {agent_id}")
     try:
         while True:
@@ -702,14 +727,14 @@ Test case execution results:\n```{text_results}```
 
 async def _request_incident_creation(
         incident_input: IncidentCreationInput,
-        artifacts: List[FileWithBytes]
+        artifacts: list[FileWithBytes]
 ) -> IncidentCreationResult:
     """Request incident creation with all artifacts sent as file parts.
-    
+
     Args:
         incident_input: The incident creation input JSON.
         artifacts: All file artifacts to send as file parts in the A2A message.
-        
+
     Returns:
         IncidentCreationResult containing the created incident information.
     """
@@ -753,14 +778,14 @@ def _get_artifacts_from_task(task: Task, task_description: str) -> list[Artifact
     return results
 
 
-async def _request_test_cases_classification(test_cases: List[TestCase], user_story_id: str) -> list[Artifact]:
+async def _request_test_cases_classification(test_cases: list[TestCase], user_story_id: str) -> list[Artifact]:
     task_description = "Classify test cases"
     completed_task = await _send_task_to_agent(f"Test cases:\n{test_cases}", task_description)
     return _get_artifacts_from_task(completed_task,
                                     f"Classification of test cases for the user story {user_story_id}")
 
 
-async def _request_test_cases_review(test_cases: List[TestCase], user_story_id: str) -> list[Artifact]:
+async def _request_test_cases_review(test_cases: list[TestCase], user_story_id: str) -> list[Artifact]:
     task_description = "Review test cases"
     completed_task = await _send_task_to_agent(f"Test cases:\n{test_cases}\nUser Story ID: {user_story_id}", task_description)
     return _get_artifacts_from_task(completed_task, "Review of test cases")
@@ -784,7 +809,7 @@ Result format: a list of all found test case issue keys as a lift of strings.
 
 
 def _get_text_content_from_artifacts(artifacts: list[Artifact] | None, task_description, any_content_expected=True) -> str:
-    text_parts: List[str] = []
+    text_parts: list[str] = []
     if artifacts:
         for artifact in artifacts:
             for part in artifact.parts:
@@ -796,8 +821,8 @@ def _get_text_content_from_artifacts(artifacts: list[Artifact] | None, task_desc
     return test_case_generation_results
 
 
-def _get_file_contents_from_artifacts(artifacts: list[Artifact] | None) -> List[FileWithBytes]:
-    file_parts: List[FileWithBytes] = []
+def _get_file_contents_from_artifacts(artifacts: list[Artifact] | None) -> list[FileWithBytes]:
+    file_parts: list[FileWithBytes] = []
     if not artifacts:
         return file_parts
     for artifact in artifacts:
@@ -809,7 +834,7 @@ def _get_file_contents_from_artifacts(artifacts: list[Artifact] | None) -> List[
 
 async def _save_agent_logs_from_task(task: Task, internal_task_id: str) -> None:
     """Extract and save agent logs from task artifacts.
-    
+
     Args:
         task: The completed Task containing artifacts with potential logs.
         internal_task_id: The internal task ID for tracking in task history.
@@ -838,7 +863,7 @@ async def _send_task_to_agent_with_message(message: Message, task_description: s
     agent_id = None
     try:
         # Wait for an agent and reserve it atomically
-        agent_id, agent_card = await _wait_and_reserve_agent(task_description, internal_task_id)
+        agent_id, agent_card = await reserve_agent_waiting_if_needed(task_description, internal_task_id)
         task_start_time = datetime.now()
         agent_name = await agent_registry.get_name(agent_id)
 
@@ -879,7 +904,7 @@ async def _send_task_to_agent_with_message(message: Message, task_description: s
                     await agent_registry.update_status(agent_id, AgentStatus.AVAILABLE)
                     await agent_registry.set_current_task(agent_id, None)
                     _handle_exception(f"Task '{task_description}' iterator finished before completion.", 500, internal_task_id, agent_id)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     logger.error(f"Task '{task_description}' timed out while waiting for completion.",
                                  extra={"task_id": internal_task_id, "agent_id": agent_id})
                     await task_history.update(internal_task_id, TaskStatus.FAILED, datetime.now(), "Task timed out")
@@ -903,7 +928,7 @@ async def _send_task_to_agent_with_message(message: Message, task_description: s
                     task, _ = response
                     last_task = task
                     if task.status.state in (TaskState.completed, TaskState.failed, TaskState.rejected):
-                        logger.info(f"Task '{task_description}' was completed with status '{str(task.status.state)}'.",
+                        logger.info(f"Task '{task_description}' was completed with status '{task.status.state!s}'.",
                                     extra={"task_id": internal_task_id, "agent_id": agent_id})
                         final_status = TaskStatus.COMPLETED if task.status.state == TaskState.completed else TaskStatus.FAILED
                         error_msg = get_message_text(task.status.message) if task.status.state != TaskState.completed else None
@@ -934,10 +959,8 @@ async def _send_task_to_agent_with_message(message: Message, task_description: s
         raise
     except Exception as e:
         logger.exception(f"Error communicating with agent {agent_id}.", extra={"task_id": internal_task_id, "agent_id": agent_id})
-        try:
+        with suppress(Exception):
             await task_history.update(internal_task_id, TaskStatus.FAILED, datetime.now(), str(e))
-        except Exception:
-            pass  # Task history update failed, but we must still release the agent
         # Connection/communication error likely means agent is offline
         await agent_registry.update_status(agent_id, AgentStatus.BROKEN, BrokenReason.OFFLINE)
         await agent_registry.set_current_task(agent_id, None)
@@ -959,7 +982,7 @@ async def _send_task_to_agent(input_data: str, task_description: str) -> Task | 
     return await _send_task_to_agent_with_message(message, task_description)
 
 
-async def _wait_and_reserve_agent(task_description: str, task_id: str | None = None) -> tuple[str, AgentCard] | None:
+async def reserve_agent_waiting_if_needed(task_description: str, task_id: str | None = None) -> tuple[str, AgentCard] | None:
     """Wait for an available agent and atomically reserve it.
 
     This function handles the waiting loop outside the lock, and only holds
@@ -971,9 +994,9 @@ async def _wait_and_reserve_agent(task_description: str, task_id: str | None = N
 
     Returns:
         Tuple of (agent_id, agent_card) for the reserved agent.
-        
+
     Raises:
-        HTTPException: If no agents are registered, no suitable agent found, 
+        HTTPException: If no agents are registered, no suitable agent found,
                        or timeout waiting for an available agent.
     """
     if await agent_registry.is_empty():
@@ -981,8 +1004,8 @@ async def _wait_and_reserve_agent(task_description: str, task_id: str | None = N
 
     max_wait_time = config.OrchestratorConfig.TASK_EXECUTION_TIMEOUT
     start_time = time.time()
-    wait_interval = 2
-    max_wait_interval = 30
+    wait_interval = 30
+    max_wait_interval = 60
 
     while (time.time() - start_time) < max_wait_time:
         # Try to atomically select and reserve an agent
@@ -1032,7 +1055,7 @@ def _handle_exception(
         agent_id: str | None = None
 ) -> HTTPException:
     """Handle an exception by logging it and recording it for the dashboard.
-    
+
     Args:
         message: Error message.
         status_code: HTTP status code.
@@ -1052,7 +1075,7 @@ def _handle_exception(
         traceback_snippet=traceback.format_exc()[-500:]  # Last 500 chars of traceback
     )
     # Schedule the async add without waiting
-    asyncio.create_task(error_history.add(error_record))
+    asyncio.create_task(error_history.add(error_record))  # noqa: RUF006
 
     raise HTTPException(status_code=status_code, detail=message)
 
@@ -1066,7 +1089,7 @@ def _validate_task_status(task: Task, task_description: str):
         _handle_exception(f"Something went wrong while executing the task for {task_description}.")
     task_state = task.status.state
     if task_state != TaskState.completed:
-        _handle_exception(f"Task for {task_description} has an unexpected status '{str(task_state)}'. "
+        _handle_exception(f"Task for {task_description} has an unexpected status '{task_state!s}'. "
                           f"Root cause: {get_message_text(task.status.message)}")
 
 
@@ -1074,9 +1097,9 @@ def _get_time_left_for_task_completion_waiting(start_time):
     return config.OrchestratorConfig.TASK_EXECUTION_TIMEOUT - (time.time() - start_time)
 
 
-async def _select_all_suitable_agent_ids(task_description: str) -> List[str]:
+async def _select_all_suitable_agent_ids(task_description: str) -> list[str]:
     """Selects all suitable agents from the registry for a given task.
-    
+
     Only considers agents that are currently AVAILABLE for new tasks.
     """
     available_agent_ids = await agent_registry.get_available_agents()
@@ -1101,12 +1124,12 @@ The list of all registered with you agents:\n{agents_info}
     return valid_agent_ids
 
 
-async def _get_agents_info(available_agent_ids: List[str]) -> str:
+async def _get_agents_info(available_agent_ids: list[str]) -> str:
     """Get information about agents that are AVAILABLE for new tasks.
-    
+
     Args:
         available_agent_ids: List of agent IDs that are currently AVAILABLE.
-        
+
     Returns:
         Formatted string with agent information for the discovery agent.
     """
@@ -1120,14 +1143,14 @@ async def _get_agents_info(available_agent_ids: List[str]) -> str:
     return agents_info
 
 
-async def _select_agent(task_description: str, available_agent_ids: List[str], task_id: str | None = None) -> str | None:
+async def _select_agent(task_description: str, available_agent_ids: list[str], task_id: str | None = None) -> str | None:
     """Selects the best agent from the available agents to handle a given task.
-    
+
     Args:
         task_description: Description of the task to be assigned.
         available_agent_ids: List of agent IDs that are currently AVAILABLE.
         task_id: Optional ID of the task for logging purposes.
-        
+
     Returns:
         The ID of the selected agent, or None if no suitable agent found.
     """

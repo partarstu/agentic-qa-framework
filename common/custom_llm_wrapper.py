@@ -1,18 +1,27 @@
 import json
-from datetime import datetime
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
-from typing import List, Sequence, Optional
+from datetime import datetime
 
 from fastapi import HTTPException
-from pydantic_ai.messages import ModelRequest, ToolReturnPart, UserPromptPart, ModelMessage, ModelResponse, \
-    ToolCallPart, \
-    ThinkingPart, TextPart, SystemPromptPart, RetryPromptPart, BinaryContent
+from pydantic_ai.messages import (
+    BinaryContent,
+    ModelMessage,
+    ModelRequest,
+    ModelResponse,
+    RetryPromptPart,
+    SystemPromptPart,
+    TextPart,
+    ThinkingPart,
+    ToolCallPart,
+    ToolReturnPart,
+    UserPromptPart,
+)
 from pydantic_ai.models import (
-    Model,
     KnownModelName,
-    ModelSettings,
+    Model,
     ModelRequestParameters,
+    ModelSettings,
     StreamedResponse,
 )
 from pydantic_ai.models.wrapper import WrapperModel
@@ -32,7 +41,7 @@ class CustomLlmWrapper(WrapperModel):
         super().__init__(wrapped)
         self.latest_instructions: str | None = None
 
-    async def request(self, messages: List[ModelMessage], model_settings: ModelSettings | None,
+    async def request(self, messages: list[ModelMessage], model_settings: ModelSettings | None,
                       model_request_parameters: ModelRequestParameters,
                       ) -> ModelResponse:
         if config.PROMPT_INJECTION_CHECK_ENABLED:
@@ -50,7 +59,7 @@ class CustomLlmWrapper(WrapperModel):
     @asynccontextmanager
     async def request_stream(
             self,
-            messages: List[ModelMessage],
+            messages: list[ModelMessage],
             model_settings: ModelSettings | None,
             model_request_parameters: ModelRequestParameters,
             run_context,
@@ -64,7 +73,7 @@ class CustomLlmWrapper(WrapperModel):
             yield response_stream
 
     @staticmethod
-    def _get_prompt_from_messages(messages: List[ModelMessage]) -> Optional[GuardPrompt]:
+    def _get_prompt_from_messages(messages: list[ModelMessage]) -> GuardPrompt | None:
         for message in reversed(messages):
             if not isinstance(message, ModelRequest):
                 continue

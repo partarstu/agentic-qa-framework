@@ -4,10 +4,8 @@
 
 import config
 from common.services.test_management_base import TestManagementClientBase
-from common.services.zephyr_client import ZephyrClient
-
-
 from common.services.xray_client import XrayClient
+from common.services.zephyr_client import ZephyrClient
 
 
 def get_test_management_client() -> TestManagementClientBase:

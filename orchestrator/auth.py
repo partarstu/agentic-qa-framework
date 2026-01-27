@@ -6,12 +6,11 @@
 Authentication utilities for the UI dashboard.
 """
 
-from datetime import datetime, timedelta, timezone
-from typing import Optional
+from datetime import UTC, datetime, timedelta
 
 import jwt
 from fastapi import HTTPException, Request
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
 
 import config
@@ -32,7 +31,7 @@ class TokenResponse(BaseModel):
 
 class AuthService:
     """Service for handling dashboard authentication."""
-    
+
     def __init__(self):
         self._secret = config.DashboardAuthConfig.JWT_SECRET
         self._algorithm = config.DashboardAuthConfig.JWT_ALGORITHM
@@ -47,11 +46,11 @@ class AuthService:
 
     def create_token(self, username: str) -> TokenResponse:
         """Create a JWT token for an authenticated user."""
-        expires_at = datetime.now(timezone.utc) + timedelta(hours=self._expire_hours)
+        expires_at = datetime.now(UTC) + timedelta(hours=self._expire_hours)
         payload = {
             "sub": username,
             "exp": expires_at,
-            "iat": datetime.now(timezone.utc),
+            "iat": datetime.now(UTC),
         }
         token = jwt.encode(payload, self._secret, algorithm=self._algorithm)
         return TokenResponse(
@@ -59,10 +58,10 @@ class AuthService:
             expires_at=expires_at.isoformat(),
         )
 
-    def verify_token(self, token: str) -> Optional[str]:
+    def verify_token(self, token: str) -> str | None:
         """
         Verify a JWT token and return the username if valid.
-        
+
         Returns:
             The username if the token is valid, None otherwise.
         """
@@ -77,24 +76,24 @@ class AuthService:
 
 class DashboardAuthBearer(HTTPBearer):
     """Custom HTTP Bearer authentication for dashboard routes."""
-    
+
     def __init__(self, auth_service: AuthService, auto_error: bool = True):
         super().__init__(auto_error=auto_error)
         self._auth_service = auth_service
 
-    async def __call__(self, request: Request) -> Optional[str]:
+    async def __call__(self, request: Request) -> str | None:
         """Validate the bearer token and return the username."""
-        credentials: Optional[HTTPAuthorizationCredentials] = await super().__call__(request)
-        
+        credentials: HTTPAuthorizationCredentials | None = await super().__call__(request)
+
         if credentials is None:
             if self.auto_error:
                 raise HTTPException(status_code=401, detail="Not authenticated")
             return None
-        
+
         username = self._auth_service.verify_token(credentials.credentials)
         if username is None:
             raise HTTPException(status_code=401, detail="Invalid or expired token")
-        
+
         return username
 
 

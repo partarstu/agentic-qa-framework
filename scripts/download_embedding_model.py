@@ -16,9 +16,9 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Import config before sentence_transformers to ensure HF_HOME is set
-from config import QdrantConfig  # noqa: E402
+from config import QdrantConfig  # noqa: I001
 
-from sentence_transformers import SentenceTransformer  # noqa: E402
+from sentence_transformers import SentenceTransformer
 
 if __name__ == "__main__":
     model_name = QdrantConfig.EMBEDDING_MODEL

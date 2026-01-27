@@ -6,22 +6,21 @@ import base64
 import json
 import os
 import uuid
-from typing import List
 
 from a2a.types import FilePart, FileWithBytes
 from pydantic_ai import Agent
-from qdrant_client import models as qdrant_models
 from pydantic_ai.mcp import MCPServerSSE
+from qdrant_client import models as qdrant_models
 
 import config
-from agents.incident_creation.prompt import IncidentCreationPrompt, DuplicateDetectionPrompt
+from agents.incident_creation.prompt import DuplicateDetectionPrompt, IncidentCreationPrompt
 from common import utils
 from common.agent_base import AgentBase
 from common.custom_llm_wrapper import CustomLlmWrapper
 from common.models import (
+    DuplicateDetectionResult,
     IncidentCreationInput,
     IncidentCreationResult,
-    DuplicateDetectionResult,
     JiraIssue,
 )
 from common.services.test_management_system_client_provider import get_test_management_client
@@ -130,7 +129,7 @@ class IncidentCreationAgent(AgentBase):
         return candidates
 
     @staticmethod
-    async def _get_linked_issues(test_case_key: str) -> List[str]:
+    async def _get_linked_issues(test_case_key: str) -> list[str]:
         """Fetches all Jira issues linked to the test case.
 
         Args:
@@ -150,7 +149,7 @@ class IncidentCreationAgent(AgentBase):
 
     def _save_artifacts(self) -> list[str]:
         """Saves all received file artifacts into the file system and returns their paths.
-        
+
         Files are saved to the local/host path (ATTACHMENTS_LOCAL_DESTINATION_FOLDER_PATH) but
         the returned paths use the MCP server's container path (MCP_SERVER_ATTACHMENTS_FOLDER_PATH)
         since the Jira MCP server runs in Docker and expects paths relative to its filesystem.
@@ -185,7 +184,7 @@ class IncidentCreationAgent(AgentBase):
                         saved_paths.append(mcp_file_path)
                         logger.info(f"Saved artifact '{original_name}' to {local_file_path} (MCP path: {mcp_file_path})")
                     except Exception:
-                        logger.exception(f"Failed to save artifact.")
+                        logger.exception("Failed to save artifact.")
 
         if saved_paths:
             logger.info(f"Saved {len(saved_paths)} artifacts so that they could be used by MCP server.")
@@ -211,7 +210,7 @@ class IncidentCreationAgent(AgentBase):
     @staticmethod
     async def _link_issue_to_test_case(test_case_key: str, issue_id: int, link_type: str) -> str:
         """Links a bug issue to the test case using the test management system.
-        
+
         Args:
             test_case_key: The key of the test case (e.g., 'PROJ-T123').
             issue_id: The numeric ID of the created bug issue (not the key, but the ID).
