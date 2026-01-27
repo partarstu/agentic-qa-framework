@@ -29,7 +29,7 @@ async def test_send_task_success(mock_registry):
     
     with patch("orchestrator.main.httpx.AsyncClient") as mock_client_cls, \
          patch("orchestrator.main.ClientFactory") as mock_factory_cls, \
-         patch("orchestrator.main._wait_and_reserve_agent", new_callable=AsyncMock) as mock_reserve:
+         patch("orchestrator.main.reserve_agent_waiting_if_needed", new_callable=AsyncMock) as mock_reserve:
 
         mock_reserve.return_value = ("agent-1", MagicMock())
         mock_a2a_client = MagicMock()
@@ -56,7 +56,7 @@ async def test_send_task_timeout(mock_registry):
     with patch("orchestrator.main.httpx.AsyncClient"), \
          patch("orchestrator.main.ClientFactory") as mock_factory_cls, \
          patch("orchestrator.main.config.OrchestratorConfig.TASK_EXECUTION_TIMEOUT", 0.1), \
-         patch("orchestrator.main._wait_and_reserve_agent", new_callable=AsyncMock) as mock_reserve:
+         patch("orchestrator.main.reserve_agent_waiting_if_needed", new_callable=AsyncMock) as mock_reserve:
          
         mock_reserve.return_value = ("agent-1", MagicMock())
         mock_a2a_client = MagicMock()
