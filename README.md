@@ -24,6 +24,7 @@ Watch a demo of QuAIA™ in action:
     * UI & API Test Execution (separate project)    
     * Incident Report Creation
     * Jira Ticket RAG
+* **Dedicated Prompt Guard Service:** A dedicated microservice for detecting prompt injection attacks using the ProtectAI model.
 * **Web UI Monitoring Dashboard:** Real-time monitoring interface for:
     * Agent status visualization (AVAILABLE, BUSY, BROKEN states)
     * Task history with execution details and duration
@@ -200,13 +201,14 @@ TEMPERATURE=0.0 # Default: 0.0. Temperature parameter for models.
 # Qdrant Vector Database (for RAG and semantic search)
 QDRANT_URL=http://localhost # Default: http://localhost. URL of the Qdrant server.
 QDRANT_PORT=6333 # Default: 6333. Port of the Qdrant server.
+QDRANT_GRPC_PORT=6334 # Default: 6334. gRPC Port of the Qdrant server.
 QDRANT_API_KEY= # Optional. API key for Qdrant authentication.
 QDRANT_COLLECTION_NAME=jira_issues # Default: jira_issues. Name of the main collection for Jira issues.
 QDRANT_METADATA_COLLECTION_NAME=rag_metadata # Default: rag_metadata. Name of the collection for RAG metadata.
 RAG_MIN_SIMILARITY_SCORE=0.7 # Default: 0.7. Minimum similarity score for vector search results.
 RAG_MAX_RESULTS=5 # Default: 5. Maximum number of results to return from vector search.
 RAG_EMBEDDING_MODEL=Qwen/Qwen3-Embedding-0.6B # Default: Qwen/Qwen3-Embedding-0.6B. SentenceTransformer model for embeddings.
-EMBEDDING_SERVICE_URL= # Optional. URL of the embedding service for remote embedding generation.
+EMBEDDING_SERVICE_URL= # Required for agents using Vector DB. URL of the embedding service for remote embedding generation.
 EMBEDDING_SERVICE_TIMEOUT_SECONDS=60.0 # Default: 60.0. Timeout for embedding service requests.
 
 # Incident Creation Agent Configuration
@@ -217,6 +219,7 @@ ISSUE_SEVERITY_FIELD_NAME=customfield_10124 # Default: customfield_10124. Jira c
 # Prompt Injection Detection
 PROMPT_INJECTION_CHECK_ENABLED=False # Default: False. Set to "True" to enable prompt injection detection.
 PROMPT_GUARD_PROVIDER=protect_ai # Default: protect_ai. The provider for prompt injection detection.
+PROMPT_GUARD_SERVICE_URL= # Required if PROMPT_INJECTION_CHECK_ENABLED is True. URL of the prompt guard service.
 PROMPT_INJECTION_MIN_SCORE=0.8 # Default: 0.8. The minimum score for a prompt to be considered an injection.
 PROMPT_INJECTION_MODEL_NAME=ProtectAI/deberta-v3-base-prompt-injection-v2 # Default: ProtectAI/deberta-v3-base-prompt-injection-v2. The name of the model used for prompt injection detection.
 
@@ -291,7 +294,13 @@ To run the Jira MCP server, you will need Docker installed.
    python services/embedding_service/main.py
    ```
 
-3. **Start Individual Agents:**
+3. **Start the Prompt Guard Service (optional):**
+   Required if prompt injection checks are enabled.
+   ```bash
+   python services/prompt_guard_service/main.py
+   ```
+
+4. **Start Individual Agents:**
    Open separate terminal windows for each agent you want to run:
 
     * **Requirements Review Agent:**
@@ -319,7 +328,7 @@ To run the Jira MCP server, you will need Docker installed.
       python agents/jira_rag/main.py
       ```
 
-4. **Start the Orchestrator:**
+5. **Start the Orchestrator:**
    ```bash
    python orchestrator/main.py
    ```
@@ -418,11 +427,11 @@ you run any of the commands below.
 After having all preconditions fulfilled, you can execute the following command:
 
 ```bash
-gcloud builds submit --config 'path/to/your/cloudbuild.yaml' --substitutions "^;^_BUCKET_NAME=YOUR_GCS_BUCKET_NAME;_ALLURE_REPORTS_BUCKET=YOUR_ALLURE_REPORTS_BUCKET_NAME;_REQUIREMENTS_REVIEW_AGENT_BASE_URL=YOUR_REQUIREMENTS_REVIEW_AGENT_URL;_TEST_CASE_GENERATION_AGENT_BASE_URL=YOUR_TEST_CASE_GENERATION_AGENT_URL;_TEST_CASE_CLASSIFICATION_AGENT_BASE_URL=YOUR_TEST_CASE_CLASSIFICATION_AGENT_URL;_TEST_CASE_REVIEW_AGENT_BASE_URL=YOUR_TEST_CASE_REVIEW_AGENT_URL;_REMOTE_EXECUTION_AGENT_HOSTS=YOUR_COMMA_SEPARATED_AGENT_HOSTS" .
+gcloud builds submit --config 'path/to/your/cloudbuild.yaml' --substitutions "^;^_BUCKET_NAME=YOUR_GCS_BUCKET_NAME;_ALLURE_REPORTS_BUCKET=YOUR_ALLURE_REPORTS_BUCKET_NAME;_REQUIREMENTS_REVIEW_AGENT_BASE_URL=YOUR_REQUIREMENTS_REVIEW_AGENT_URL;_TEST_CASE_GENERATION_AGENT_BASE_URL=YOUR_TEST_CASE_GENERATION_AGENT_URL;_TEST_CASE_CLASSIFICATION_AGENT_BASE_URL=YOUR_TEST_CASE_CLASSIFICATION_AGENT_URL;_TEST_CASE_REVIEW_AGENT_BASE_URL=YOUR_TEST_CASE_REVIEW_AGENT_URL;_INCIDENT_CREATION_AGENT_BASE_URL=YOUR_INCIDENT_CREATION_AGENT_URL;_JIRA_RAG_UPDATE_AGENT_BASE_URL=YOUR_JIRA_RAG_UPDATE_AGENT_URL;_REMOTE_EXECUTION_AGENT_HOSTS=YOUR_COMMA_SEPARATED_AGENT_HOSTS;_PROMPT_GUARD_SERVICE_URL=YOUR_PROMPT_GUARD_SERVICE_URL;_DEPLOY_ALL_SERVICES=true" .
 ```
 
 ```powershell
-gcloud builds submit --config 'path/to/your/cloudbuild.yaml' --substitutions "`^;`^_BUCKET_NAME=YOUR_GCS_BUCKET_NAME;_ALLURE_REPORTS_BUCKET=YOUR_ALLURE_REPORTS_BUCKET_NAME;_REQUIREMENTS_REVIEW_AGENT_BASE_URL=YOUR_REQUIREMENTS_REVIEW_AGENT_URL;_TEST_CASE_GENERATION_AGENT_BASE_URL=YOUR_TEST_CASE_GENERATION_AGENT_URL;_TEST_CASE_CLASSIFICATION_AGENT_BASE_URL=YOUR_TEST_CASE_CLASSIFICATION_AGENT_URL;_TEST_CASE_REVIEW_AGENT_BASE_URL=YOUR_TEST_CASE_REVIEW_AGENT_URL;_REMOTE_EXECUTION_AGENT_HOSTS=YOUR_COMMA_SEPARATED_AGENT_HOSTS" .
+gcloud builds submit --config 'path/to/your/cloudbuild.yaml' --substitutions "`^;`^_BUCKET_NAME=YOUR_GCS_BUCKET_NAME;_ALLURE_REPORTS_BUCKET=YOUR_ALLURE_REPORTS_BUCKET_NAME;_REQUIREMENTS_REVIEW_AGENT_BASE_URL=YOUR_REQUIREMENTS_REVIEW_AGENT_URL;_TEST_CASE_GENERATION_AGENT_BASE_URL=YOUR_TEST_CASE_GENERATION_AGENT_URL;_TEST_CASE_CLASSIFICATION_AGENT_BASE_URL=YOUR_TEST_CASE_CLASSIFICATION_AGENT_URL;_TEST_CASE_REVIEW_AGENT_BASE_URL=YOUR_TEST_CASE_REVIEW_AGENT_URL;_INCIDENT_CREATION_AGENT_BASE_URL=YOUR_INCIDENT_CREATION_AGENT_URL;_JIRA_RAG_UPDATE_AGENT_BASE_URL=YOUR_JIRA_RAG_UPDATE_AGENT_URL;_REMOTE_EXECUTION_AGENT_HOSTS=YOUR_COMMA_SEPARATED_AGENT_HOSTS;_PROMPT_GUARD_SERVICE_URL=YOUR_PROMPT_GUARD_SERVICE_URL;_DEPLOY_ALL_SERVICES=true" .
 ```
 
 **Substitution Variables:**
@@ -439,6 +448,8 @@ gcloud builds submit --config 'path/to/your/cloudbuild.yaml' --substitutions "`^
 * `_JIRA_RAG_UPDATE_AGENT_BASE_URL`: The URL of the deployed Jira RAG Update Agent.
 * `_REMOTE_EXECUTION_AGENT_HOSTS`: A comma-separated list of URLs for all deployed agents that the orchestrator will
   interact with.
+* `_PROMPT_GUARD_SERVICE_URL`: The URL of the deployed Prompt Guard Service.
+* `_DEPLOY_ALL_SERVICES`: Set to `true` to deploy all services. Individual service flags (e.g., `_DEPLOY_JIRA_MCP`) are available for granular deployment.
 
 **Important**: Before the initial deployment of the framework into Google Cloud Run it's quite hard to know which URL
 will be assigned to each agent and orchestrator. That's why most probably you'll have to run the deployment command
