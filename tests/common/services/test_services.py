@@ -60,6 +60,9 @@ def xray_client():
     with patch("config.XRAY_BASE_URL", "http://xray"), \
          patch("config.XRAY_CLIENT_ID", "id"), \
          patch("config.XRAY_CLIENT_SECRET", "secret"), \
+         patch("config.JIRA_BASE_URL", "http://jira"), \
+         patch("config.JIRA_USER", "user"), \
+         patch("config.JIRA_TOKEN", "token"), \
          patch("common.services.xray_client.XrayClient._get_token", return_value="mock_token"):
         return XrayClient()
 
@@ -77,17 +80,23 @@ def test_xray_authenticate(mock_post):
 
     with patch("config.XRAY_BASE_URL", "http://xray"), \
          patch("config.XRAY_CLIENT_ID", "id"), \
-         patch("config.XRAY_CLIENT_SECRET", "secret"):
+         patch("config.XRAY_CLIENT_SECRET", "secret"), \
+         patch("config.JIRA_BASE_URL", "http://jira"), \
+         patch("config.JIRA_USER", "user"), \
+         patch("config.JIRA_TOKEN", "token"):
 
          client = XrayClient()
          assert "Bearer real_token" in client.xray_headers["Authorization"]
 
 # Allure Client Tests
-def test_allure_client_generate_report():
-    with patch("os.path.exists", return_value=True), patch("os.makedirs"):
-        client = AllureClient("reports")
-        with patch("common.services.allure_client.utils.get_logger"), patch("subprocess.run"):
-            client.generate_report([])
+def test_allure_client_generate_report(tmp_path):
+    # Create the reports directory in the temporary path
+    reports_dir = tmp_path / "reports"
+    reports_dir.mkdir()
+    
+    client = AllureClient(str(reports_dir))
+    with patch("common.services.allure_client.utils.get_logger"), patch("subprocess.run"):
+        client.generate_report([])
 
 # Provider Tests
 def test_get_test_management_client_zephyr():
@@ -104,6 +113,9 @@ def test_get_test_management_client_xray():
          patch("config.XRAY_BASE_URL", "http://xray"), \
          patch("config.XRAY_CLIENT_ID", "id"), \
          patch("config.XRAY_CLIENT_SECRET", "secret"), \
+         patch("config.JIRA_BASE_URL", "http://jira"), \
+         patch("config.JIRA_USER", "user"), \
+         patch("config.JIRA_TOKEN", "token"), \
          patch("common.services.xray_client.XrayClient._get_token", return_value="token"):
 
         client = get_test_management_client()
