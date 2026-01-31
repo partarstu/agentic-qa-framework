@@ -202,6 +202,6 @@ class QdrantConfig:
     EMBEDDING_MODEL = os.environ.get("RAG_EMBEDDING_MODEL", "Qwen/Qwen3-Embedding-0.6B")
     EMBEDDING_MODEL_PATH = os.path.join(LOCAL_MODELS_PATH, "embedding_model")
     EMBEDDING_SERVICE_URL = os.environ.get("EMBEDDING_SERVICE_URL")
-    EMBEDDING_SERVICE_TIMEOUT_SECONDS = float(os.environ.get("EMBEDDING_SERVICE_TIMEOUT_SECONDS", "60.0"))
+    EMBEDDING_SERVICE_TIMEOUT_SECONDS = float(os.environ.get("EMBEDDING_SERVICE_TIMEOUT_SECONDS", "120.0"))
     VALID_STATUSES = os.environ.get("JIRA_VALID_STATUSES", "To Do,In Review,Ready for Development,In Progress,Done").split(",")
     BUG_ISSUE_TYPE = os.environ.get("JIRA_BUG_ISSUE_TYPE", "Bug")

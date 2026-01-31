@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import asyncio
 import httpx
 from qdrant_client import AsyncQdrantClient, models
 
@@ -28,25 +29,34 @@ class VectorDbService:
         if not self.embedding_service_url:
             logger.warning("EMBEDDING_SERVICE_URL is not configured. Vector operations requiring embeddings will fail.")
 
-    async def _get_embedding(self, text: str) -> list[float]:
+    async def _get_embedding(self, text: str) -> list[float]|None:
         if not self.embedding_service_url:
             raise ValueError("EMBEDDING_SERVICE_URL is not configured.")
 
-        timeout = httpx.Timeout(getattr(config.QdrantConfig, "EMBEDDING_SERVICE_TIMEOUT_SECONDS", 60.0))
-        try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                response = await client.post(f"{self.embedding_service_url}/embed", json={"text": text})
-                response.raise_for_status()
-                return response.json()["embedding"]
-        except httpx.TimeoutException:
-            logger.exception(f"Timeout calling embedding service at {self.embedding_service_url}")
-            raise
-        except httpx.HTTPStatusError as e:
-            logger.exception(f"HTTP error from embedding service: {e.response.status_code} - {e.response.text}")
-            raise
-        except Exception:
-            logger.exception("Error calling embedding service")
-            raise
+        timeout_seconds = getattr(config.QdrantConfig, "EMBEDDING_SERVICE_TIMEOUT_SECONDS", 120.0)
+        timeout = httpx.Timeout(timeout_seconds)
+        max_retries = 3
+
+        for attempt in range(max_retries):
+            try:
+                async with httpx.AsyncClient(timeout=timeout) as client:
+                    response = await client.post(f"{self.embedding_service_url}/embed", json={"text": text})
+                    response.raise_for_status()
+                    return response.json()["embedding"]
+            except (httpx.TimeoutException, httpx.ConnectError) as e:
+                if attempt == max_retries - 1:
+                    logger.exception(f"Failed to call embedding service at {self.embedding_service_url} after {max_retries} attempts.")
+                    raise
+                wait_time = 2 ** attempt
+                logger.warning(f"Attempt {attempt + 1}/{max_retries} failed calling embedding service: {e}. Retrying in {wait_time}s...")
+                await asyncio.sleep(wait_time)
+            except httpx.HTTPStatusError as e:
+                logger.exception(f"HTTP error from embedding service: {e.response.status_code} - {e.response.text}")
+                raise
+            except Exception:
+                logger.exception("Error calling embedding service")
+                raise
+        return None
 
     async def _ensure_collection(self):
         if not await self.client.collection_exists(self.collection_name):

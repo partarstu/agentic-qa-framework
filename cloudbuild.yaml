@@ -3,29 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 steps:
-  # Pull the external mcp-atlassian image from GitHub Container Registry
-  - name: 'gcr.io/cloud-builders/docker'
-    args: [ 'pull', 'ghcr.io/sooperset/mcp-atlassian:0.11.12' ]
-
-  # Tag the external image for Google Container Registry
-  - name: 'gcr.io/cloud-builders/docker'
-    args: [ 'tag', 'ghcr.io/sooperset/mcp-atlassian:0.11.12', 'gcr.io/$PROJECT_ID/mcp-atlassian:latest' ]
-
-  # Push the mcp-atlassian image to internal Container Registry
-  - name: 'gcr.io/cloud-builders/docker'
-    args: [ 'push', 'gcr.io/$PROJECT_ID/mcp-atlassian:latest' ]
 
   # Build the base image
   - name: 'gcr.io/cloud-builders/docker'
     args: [ 'build', '-t', 'agentic-qa-base:latest', '-f', 'Dockerfile.base', '.' ]
-
-  # Build the embedding-service image
-  - name: 'gcr.io/cloud-builders/docker'
-    args: [ 'build', '-t', 'gcr.io/$PROJECT_ID/embedding-service', '-f', 'services/embedding_service/Dockerfile', '.' ]
-
-  # Build the prompt-guard-service image
-  - name: 'gcr.io/cloud-builders/docker'
-    args: [ 'build', '-t', 'gcr.io/$PROJECT_ID/prompt-guard-service', '-f', 'services/prompt_guard_service/Dockerfile', '.' ]
 
   # Build the orchestrator image
   - name: 'gcr.io/cloud-builders/docker'
@@ -75,14 +56,6 @@ steps:
   - name: 'gcr.io/cloud-builders/docker'
     args: [ 'push', 'gcr.io/$PROJECT_ID/test-case-review-agent' ]
 
-  # Push the embedding-service image to Container Registry
-  - name: 'gcr.io/cloud-builders/docker'
-    args: [ 'push', 'gcr.io/$PROJECT_ID/embedding-service' ]
-
-  # Push the prompt-guard-service image to Container Registry
-  - name: 'gcr.io/cloud-builders/docker'
-    args: [ 'push', 'gcr.io/$PROJECT_ID/prompt-guard-service' ]
-
   # Push the incident-creation-agent image to Container Registry
   - name: 'gcr.io/cloud-builders/docker'
     args: [ 'push', 'gcr.io/$PROJECT_ID/incident-creation-agent' ]
@@ -91,13 +64,20 @@ steps:
   - name: 'gcr.io/cloud-builders/docker'
     args: [ 'push', 'gcr.io/$PROJECT_ID/jira-rag-agent' ]
 
-  # Deploy to Cloud Run jira-mcp-server
+  # Pull, tag, push, and deploy jira-mcp-server to Cloud Run (conditional)
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: 'bash'
     args:
       - '-c'
       - |
         if [ "$_DEPLOY_ALL_SERVICES" = "true" ] || [ "$_DEPLOY_JIRA_MCP" = "true" ]; then
+          echo "Pulling mcp-atlassian image from GitHub Container Registry..."
+          docker pull ghcr.io/sooperset/mcp-atlassian:0.11.12 && \
+          echo "Tagging mcp-atlassian image for Google Container Registry..." && \
+          docker tag ghcr.io/sooperset/mcp-atlassian:0.11.12 gcr.io/$PROJECT_ID/mcp-atlassian:latest && \
+          echo "Pushing mcp-atlassian image to Container Registry..." && \
+          docker push gcr.io/$PROJECT_ID/mcp-atlassian:latest && \
+          echo "Deploying jira-mcp-server to Cloud Run..." && \
           gcloud beta run deploy jira-mcp-server \
             --image=gcr.io/$PROJECT_ID/mcp-atlassian:latest \
             --network=agent-network \
@@ -117,16 +97,21 @@ steps:
             --add-volume-mount=volume=jira-volume,mount-path=$_JIRA_MCP_SERVER_ATTACHMENTS_MOUNT_PATH \
             --concurrency=100
         else
-          echo "Skipping jira-mcp-server deployment (variable _DEPLOY_JIRA_MCP and _DEPLOY_ALL_SERVICES are not true)"
+          echo "Skipping jira-mcp-server pull/tag/push/deploy (variable _DEPLOY_JIRA_MCP and _DEPLOY_ALL_SERVICES are not true)"
         fi
 
-  # Deploy to Cloud Run embedding-service
+  # Build, push, and deploy embedding-service to Cloud Run (conditional)
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: 'bash'
     args:
       - '-c'
       - |
         if [ "$_DEPLOY_ALL_SERVICES" = "true" ] || [ "$_DEPLOY_EMBEDDING_SERVICE" = "true" ]; then
+          echo "Building embedding-service image..."
+          docker build -t gcr.io/$PROJECT_ID/embedding-service -f services/embedding_service/Dockerfile . && \
+          echo "Pushing embedding-service image to Container Registry..." && \
+          docker push gcr.io/$PROJECT_ID/embedding-service && \
+          echo "Deploying embedding-service to Cloud Run..." && \
           gcloud beta run deploy embedding-service \
             --image=gcr.io/$PROJECT_ID/embedding-service \
             --network=agent-network \
@@ -141,16 +126,21 @@ steps:
             --port=8080 \
             --concurrency=5
         else
-          echo "Skipping embedding-service deployment (variable _DEPLOY_EMBEDDING_SERVICE and _DEPLOY_ALL_SERVICES are not true)"
+          echo "Skipping embedding-service build/push/deploy (variable _DEPLOY_EMBEDDING_SERVICE and _DEPLOY_ALL_SERVICES are not true)"
         fi
 
-  # Deploy to Cloud Run prompt-guard-service
+  # Build, push, and deploy prompt-guard-service to Cloud Run (conditional)
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: 'bash'
     args:
       - '-c'
       - |
         if [ "$_DEPLOY_ALL_SERVICES" = "true" ] || [ "$_DEPLOY_PROMPT_GUARD" = "true" ]; then
+          echo "Building prompt-guard-service image..."
+          docker build -t gcr.io/$PROJECT_ID/prompt-guard-service -f services/prompt_guard_service/Dockerfile . && \
+          echo "Pushing prompt-guard-service image to Container Registry..." && \
+          docker push gcr.io/$PROJECT_ID/prompt-guard-service && \
+          echo "Deploying prompt-guard-service to Cloud Run..." && \
           gcloud beta run deploy prompt-guard-service \
             --image=gcr.io/$PROJECT_ID/prompt-guard-service \
             --network=agent-network \
@@ -165,17 +155,18 @@ steps:
             --port=8080 \
             --concurrency=5
         else
-          echo "Skipping prompt-guard-service deployment (variable _DEPLOY_PROMPT_GUARD and _DEPLOY_ALL_SERVICES are not true)"
+          echo "Skipping prompt-guard-service build/push/deploy (variable _DEPLOY_PROMPT_GUARD and _DEPLOY_ALL_SERVICES are not true)"
         fi
 
 
-  # Deploy Qdrant Vector DB to Cloud Run
+  # Deploy Qdrant Vector DB to Cloud Run (conditional)
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: 'bash'
     args:
       - '-c'
       - |
         if [ "$_DEPLOY_ALL_SERVICES" = "true" ] || [ "$_DEPLOY_QDRANT" = "true" ]; then
+          echo "Deploying qdrant-vector-db to Cloud Run..."
           gcloud beta run deploy qdrant-vector-db \
             --image=qdrant/qdrant:v1.16.3 \
             --network=agent-network \
@@ -402,8 +393,6 @@ images:
   - 'gcr.io/$PROJECT_ID/incident-creation-agent'
   - 'gcr.io/$PROJECT_ID/jira-rag-agent'
   - 'gcr.io/$PROJECT_ID/orchestrator'
-  - 'gcr.io/$PROJECT_ID/embedding-service'
-  - 'gcr.io/$PROJECT_ID/prompt-guard-service'
 
 options:
   logging: CLOUD_LOGGING_ONLY
