@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
+import logging
 import time
 import traceback
 from collections import defaultdict
@@ -21,6 +22,8 @@ from a2a.types import (
     FileWithBytes,
     JSONRPCErrorResponse,
     Message,
+    Part,
+    Role,
     Task,
     TaskIdParams,
     TaskState,
@@ -30,6 +33,7 @@ from a2a.utils import get_message_text, new_agent_text_message
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Security
 from fastapi.security import APIKeyHeader
 from fastapi.staticfiles import StaticFiles
+from pydantic import ValidationError
 from pydantic_ai import Agent
 from pydantic_ai.settings import ModelSettings
 
@@ -37,6 +41,7 @@ import config
 from common import utils
 from common.custom_llm_wrapper import CustomLlmWrapper
 from common.models import (
+    AgentExecutionError,
     GeneratedTestCases,
     IncidentCreationInput,
     IncidentCreationResult,
@@ -50,7 +55,6 @@ from common.models import (
 )
 from common.services.test_management_system_client_provider import get_test_management_client
 from common.services.test_reporting_client_base_provider import get_test_reporting_client
-from common.services.vector_db_service import VectorDbService
 from orchestrator.auth import LoginRequest, TokenResponse, auth_service, dashboard_auth
 from orchestrator.dashboard_service import dashboard_service
 from orchestrator.memory_log_handler import setup_memory_logging
@@ -74,8 +78,6 @@ logger = utils.get_logger("orchestrator")
 # Set up memory logging for dashboard
 setup_memory_logging("orchestrator")
 
-# Initialize Vector DB Service for Orchestrator
-vector_db_service = VectorDbService(getattr(config.QdrantConfig, "COLLECTION_NAME", "jira_issues"))
 execution_lock = asyncio.Lock()
 agent_selection_lock = asyncio.Lock()  # Ensures atomic agent selection and reservation
 cancellation_queue = asyncio.Queue()
@@ -84,9 +86,30 @@ API_KEY_NAME = "X-API-Key"
 api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=False)
 
 
+class EndpointFilter(logging.Filter):
+    """
+    Filter to suppress logs for specific endpoints (like dashboard polling).
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            # Uvicorn access logs usually store the path in args[2]
+            # args: (remote_addr, method, path, http_version, status_code)
+            if record.args and len(record.args) >= 3:
+                path = str(record.args[2])
+                if path.startswith("/api/dashboard/"):
+                    return False
+        except Exception:
+            pass
+        return True
+
+
 # noinspection PyUnusedLocal
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Filter out dashboard polling logs from uvicorn access logger
+    logging.getLogger("uvicorn.access").addFilter(EndpointFilter())
+
     logger.info("Orchestrator starting up...")
 
     # Perform initial agent discovery before accepting requests
@@ -428,7 +451,10 @@ async def update_rag_db(request: ProjectExecutionRequest, api_key: str = Depends
 
         _validate_task_status(completed_task, task_description)
         received_artifacts = _get_artifacts_from_task(completed_task, task_description)
-        text_content = _get_text_content_from_artifacts(received_artifacts, task_description)
+        text_parts = _get_text_content_from_artifacts(received_artifacts, task_description)
+        if len(text_parts) != 1:
+            _handle_exception(f"Expected exactly one text artifact from RAG update, but received {len(text_parts)}.")
+        text_content = text_parts[0]
 
         logger.info(f"RAG update completed: {text_content}")
         return {"message": "RAG update completed.", "details": text_content}
@@ -695,10 +721,8 @@ async def _execute_single_test(agent_id: str, test_case: TestCase,
     agent_name = await agent_registry.get_name(agent_id)
     if not artifacts:
         _handle_exception(f"No test case execution results received from agent {agent_name}", 500)
-    text_results = _get_text_content_from_artifacts(artifacts, task_description)
-    if not text_results:
-        _handle_exception(f"No test case execution information received from agent {agent_name}",
-                          500)
+    text_parts = _get_text_content_from_artifacts(artifacts, task_description)
+    text_results = "\n".join(text_parts)
     user_prompt = f"""
 Test case execution results:\n```{text_results}```
 """
@@ -725,10 +749,8 @@ Test case execution results:\n```{text_results}```
     return test_execution_result
 
 
-async def _request_incident_creation(
-        incident_input: IncidentCreationInput,
-        artifacts: list[FileWithBytes]
-) -> IncidentCreationResult:
+async def _request_incident_creation(incident_input: IncidentCreationInput,
+                                     artifacts: list[FileWithBytes]) -> IncidentCreationResult | None:
     """Request incident creation with all artifacts sent as file parts.
 
     Args:
@@ -736,38 +758,63 @@ async def _request_incident_creation(
         artifacts: All file artifacts to send as file parts in the A2A message.
 
     Returns:
-        IncidentCreationResult containing the created incident information.
+        IncidentCreationResult containing the created incident information,
+        or None if an AgentExecutionError occurred.
     """
     task_description = "Create incident report"
 
     # Create message with JSON text part and ALL artifact file parts
-    message_parts = [TextPart(text=incident_input.model_dump_json())]
+    message_parts: list[Part] = [Part(TextPart(text=incident_input.model_dump_json()))]
 
     # Add ALL artifacts as file parts (agent will handle them)
     for artifact in artifacts:
-        message_parts.append(FilePart(file=artifact))
+        message_parts.append(Part(FilePart(file=artifact)))
         logger.info(f"Adding artifact '{artifact.name}' as file part to incident creation message")
 
     # Create the message
-    message = Message(parts=message_parts, message_id="", role='agent')
+    message = Message(parts=message_parts, message_id="", role=Role('agent'))
 
     completed_task = await _send_task_to_agent_with_message(message, task_description)
 
     task_description = f"Incident creation for test case {incident_input.test_case.key}"
     received_artifacts = _get_artifacts_from_task(completed_task, task_description)
-    text_content = _get_text_content_from_artifacts(received_artifacts, task_description)
-    result = IncidentCreationResult.model_validate_json(text_content)
+    result = _get_model_from_artifacts(received_artifacts, task_description, IncidentCreationResult)
+
+    if isinstance(result, AgentExecutionError):
+        logger.error(
+            f"Incident creation failed for test case {incident_input.test_case.key}: "
+            f"{result.error_message}"
+        )
+        return None
+
     return result
 
 
 async def _request_test_cases_generation(user_story_id) -> GeneratedTestCases:
+    """Request test case generation for a user story.
+
+    Args:
+        user_story_id: The Jira user story key to generate test cases for.
+
+    Returns:
+        GeneratedTestCases containing the generated test cases.
+
+    Raises:
+        HTTPException: If an AgentExecutionError is returned by the agent.
+    """
     task_description = "Generate test cases"
     completed_task = await _send_task_to_agent(f"Jira user story with key {user_story_id}",
                                                task_description)
     task_description = f"Generation of test cases for the user story {user_story_id}"
     received_artifacts = _get_artifacts_from_task(completed_task, task_description)
-    text_content = _get_text_content_from_artifacts(received_artifacts, task_description)
-    return GeneratedTestCases.model_validate_json(text_content)
+    result = _get_model_from_artifacts(received_artifacts, task_description, GeneratedTestCases)
+
+    if isinstance(result, AgentExecutionError):
+        _handle_exception(
+            f"Test case generation failed for user story {user_story_id}: {result.error_message}"
+        )
+
+    return result
 
 
 def _get_artifacts_from_task(task: Task, task_description: str) -> list[Artifact]:
@@ -793,7 +840,10 @@ async def _request_test_cases_review(test_cases: list[TestCase], user_story_id: 
 
 async def _extract_generated_test_case_issue_keys_from_agent_response(results: list[Artifact], task_description: str) -> \
         list[str]:
-    test_case_generation_results = _get_text_content_from_artifacts(results, task_description)
+    text_parts = _get_text_content_from_artifacts(results, task_description)
+    if len(text_parts) != 1:
+        _handle_exception(f"Expected exactly one text artifact from test case generation, but received {len(text_parts)}.")
+    test_case_generation_results = text_parts[0]
     user_prompt = f"""
 Your input:\n"{test_case_generation_results}".
 
@@ -808,17 +858,72 @@ Result format: a list of all found test case issue keys as a lift of strings.
     return result.output or None
 
 
-def _get_text_content_from_artifacts(artifacts: list[Artifact] | None, task_description, any_content_expected=True) -> str:
+def _get_text_content_from_artifacts(artifacts: list[Artifact] | None, task_description: str, any_content_expected: bool = True
+                                     ) -> list[str]:
+    """Extract text content from artifacts.
+
+    Args:
+        artifacts: List of artifacts from the agent response.
+        task_description: Description of the task for error messages.
+        any_content_expected: If True, raises an exception when no text content is found.
+
+    Returns:
+        List of non-empty text strings extracted from artifacts.
+
+    Raises:
+        HTTPException: If any_content_expected is True and no text content is found.
+    """
     text_parts: list[str] = []
     if artifacts:
         for artifact in artifacts:
             for part in artifact.parts:
-                if isinstance(part.root, TextPart):
+                if isinstance(part.root, TextPart) and part.root.text:
                     text_parts.append(part.root.text)
-    if any_content_expected and (not text_parts):
+    if any_content_expected and not text_parts:
         _handle_exception(f"Received no text results from the agent after it executed {task_description}.")
-    test_case_generation_results = "\n".join(text_parts)
-    return test_case_generation_results
+
+    return text_parts
+
+
+def _get_model_from_artifacts[T: JsonSerializableModel](artifacts: list[Artifact] | None, task_description: str, model_type: type[T]
+                                                        ) -> T | AgentExecutionError | None:
+    """Extract text content from artifacts and parse it as a model.
+
+    Args:
+        artifacts: List of artifacts from the agent response.
+        task_description: Description of the task for error messages.
+        model_type: The expected model type to parse the content as.
+
+    Returns:
+        Either the parsed model of type T, or an AgentExecutionError if the agent returned an error.
+
+    Raises:
+        HTTPException: If no text content is found in artifacts or parsing fails.
+    """
+    text_parts = _get_text_content_from_artifacts(artifacts, task_description)
+    if len(text_parts) != 1:
+        _handle_exception(
+            f"Expected exactly one text artifact for model parsing in task '{task_description}', but received {len(text_parts)}.")
+    text_content = text_parts[0]
+
+    # First, try to parse as AgentExecutionError
+    try:
+        error = AgentExecutionError.model_validate_json(text_content)
+        logger.warning(f"Agent returned an execution error for task '{task_description}': {error.error_message}")
+        return error
+    except ValidationError:
+        # Not an AgentExecutionError, continue with model parsing
+        pass
+
+    # Parse as the expected model type
+    try:
+        return model_type.model_validate_json(text_content)
+    except Exception as e:
+        truncated_text = text_content[:500] + ("..." if len(text_content) > 500 else "")
+        _handle_exception(
+            f"Failed to parse agent response for task '{task_description}' as {model_type.__name__}. "
+            f"Content was: {truncated_text}. Error: {e}"
+        )
 
 
 def _get_file_contents_from_artifacts(artifacts: list[Artifact] | None) -> list[FileWithBytes]:

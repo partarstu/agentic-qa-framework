@@ -29,16 +29,13 @@ def _get_embedding_model() -> SentenceTransformer:
     global _embedding_model
     if _embedding_model is None:
         logger.info(f"Initializing embedding service with model: {_model_name}")
-        # Use tokenizer_kwargs to fix Mistral tokenizer regex pattern issue
-        # See: https://huggingface.co/mistralai/Mistral-Small-3.1-24B-Instruct-2503/discussions/84
-        tokenizer_kwargs = {"fix_mistral_regex": True}
 
         if _model_path and os.path.exists(_model_path) and os.listdir(_model_path):
             logger.info(f"Loading embedding model from local path: {_model_path}")
-            _embedding_model = SentenceTransformer(_model_path, tokenizer_kwargs=tokenizer_kwargs)
+            _embedding_model = SentenceTransformer(_model_path)
         else:
             logger.info(f"Model not found locally at {_model_path}, downloading: {_model_name}")
-            _embedding_model = SentenceTransformer(_model_name, tokenizer_kwargs=tokenizer_kwargs)
+            _embedding_model = SentenceTransformer(_model_name)
         logger.info("Embedding model loaded successfully")
     return _embedding_model
 

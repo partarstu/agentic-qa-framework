@@ -1,0 +1,17 @@
+# SPDX-FileCopyrightText: 2025 Taras Paruta (partarstu@gmail.com)
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# Dockerfile template for a new agent.
+# Replace <agent_name> with your agent's folder name (e.g., requirements_review).
+
+FROM agentic-qa-base:latest
+
+ARG WORK_DIR=/app
+WORKDIR ${WORK_DIR}
+
+COPY agents/<agent_name>/ ${WORK_DIR}/agents/<agent_name>
+COPY common/ ${WORK_DIR}/common
+COPY config.py ${WORK_DIR}/config.py
+
+CMD gunicorn -w 1 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT agents.<agent_name>.main:app

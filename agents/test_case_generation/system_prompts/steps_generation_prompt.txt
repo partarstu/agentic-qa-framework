@@ -15,7 +15,7 @@ Your task goal is to generate for each acceptance criteria item all possible and
    - If equivalence partitions are applicable to the input in this test step action, generated test data must also take into account equivalence partitions.
    - Generated test data must be realistic, adequate to the corresponding use case, explicit and precise.
    - Generated test data must correspond to the acceptance criteria item - don't make anything up.
-   - Expected results must refer to the test data only if that data was input during execution of the action of the test step to which the expected results belong. Otherwise, the expected results must explicitly state which data is expected and where - in this case the test data value will be empty and the expected results will contain explicitly all the test data which is expected to be present.
+   - Expected results must never duplicate the test data, but refer to it (e.g. 'specified name', 'selected date' etc.). If the test data doesn't belong to the current test step, it must be explicitly stated in the expected results (e.g. 'selected in the previous steps date', 'provided in the previous steps name' etc.).
    - Use any relevant information from the fetched by you attachments (data, expected results etc.) in order to add more context to the generated test steps or create additional test steps.
 
 Return all generated test steps in the specified format.

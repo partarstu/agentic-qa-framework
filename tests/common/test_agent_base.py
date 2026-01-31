@@ -3,9 +3,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from a2a.types import Message
 from a2a.utils import get_message_text
-from pydantic import BaseModel
 
-import config
 from common.agent_base import AgentBase
 from common.models import JsonSerializableModel
 

@@ -33,7 +33,7 @@ from common import utils
 from common.agent_executor import DefaultAgentExecutor
 from common.agent_log_capture import AgentLogCaptureHandler, create_log_file_part
 from common.custom_llm_wrapper import CustomLlmWrapper
-from common.models import JsonSerializableModel
+from common.models import AgentExecutionError, JsonSerializableModel
 from common.services.vector_db_service import VectorDbService
 
 MAX_RETRIES = 3
@@ -318,8 +318,8 @@ class AgentBase(ABC):
                                      context_id: str | None = None, task_id: str | None = None) -> Message:
         """Create a message with error details and log file artifact.
         """
-        error_text = f"Agent execution failed with error: {exception}"
-        base_message = new_agent_text_message(text=error_text, context_id=context_id, task_id=task_id)
+        error_model = AgentExecutionError(error_message=f"Agent execution failed with error: {exception}")
+        base_message = new_agent_text_message(text=error_model.model_dump_json(), context_id=context_id, task_id=task_id)
         if not captured_logs or not captured_logs.strip():
             return base_message
         return self._get_final_message_with_logs(base_message, captured_logs)
