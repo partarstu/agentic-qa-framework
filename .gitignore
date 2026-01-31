@@ -13,3 +13,6 @@ substitutions.yaml
 test_main.py
 **/node_modules/
 orchestrator/static/
+bandit-report.json
+coverage.xml
+test-results.xml

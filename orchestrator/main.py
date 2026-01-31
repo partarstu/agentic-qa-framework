@@ -22,10 +22,12 @@ from a2a.types import (
     FileWithBytes,
     JSONRPCErrorResponse,
     Message,
+    Part,
+    Role,
     Task,
     TaskIdParams,
     TaskState,
-    TextPart, Role, Part,
+    TextPart,
 )
 from a2a.utils import get_message_text, new_agent_text_message
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Security

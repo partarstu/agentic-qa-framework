@@ -29,7 +29,7 @@ def _get_embedding_model() -> SentenceTransformer:
     global _embedding_model
     if _embedding_model is None:
         logger.info(f"Initializing embedding service with model: {_model_name}")
-        
+
         if _model_path and os.path.exists(_model_path) and os.listdir(_model_path):
             logger.info(f"Loading embedding model from local path: {_model_path}")
             _embedding_model = SentenceTransformer(_model_path)

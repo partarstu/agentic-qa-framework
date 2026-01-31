@@ -25,7 +25,6 @@ from orchestrator.main import (
     _get_text_content_from_artifacts,
 )
 
-
 # =============================================================================
 # Helper Functions and Fixtures
 # =============================================================================
@@ -360,7 +359,7 @@ class TestGetModelFromArtifacts:
 
     def test_prioritizes_agent_execution_error_over_model(self):
         """Test that AgentExecutionError is detected before attempting model parsing.
-        
+
         This ensures that if an agent returns an error in the expected JSON format,
         it's properly detected even if the error JSON might also be valid for the
         target model (unlikely but possible with permissive schemas).
@@ -612,7 +611,7 @@ class TestExecuteSingleTestMultipleTextParts:
 
             from orchestrator.main import _execute_single_test
 
-            result = await _execute_single_test("agent-1", test_case, "ui")
+            await _execute_single_test("agent-1", test_case, "ui")
 
             # Verify that the extractor was called with joined text parts
             mock_extractor_instance.run.assert_called_once()
