@@ -322,8 +322,6 @@ Present a summary of the changes made:
 >
 > Proceeding to commit these changes."
 
-**Note**: Only stop and wait for user approval if there were significant manual fixes, controversial changes, or if the user previously indicated they want to review before committing.
-
 If the user requests modifications:
 
 1. Apply the requested changes
