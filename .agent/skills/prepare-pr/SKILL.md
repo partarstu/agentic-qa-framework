@@ -30,13 +30,14 @@ Do NOT ask for confirmation on routine steps that complete successfully (e.g., l
 The workflow:
 
 1. Runs linting (ruff) and auto-fixes issues
-2. Runs unit tests and assists with fixing failures
-3. Runs security scan (bandit) and dependency vulnerability check (pip-audit)
-4. Analyzes changes against `main` branch and updates README documentation
-5. Presents all changes for user review and approval
-6. Commits approved changes
-7. Creates a clean `temp` branch from `main` with all changes squashed into a single commit
-8. Creates a descriptive pull request from the `temp` branch
+2. Verifies new files have the required license header
+3. Runs unit tests and assists with fixing failures
+4. Runs security scan (bandit) and dependency vulnerability check (pip-audit)
+5. Analyzes changes against `main` branch and updates README documentation
+6. Presents all changes for user review and approval
+7. Commits approved changes
+8. Creates a clean `temp` branch from `main` with all changes squashed into a single commit
+9. Creates a descriptive pull request from the `temp` branch
 
 ## Prerequisites
 
@@ -72,7 +73,65 @@ If there are unfixable issues that ruff reports:
 3. Apply fixes based on user guidance
 4. Re-run `ruff check .` until no issues remain
 
-### Step 2: Run Unit Tests and Fix Any Failures
+### Step 2: Verify License Headers on New Files
+
+All new Python files must include the SPDX license header at the top. This step identifies new files and ensures they have the required header.
+
+#### 2.1: Identify New Python Files
+
+Find all new Python files added in the current branch compared to `main`:
+
+```powershell
+# Fetch latest main branch
+git fetch origin main
+
+# List new Python files (Added files only)
+git diff --name-only --diff-filter=A origin/main...HEAD -- "*.py"
+```
+
+#### 2.2: Check Each File for License Header
+
+For each new `.py` file, verify it starts with the SPDX license header:
+
+```
+# SPDX-FileCopyrightText: 2025 Taras Paruta (partarstu@gmail.com)
+#
+# SPDX-License-Identifier: Apache-2.0
+```
+
+Check the first few lines of each file:
+
+```powershell
+# For each new file, check if it has the license header
+# Example: Get-Content -Path "path/to/file.py" -Head 3
+```
+
+#### 2.3: Auto-Add Missing License Headers
+
+If any new Python files are missing the license header:
+
+1. **Automatically prepend** the license header to the file
+2. The header format is:
+   ```python
+   # SPDX-FileCopyrightText: 2025 Taras Paruta (partarstu@gmail.com)
+   #
+   # SPDX-License-Identifier: Apache-2.0
+   ```
+3. Add an empty line after the header before any existing content
+4. Log which files were updated
+
+**Files to Skip:**
+- `__init__.py` files that are empty
+- Files in `.venv/`, `node_modules/`, or other dependency directories
+- Files that already have the header
+
+If there are issues determining whether a file should have a header (e.g., generated files, third-party code):
+
+1. **STOP** and present the file list to the user
+2. **ASK** the user which files should receive the license header
+3. Apply headers based on user guidance
+
+### Step 3: Run Unit Tests and Fix Any Failures
 
 Run the complete test suite:
 
@@ -97,7 +156,7 @@ For running tests with coverage (as in CI):
 pytest tests/ --cov=. --cov-report=term-missing -v
 ```
 
-### Step 3: Run Security and Dependency Checks
+### Step 4: Run Security and Dependency Checks
 
 #### 3.1: Run Security Scan (Bandit)
 
@@ -142,7 +201,7 @@ If vulnerabilities are found:
     - Accept the risk with justification
 3. If updating, modify `requirements.txt` and re-run `pip-audit --desc`
 
-### Step 4: Analyze Changes and Update Documentation
+### Step 5: Analyze Changes and Update Documentation
 
 This step ensures the README and other documentation accurately reflect the current state of the code.
 
@@ -238,7 +297,7 @@ For each skill, consider whether the changes affect:
 
 If no skill updates are needed (e.g., changes don't affect documented patterns), explicitly note this and proceed.
 
-### Step 5: Review All Changes with User
+### Step 6: Review All Changes with User
 
 After all checks pass and documentation is updated, show the user all modifications made:
 
@@ -271,7 +330,7 @@ If the user requests modifications:
 2. Re-run any relevant checks (linting, tests, etc.)
 3. Present the updated changes for approval again
 
-### Step 6: Commit and Push All Changes
+### Step 7: Commit and Push All Changes
 
 After all checks pass, stage, commit, and push all changes:
 
@@ -294,7 +353,7 @@ You may need separate commits for different types of changes:
 - `fix: resolve failing unit tests` - For test fixes
 - `docs: update README with latest changes` - For documentation updates
 
-### Step 7: Create Clean Temp Branch with Squashed Changes
+### Step 8: Create Clean Temp Branch with Squashed Changes
 
 This step creates a clean branch from `main` with all your changes squashed into a single commit. This ensures a clean PR history.
 
@@ -336,9 +395,9 @@ git push origin --delete $currentBranch 2>$null
 
 **Note**: From this point forward, all actions will be performed on the `temp` branch. The original branch has been deleted.
 
-### Step 8: Create Pull Request
+### Step 9: Create Pull Request
 
-Using the change analysis from Step 4, create the pull request from the `temp` branch.
+Using the change analysis from Step 5, create the pull request from the `temp` branch.
 
 #### 8.1: Verify You're on Temp Branch
 
@@ -399,6 +458,7 @@ Before creating the PR, ensure:
 
 - [ ] `ruff check .` returns no errors
 - [ ] `ruff format . --check` returns no formatting issues
+- [ ] All new Python files have the SPDX license header
 - [ ] `pytest tests/ -v` - all tests pass
 - [ ] `bandit` - no high/medium security issues (or they're documented)
 - [ ] `pip-audit` - no critical vulnerabilities (or they're documented)
