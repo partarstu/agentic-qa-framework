@@ -1,6 +1,6 @@
 ---
-name: Adding a New Orchestrator Workflow
-description: Step-by-step guide for adding new workflow endpoints to the QuAIA orchestrator
+name: adding-orchestrator-workflow
+description: Adds new workflow endpoints to the QuAIA orchestrator. Use when creating new FastAPI endpoints that coordinate agent tasks, handle webhooks, or expose new API functionality.
 ---
 
 # Adding a New Orchestrator Workflow
@@ -31,81 +31,17 @@ A typical orchestrator workflow:
 
 If your endpoint accepts structured input, create a request model in `common/models.py`:
 
-```python
-class <WorkflowName>Request(JsonSerializableModel):
-    """Request to trigger <workflow description>."""
-    
-    field_name: str = Field(description="Description of this field")
-    # Add other required fields
-```
+📄 **Template:** [resources/models_template.py](resources/models_template.py)
 
 ### Step 2: Define the Response Model (if needed)
 
-If the workflow returns structured data beyond simple status messages, add a response model:
-
-```python
-class <WorkflowName>Result(BaseAgentResult):
-    """Result from <workflow description>."""
-    
-    result_field: str = Field(description="Description of this field")
-    # Add other fields as needed
-```
+If the workflow returns structured data beyond simple status messages, add a response model (also in the template above).
 
 ### Step 3: Create the Endpoint Function
 
-Add your endpoint in `orchestrator/main.py`. Follow this pattern:
+Add your endpoint in `orchestrator/main.py`:
 
-```python
-# noinspection PyUnusedLocal
-@orchestrator_app.post("/<endpoint-path>")
-async def <endpoint_function_name>(request: <RequestModel>, api_key: str = Depends(_validate_api_key)):
-    """
-    Brief description of what this endpoint does.
-    
-    Args:
-        request: The request payload.
-        api_key: API key for authentication (automatically validated).
-        
-    Returns:
-        Dictionary with status message and any relevant data.
-    """
-    logger.info(f"Received request for <workflow description>: {request}")
-    
-    try:
-        # 1. Extract data from request
-        data = request.field_name
-        
-        # 2. Send task to agent
-        task_description = "<Description for agent selection>"
-        completed_task = await _send_task_to_agent(
-            f"<Task payload for agent>",  # What the agent should process
-            task_description              # Used for agent selection
-        )
-        
-        # 3. Validate and extract results
-        _validate_task_status(completed_task, task_description)
-        received_artifacts = _get_artifacts_from_task(completed_task, task_description)
-        
-        # 4. Parse results based on expected format
-        # Option A: Get raw text
-        text_parts = _get_text_content_from_artifacts(received_artifacts, task_description)
-        
-        # Option B: Parse as model
-        result = _get_model_from_artifacts(received_artifacts, task_description, <ResultModel>)
-        
-        # 5. Handle AgentExecutionError if using _get_model_from_artifacts
-        if isinstance(result, AgentExecutionError):
-            _handle_exception(f"Workflow failed: {result.error_message}")
-        
-        # 6. Optionally trigger follow-up workflows
-        # await _some_follow_up_workflow(result)
-        
-        logger.info(f"<Workflow name> completed successfully")
-        return {"message": "Workflow completed successfully", "result": result}
-        
-    except Exception as e:
-        _handle_exception(f"<Workflow name> failed: {e}")
-```
+📄 **Template:** [resources/endpoint_template.py](resources/endpoint_template.py)
 
 ### Step 4: Helper Functions Reference
 
@@ -165,68 +101,13 @@ _handle_exception(error_message: str, status_code: int = 500)
 
 For workflows that involve multiple agents in sequence:
 
-```python
-@orchestrator_app.post("/multi-step-workflow")
-async def multi_step_workflow(request: Request, api_key: str = Depends(_validate_api_key)):
-    """Example of a multi-agent workflow."""
-    
-    # Step 1: First agent task
-    step1_task = await _send_task_to_agent(
-        "Input for step 1",
-        "First processing step"
-    )
-    step1_result = _get_model_from_artifacts(
-        _get_artifacts_from_task(step1_task, "Step 1"),
-        "Step 1",
-        Step1ResultModel
-    )
-    
-    if isinstance(step1_result, AgentExecutionError):
-        _handle_exception(f"Step 1 failed: {step1_result.error_message}")
-    
-    # Step 2: Second agent task using results from step 1
-    step2_task = await _send_task_to_agent(
-        f"Process these results: {step1_result}",
-        "Second processing step"
-    )
-    # ... parse step2 results ...
-    
-    return {"message": "Multi-step workflow completed"}
-```
+📄 **Example:** [examples/multi_agent_workflow.py](examples/multi_agent_workflow.py)
 
 ### Step 6: Parallel Agent Execution
 
 For workflows that can process items in parallel:
 
-```python
-async def _process_items_in_parallel(items: list[SomeItem]) -> list[Result]:
-    """Process multiple items using parallel agent tasks."""
-    
-    async def _process_single_item(item: SomeItem) -> Result:
-        """Helper coroutine for processing a single item."""
-        task = await _send_task_to_agent(
-            item.model_dump_json(),
-            f"Process item {item.id}"
-        )
-        # Parse and return result
-        return _parse_result(task)
-    
-    # Execute all tasks in parallel
-    results = await asyncio.gather(
-        *[_process_single_item(item) for item in items],
-        return_exceptions=True  # Continue on individual failures
-    )
-    
-    # Filter successful results and log failures
-    successful_results = []
-    for i, result in enumerate(results):
-        if isinstance(result, Exception):
-            logger.error(f"Failed to process item {i}: {result}")
-        else:
-            successful_results.append(result)
-    
-    return successful_results
-```
+📄 **Example:** [examples/parallel_execution.py](examples/parallel_execution.py)
 
 ### Step 7: Using Execution Lock (Optional)
 
@@ -282,107 +163,13 @@ Description of what this workflow does.
 
 Create test cases in `tests/orchestrator/test_endpoints.py` or a new file:
 
-```python
-from unittest.mock import AsyncMock, MagicMock, patch
-
-import pytest
-from fastapi.testclient import TestClient
-
-from orchestrator.main import orchestrator_app
-
-
-@pytest.fixture
-def client():
-    return TestClient(orchestrator_app)
-
-
-@pytest.fixture
-def mock_api_key(monkeypatch):
-    """Allow requests without API key check."""
-    monkeypatch.setattr("orchestrator.main._validate_api_key", lambda x=None: None)
-
-
-@pytest.mark.asyncio
-async def test_<workflow_name>_success(client, mock_api_key):
-    with patch("orchestrator.main._send_task_to_agent") as mock_send:
-        # Setup mock response
-        mock_task = MagicMock()
-        mock_task.status.state = "completed"
-        mock_task.artifacts = [...]  # Mock artifacts
-        mock_send.return_value = mock_task
-        
-        response = client.post(
-            "/<endpoint-path>",
-            json={"field_name": "value"}
-        )
-        
-        assert response.status_code == 200
-        assert "message" in response.json()
-
-
-@pytest.mark.asyncio
-async def test_<workflow_name>_agent_error(client, mock_api_key):
-    with patch("orchestrator.main._send_task_to_agent") as mock_send:
-        mock_send.side_effect = Exception("Agent unavailable")
-        
-        response = client.post(
-            "/<endpoint-path>",
-            json={"field_name": "value"}
-        )
-        
-        assert response.status_code == 500
-```
+📄 **Example:** [examples/test_endpoint_example.py](examples/test_endpoint_example.py)
 
 ## Complete Workflow Example
 
-Here's a complete example of a simple workflow:
+For a full example including models and endpoint:
 
-```python
-# In common/models.py
-class DataProcessingRequest(JsonSerializableModel):
-    """Request to process data items."""
-    project_key: str = Field(description="The project to process data for")
-    item_ids: list[str] = Field(description="List of item IDs to process")
-
-
-class DataProcessingResult(BaseAgentResult):
-    """Result of data processing."""
-    processed_count: int = Field(description="Number of items processed")
-    results: list[str] = Field(description="Processing results")
-
-
-# In orchestrator/main.py
-@orchestrator_app.post("/process-data")
-async def process_data(request: DataProcessingRequest, api_key: str = Depends(_validate_api_key)):
-    """
-    Process data items for a project.
-    """
-    logger.info(f"Starting data processing for project {request.project_key}")
-    
-    try:
-        task_description = "Process data items"
-        completed_task = await _send_task_to_agent(
-            request.model_dump_json(),
-            task_description
-        )
-        
-        _validate_task_status(completed_task, task_description)
-        artifacts = _get_artifacts_from_task(completed_task, task_description)
-        result = _get_model_from_artifacts(artifacts, task_description, DataProcessingResult)
-        
-        if isinstance(result, AgentExecutionError):
-            _handle_exception(f"Data processing failed: {result.error_message}")
-        
-        logger.info(f"Data processing completed: {result.processed_count} items")
-        return {
-            "message": "Data processing completed",
-            "processed_count": result.processed_count,
-            "results": result.results
-        }
-        
-    except Exception as e:
-        _handle_exception(f"Data processing failed: {e}")
-```
+📄 **Example:** [examples/complete_workflow.py](examples/complete_workflow.py)
 
 ## Verification Checklist
 

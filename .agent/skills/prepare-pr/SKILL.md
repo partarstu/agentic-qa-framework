@@ -1,26 +1,34 @@
 ---
-name: Prepare PR
-description: Comprehensive workflow to run all CI checks, fix issues, and create a pull request with automated analysis
+name: prepare-pr
+description: Prepares code for a pull request by running linting (ruff), tests, security scans (bandit), and dependency checks (pip-audit). Use when ready to create a PR or before committing changes.
 ---
 
 # Prepare Pull Request
 
-This skill provides a comprehensive workflow to prepare your code for a pull request. It runs all CI checks locally, fixes any issues, and creates a well-documented pull request.
+This skill provides a comprehensive workflow to prepare your code for a pull request. It runs all CI checks locally, fixes any issues, and
+creates a well-documented pull request.
 
 ## ⚠️ CRITICAL: User Intervention Policy
 
-**IMPORTANT**: If at ANY step during this workflow user intervention is required (e.g., manual fixes needed, decisions to be made, approval required), you MUST:
+**IMPORTANT**: This workflow should proceed **autonomously** when steps complete successfully. Only stop and involve the user when:
+
+- **Blockers occur**: Unfixable errors, failing tests, security issues that cannot be auto-resolved
+- **Manual decisions are needed**: Ambiguous situations where multiple valid approaches exist
+- **Approval is required**: Before committing changes or creating the PR
+
+When user intervention IS needed, you MUST:
 
 1. **STOP** the workflow execution immediately
 2. **PRESENT** the issue clearly to the user with all relevant context
 3. **ASK** the user for the specific action or decision needed
 4. **WAIT** for user response before continuing
 
-Never proceed autonomously when user input is required. This ensures the user maintains full control over all changes.
+Do NOT ask for confirmation on routine steps that complete successfully (e.g., linting fixes applied, tests passing).
 
 ## Overview
 
 The workflow:
+
 1. Runs linting (ruff) and auto-fixes issues
 2. Runs unit tests and assists with fixing failures
 3. Runs security scan (bandit) and dependency vulnerability check (pip-audit)
@@ -33,6 +41,7 @@ The workflow:
 ## Prerequisites
 
 Ensure the following tools are installed:
+
 - `ruff` - Python linter
 - `bandit` - Security scanner
 - `pip-audit` - Dependency vulnerability checker
@@ -57,6 +66,7 @@ ruff format .
 ```
 
 If there are unfixable issues that ruff reports:
+
 1. **STOP** and present the issues to the user
 2. **ASK** the user how they would like to fix each issue
 3. Apply fixes based on user guidance
@@ -71,11 +81,12 @@ pytest tests/ -v
 ```
 
 If any tests fail:
+
 1. **STOP** and present the failure details to the user
 2. Analyze the failure output and explain the likely cause:
-   - A bug in the new code → Suggest fixing the code
-   - An outdated test → Suggest updating the test
-   - Missing test dependencies → Suggest installing them
+    - A bug in the new code → Suggest fixing the code
+    - An outdated test → Suggest updating the test
+    - Missing test dependencies → Suggest installing them
 3. **ASK** the user which approach they prefer
 4. Apply fixes based on user guidance
 5. Re-run `pytest tests/ -v` until all tests pass
@@ -97,16 +108,19 @@ bandit -r . -x ./tests,./orchestrator/ui,./.venv -f txt
 ```
 
 Review any security findings:
+
 - **High severity**: Must be fixed before PR
 - **Medium severity**: Should be fixed or explicitly justified
 - **Low severity**: Review and fix if reasonable
 
 If any High or Medium severity issues are found:
+
 1. **STOP** and present the findings to the user
 2. **ASK** the user how they would like to address each issue
 3. Apply fixes or add `# nosec` comments based on user guidance
 
 Common fixes:
+
 - Hardcoded passwords → Use environment variables
 - SQL injection risks → Use parameterized queries
 - Insecure random → Use `secrets` module instead of `random`
@@ -120,11 +134,12 @@ pip-audit --desc
 ```
 
 If vulnerabilities are found:
+
 1. **STOP** and present the vulnerabilities to the user
 2. **ASK** the user how to proceed:
-   - Update to a patched version if available
-   - Document in PR description if no fix exists
-   - Accept the risk with justification
+    - Update to a patched version if available
+    - Document in PR description if no fix exists
+    - Accept the risk with justification
 3. If updating, modify `requirements.txt` and re-run `pip-audit --desc`
 
 ### Step 4: Analyze Changes and Update Documentation
@@ -148,15 +163,15 @@ git diff origin/main...HEAD
 
 Review the diff thoroughly and categorize all changes into:
 
-| Category | Description | Examples |
-|----------|-------------|----------|
-| **Features** | New functionality added | New endpoints, new agents, new commands |
-| **Bug Fixes** | Issues that were resolved | Error handling fixes, logic corrections |
-| **Refactoring** | Code improvements without behavior changes | Renaming, restructuring, optimization |
-| **Tests** | New or updated tests | Unit tests, integration tests |
-| **Documentation** | README, docstrings, comments | Updated docs, new examples |
-| **Dependencies** | Added, removed, or updated packages | requirements.txt changes |
-| **Configuration** | Changes to config files, CI/CD | cloudbuild.yaml, ci.yml changes |
+| Category          | Description                                | Examples                                |
+|-------------------|--------------------------------------------|-----------------------------------------|
+| **Features**      | New functionality added                    | New endpoints, new agents, new commands |
+| **Bug Fixes**     | Issues that were resolved                  | Error handling fixes, logic corrections |
+| **Refactoring**   | Code improvements without behavior changes | Renaming, restructuring, optimization   |
+| **Tests**         | New or updated tests                       | Unit tests, integration tests           |
+| **Documentation** | README, docstrings, comments               | Updated docs, new examples              |
+| **Dependencies**  | Added, removed, or updated packages        | requirements.txt changes                |
+| **Configuration** | Changes to config files, CI/CD             | cloudbuild.yaml, ci.yml changes         |
 
 Document this analysis - it will be used for both README updates and PR description.
 
@@ -177,11 +192,51 @@ cat README.md
 ```
 
 If README updates are needed:
-1. **PRESENT** the proposed changes to the user
-2. **ASK** the user to confirm the documentation updates
-3. Apply the approved changes
 
-If no README updates are needed (e.g., only internal refactoring), explicitly note this and proceed.
+1. Apply the necessary documentation updates
+2. Continue to the next step
+
+**Note**: Only stop and ask the user if there are complex documentation decisions (e.g., major restructuring, unclear how to document a feature).
+
+If no README updates are needed (e.g., only internal refactoring), proceed to the next step.
+
+#### 4.4: Identify and Update Relevant Skills
+
+Review the changes to determine if any existing skills in `.agent/skills/` need to be updated:
+
+```powershell
+# List all available skills
+Get-ChildItem -Path ".agent/skills" -Directory | Select-Object Name
+```
+
+For each skill, consider whether the changes affect:
+
+| Skill Component     | When to Update                                              |
+|---------------------|-------------------------------------------------------------|
+| **SKILL.md**        | Workflow steps changed, new prerequisites, updated commands |
+| **resources/**      | Templates, configuration files, or reference docs changed   |
+| **scripts/**        | Helper scripts modified or new automation added             |
+| **examples/**       | Code patterns changed, new examples needed                  |
+
+**Skill Update Checklist:**
+
+1. **Review affected skills**: Identify which skills are impacted
+2. **Verify skill accuracy**: For each potentially affected skill:
+   ```powershell
+   # View the skill's main instruction file
+   cat ".agent/skills/<skill-name>/SKILL.md"
+   
+   # Check if skill has supporting directories
+   Get-ChildItem -Path ".agent/skills/<skill-name>" -Recurse
+   ```
+
+3. **Update skill contents** if needed:
+   - Update SKILL.md instructions if workflow steps changed
+   - Update resource files if templates or configs changed
+   - Update example files if code patterns changed
+   - Update scripts if automation logic changed
+
+If no skill updates are needed (e.g., changes don't affect documented patterns), explicitly note this and proceed.
 
 ### Step 5: Review All Changes with User
 
@@ -198,7 +253,7 @@ git diff
 git diff --cached
 ```
 
-**MANDATORY**: Present the changes to the user and explicitly ask for their approval:
+Present a summary of the changes made:
 
 > "I've made the following changes:
 > - [List of linting fixes]
@@ -206,18 +261,19 @@ git diff --cached
 > - [List of security fixes, if any]
 > - [List of documentation updates, if any]
 >
-> Please review these changes and confirm if you'd like me to commit them. If you want any modifications, please let me know."
+> Proceeding to commit these changes."
 
-**WAIT** for explicit user confirmation before proceeding to the next step. 
+**Note**: Only stop and wait for user approval if there were significant manual fixes, controversial changes, or if the user previously indicated they want to review before committing.
 
 If the user requests modifications:
+
 1. Apply the requested changes
 2. Re-run any relevant checks (linting, tests, etc.)
 3. Present the updated changes for approval again
 
-### Step 6: Commit and Push All Approved Changes
+### Step 6: Commit and Push All Changes
 
-After user approval, stage, commit, and push all changes:
+After all checks pass, stage, commit, and push all changes:
 
 ```powershell
 # Stage all changes
@@ -231,6 +287,7 @@ git push -u origin HEAD
 ```
 
 You may need separate commits for different types of changes:
+
 - `chore: fix ruff linting errors` - For pure formatting/linting fixes
 - `fix: resolve security issues detected by bandit` - For security fixes
 - `chore: update dependencies for security patches` - For dependency updates
@@ -300,112 +357,38 @@ gh pr create --title "<short summary of changes>" --body "<detailed description>
 ```
 
 **PR Title Guidelines**:
+
 - Should be a concise summary (max ~72 characters)
 - Use conventional commit style prefixes when appropriate:
-  - `feat:` for new features
-  - `fix:` for bug fixes  
-  - `refactor:` for code refactoring
-  - `chore:` for maintenance tasks
-  - `docs:` for documentation updates
+    - `feat:` for new features
+    - `fix:` for bug fixes
+    - `refactor:` for code refactoring
+    - `chore:` for maintenance tasks
+    - `docs:` for documentation updates
 
 **PR Body Template** (use the analysis from Step 4):
 
-```markdown
-## Summary
-
-<Brief overview of what this PR accomplishes>
-
-## Changes
-
-### Features
-- <List of new features, if any>
-
-### Bug Fixes
-- <List of bug fixes, if any>
-
-### Refactoring
-- <List of code improvements, if any>
-
-### Tests
-- <List of test changes, if any>
-
-### Documentation
-- <List of documentation updates, if any>
-
-### Other
-- <Any other changes>
-
-## Testing
-- [x] All unit tests pass
-- [x] Linting passes (ruff)
-- [x] Security scan reviewed (bandit)
-- [x] Dependency vulnerabilities checked (pip-audit)
-
-## Notes
-
-<Any additional context, breaking changes, or follow-up work needed>
-```
-
-## Complete Example Workflow
-
-Here's a complete example of running this workflow:
-
-```powershell
-# Step 1: Lint and auto-fix
-ruff check . --fix
-ruff format .
-ruff check .  # Verify no remaining issues
-
-# Step 2: Run tests
-pytest tests/ -v
-
-# Step 3: Security and dependency checks
-bandit -r . -x ./tests,./orchestrator/ui,./.venv -f txt
-pip-audit --desc
-
-# Step 4: Analyze changes and update docs
-git fetch origin main
-git diff origin/main...HEAD
-# Update README.md if needed
-
-# Step 5: Review changes (STOP and ask user)
-git status
-git diff
-
-# Step 6: Commit and push (ONLY after user approval)
-git add -A
-git commit -m "chore: fix code quality issues"
-git push -u origin HEAD
-
-# Step 7: Create temp branch with squashed changes
-$currentBranch = git branch --show-current
-git fetch origin main
-git checkout -b temp origin/main
-git merge --squash $currentBranch
-git commit -m "PR preparation"
-git push -u origin temp
-git branch -D $currentBranch
-git push origin --delete $currentBranch 2>$null
-
-# Step 8: Create PR (from temp branch)
-gh pr create --title "feat: add new feature X" --body "## Summary\n\nAdded feature X...\n\n## Changes\n\n- Added X\n- Fixed Y\n\n## Testing\n\n- [x] All tests pass"
-```
+📄 **Template:** [resources/pr_body_template.md](resources/pr_body_template.md)
 
 ## Troubleshooting
 
 ### Ruff Issues
+
 - **Import sorting conflicts**: Run `ruff check . --fix --select I` for import-only fixes
 - **Line too long**: Either configure ruff to allow longer lines or refactor the code
 
 ### Test Failures
+
 - **Missing fixtures**: Check if pytest plugins are installed (`pytest-asyncio`, etc.)
 - **Import errors**: Ensure virtual environment is activated and dependencies installed
 
 ### Security Findings
+
 - **False positives**: Add `# nosec` comment with justification if the finding is a false positive
 - **Cannot fix**: Document in PR description why the issue cannot be resolved
 
 ### PR Creation Fails
+
 - **Not authenticated**: Run `gh auth login` to authenticate with GitHub
 - **No upstream branch**: Ensure you push the branch first with `git push -u origin HEAD`
 - **Branch behind main**: Rebase with `git rebase origin/main` before creating PR

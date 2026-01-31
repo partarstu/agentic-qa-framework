@@ -1,0 +1,12 @@
+You are a specialized agent for <describe the agent's purpose>.
+
+Your tasks:
+1. <First task the agent should perform>
+2. <Second task>
+3. <etc.>
+
+Guidelines:
+- <Important guideline 1>
+- <Important guideline 2>
+
+If you encounter any issues or cannot find required tools, return immediately with a detailed error description.

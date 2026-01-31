@@ -1,6 +1,6 @@
 ---
-name: Creating a New Agent
-description: Step-by-step guide for creating a new specialized agent in the QuAIA framework
+name: creating-new-agent
+description: Creates new A2A-compliant agents in the QuAIA framework. Use when adding a new specialized agent with custom tools, prompts, and MCP server integrations.
 ---
 
 # Creating a New Agent
@@ -40,18 +40,9 @@ mkdir -p agents/<agent_name>/system_prompts
 
 ### Step 2: Define the Configuration Class
 
-Add a configuration class in `config.py`:
+Add a configuration class in `config.py` using the template:
 
-```python
-class <AgentName>AgentConfig:
-    THINKING_BUDGET = 2000  # Token budget for thinking (0 to disable)
-    OWN_NAME = "<Human-Readable Agent Name>"
-    PORT = int(os.environ.get("PORT", "<unique_port>"))  # e.g., 8008
-    EXTERNAL_PORT = int(os.environ.get("EXTERNAL_PORT", PORT))
-    PROTOCOL = "http"
-    MODEL_NAME = "google-gla:gemini-3-flash-preview"
-    MAX_REQUESTS_PER_TASK = 30  # Maximum tool calls per task
-```
+📄 **Template:** [resources/config_template.py](resources/config_template.py)
 
 **Configuration field descriptions:**
 - `THINKING_BUDGET`: Token budget for chain-of-thought reasoning (0 disables it)
@@ -65,13 +56,7 @@ class <AgentName>AgentConfig:
 
 If the agent returns structured output, add a Pydantic model in `common/models.py`:
 
-```python
-class <AgentOutput>(BaseAgentResult):
-    """Result from <Agent Name> agent."""
-    
-    field_name: str = Field(description="Description of this field")
-    # Add other fields as needed
-```
+📄 **Template:** [resources/output_model_template.py](resources/output_model_template.py)
 
 **Important:** Inherit from `BaseAgentResult` to include the `llm_comments` field for debugging.
 
@@ -79,73 +64,13 @@ class <AgentOutput>(BaseAgentResult):
 
 Create `agents/<agent_name>/prompt.py`:
 
-```python
-# SPDX-FileCopyrightText: 2025 Taras Paruta (partarstu@gmail.com)
-#
-# SPDX-License-Identifier: Apache-2.0
-
-from pathlib import Path
-
-from common import utils
-from common.prompt_base import PromptBase
-
-logger = utils.get_logger("<agent_name>.agent")
-PROMPTS_ROOT = "system_prompts"
-
-
-def _get_prompts_root() -> Path:
-    return Path(__file__).resolve().parent.joinpath(PROMPTS_ROOT)
-
-
-class <AgentName>SystemPrompt(PromptBase):
-    """
-    Loads the main system prompt template for <Agent Name>.
-    """
-
-    def get_script_dir(self) -> Path:
-        return _get_prompts_root()
-
-    def __init__(
-        self,
-        # Add any template variables as constructor parameters
-        template_file_name: str = "main_prompt_template.txt"
-    ):
-        """
-        Initializes the prompt instance.
-
-        Args:
-            template_file_name: The name of the prompt template file.
-        """
-        super().__init__(template_file_name)
-        # Store template variables for formatting
-
-    def get_prompt(self) -> str:
-        """Returns the formatted prompt as a string."""
-        logger.info("Generating <agent_name> system prompt")
-        # Return template with variables substituted
-        return self.template.format(
-            # variable_name=self.variable_name
-        )
-```
+📄 **Template:** [resources/prompt_template.py](resources/prompt_template.py)
 
 ### Step 5: Create the System Prompt Template
 
 Create `agents/<agent_name>/system_prompts/main_prompt_template.txt`:
 
-```text
-You are a specialized agent for <describe the agent's purpose>.
-
-Your tasks:
-1. <First task the agent should perform>
-2. <Second task>
-3. <etc.>
-
-Guidelines:
-- <Important guideline 1>
-- <Important guideline 2>
-
-If you encounter any issues or cannot find required tools, return immediately with a detailed error description.
-```
+📄 **Template:** [resources/system_prompt_template.txt](resources/system_prompt_template.txt)
 
 **Best practices for prompts:**
 - Be specific about the expected workflow
@@ -157,74 +82,7 @@ If you encounter any issues or cannot find required tools, return immediately wi
 
 Create `agents/<agent_name>/main.py`:
 
-```python
-# SPDX-FileCopyrightText: 2025 Taras Paruta (partarstu@gmail.com)
-#
-# SPDX-License-Identifier: Apache-2.0
-
-from pydantic_ai.mcp import MCPServerSSE
-
-import config
-from agents.<agent_name>.prompt import <AgentName>SystemPrompt
-from common import utils
-from common.agent_base import AgentBase
-from common.models import <OutputModel>, <DepsModel>  # Import relevant models
-
-logger = utils.get_logger("<agent_name>_agent")
-
-# Add MCP servers if the agent needs external tools
-# jira_mcp_server = MCPServerSSE(url=config.JIRA_MCP_SERVER_URL, timeout=config.MCP_SERVER_TIMEOUT_SECONDS)
-
-
-class <AgentName>Agent(AgentBase):
-    def __init__(self):
-        instruction_prompt = <AgentName>SystemPrompt(
-            # Pass any template variables
-        )
-        super().__init__(
-            agent_name=config.<AgentName>AgentConfig.OWN_NAME,
-            base_url=config.AGENT_BASE_URL,
-            port=config.<AgentName>AgentConfig.PORT,
-            external_port=config.<AgentName>AgentConfig.EXTERNAL_PORT,
-            protocol=config.<AgentName>AgentConfig.PROTOCOL,
-            model_name=config.<AgentName>AgentConfig.MODEL_NAME,
-            output_type=<OutputModel>,  # The Pydantic model for structured output
-            instructions=instruction_prompt.get_prompt(),
-            mcp_servers=[],  # Add MCP servers here if needed
-            deps_type=<DepsModel>,  # Optional: context/dependencies type
-            description="<Brief description of what this agent does>",
-            tools=[self.<custom_tool>]  # Add custom tools here
-            # vector_db_collection_name="<collection>"  # For RAG-enabled agents
-        )
-
-    def get_thinking_budget(self) -> int:
-        return config.<AgentName>AgentConfig.THINKING_BUDGET
-
-    def get_max_requests_per_task(self) -> int:
-        return config.<AgentName>AgentConfig.MAX_REQUESTS_PER_TASK
-
-    # Define custom tools as methods with docstrings
-    async def <custom_tool>(self, param: str) -> str:
-        """
-        Brief description of what this tool does.
-
-        Args:
-            param: Description of the parameter.
-
-        Returns:
-            Description of the return value.
-        """
-        # Tool implementation
-        return "result"
-
-
-# Create agent instance and expose FastAPI app
-agent = <AgentName>Agent()
-app = agent.a2a_server
-
-if __name__ == "__main__":
-    agent.start_as_server()
-```
+📄 **Template:** [resources/agent_template.py](resources/agent_template.py)
 
 **Key points:**
 - The agent class MUST inherit from `AgentBase`
@@ -237,21 +95,7 @@ if __name__ == "__main__":
 
 Create `agents/<agent_name>/Dockerfile`:
 
-```dockerfile
-# SPDX-FileCopyrightText: 2025 Taras Paruta (partarstu@gmail.com)
-#
-# SPDX-License-Identifier: Apache-2.0
-FROM agentic-qa-base:latest
-
-ARG WORK_DIR=/app
-WORKDIR ${WORK_DIR}
-
-COPY agents/<agent_name>/ ${WORK_DIR}/agents/<agent_name>
-COPY common/ ${WORK_DIR}/common
-COPY config.py ${WORK_DIR}/config.py
-
-CMD gunicorn -w 1 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT agents.<agent_name>.main:app
-```
+📄 **Template:** [resources/dockerfile_template](resources/dockerfile_template)
 
 ### Step 8: Update Cloud Build Configuration (Optional)
 
@@ -265,44 +109,7 @@ If deploying to Google Cloud Run, add build and deploy steps to `cloudbuild.yaml
 
 Create `tests/agents/test_<agent_name>.py`:
 
-```python
-from unittest.mock import MagicMock, patch
-
-import pytest
-
-import config
-from agents.<agent_name>.main import <AgentName>Agent
-
-
-@pytest.fixture
-def mock_config(monkeypatch):
-    monkeypatch.setattr(config.<AgentName>AgentConfig, "OWN_NAME", "Test Agent")
-    monkeypatch.setattr(config.<AgentName>AgentConfig, "PORT", 8099)
-    monkeypatch.setattr(config.<AgentName>AgentConfig, "EXTERNAL_PORT", 8099)
-    monkeypatch.setattr(config.<AgentName>AgentConfig, "PROTOCOL", "http")
-    monkeypatch.setattr(config.<AgentName>AgentConfig, "MODEL_NAME", "test")
-    monkeypatch.setattr(config.<AgentName>AgentConfig, "THINKING_BUDGET", 100)
-    monkeypatch.setattr(config.<AgentName>AgentConfig, "MAX_REQUESTS_PER_TASK", 5)
-    monkeypatch.setattr(config, "AGENT_BASE_URL", "http://localhost")
-
-
-@patch("agents.<agent_name>.main.<AgentName>SystemPrompt")
-@patch("agents.<agent_name>.main.AgentBase.__init__")
-def test_agent_init(mock_super_init, mock_prompt_cls, mock_config):
-    mock_prompt_instance = MagicMock()
-    mock_prompt_instance.get_prompt.return_value = "system prompt"
-    mock_prompt_cls.return_value = mock_prompt_instance
-
-    agent = <AgentName>Agent()
-
-    mock_super_init.assert_called_once()
-    _, kwargs = mock_super_init.call_args
-    assert kwargs["agent_name"] == "Test Agent"
-    assert kwargs["instructions"] == "system prompt"
-
-    assert agent.get_thinking_budget() == 100
-    assert agent.get_max_requests_per_task() == 5
-```
+📄 **Example:** [examples/test_agent_example.py](examples/test_agent_example.py)
 
 ## Verification Checklist
 

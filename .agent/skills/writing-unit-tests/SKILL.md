@@ -1,6 +1,6 @@
 ---
-name: Writing Unit Tests
-description: Comprehensive guide for writing unit tests for agents and orchestrator components in QuAIA
+name: writing-unit-tests
+description: Writes unit tests for agents, orchestrator logic, and common utilities in the QuAIA framework using pytest. Use when adding tests for new or existing components.
 ---
 
 # Writing Unit Tests
@@ -31,24 +31,7 @@ tests/
 
 The root `tests/conftest.py` sets up global test configuration:
 
-```python
-import os
-import sys
-from unittest.mock import MagicMock
-
-# Set dummy API keys for test environment
-os.environ["OPENAI_API_KEY"] = "dummy"
-os.environ["GOOGLE_API_KEY"] = "dummy"
-
-# Mock heavy dependencies to avoid loading during test collection
-mock_sentence_transformers = MagicMock()
-sys.modules["sentence_transformers"] = mock_sentence_transformers
-
-import pytest  # noqa: E402
-
-# Add project root to path
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-```
+📄 **Template:** [resources/conftest_template.py](resources/conftest_template.py)
 
 ## Writing Agent Tests
 
@@ -59,348 +42,21 @@ Agent tests verify:
 2. Custom tools work as expected
 3. Thinking budget and request limits are properly returned
 
-```python
-# tests/agents/test_<agent_name>.py
-
-from unittest.mock import MagicMock, patch
-
-import pytest
-
-import config
-from agents.<agent_name>.main import <AgentName>Agent
-
-
-@pytest.fixture
-def mock_config(monkeypatch):
-    """Mock configuration values for testing."""
-    monkeypatch.setattr(config.<AgentName>AgentConfig, "OWN_NAME", "Test Agent")
-    monkeypatch.setattr(config.<AgentName>AgentConfig, "PORT", 8099)
-    monkeypatch.setattr(config.<AgentName>AgentConfig, "EXTERNAL_PORT", 8099)
-    monkeypatch.setattr(config.<AgentName>AgentConfig, "PROTOCOL", "http")
-    monkeypatch.setattr(config.<AgentName>AgentConfig, "MODEL_NAME", "test")
-    monkeypatch.setattr(config.<AgentName>AgentConfig, "THINKING_BUDGET", 100)
-    monkeypatch.setattr(config.<AgentName>AgentConfig, "MAX_REQUESTS_PER_TASK", 5)
-    monkeypatch.setattr(config, "AGENT_BASE_URL", "http://localhost")
-    # Add any agent-specific config mocks here
-
-
-@patch("agents.<agent_name>.main.<AgentName>SystemPrompt")
-@patch("agents.<agent_name>.main.AgentBase.__init__")
-def test_agent_init(mock_super_init, mock_prompt_cls, mock_config):
-    """Test agent initializes with correct configuration."""
-    mock_prompt_instance = MagicMock()
-    mock_prompt_instance.get_prompt.return_value = "system prompt"
-    mock_prompt_cls.return_value = mock_prompt_instance
-
-    agent = <AgentName>Agent()
-
-    mock_super_init.assert_called_once()
-    _, kwargs = mock_super_init.call_args
-    assert kwargs["agent_name"] == "Test Agent"
-    assert kwargs["instructions"] == "system prompt"
-
-    assert agent.get_thinking_budget() == 100
-    assert agent.get_max_requests_per_task() == 5
-```
-
-### Testing Custom Agent Tools
-
-For agents with custom tools, test them separately:
-
-```python
-@pytest.mark.asyncio
-async def test_custom_tool_success(mock_config):
-    """Test custom tool returns expected result."""
-    with patch("agents.<agent_name>.main.AgentBase.__init__"):
-        agent = <AgentName>Agent()
-        
-        # Mock any external dependencies the tool uses
-        with patch("agents.<agent_name>.main.external_service") as mock_service:
-            mock_service.call.return_value = "expected result"
-            
-            result = await agent.custom_tool("input")
-            
-            assert result == "expected result"
-            mock_service.call.assert_called_once_with("input")
-
-
-@pytest.mark.asyncio
-async def test_custom_tool_handles_error(mock_config):
-    """Test custom tool handles errors gracefully."""
-    with patch("agents.<agent_name>.main.AgentBase.__init__"):
-        agent = <AgentName>Agent()
-        
-        with patch("agents.<agent_name>.main.external_service") as mock_service:
-            mock_service.call.side_effect = Exception("Service unavailable")
-            
-            with pytest.raises(RuntimeError):
-                await agent.custom_tool("input")
-```
+📄 **Example:** [examples/test_agent_example.py](examples/test_agent_example.py)
 
 ## Writing Orchestrator Tests
 
 ### Testing Orchestrator Logic Functions
 
-```python
-# tests/orchestrator/test_orchestrator_logic.py
-
-from unittest.mock import AsyncMock, MagicMock, patch
-
-import pytest
-from a2a.types import AgentCapabilities, AgentCard
-
-import config
-from orchestrator.main import (
-    AgentStatus,
-    BrokenReason,
-    _discover_agents,
-    _fetch_agent_card,
-    _select_agent,
-    agent_registry,
-    discovery_agent,
-)
-
-
-@pytest.fixture
-async def clear_registry():
-    """Clear agent registry before and after each test."""
-    agent_registry._cards.clear()
-    agent_registry._statuses.clear()
-    agent_registry._broken_reasons.clear()
-    agent_registry._stuck_task_ids.clear()
-    yield
-    agent_registry._cards.clear()
-    agent_registry._statuses.clear()
-    agent_registry._broken_reasons.clear()
-    agent_registry._stuck_task_ids.clear()
-
-
-@pytest.fixture
-def mock_agent_card():
-    """Create a mock AgentCard for testing."""
-    return AgentCard(
-        name="Test Agent",
-        description="Test description",
-        url="http://localhost:8001",
-        version="1.0.0",
-        capabilities=AgentCapabilities(streaming=False),
-        skills=[],
-        defaultInputModes=['text'],
-        defaultOutputModes=['text']
-    )
-
-
-@pytest.mark.asyncio
-async def test_fetch_agent_card_success(mock_agent_card):
-    """Test successful agent card fetch."""
-    with patch("httpx.AsyncClient") as mock_client_cls:
-        mock_client = AsyncMock()
-        mock_client_cls.return_value.__aenter__.return_value = mock_client
-
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = mock_agent_card.model_dump()
-        mock_client.get.return_value = mock_response
-
-        card = await _fetch_agent_card("http://localhost:8001")
-        assert card.name == "Test Agent"
-
-
-@pytest.mark.asyncio
-async def test_fetch_agent_card_failure():
-    """Test agent card fetch handles connection errors."""
-    with patch("httpx.AsyncClient") as mock_client_cls:
-        mock_client = AsyncMock()
-        mock_client_cls.return_value.__aenter__.return_value = mock_client
-        mock_client.get.side_effect = Exception("Connection error")
-
-        card = await _fetch_agent_card("http://bad-url")
-        assert card is None
-```
+📄 **Example:** [examples/test_orchestrator_logic.py](examples/test_orchestrator_logic.py)
 
 ### Testing Artifact Parsing Functions
 
-```python
-# tests/orchestrator/test_parsing_logic.py
-
-from unittest.mock import AsyncMock, patch
-
-import pytest
-from a2a.types import Artifact, FilePart, FileWithBytes, Part, TextPart
-
-from common.models import AgentExecutionError, JsonSerializableModel
-from orchestrator.main import (
-    _get_model_from_artifacts,
-    _get_text_content_from_artifacts,
-)
-
-
-def _create_text_artifact(texts: list[str]) -> Artifact:
-    """Helper to create an artifact with text parts."""
-    parts = [Part(root=TextPart(text=text)) for text in texts]
-    return Artifact(artifactId="test-artifact", parts=parts)
-
-
-def _create_file_artifact(filename: str = "test.txt") -> Artifact:
-    """Helper to create an artifact with a file part."""
-    file_part = FilePart(file=FileWithBytes(name=filename, mimeType="text/plain", bytes=b"content"))
-    return Artifact(artifactId="file-artifact", parts=[Part(root=file_part)])
-
-
-class SampleModel(JsonSerializableModel):
-    """Sample model for testing."""
-    name: str
-    value: int
-
-
-@pytest.fixture
-def mock_error_history():
-    """Mock error_history to prevent asyncio event loop issues."""
-    with patch("orchestrator.main.error_history") as mock:
-        mock.add = AsyncMock()
-        yield mock
-
-
-class TestGetTextContentFromArtifacts:
-    """Tests for _get_text_content_from_artifacts function."""
-
-    def test_single_artifact_single_text_part(self):
-        """Test extracting text from a single artifact with one text part."""
-        artifacts = [_create_text_artifact(["Hello, World!"])]
-        result = _get_text_content_from_artifacts(artifacts, "test task")
-        assert result == ["Hello, World!"]
-
-    def test_multiple_artifacts_multiple_parts(self):
-        """Test extracting text from multiple artifacts."""
-        artifacts = [
-            _create_text_artifact(["Part 1", "Part 2"]),
-            _create_text_artifact(["Part 3"]),
-        ]
-        result = _get_text_content_from_artifacts(artifacts, "test task")
-        assert result == ["Part 1", "Part 2", "Part 3"]
-
-    @pytest.mark.asyncio
-    async def test_empty_artifacts_raises_exception(self, mock_error_history):
-        """Test empty artifacts raises exception when content expected."""
-        from fastapi import HTTPException
-
-        with pytest.raises(HTTPException) as exc_info:
-            _get_text_content_from_artifacts([], "test task", any_content_expected=True)
-        
-        assert exc_info.value.status_code == 500
-
-    def test_empty_artifacts_returns_empty_when_not_expected(self):
-        """Test empty artifacts returns empty list when content not expected."""
-        result = _get_text_content_from_artifacts([], "test task", any_content_expected=False)
-        assert result == []
-
-
-class TestGetModelFromArtifacts:
-    """Tests for _get_model_from_artifacts function."""
-
-    def test_parse_valid_model(self):
-        """Test parsing valid JSON into model."""
-        json_content = '{"name": "test", "value": 42}'
-        artifacts = [_create_text_artifact([json_content])]
-        
-        result = _get_model_from_artifacts(artifacts, "test task", SampleModel)
-        
-        assert isinstance(result, SampleModel)
-        assert result.name == "test"
-        assert result.value == 42
-
-    def test_parse_agent_execution_error(self):
-        """Test AgentExecutionError is correctly recognized."""
-        error_json = '{"error_message": "Something went wrong"}'
-        artifacts = [_create_text_artifact([error_json])]
-        
-        result = _get_model_from_artifacts(artifacts, "test task", SampleModel)
-        
-        assert isinstance(result, AgentExecutionError)
-        assert result.error_message == "Something went wrong"
-
-    @pytest.mark.asyncio
-    async def test_invalid_json_raises_exception(self, mock_error_history):
-        """Test invalid JSON raises exception."""
-        from fastapi import HTTPException
-
-        artifacts = [_create_text_artifact(["not valid json"])]
-        
-        with pytest.raises(HTTPException) as exc_info:
-            _get_model_from_artifacts(artifacts, "test task", SampleModel)
-        
-        assert "failed to parse" in exc_info.value.detail.lower()
-```
+📄 **Example:** [examples/test_parsing_logic.py](examples/test_parsing_logic.py)
 
 ### Testing Endpoint Functions
 
-```python
-# tests/orchestrator/test_endpoints.py
-
-from unittest.mock import AsyncMock, MagicMock, patch
-
-import pytest
-from fastapi.testclient import TestClient
-
-from orchestrator.main import orchestrator_app
-
-
-@pytest.fixture
-def client():
-    """Create test client for orchestrator."""
-    return TestClient(orchestrator_app)
-
-
-@pytest.fixture
-def mock_api_key(monkeypatch):
-    """Bypass API key validation."""
-    monkeypatch.setattr("orchestrator.main._validate_api_key", lambda x=None: None)
-
-
-@pytest.fixture
-def mock_agent_registry():
-    """Mock the agent registry."""
-    with patch("orchestrator.main.agent_registry") as mock:
-        mock.is_empty = AsyncMock(return_value=False)
-        mock.get_all_cards = AsyncMock(return_value={"agent-1": MagicMock()})
-        mock.get_status = AsyncMock(return_value="AVAILABLE")
-        yield mock
-
-
-class TestWorkflowEndpoints:
-    """Tests for orchestrator workflow endpoints."""
-
-    @pytest.mark.asyncio
-    async def test_workflow_endpoint_success(self, client, mock_api_key):
-        """Test successful workflow execution."""
-        with patch("orchestrator.main._send_task_to_agent") as mock_send, \
-             patch("orchestrator.main._get_artifacts_from_task") as mock_artifacts:
-            
-            mock_task = MagicMock()
-            mock_task.status.state = "completed"
-            mock_send.return_value = mock_task
-            mock_artifacts.return_value = [...]  # Mock artifacts
-            
-            response = client.post(
-                "/endpoint-path",
-                json={"field": "value"}
-            )
-            
-            assert response.status_code == 200
-
-    @pytest.mark.asyncio
-    async def test_workflow_endpoint_agent_unavailable(self, client, mock_api_key):
-        """Test workflow handles agent unavailability."""
-        with patch("orchestrator.main._send_task_to_agent") as mock_send:
-            mock_send.side_effect = Exception("No agents available")
-            
-            response = client.post(
-                "/endpoint-path",
-                json={"field": "value"}
-            )
-            
-            assert response.status_code == 500
-```
+📄 **Example:** [examples/test_endpoints.py](examples/test_endpoints.py)
 
 ## Testing Patterns
 
@@ -499,6 +155,12 @@ async def test_status_handling(status, should_succeed, clear_registry):
     # Assert based on should_succeed
 ```
 
+## Test Helper Utilities
+
+Use the provided helper utilities for creating mock objects:
+
+📄 **Template:** [resources/test_helpers.py](resources/test_helpers.py)
+
 ## Running Tests
 
 ### Running All Tests
@@ -535,55 +197,6 @@ pytest -k "test_agent"
 ```bash
 # Ensure pytest-asyncio is configured
 pytest tests/orchestrator/test_orchestrator_logic.py -v
-```
-
-## Test Helper Utilities
-
-### Creating Test Artifacts
-
-```python
-def _create_text_artifact(texts: list[str]) -> Artifact:
-    """Helper to create an artifact with text parts."""
-    parts = [Part(root=TextPart(text=text)) for text in texts]
-    return Artifact(artifactId="test-artifact", parts=parts)
-
-
-def _create_file_artifact(filename: str = "test.txt", content: bytes = b"content") -> Artifact:
-    """Helper to create an artifact with a file part."""
-    file_part = FilePart(
-        file=FileWithBytes(name=filename, mimeType="text/plain", bytes=content)
-    )
-    return Artifact(artifactId="file-artifact", parts=[Part(root=file_part)])
-
-
-def _create_mixed_artifact(text: str, filename: str = "test.txt") -> Artifact:
-    """Helper to create an artifact with both text and file parts."""
-    text_part = Part(root=TextPart(text=text))
-    file_part = Part(root=FilePart(
-        file=FileWithBytes(name=filename, mimeType="text/plain", bytes=b"content")
-    ))
-    return Artifact(artifactId="mixed-artifact", parts=[text_part, file_part])
-```
-
-### Creating Mock Agent Cards
-
-```python
-def create_mock_agent_card(
-    name: str = "Test Agent",
-    url: str = "http://localhost:8001",
-    description: str = "Test description"
-) -> AgentCard:
-    """Create a mock AgentCard for testing."""
-    return AgentCard(
-        name=name,
-        description=description,
-        url=url,
-        version="1.0.0",
-        capabilities=AgentCapabilities(streaming=False),
-        skills=[],
-        defaultInputModes=['text'],
-        defaultOutputModes=['text']
-    )
 ```
 
 ## Verification Checklist
