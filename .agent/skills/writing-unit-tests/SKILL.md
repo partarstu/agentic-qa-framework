@@ -161,44 +161,6 @@ Use the provided helper utilities for creating mock objects:
 
 📄 **Template:** [resources/test_helpers.py](resources/test_helpers.py)
 
-## Running Tests
-
-### Running All Tests
-
-```bash
-# Run all tests
-pytest
-
-# Run with verbose output
-pytest -v
-
-# Run with coverage report
-pytest --cov=. --cov-report=html
-```
-
-### Running Specific Tests
-
-```bash
-# Run tests for a specific module
-pytest tests/agents/
-
-# Run tests for a specific file
-pytest tests/agents/test_requirements_review.py
-
-# Run a specific test function
-pytest tests/orchestrator/test_parsing_logic.py::TestGetModelFromArtifacts::test_parse_valid_model
-
-# Run tests matching a pattern
-pytest -k "test_agent"
-```
-
-### Running Async Tests
-
-```bash
-# Ensure pytest-asyncio is configured
-pytest tests/orchestrator/test_orchestrator_logic.py -v
-```
-
 ## Verification Checklist
 
 After writing tests, verify:
