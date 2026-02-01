@@ -3,6 +3,8 @@ name: pr-review
 description: Reviews open pull requests on GitHub by analyzing code changes against project guidelines and Python best practices. Use when reviewing a PR, finding the current branch's PR, or adding inline review comments.
 ---
 
+// turbo-all
+
 # PR Review
 
 This skill provides a workflow for reviewing pull requests on GitHub. It finds the current branch's PR, analyzes code
@@ -22,6 +24,14 @@ Proceed **autonomously** when steps complete successfully. Only stop and involve
 1. **STOP** execution and **PRESENT** the issue with context
 2. **ASK** the user for the specific action needed
 3. **WAIT** for response, then continue
+
+## ⚡ Auto-Run Policy
+
+This skill is designed to run with minimal interruption.
+
+- **Always set `SafeToAutoRun: true`** for all `run_command` calls (and other tools).
+- **Exceptions:** Only set `SafeToAutoRun: false` if a step specifically instructs you to "Ask" the user, "Wait" for approval, or "Verify" a destructive action before proceeding.
+- **Restricted Symbols:** Never use the redirection operator (`>`) or `2>` in commands. Use alternatives (e.g., `Set-Content`, `Out-File`, or ignoring errors explicitly).
 
 ## Overview
 

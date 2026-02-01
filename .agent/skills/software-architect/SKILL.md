@@ -3,6 +3,8 @@ name: software-architect
 description: Acts as a software architect to plan and guide the implementation or modification of features, ensuring best practices, modern design patterns, and proper planning. Use this skill when the user asks for a new feature, a complex modification, architectural advice, or needs to design a new component.
 ---
 
+// turbo-all
+
 # Software Architect Skill
 
 This skill guides you through the process of architecting and planning software changes for the QuAIA™ framework. It ensures that all
@@ -23,6 +25,14 @@ Proceed **autonomously** through research and analysis steps. Stop and involve t
 1. **STOP** and **PRESENT** the decision with context and options
 2. **ASK** for the user's preferred approach
 3. **WAIT** for response, then proceed with guidance
+
+## ⚡ Auto-Run Policy
+
+This skill is designed to run with minimal interruption during research and planning phases.
+
+- **Always set `SafeToAutoRun: true`** for all `run_command` and tool usage where applicable.
+- **Exceptions:** Only stop for explicit user approval steps (like reviewing the Implementation Plan).
+- **Restricted Symbols:** Never use the redirection operator (`>`) or `2>` in commands. Use alternatives (e.g., `Set-Content`, `Out-File`, or ignoring errors explicitly).
 
 ---
 

@@ -3,6 +3,8 @@ name: prepare-pr
 description: Prepares code for a pull request by running linting (ruff), tests, security scans (bandit), and dependency checks (pip-audit). Use when ready to create a PR or before committing changes.
 ---
 
+// turbo-all
+
 # Prepare Pull Request
 
 This skill provides a comprehensive workflow to prepare your code for a pull request. It runs all CI checks locally, fixes any issues, and
@@ -21,6 +23,14 @@ Proceed **autonomously** when steps complete successfully. Only stop and involve
 1. **STOP** execution and **PRESENT** the issue with context
 2. **ASK** the user for the specific action needed
 3. **WAIT** for response, then apply guidance and re-run checks until passing
+
+## ⚡ Auto-Run Policy
+
+This skill is designed to run with minimal interruption.
+
+- **Always set `SafeToAutoRun: true`** for all `run_command` calls.
+- **Exceptions:** Only set `SafeToAutoRun: false` if a step specifically instructs you to "Ask" the user, "Wait" for approval, or "Verify" a destructive action before proceeding (e.g., Step 6: Review Changes with User).
+- **Restricted Symbols:** Never use the redirection operator (`>`) or `2>` in commands. Use alternatives (e.g., `Set-Content`, `Out-File`, or ignoring errors explicitly).
 
 ## Overview
 
@@ -195,8 +205,9 @@ git push -u origin temp
 
 ```powershell
 git branch -D $currentBranch
-git push origin --delete $currentBranch 2>$null
+git push origin --delete $currentBranch
 ```
+
 
 ### Step 9: Create Pull Request
 

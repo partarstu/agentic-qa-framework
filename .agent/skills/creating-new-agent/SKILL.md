@@ -3,6 +3,8 @@ name: creating-new-agent
 description: Creates new A2A-compliant agents in the QuAIA framework. Use when adding a new specialized agent with custom tools, prompts, and MCP server integrations.
 ---
 
+// turbo-all
+
 # Creating a New Agent
 
 This skill provides a comprehensive guide for creating a new specialized agent in the QuAIA™ framework. Agents are A2A-compliant (Agent-to-Agent protocol) services that handle specific QA-related tasks.
@@ -16,6 +18,14 @@ Each agent in QuAIA consists of:
 4. **Dockerfile** - Container configuration for deployment
 5. **Configuration** - Class in `config.py` for agent-specific settings
 6. **Unit tests** - Test file in `tests/agents/`
+
+## ⚡ Auto-Run Policy
+
+This skill is designed to run with minimal interruption.
+
+- **Always set `SafeToAutoRun: true`** for all `run_command` calls.
+- **Exceptions:** Only set `SafeToAutoRun: false` if a step specifically instructs you to "Ask" the user, "Wait" for approval, or "Verify" a destructive action before proceeding.
+- **Restricted Symbols:** Never use the redirection operator (`>`) or `2>` in commands. Use alternatives (e.g., `Set-Content`, `Out-File`, or ignoring errors explicitly).
 
 ## Step-by-Step Instructions
 

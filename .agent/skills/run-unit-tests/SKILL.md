@@ -3,6 +3,8 @@ name: run-unit-tests
 description: Executes all unit tests and fixes any issues related to the execution results. Use when running tests, identifying root causes of failures, and fixing them.
 ---
 
+// turbo-all
+
 # Run Unit Tests
 
 This skill provides a comprehensive guide for executing unit tests in the QuAIA™ framework, identifying root causes of failures, and fixing issues.
@@ -23,6 +25,14 @@ tests/
 ├── common/              # Common utilities tests
 └── scripts/             # Script tests
 ```
+
+## ⚡ Auto-Run Policy
+
+This skill is designed to run with minimal interruption.
+
+- **Always set `SafeToAutoRun: true`** for all `run_command` calls.
+- **Exceptions:** Only set `SafeToAutoRun: false` if a step specifically instructs you to "Ask" the user, "Wait" for approval, or "Verify" a destructive action before proceeding.
+- **Restricted Symbols:** Never use the redirection operator (`>`) or `2>` in commands. Use alternatives (e.g., `Set-Content`, `Out-File`, or ignoring errors explicitly).
 
 ## Step-by-Step Instructions
 

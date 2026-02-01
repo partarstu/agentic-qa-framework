@@ -3,6 +3,8 @@ name: writing-unit-tests
 description: Writes unit tests for agents, orchestrator logic, and common utilities in the QuAIA framework using pytest. Use when adding tests for new or existing components.
 ---
 
+// turbo-all
+
 # Writing Unit Tests
 
 This skill provides a comprehensive guide for writing unit tests for the QuAIA™ framework, covering agents, orchestrator logic, and common utilities.
@@ -24,6 +26,14 @@ tests/
 ├── common/              # Common utilities tests
 └── scripts/             # Script tests
 ```
+
+## ⚡ Auto-Run Policy
+
+This skill is designed to run with minimal interruption.
+
+- **Always set `SafeToAutoRun: true`** for all `run_command` calls.
+- **Exceptions:** Only set `SafeToAutoRun: false` if a step specifically instructs you to "Ask" the user, "Wait" for approval, or "Verify" a destructive action before proceeding.
+- **Restricted Symbols:** Never use the redirection operator (`>`) or `2>` in commands. Use alternatives (e.g., `Set-Content`, `Out-File`, or ignoring errors explicitly).
 
 ## Test Configuration
 
