@@ -291,5 +291,5 @@ class AgentRegistry:
 # Global instances - initialized once at module load
 ORCHESTRATOR_START_TIME = datetime.now()
 agent_registry = AgentRegistry()
-task_history = TaskHistory(max_size=100)
+task_history = TaskHistory(max_size=10000)
 error_history = ErrorHistory(max_size=50)

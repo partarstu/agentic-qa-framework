@@ -154,11 +154,19 @@ class OrchestratorDashboardService:
                         self._parse_agent_logs(task.agent_logs, task.task_id, agent_id)
                     )
 
-        # If neither task_id nor agent_id is provided, return orchestrator logs only
+        # If neither task_id nor agent_id is provided, return combined logs from orchestrator AND all agents
         else:
-            return [entry.to_dict() for entry in memory_log_handler.get_logs(
-                limit=limit, offset=offset, level=level
-            )]
+            # 1. Get orchestrator logs (fetch all to allow proper sorting/merging)
+            # Use a very large limit to get everything currently in buffer
+            result_entries = memory_log_handler.get_logs(limit=100000, offset=0, level=level)
+
+            # 2. Get all agent logs from all tasks
+            all_tasks = await self.tasks.get_all()
+            for task in all_tasks:
+                if task.agent_logs:
+                    result_entries.extend(
+                        self._parse_agent_logs(task.agent_logs, task.task_id, task.agent_id)
+                    )
 
         # Filter by level if specified and we have agent logs
         if level and (task_id or agent_id):

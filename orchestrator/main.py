@@ -632,12 +632,12 @@ async def _execute_test_group(test_type: str, test_cases: list[TestCase],
     # Wait for all items in the queue to be processed
     await queue.join()
 
-    # Cancel all workers
-    for worker in workers:
-        worker.cancel()
+    # Signal all workers to stop
+    for _ in workers:
+        queue.put_nowait(None)
 
-    # Wait for workers to finish cancelling
-    await asyncio.gather(*workers, return_exceptions=True)
+    # Wait for workers to finish gracefully
+    await asyncio.gather(*workers)
 
     return results
 
@@ -654,7 +654,13 @@ async def _agent_worker(agent_id: str, queue: asyncio.Queue, results: list[TestE
                 await asyncio.sleep(1)
                 continue
 
-            test_case, test_type = await queue.get()
+            item = await queue.get()
+            if item is None:
+                logger.debug(f"Agent worker for {agent_id} stopping gracefully.")
+                queue.task_done()
+                break
+
+            test_case, test_type = item
             try:
                 result = await _execute_single_test(agent_id, test_case, test_type)
                 if result:
