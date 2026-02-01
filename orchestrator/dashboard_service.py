@@ -126,7 +126,7 @@ class OrchestratorDashboardService:
         errors = await self.errors.get_recent(limit)
         return [error.to_dict() for error in errors]
 
-    async def get_logs(self, limit: int = 100, level: str | None = None,
+    async def get_logs(self, limit: int = 100, offset: int = 0, level: str | None = None,
                        task_id: str | None = None, agent_id: str | None = None) -> list[dict[str, Any]]:
         """Returns recent application logs.
 
@@ -156,7 +156,9 @@ class OrchestratorDashboardService:
 
         # If neither task_id nor agent_id is provided, return orchestrator logs only
         else:
-            result_entries = memory_log_handler.get_logs(limit=limit, level=level)
+            return [entry.to_dict() for entry in memory_log_handler.get_logs(
+                limit=limit, offset=offset, level=level
+            )]
 
         # Filter by level if specified and we have agent logs
         if level and (task_id or agent_id):
@@ -166,10 +168,19 @@ class OrchestratorDashboardService:
         # Sort by timestamp
         result_entries.sort(key=lambda x: x.timestamp)
 
-        # Apply limit - take the last 'limit' items (most recent)
-        limited_logs = result_entries[-limit:]
+        # Apply limit - take the last 'limit' items (most recent) with offset
+        # result_entries is sorted oldest to newest (by timestamp sorting)
+        total_logs = len(result_entries)
+        if offset >= total_logs:
+            return []
 
-        return [entry.to_dict() for entry in limited_logs]
+        end = total_logs - offset
+        start = max(0, end - limit)
+        
+        sliced_logs = result_entries[start:end]
+        
+        # We need to return them reversed (newest first) to match get_logs behavior
+        return [entry.to_dict() for entry in reversed(sliced_logs)]
 
     @staticmethod
     def _parse_agent_logs(raw_logs: list[str], task_id: str, agent_id: str) -> list[LogEntry]:

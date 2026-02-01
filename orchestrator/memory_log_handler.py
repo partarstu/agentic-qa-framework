@@ -43,7 +43,7 @@ class MemoryLogHandler(logging.Handler):
     _instance: "MemoryLogHandler | None" = None
     _lock = threading.Lock()
 
-    def __new__(cls, max_size: int = 500):
+    def __new__(cls, max_size: int = 50000):
         """Singleton pattern to ensure only one instance exists."""
         with cls._lock:
             if cls._instance is None:
@@ -51,7 +51,7 @@ class MemoryLogHandler(logging.Handler):
                 cls._instance._initialized = False
             return cls._instance
 
-    def __init__(self, max_size: int = 500):
+    def __init__(self, max_size: int = 50000):
         if self._initialized:
             return
         super().__init__()
@@ -78,7 +78,7 @@ class MemoryLogHandler(logging.Handler):
         except Exception:
             self.handleError(record)
 
-    def get_logs(self, limit: int = 100, level: str | None = None,
+    def get_logs(self, limit: int = 100, offset: int = 0, level: str | None = None,
                  task_id: str | None = None, agent_id: str | None = None) -> list[LogEntry]:
         """
         Get the most recent log entries.
@@ -106,8 +106,23 @@ class MemoryLogHandler(logging.Handler):
         if agent_id:
             logs = [log for log in logs if log.agent_id == agent_id]
 
-        # Return newest first, limited
-        return list(reversed(logs[-limit:]))
+        if not logs:
+            return []
+
+        # Return newest first, limited with offset
+        # logs is [oldest, ..., newest]
+        # with offset=0, limit=100 -> we want logs[-100:] reversed
+        # with offset=100, limit=100 -> we want logs[-200:-100] reversed
+
+        total_logs = len(logs)
+        if offset >= total_logs:
+            return []
+
+        end = total_logs - offset
+        start = max(0, end - limit)
+
+        sliced_logs = logs[start:end]
+        return list(reversed(sliced_logs))
 
     def clear(self) -> None:
         """Clear all buffered logs."""

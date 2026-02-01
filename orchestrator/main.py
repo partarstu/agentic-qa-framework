@@ -202,14 +202,15 @@ async def get_recent_errors(limit: int = Query(default=20, le=50), _: str = Depe
 
 @orchestrator_app.get("/api/dashboard/logs")
 async def get_logs(
-        limit: int = Query(default=100, le=500),
+        limit: int = Query(default=100),
+        offset: int = Query(default=0),
         level: str | None = Query(default=None, description="Filter by log level (INFO, WARNING, ERROR)"),
         task_id: str | None = Query(default=None, description="Filter by task ID"),
         agent_id: str | None = Query(default=None, description="Filter by agent ID"),
         _: str = Depends(dashboard_auth)
 ):
     """Get recent application logs."""
-    return await dashboard_service.get_logs(limit=limit, level=level, task_id=task_id, agent_id=agent_id)
+    return await dashboard_service.get_logs(limit=limit, offset=offset, level=level, task_id=task_id, agent_id=agent_id)
 
 
 async def _retry_cancellation_task():

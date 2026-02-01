@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useQuery, QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { useQuery, useInfiniteQuery, QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { LogOut } from 'lucide-react';
 import quaiaLogo from './assets/quaia_logo.png';
 import { dashboardApi } from './api/dashboardApi';
@@ -49,10 +49,23 @@ function Dashboard() {
     queryFn: () => dashboardApi.getErrors(20),
   });
 
-  const { data: logs, isLoading: logsLoading } = useQuery({
+  const { 
+    data: logData, 
+    fetchNextPage, 
+    hasNextPage, 
+    isFetchingNextPage,
+    isLoading: logsLoading 
+  } = useInfiniteQuery({
     queryKey: ['logs'],
-    queryFn: () => dashboardApi.getLogs(100),
+    queryFn: ({ pageParam = 0 }) => dashboardApi.getLogs(100, pageParam),
+    getNextPageParam: (lastPage, allPages) => {
+        return lastPage.length === 100 ? allPages.length * 100 : undefined;
+    },
+    initialPageParam: 0,
+    refetchInterval: 3000,
   });
+
+  const logs = logData ? logData.pages.flat() : undefined;
 
 
   const [isOffline, setIsOffline] = useState(false);
@@ -116,7 +129,13 @@ function Dashboard() {
         <ErrorLog errors={errors} isLoading={errorsLoading} />
 
         {/* Log Viewer */}
-        <LogViewer logs={logs} isLoading={logsLoading} />
+        <LogViewer 
+          logs={logs} 
+          isLoading={logsLoading} 
+          onLoadMore={fetchNextPage}
+          hasMore={!!hasNextPage}
+          isLoadingMore={isFetchingNextPage}
+        />
       </main>
 
       {isOffline && (

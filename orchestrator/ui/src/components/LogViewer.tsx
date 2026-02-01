@@ -5,18 +5,60 @@ import type { LogEntry } from '../types/dashboard';
 interface LogViewerProps {
   logs: LogEntry[] | undefined;
   isLoading: boolean;
+  onLoadMore: () => void;
+  hasMore: boolean;
+  isLoadingMore: boolean;
 }
 
-export function LogViewer({ logs, isLoading }: LogViewerProps) {
+export function LogViewer({ logs, isLoading, onLoadMore, hasMore, isLoadingMore }: LogViewerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [autoScroll, setAutoScroll] = useState(true);
   const [levelFilter, setLevelFilter] = useState<string>('');
+  const prevScrollHeightRef = useRef<number>(0);
+  const prevLogsLengthRef = useRef<number>(0);
 
+  // Handle auto-scroll for new logs (at bottom)
   useEffect(() => {
-    if (autoScroll && containerRef.current) {
-      containerRef.current.scrollTop = containerRef.current.scrollHeight;
+    if (autoScroll && containerRef.current && logs && logs.length > prevLogsLengthRef.current) {
+      // Only auto-scroll if we are not loading history and new logs arrived
+      if (!isLoadingMore) {
+        containerRef.current.scrollTop = containerRef.current.scrollHeight;
+      }
     }
-  }, [logs, autoScroll]);
+    prevLogsLengthRef.current = logs?.length || 0;
+  }, [logs, autoScroll, isLoadingMore]);
+
+  // Maintain scroll position when history loads (at top)
+  useEffect(() => {
+    if (containerRef.current && prevScrollHeightRef.current > 0) {
+      const newScrollHeight = containerRef.current.scrollHeight;
+      const diff = newScrollHeight - prevScrollHeightRef.current;
+      if (diff > 0) {
+        containerRef.current.scrollTop += diff;
+      }
+      prevScrollHeightRef.current = 0;
+    }
+  }, [logs]);
+
+  const handleScroll = () => {
+    if (!containerRef.current) return;
+    
+    const { scrollTop, scrollHeight, clientHeight } = containerRef.current;
+    
+    // Check for scroll to top to load more
+    if (scrollTop === 0 && hasMore && !isLoadingMore) {
+      prevScrollHeightRef.current = scrollHeight;
+      onLoadMore();
+    }
+
+    // Check if user scrolled away from bottom to disable auto-scroll
+    const isAtBottom = Math.abs(scrollHeight - scrollTop - clientHeight) < 10;
+    if (!isAtBottom) {
+      setAutoScroll(false);
+    } else {
+        setAutoScroll(true);
+    }
+  };
 
   const getLevelClass = (level: string) => {
     switch (level.toUpperCase()) {
@@ -87,8 +129,14 @@ export function LogViewer({ logs, isLoading }: LogViewerProps) {
       
       <div
         ref={containerRef}
+        onScroll={handleScroll}
         className="h-80 bg-slate-900 rounded-lg overflow-auto font-mono text-xs p-4"
       >
+        {isLoadingMore && (
+            <div className="flex justify-center py-2">
+                <div className="w-4 h-4 border-2 border-indigo-500/30 border-t-indigo-500 rounded-full animate-spin" />
+            </div>
+        )}
         {!filteredLogs || filteredLogs.length === 0 ? (
           <p className="text-slate-500 text-center py-8">No logs available</p>
         ) : (
