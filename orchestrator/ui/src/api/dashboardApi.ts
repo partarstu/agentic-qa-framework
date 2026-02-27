@@ -50,4 +50,12 @@ export const dashboardApi = {
     });
     return response.data;
   },
+
+  /**
+   * Manually trigger agent discovery.
+   */
+  async triggerDiscovery(): Promise<{ message: string }> {
+    const response = await apiClient.post<{ message: string }>('/discovery');
+    return response.data;
+  },
 };

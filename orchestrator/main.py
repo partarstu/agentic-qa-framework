@@ -213,6 +213,17 @@ async def get_logs(
     return await dashboard_service.get_logs(limit=limit, offset=offset, level=level, task_id=task_id, agent_id=agent_id)
 
 
+@orchestrator_app.post("/api/dashboard/discovery")
+async def trigger_agent_discovery(_: str = Depends(dashboard_auth)):
+    """Manually trigger agent discovery."""
+    try:
+        await _discover_agents()
+        return {"message": "Agent discovery triggered successfully"}
+    except Exception as e:
+        logger.exception("Manual agent discovery failed.")
+        raise HTTPException(status_code=500, detail=f"Discovery failed: {e}")
+
+
 async def _retry_cancellation_task():
     """Background task to recover broken agents.
 

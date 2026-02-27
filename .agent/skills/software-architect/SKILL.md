@@ -1,6 +1,6 @@
 ---
 name: software-architect
-description: Acts as a software architect to plan and guide the implementation or modification of features, ensuring best practices, modern design patterns, and proper planning. Use this skill when the user asks for a new feature, a complex modification, architectural advice, or needs to design a new component.
+description: Allows to plan and guide the implementation of new features or modification of existing features, ensuring best practices, modern design patterns, and proper planning. Use this skill every time when the user asks for implementing somethig new or modifying already existing logic, architectural advice, or needs to design a new component.
 ---
 
 // turbo-all
