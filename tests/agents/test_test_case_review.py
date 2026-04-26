@@ -20,7 +20,7 @@ def mock_config():
         mock_conf.TestCaseReviewAgentConfig.EXTERNAL_PORT = 8003
         mock_conf.TestCaseReviewAgentConfig.PROTOCOL = "http"
         mock_conf.TestCaseReviewAgentConfig.MODEL_NAME = "test"
-        mock_conf.TestCaseReviewAgentConfig.THINKING_BUDGET = 1500
+        mock_conf.TestCaseReviewAgentConfig.THINKING_LEVEL = "LOW"
         mock_conf.TestCaseReviewAgentConfig.MAX_REQUESTS_PER_TASK = 8
         mock_conf.TestCaseReviewAgentConfig.REVIEW_COMPLETE_STATUS_NAME = "Review Complete"
         mock_conf.JIRA_MCP_SERVER_URL = "http://jira-mcp"
@@ -35,7 +35,7 @@ def agent(mock_config):
 
 def test_agent_init(agent, mock_config):
     assert agent.agent_name == "review_agent"
-    assert agent.get_thinking_budget() == 1500
+    assert agent.get_thinking_level() == "LOW"
     assert agent.get_max_requests_per_task() == 8
 
 @patch("agents.test_case_review.main.get_test_management_client")

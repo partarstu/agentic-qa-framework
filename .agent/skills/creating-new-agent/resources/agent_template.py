@@ -46,8 +46,8 @@ class <AgentName>Agent(AgentBase):
             # vector_db_collection_name="<collection>"  # For RAG-enabled agents
         )
 
-    def get_thinking_budget(self) -> int:
-        return config.<AgentName>AgentConfig.THINKING_BUDGET
+    def get_thinking_level(self) -> str:
+        return config.<AgentName>AgentConfig.THINKING_LEVEL
 
     def get_max_requests_per_task(self) -> int:
         return config.<AgentName>AgentConfig.MAX_REQUESTS_PER_TASK

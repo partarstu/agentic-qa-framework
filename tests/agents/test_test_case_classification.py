@@ -21,7 +21,7 @@ def mock_config():
         mock_conf.TestCaseClassificationAgentConfig.EXTERNAL_PORT = 8001
         mock_conf.TestCaseClassificationAgentConfig.PROTOCOL = "http"
         mock_conf.TestCaseClassificationAgentConfig.MODEL_NAME = "test"
-        mock_conf.TestCaseClassificationAgentConfig.THINKING_BUDGET = 1000
+        mock_conf.TestCaseClassificationAgentConfig.THINKING_LEVEL = "LOW"
         mock_conf.TestCaseClassificationAgentConfig.MAX_REQUESTS_PER_TASK = 5
         mock_conf.JIRA_MCP_SERVER_URL = "http://jira-mcp"
         mock_conf.MCP_SERVER_TIMEOUT_SECONDS = 30
@@ -35,7 +35,7 @@ def agent(mock_config):
 
 def test_agent_init(agent, mock_config):
     assert agent.agent_name == "classification_agent"
-    assert agent.get_thinking_budget() == 1000
+    assert agent.get_thinking_level() == "LOW"0
     assert agent.get_max_requests_per_task() == 5
 
 @patch("agents.test_case_classification.main.get_test_management_client")

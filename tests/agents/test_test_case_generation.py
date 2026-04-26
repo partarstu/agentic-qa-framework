@@ -21,7 +21,7 @@ def mock_config():
         mock_conf.TestCaseGenerationAgentConfig.EXTERNAL_PORT = 8002
         mock_conf.TestCaseGenerationAgentConfig.PROTOCOL = "http"
         mock_conf.TestCaseGenerationAgentConfig.MODEL_NAME = "test"
-        mock_conf.TestCaseGenerationAgentConfig.THINKING_BUDGET = 2000
+        mock_conf.TestCaseGenerationAgentConfig.THINKING_LEVEL = "MEDIUM"
         mock_conf.TestCaseGenerationAgentConfig.MAX_REQUESTS_PER_TASK = 10
         mock_conf.JIRA_MCP_SERVER_URL = "http://jira-mcp"
         mock_conf.MCP_SERVER_TIMEOUT_SECONDS = 30
@@ -47,7 +47,7 @@ def agent(mock_config):
 
 def test_agent_init(agent, mock_config):
     assert agent.agent_name == "generation_agent"
-    assert agent.get_thinking_budget() == 2000
+    assert agent.get_thinking_level() == "MEDIUM"
     assert agent.get_max_requests_per_task() == 10
 
     assert agent.ac_extractor_agent is not None

@@ -55,7 +55,7 @@ Add a configuration class in `config.py` using the template:
 📄 **Template:** [resources/config_template.py](resources/config_template.py)
 
 **Configuration field descriptions:**
-- `THINKING_BUDGET`: Token budget for chain-of-thought reasoning (0 disables it)
+- `THINKING_LEVEL`: Thinking level for chain-of-thought reasoning ("MINIMAL" disables it or keeps it to minimum)
 - `OWN_NAME`: Human-readable name displayed in the orchestrator dashboard
 - `PORT`: Internal container port the agent listens on
 - `EXTERNAL_PORT`: Externally accessible port (usually same as PORT)
@@ -96,7 +96,7 @@ Create `agents/<agent_name>/main.py`:
 
 **Key points:**
 - The agent class MUST inherit from `AgentBase`
-- Implement `get_thinking_budget()` and `get_max_requests_per_task()`
+- Implement `get_thinking_level()` and `get_max_requests_per_task()`
 - Custom tools are defined as methods with full docstrings (LLM uses these)
 - The `app` variable exposes the A2A-compliant FastAPI application
 - `start_as_server()` runs the agent standalone with uvicorn

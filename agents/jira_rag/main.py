@@ -54,8 +54,8 @@ class JiraRagAgent(AgentBase):
             ]
         )
 
-    def get_thinking_budget(self) -> int:
-        return config.JiraRagUpdateAgentConfig.THINKING_BUDGET
+    def get_thinking_level(self) -> str:
+        return config.JiraRagUpdateAgentConfig.THINKING_LEVEL
 
     def get_max_requests_per_task(self) -> int:
         return config.JiraRagUpdateAgentConfig.MAX_REQUESTS_PER_TASK

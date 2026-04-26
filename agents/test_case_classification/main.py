@@ -34,8 +34,8 @@ class TestCaseClassificationAgent(AgentBase):
             tools=[self.add_labels_to_test_case]
         )
 
-    def get_thinking_budget(self) -> int:
-        return config.TestCaseClassificationAgentConfig.THINKING_BUDGET
+    def get_thinking_level(self) -> str:
+        return config.TestCaseClassificationAgentConfig.THINKING_LEVEL
 
     def get_max_requests_per_task(self) -> int:
         return config.TestCaseClassificationAgentConfig.MAX_REQUESTS_PER_TASK

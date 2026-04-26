@@ -81,8 +81,8 @@ class TestCaseGenerationAgent(AgentBase):
             tools=[self._upload_test_cases_into_test_management_system, self._generate_test_cases],
         )
 
-    def get_thinking_budget(self) -> int:
-        return config.TestCaseGenerationAgentConfig.THINKING_BUDGET
+    def get_thinking_level(self) -> str:
+        return config.TestCaseGenerationAgentConfig.THINKING_LEVEL
 
     def get_max_requests_per_task(self) -> int:
         return config.TestCaseGenerationAgentConfig.MAX_REQUESTS_PER_TASK

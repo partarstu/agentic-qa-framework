@@ -110,7 +110,7 @@ class DashboardAuthConfig:
 
 # Requirements Review Agent
 class RequirementsReviewAgentConfig:
-    THINKING_BUDGET = 1000
+    THINKING_LEVEL = "HIGH"
     OWN_NAME = "Jira Requirements Reviewer"
     PORT = int(os.environ.get("PORT", "8001"))
     EXTERNAL_PORT = int(os.environ.get("EXTERNAL_PORT", PORT))
@@ -121,7 +121,7 @@ class RequirementsReviewAgentConfig:
 
 # Test Case Classification Agent
 class TestCaseClassificationAgentConfig:
-    THINKING_BUDGET = 2000
+    THINKING_LEVEL = "MINIMAL"
     OWN_NAME = "Test Case Classification Agent"
     PORT = int(os.environ.get("PORT", "8003"))
     EXTERNAL_PORT = int(os.environ.get("EXTERNAL_PORT", PORT))
@@ -132,7 +132,7 @@ class TestCaseClassificationAgentConfig:
 
 # Test Case Generation Agent
 class TestCaseGenerationAgentConfig:
-    THINKING_BUDGET = 0
+    THINKING_LEVEL = "MINIMAL"
     OWN_NAME = "Test Case Generation Agent"
     PORT = int(os.environ.get("PORT", "8002"))
     EXTERNAL_PORT = int(os.environ.get("EXTERNAL_PORT", PORT))
@@ -143,7 +143,7 @@ class TestCaseGenerationAgentConfig:
 
 # Test Case Review Agent
 class TestCaseReviewAgentConfig:
-    THINKING_BUDGET = 5000
+    THINKING_LEVEL = "HIGH"
     REVIEW_COMPLETE_STATUS_NAME = "Review Complete"
     OWN_NAME = "Test Case Review Agent"
     PORT = int(os.environ.get("PORT", "8004"))
@@ -155,7 +155,7 @@ class TestCaseReviewAgentConfig:
 
 # Incident Creation Agent
 class IncidentCreationAgentConfig:
-    THINKING_BUDGET = 5000
+    THINKING_LEVEL = "MEDIUM"
     OWN_NAME = "Incident Creation Agent"
     PORT = int(os.environ.get("PORT", "8007"))
     EXTERNAL_PORT = int(os.environ.get("EXTERNAL_PORT", PORT))
@@ -179,7 +179,7 @@ class IncidentCreationAgentConfig:
 
 # RAG Update Agent
 class JiraRagUpdateAgentConfig:
-    THINKING_BUDGET = 2000
+    THINKING_LEVEL = "MEDIUM"
     OWN_NAME = "Jira RAG Update Agent"
     PORT = int(os.environ.get("PORT", "8006"))
     EXTERNAL_PORT = int(os.environ.get("EXTERNAL_PORT", PORT))

@@ -168,7 +168,7 @@ classDiagram
         <<abstract>>
         +agent_card: AgentCard
         +execute_task(task)* Result
-        #get_thinking_budget() int
+        #get_thinking_level() int
         #get_max_requests_per_task() int
     }
     

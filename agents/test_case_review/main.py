@@ -52,8 +52,8 @@ class TestCaseReviewAgent(AgentBase):
             tools=[self.add_review_feedback, self.set_test_case_status_to_review_complete, self._review_test_cases_with_attachments]
         )
 
-    def get_thinking_budget(self) -> int:
-        return config.TestCaseReviewAgentConfig.THINKING_BUDGET
+    def get_thinking_level(self) -> str:
+        return config.TestCaseReviewAgentConfig.THINKING_LEVEL
 
     def get_max_requests_per_task(self) -> int:
         return config.TestCaseReviewAgentConfig.MAX_REQUESTS_PER_TASK

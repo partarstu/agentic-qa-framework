@@ -21,7 +21,7 @@ def mock_config():
         mock_conf.IncidentCreationAgentConfig.EXTERNAL_PORT = 8005
         mock_conf.IncidentCreationAgentConfig.PROTOCOL = "http"
         mock_conf.IncidentCreationAgentConfig.MODEL_NAME = "test"
-        mock_conf.IncidentCreationAgentConfig.THINKING_BUDGET = 16000
+        mock_conf.IncidentCreationAgentConfig.THINKING_LEVEL = "HIGH"
         mock_conf.JIRA_MCP_SERVER_URL = "http://jira-mcp"
         mock_conf.MCP_SERVER_TIMEOUT_SECONDS = 30
         mock_conf.QdrantConfig.COLLECTION_NAME = "jira_issues"
@@ -43,7 +43,7 @@ def agent(mock_config):
 
 def test_agent_init(agent, mock_config):
     assert agent.agent_name == "incident_creation_agent"
-    assert agent.get_thinking_budget() == 16000
+    assert agent.get_thinking_level() == "HIGH"
     assert agent.duplicate_detector is not None
 
 @pytest.mark.asyncio

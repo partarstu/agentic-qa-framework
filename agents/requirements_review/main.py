@@ -49,8 +49,8 @@ class RequirementsReviewAgent(AgentBase):
             tools=[self._review_with_attachments, self.add_jira_comment]
         )
 
-    def get_thinking_budget(self) -> int:
-        return config.RequirementsReviewAgentConfig.THINKING_BUDGET
+    def get_thinking_level(self) -> str:
+        return config.RequirementsReviewAgentConfig.THINKING_LEVEL
 
     def get_max_requests_per_task(self) -> int:
         return config.RequirementsReviewAgentConfig.MAX_REQUESTS_PER_TASK

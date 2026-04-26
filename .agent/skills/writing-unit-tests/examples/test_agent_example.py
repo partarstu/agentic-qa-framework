@@ -25,7 +25,7 @@ def mock_config(monkeypatch):
     monkeypatch.setattr(config.<AgentName>AgentConfig, "EXTERNAL_PORT", 8099)
     monkeypatch.setattr(config.<AgentName>AgentConfig, "PROTOCOL", "http")
     monkeypatch.setattr(config.<AgentName>AgentConfig, "MODEL_NAME", "test")
-    monkeypatch.setattr(config.<AgentName>AgentConfig, "THINKING_BUDGET", 100)
+    monkeypatch.setattr(config.<AgentName>AgentConfig, "THINKING_LEVEL", "LOW")
     monkeypatch.setattr(config.<AgentName>AgentConfig, "MAX_REQUESTS_PER_TASK", 5)
     monkeypatch.setattr(config, "AGENT_BASE_URL", "http://localhost")
     # Add any agent-specific config mocks here
@@ -46,7 +46,7 @@ def test_agent_init(mock_super_init, mock_prompt_cls, mock_config):
     assert kwargs["agent_name"] == "Test Agent"
     assert kwargs["instructions"] == "system prompt"
 
-    assert agent.get_thinking_budget() == 100
+    assert agent.get_thinking_level() == "LOW"
     assert agent.get_max_requests_per_task() == 5
 
 

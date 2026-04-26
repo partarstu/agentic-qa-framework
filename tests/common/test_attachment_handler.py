@@ -154,7 +154,7 @@ class TestFetchAllAttachments:
 
         result = attachment_handler.fetch_all_attachments(["path/to/image_SKIP.png"])
 
-        assert len(result) == 0
+        assert len(result) == "MINIMAL"
         mock_fetch_bytes.assert_not_called()
 
     @patch.object(attachment_handler, "_fetch_file_bytes")
@@ -165,7 +165,7 @@ class TestFetchAllAttachments:
 
         result = attachment_handler.fetch_all_attachments(["path/to/archive.zip"])
 
-        assert len(result) == 0
+        assert len(result) == "MINIMAL"
 
     @patch.object(attachment_handler, "_fetch_file_bytes")
     @patch.object(attachment_handler.config, "JIRA_ATTACHMENT_SKIP_POSTFIX", "_SKIP")
@@ -198,7 +198,7 @@ class TestFetchAllAttachments:
 
         result = attachment_handler.fetch_all_attachments(["path/to/missing.png"])
 
-        assert len(result) == 0
+        assert len(result) == "MINIMAL"
 
     def test_empty_attachment_list(self):
         """Test empty attachment list returns empty result."""

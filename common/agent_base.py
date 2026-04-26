@@ -85,7 +85,7 @@ class AgentBase(ABC):
         self.latest_received_message: Message | None = None
 
     @abstractmethod
-    def get_thinking_budget(self) -> int:
+    def get_thinking_level(self) -> int:
         pass
 
     @abstractmethod
@@ -94,10 +94,13 @@ class AgentBase(ABC):
 
     def get_default_model_settings(self, model_name: str) -> ModelSettings:
         if model_name.startswith("google"):
+            gemini_thinking_config = None
+            if self.get_thinking_level() != "MINIMAL":
+                gemini_thinking_config = {'include_thoughts': True, 'thinking_level': self.get_thinking_level()}
             return GeminiModelSettings(
                 top_p=config.TOP_P,
                 temperature=config.TEMPERATURE,
-                gemini_thinking_config={'include_thoughts': True, 'thinking_budget': self.get_thinking_budget()})
+                gemini_thinking_config=gemini_thinking_config)
         elif model_name.startswith("groq"):
             return GroqModelSettings(top_p=config.TOP_P, temperature=config.TEMPERATURE)
         else:

@@ -53,21 +53,15 @@ class IncidentCreationAgent(AgentBase):
             name="duplicate_detector",
         )
 
-        agent_config = getattr(config, "IncidentCreationAgentConfig", None)
-        port = agent_config.PORT if agent_config else 8005
-        ext_port = agent_config.EXTERNAL_PORT if agent_config else 8005
-        own_name = agent_config.OWN_NAME if agent_config else "Incident Creation Agent"
-        thinking_budget = agent_config.THINKING_BUDGET if agent_config else 16000
-        self._thinking_budget = thinking_budget
         self._saved_artifact_paths: list[str] = []
         self._media_files: list[FileWithBytes] = []
 
         super().__init__(
-            agent_name=own_name,
+            agent_name=config.IncidentCreationAgentConfig.OWN_NAME,
             base_url=config.AGENT_BASE_URL,
-            protocol="http",
-            port=port,
-            external_port=ext_port,
+            protocol=config.IncidentCreationAgentConfig.PROTOCOL,
+            port=config.IncidentCreationAgentConfig.PORT,
+            external_port=config.IncidentCreationAgentConfig.EXTERNAL_PORT,
             model_name=model_name,
             output_type=IncidentCreationResult,
             instructions=self.main_prompt.get_prompt(),
@@ -79,8 +73,8 @@ class IncidentCreationAgent(AgentBase):
             vector_db_collection_name=QDRANT_COLLECTION_NAME
         )
 
-    def get_thinking_budget(self) -> int:
-        return self._thinking_budget
+    def get_thinking_level(self) -> str:
+        return config.IncidentCreationAgentConfig.THINKING_LEVEL
 
     def get_max_requests_per_task(self) -> int:
         return config.IncidentCreationAgentConfig.MAX_REQUESTS_PER_TASK
@@ -233,3 +227,4 @@ app = agent.a2a_server
 
 if __name__ == "__main__":
     agent.start_as_server()
+
