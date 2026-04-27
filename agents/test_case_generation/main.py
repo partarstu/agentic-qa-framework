@@ -2,7 +2,6 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from pydantic_ai import Agent
 from pydantic_ai.mcp import MCPServerSSE
 from pydantic_ai.messages import BinaryContent
 
@@ -40,23 +39,23 @@ class TestCaseGenerationAgent(AgentBase):
         # Initialize sub-agents
         model_name = config.TestCaseGenerationAgentConfig.MODEL_NAME
 
-        self.ac_extractor_agent = Agent(
-            model=CustomLlmWrapper(wrapped=model_name),
+        self.ac_extractor_agent = CustomLlmWrapper.create_agent(
+            model_name=model_name,
             output_type=AcceptanceCriteriaList,
             system_prompt=self.ac_extraction_prompt.get_prompt(),
             toolsets=[jira_mcp_server],
             name="ac_extractor",
         )
 
-        self.steps_generator_agent = Agent(
-            model=CustomLlmWrapper(wrapped=model_name),
+        self.steps_generator_agent = CustomLlmWrapper.create_agent(
+            model_name=model_name,
             output_type=TestStepsSequenceList,
             system_prompt=self.steps_generation_prompt.get_prompt(),
             name="steps_generator",
         )
 
-        self.test_case_creator_agent = Agent(
-            model=CustomLlmWrapper(wrapped=model_name),
+        self.test_case_creator_agent = CustomLlmWrapper.create_agent(
+            model_name=model_name,
             output_type=GeneratedTestCases,
             system_prompt=self.test_case_creation_prompt.get_prompt(),
             name="test_case_creator",

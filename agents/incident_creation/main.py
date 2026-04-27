@@ -8,7 +8,6 @@ import os
 import uuid
 
 from a2a.types import FilePart, FileWithBytes
-from pydantic_ai import Agent
 from pydantic_ai.mcp import MCPServerSSE
 from qdrant_client import models as qdrant_models
 
@@ -46,8 +45,8 @@ class IncidentCreationAgent(AgentBase):
 
         model_name = getattr(config, "IncidentCreationAgentConfig", config.TestCaseGenerationAgentConfig).MODEL_NAME
 
-        self.duplicate_detector = Agent(
-            model=CustomLlmWrapper(wrapped=model_name),
+        self.duplicate_detector = CustomLlmWrapper.create_agent(
+            model_name=model_name,
             output_type=DuplicateDetectionResult,
             system_prompt=self.dup_detect_prompt.get_prompt(),
             name="duplicate_detector",

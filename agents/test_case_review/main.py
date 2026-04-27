@@ -4,7 +4,6 @@
 
 from typing import TYPE_CHECKING
 
-from pydantic_ai import Agent
 from pydantic_ai.mcp import MCPServerSSE
 
 import config
@@ -27,8 +26,8 @@ class TestCaseReviewAgent(AgentBase):
 
     def __init__(self):
         # Create a sub-agent for reviewing with attachments
-        self.review_agent = Agent(
-            model=CustomLlmWrapper(wrapped=config.TestCaseReviewAgentConfig.MODEL_NAME),
+        self.review_agent = CustomLlmWrapper.create_agent(
+            model_name=config.TestCaseReviewAgentConfig.MODEL_NAME,
             output_type=TestCaseReviewFeedbacks,
             system_prompt=TestCaseReviewWithAttachmentsPrompt().get_prompt(),
             name="review_test_cases_with_attachments",

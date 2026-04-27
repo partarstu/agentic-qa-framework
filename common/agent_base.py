@@ -22,9 +22,6 @@ from pydantic_ai import Agent, Tool
 from pydantic_ai.agent import AgentRunResult
 from pydantic_ai.mcp import MCPServerSSE
 from pydantic_ai.messages import BinaryContent, UserContent
-from pydantic_ai.models.gemini import GeminiModelSettings
-from pydantic_ai.models.groq import GroqModelSettings
-from pydantic_ai.settings import ModelSettings
 from pydantic_ai.tools import AgentDepsT, ToolFuncEither
 from pydantic_ai.usage import UsageLimits
 
@@ -56,7 +53,6 @@ class AgentBase(ABC):
             output_type: type[BaseModel],
             instructions: str,
             mcp_servers: list[MCPServerSSE],
-            model_settings: ModelSettings = None,
             deps_type: type[BaseModel] | None = None,
             description: str = "",
             tools: Sequence[Tool[AgentDepsT] | ToolFuncEither[AgentDepsT, ...]] = (),
@@ -73,7 +69,6 @@ class AgentBase(ABC):
         self.instructions = instructions
         self.deps_type = deps_type
         self.description = description
-        self.model_settings = model_settings if model_settings else self.get_default_model_settings(model_name)
         self.mcp_servers = mcp_servers or []
         self.tools = tools
         self.agent = self._create_agent()
@@ -85,46 +80,31 @@ class AgentBase(ABC):
         self.latest_received_message: Message | None = None
 
     @abstractmethod
-    def get_thinking_level(self) -> int:
+    def get_thinking_level(self) -> str:
         pass
 
     @abstractmethod
     def get_max_requests_per_task(self) -> int:
         pass
 
-    def get_default_model_settings(self, model_name: str) -> ModelSettings:
-        if model_name.startswith("google"):
-            gemini_thinking_config = None
-            if self.get_thinking_level() != "MINIMAL":
-                gemini_thinking_config = {'include_thoughts': True, 'thinking_level': self.get_thinking_level()}
-            return GeminiModelSettings(
-                top_p=config.TOP_P,
-                temperature=config.TEMPERATURE,
-                gemini_thinking_config=gemini_thinking_config)
-        elif model_name.startswith("groq"):
-            return GroqModelSettings(top_p=config.TOP_P, temperature=config.TEMPERATURE)
-        else:
-            return ModelSettings(top_p=config.TOP_P, temperature=config.TEMPERATURE)
-
     def _create_agent(self) -> Agent:
         logger.info(f"""Creating agent '{self.agent_name}' with the following configuration:
         - Model: {self.model_name}
         - Output Type: {self.output_type.__name__}
-        - Model Settings: {self.model_settings}
         - MCP Servers: {[server.url for server in self.mcp_servers]}
         - Tools: {[tool.__name__ for tool in self.tools]}""")
 
-        return Agent(
-            model=CustomLlmWrapper(wrapped=self.model_name),
-            deps_type=self.deps_type,
+        return CustomLlmWrapper.create_agent(
+            model_name=self.model_name,
             output_type=self.output_type,
             instructions=self.instructions,
             name=self.agent_name,
-            model_settings=self.model_settings,
+            thinking_level=self.get_thinking_level(),
             toolsets=self.mcp_servers,
             tools=self.tools,
+            deps_type=self.deps_type,
             retries=MAX_RETRIES,
-            output_retries=MAX_RETRIES
+            output_retries=MAX_RETRIES,
         )
 
     async def _get_agent_execution_result(self, received_request: list[UserContent]) -> AgentRunResult:

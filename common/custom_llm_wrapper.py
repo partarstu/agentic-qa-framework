@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 
 from fastapi import HTTPException
+from pydantic_ai import Agent
 from pydantic_ai.messages import (
     BinaryContent,
     ModelMessage,
@@ -24,6 +25,8 @@ from pydantic_ai.models import (
     ModelSettings,
     StreamedResponse,
 )
+from pydantic_ai.models.gemini import GeminiModelSettings
+from pydantic_ai.models.groq import GroqModelSettings
 from pydantic_ai.models.wrapper import WrapperModel
 
 import config
@@ -37,9 +40,58 @@ logger = utils.get_logger("llm_wrapper")
 
 
 class CustomLlmWrapper(WrapperModel):
-    def __init__(self, wrapped: Model | KnownModelName):
+    def __init__(self, wrapped: Model | KnownModelName, thinking_level: str | None = None):
         super().__init__(wrapped)
         self.latest_instructions: str | None = None
+        self.thinking_level = thinking_level or "MINIMAL"
+
+    @classmethod
+    def create_agent(
+        cls,
+        model_name: Model | KnownModelName,
+        output_type: type,
+        instructions: str | None = None,
+        system_prompt: str | None = None,
+        name: str = "",
+        thinking_level: str | None = None,
+        tools: Sequence = (),
+        toolsets: Sequence = (),
+        deps_type: type | None = None,
+        retries: int = 3,
+        output_retries: int = 3,
+    ) -> Agent:
+        """Creates a pydantic_ai Agent backed by a CustomLlmWrapper model."""
+        return Agent(
+            model=cls(wrapped=model_name, thinking_level=thinking_level),
+            output_type=output_type,
+            instructions=instructions,
+            system_prompt=system_prompt or (),
+            name=name,
+            tools=list(tools),
+            toolsets=list(toolsets),
+            deps_type=deps_type,
+            retries=retries,
+            output_retries=output_retries,
+        )
+
+    def _get_model_settings(self, provided_settings: ModelSettings | None) -> ModelSettings:
+        if provided_settings is not None:
+            return provided_settings
+
+        model_name = self.wrapped.name() if hasattr(self.wrapped, "name") else ""
+
+        if model_name.startswith("google"):
+            gemini_thinking_config = None
+            if self.thinking_level != "MINIMAL":
+                gemini_thinking_config = {'include_thoughts': True, 'thinking_level': self.thinking_level}
+            return GeminiModelSettings(
+                top_p=config.TOP_P,
+                temperature=config.TEMPERATURE,
+                gemini_thinking_config=gemini_thinking_config)
+        elif model_name.startswith("groq"):
+            return GroqModelSettings(top_p=config.TOP_P, temperature=config.TEMPERATURE)
+        else:
+            return ModelSettings(top_p=config.TOP_P, temperature=config.TEMPERATURE)
 
     async def request(self, messages: list[ModelMessage], model_settings: ModelSettings | None,
                       model_request_parameters: ModelRequestParameters,
@@ -50,8 +102,9 @@ class CustomLlmWrapper(WrapperModel):
         if messages and isinstance(messages[-1], ModelRequest):
             self._log_model_request(messages[-1])
 
+        actual_settings = self._get_model_settings(model_settings)
         response = await self.wrapped.request(
-            messages, model_settings, model_request_parameters
+            messages, actual_settings, model_request_parameters
         )
         self._log_model_response(response)
         return response
@@ -67,8 +120,9 @@ class CustomLlmWrapper(WrapperModel):
         if config.PROMPT_INJECTION_CHECK_ENABLED:
             self._validate_for_prompt_injection(messages)
 
+        actual_settings = self._get_model_settings(model_settings)
         async with self.wrapped.request_stream(
-                messages, model_settings, model_request_parameters, run_context
+                messages, actual_settings, model_request_parameters, run_context
         ) as response_stream:
             yield response_stream
 

@@ -34,8 +34,6 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request, Security
 from fastapi.security import APIKeyHeader
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
-from pydantic_ai import Agent
-from pydantic_ai.settings import ModelSettings
 
 import config
 from common import utils
@@ -70,8 +68,6 @@ from orchestrator.models import (
 )
 
 MAX_RETRIES = 3
-
-MODEL_SETTINGS = ModelSettings(top_p=config.TOP_P, temperature=config.TEMPERATURE)
 
 logger = utils.get_logger("orchestrator")
 
@@ -348,8 +344,8 @@ async def _cancel_agent_task(agent_card: AgentCard, task_id: str) -> bool:
 
 
 # --- For selecting the single best for the task agent ---
-discovery_agent = Agent(
-    model=CustomLlmWrapper(wrapped=config.OrchestratorConfig.MODEL_NAME),
+discovery_agent = CustomLlmWrapper.create_agent(
+    model_name=config.OrchestratorConfig.MODEL_NAME,
     output_type=SelectedAgent,
     instructions="You are an intelligent orchestrator specialized on routing the target task to one of the agents "
                  "which are registered with you. Your task is to select one agent to handle the target "
@@ -357,38 +353,36 @@ discovery_agent = Agent(
                  " (this list has the info about the capabilities of each agent). If there is no agent that can "
                  "execute the target task, return an empty string.",
     name="Discovery Agent",
-    model_settings=MODEL_SETTINGS,
     retries=MAX_RETRIES,
-    output_retries=MAX_RETRIES
+    output_retries=MAX_RETRIES,
 )
 
 # --- For selecting ALL suitable for the task agents ---
-multi_discovery_agent = Agent(
-    model=CustomLlmWrapper(wrapped=config.OrchestratorConfig.MODEL_NAME),
+multi_discovery_agent = CustomLlmWrapper.create_agent(
+    model_name=config.OrchestratorConfig.MODEL_NAME,
     output_type=SelectedAgents,
     instructions="You are an intelligent orchestrator specialized on routing tasks. Your task is to select all agents "
                  "that can handle the target task based on the task's description and a list of available agents. "
                  "If no agents can execute the task, return an empty list.",
     name="Multi-Discovery Agent",
-    model_settings=MODEL_SETTINGS,
     retries=MAX_RETRIES,
-    output_retries=MAX_RETRIES
+    output_retries=MAX_RETRIES,
 )
 
 
 # --- For mapping between input in unknown format and output in structured format ---
 def _get_results_extractor_agent(output_type: type[JsonSerializableModel] | type[str]):
-    return Agent(
-        model=CustomLlmWrapper(wrapped=config.OrchestratorConfig.MODEL_NAME),
+    return CustomLlmWrapper.create_agent(
+        model_name=config.OrchestratorConfig.MODEL_NAME,
         output_type=output_type,
         instructions="You are an intelligent agent specialized on extracting the structured information based on the input "
                      "provided to you. Your task is to analyze the provided to you input, identify the requested "
                      "information inside of this input and return it in a format which is requested by the user. If you've "
                      "identified no matching information inside of the provided to you input, return an empty result.",
         name="Results Extractor Agent",
-        model_settings=MODEL_SETTINGS,
+        thinking_level=config.OrchestratorConfig.THINKING_LEVEL,
         retries=MAX_RETRIES,
-        output_retries=MAX_RETRIES
+        output_retries=MAX_RETRIES,
     )
 
 
