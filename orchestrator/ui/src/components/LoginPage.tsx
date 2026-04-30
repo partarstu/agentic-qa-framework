@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from 'react';
-import { Lock, User, AlertCircle, Eye, EyeOff } from 'lucide-react';
+import { Lock, User, AlertCircle, Eye, EyeOff, WifiOff } from 'lucide-react';
+import axios from 'axios';
 import quaiaLogo from '../assets/quaia_logo.png';
 import { useAuth } from '../context/AuthContext';
 
@@ -8,7 +9,7 @@ export function LoginPage() {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<{ message: string; isOffline: boolean } | null>(null);
   const [isLoading, setIsLoading] = useState(false);
 
   const handleSubmit = async (e: FormEvent) => {
@@ -19,10 +20,12 @@ export function LoginPage() {
     try {
       await login(username, password);
     } catch (err) {
-      if (err instanceof Error) {
-        setError('Invalid username or password');
+      if (axios.isAxiosError(err) && !err.response) {
+        setError({ message: 'Orchestrator is offline or not reachable', isOffline: true });
+      } else if (axios.isAxiosError(err) && err.response?.status === 401) {
+        setError({ message: 'Invalid username or password', isOffline: false });
       } else {
-        setError('An unexpected error occurred');
+        setError({ message: 'An unexpected error occurred', isOffline: false });
       }
     } finally {
       setIsLoading(false);
@@ -46,9 +49,12 @@ export function LoginPage() {
           <form onSubmit={handleSubmit} className="space-y-6">
             {/* Error Message */}
             {error && (
-              <div className="flex items-center gap-3 p-4 rounded-lg bg-red-500/10 border border-red-500/30 text-red-400">
-                <AlertCircle className="w-5 h-5 flex-shrink-0" />
-                <span className="text-sm">{error}</span>
+              <div className={`flex items-center gap-3 p-4 rounded-lg border text-sm ${error.isOffline ? 'bg-amber-500/10 border-amber-500/30 text-amber-400' : 'bg-red-500/10 border-red-500/30 text-red-400'}`}>
+                {error.isOffline
+                  ? <WifiOff className="w-5 h-5 flex-shrink-0" />
+                  : <AlertCircle className="w-5 h-5 flex-shrink-0" />
+                }
+                <span>{error.message}</span>
               </div>
             )}
 
