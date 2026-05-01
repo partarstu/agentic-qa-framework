@@ -45,6 +45,7 @@ class TestCaseGenerationAgent(AgentBase):
             system_prompt=self.ac_extraction_prompt.get_prompt(),
             toolsets=[jira_mcp_server],
             name="ac_extractor",
+            thinking_level=config.TestCaseGenerationAgentConfig.THINKING_LEVEL
         )
 
         self.steps_generator_agent = CustomLlmWrapper.create_agent(
@@ -52,6 +53,7 @@ class TestCaseGenerationAgent(AgentBase):
             output_type=TestStepsSequenceList,
             system_prompt=self.steps_generation_prompt.get_prompt(),
             name="steps_generator",
+            thinking_level=config.TestCaseGenerationAgentConfig.THINKING_LEVEL
         )
 
         self.test_case_creator_agent = CustomLlmWrapper.create_agent(
@@ -59,6 +61,7 @@ class TestCaseGenerationAgent(AgentBase):
             output_type=GeneratedTestCases,
             system_prompt=self.test_case_creation_prompt.get_prompt(),
             name="test_case_creator",
+            thinking_level=config.TestCaseGenerationAgentConfig.THINKING_LEVEL
         )
 
         # Initialize base agent (as orchestrator placeholder)

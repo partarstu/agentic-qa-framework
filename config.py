@@ -9,6 +9,7 @@ Centralized configuration for the application.
 import os
 
 from dotenv import load_dotenv
+from pydantic_ai.settings import ThinkingLevel
 
 load_dotenv()
 
@@ -87,7 +88,7 @@ PROMPT_GUARD_SERVICE_URL = os.environ.get("PROMPT_GUARD_SERVICE_URL")
 
 # Orchestrator
 class OrchestratorConfig:
-    THINKING_LEVEL = "MINIMAL"
+    THINKING_LEVEL: ThinkingLevel = 'minimal'
     AUTOMATED_TC_LABEL = "automated"
     AGENTS_DISCOVERY_INTERVAL_SECONDS = 300
     TASK_EXECUTION_TIMEOUT = 500.0
@@ -111,7 +112,7 @@ class DashboardAuthConfig:
 
 # Requirements Review Agent
 class RequirementsReviewAgentConfig:
-    THINKING_LEVEL = "HIGH"
+    THINKING_LEVEL: ThinkingLevel = 'high'
     OWN_NAME = "Jira Requirements Reviewer"
     PORT = int(os.environ.get("PORT", "8001"))
     EXTERNAL_PORT = int(os.environ.get("EXTERNAL_PORT", PORT))
@@ -122,7 +123,7 @@ class RequirementsReviewAgentConfig:
 
 # Test Case Classification Agent
 class TestCaseClassificationAgentConfig:
-    THINKING_LEVEL = "MINIMAL"
+    THINKING_LEVEL: ThinkingLevel = 'minimal'
     OWN_NAME = "Test Case Classification Agent"
     PORT = int(os.environ.get("PORT", "8003"))
     EXTERNAL_PORT = int(os.environ.get("EXTERNAL_PORT", PORT))
@@ -133,7 +134,7 @@ class TestCaseClassificationAgentConfig:
 
 # Test Case Generation Agent
 class TestCaseGenerationAgentConfig:
-    THINKING_LEVEL = "MINIMAL"
+    THINKING_LEVEL: ThinkingLevel = 'minimal'
     OWN_NAME = "Test Case Generation Agent"
     PORT = int(os.environ.get("PORT", "8002"))
     EXTERNAL_PORT = int(os.environ.get("EXTERNAL_PORT", PORT))
@@ -144,7 +145,7 @@ class TestCaseGenerationAgentConfig:
 
 # Test Case Review Agent
 class TestCaseReviewAgentConfig:
-    THINKING_LEVEL = "HIGH"
+    THINKING_LEVEL: ThinkingLevel = 'high'
     REVIEW_COMPLETE_STATUS_NAME = "Review Complete"
     OWN_NAME = "Test Case Review Agent"
     PORT = int(os.environ.get("PORT", "8004"))
@@ -156,7 +157,7 @@ class TestCaseReviewAgentConfig:
 
 # Incident Creation Agent
 class IncidentCreationAgentConfig:
-    THINKING_LEVEL = "MEDIUM"
+    THINKING_LEVEL: ThinkingLevel = 'medium'
     OWN_NAME = "Incident Creation Agent"
     PORT = int(os.environ.get("PORT", "8007"))
     EXTERNAL_PORT = int(os.environ.get("EXTERNAL_PORT", PORT))
@@ -176,11 +177,16 @@ class IncidentCreationAgentConfig:
         "INCIDENT_AGENT_PRIORITY_VALUES",
         "High:immediate fix,Medium:normal release,Low:backlog"
     )
+    # Jira statuses considered terminal — bugs in these statuses are excluded from duplicate detection
+    TERMINAL_STATUSES = os.environ.get(
+        "INCIDENT_AGENT_TERMINAL_STATUSES",
+        "Closed,Done,Duplicate,Rejected,Won't Fix,Cannot Reproduce,Resolved"
+    ).split(",")
 
 
 # RAG Update Agent
 class JiraRagUpdateAgentConfig:
-    THINKING_LEVEL = "MEDIUM"
+    THINKING_LEVEL: ThinkingLevel = 'medium'
     OWN_NAME = "Jira RAG Update Agent"
     PORT = int(os.environ.get("PORT", "8006"))
     EXTERNAL_PORT = int(os.environ.get("EXTERNAL_PORT", PORT))
@@ -199,7 +205,7 @@ class RetryConfig:
 class QdrantConfig:
     URL = os.environ.get("QDRANT_URL", "http://localhost")
     API_KEY = os.environ.get("QDRANT_API_KEY")
-    TIMEOUT_SECONDS = float(os.environ.get("QDRANT_TIMEOUT_SECONDS", "30.0"))
+    TIMEOUT_SECONDS = int(os.environ.get("QDRANT_TIMEOUT_SECONDS", "30"))
     PORT = int(os.environ.get("QDRANT_PORT", "6333"))
     GRPC_PORT = int(os.environ.get("QDRANT_GRPC_PORT", "6334"))
     COLLECTION_NAME = os.environ.get("QDRANT_COLLECTION_NAME", "jira_issues")

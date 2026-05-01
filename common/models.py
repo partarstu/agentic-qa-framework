@@ -6,7 +6,7 @@ import hashlib
 from abc import ABC, abstractmethod
 from typing import Literal, Optional
 
-from a2a.types import FileWithBytes
+from a2a.types import FileWithBytes, Part
 from pydantic import BaseModel, Field
 
 
@@ -19,6 +19,14 @@ class JsonSerializableModel(BaseModel):
 
 class AgentExecutionError(JsonSerializableModel):
     error_message: str = Field(description="Error message describing the failure")
+
+
+class AgentRuntimeError(Exception):
+    """Raised when agent execution fails; carries artifact parts for the failed task response."""
+
+    def __init__(self, parts: list[Part], message: str = ""):
+        super().__init__(message)
+        self.parts = parts
 
 
 class BaseAgentResult(JsonSerializableModel):

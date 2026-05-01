@@ -24,7 +24,7 @@ class VectorDbService:
             grpc_port=getattr(config.QdrantConfig, "GRPC_PORT", 6334),
             prefer_grpc=True,
             api_key=getattr(config.QdrantConfig, "API_KEY", None),
-            timeout=getattr(config.QdrantConfig, "TIMEOUT_SECONDS", 30.0),
+            timeout=getattr(config.QdrantConfig, "TIMEOUT_SECONDS", 30),
         )
         self.embedding_service_url = getattr(config.QdrantConfig, "EMBEDDING_SERVICE_URL", None)
         if not self.embedding_service_url:
@@ -157,4 +157,39 @@ class VectorDbService:
             logger.info(f"Deleted documents with IDs {point_ids} from collection {self.collection_name}")
         except Exception:
             logger.exception("Error deleting from Vector DB")
+            raise
+
+    async def scroll_all_ids_by_project(self, project_key: str) -> list[int]:
+        """Retrieves all stored point IDs for a given project key using Qdrant scroll pagination.
+
+        Args:
+            project_key: The project key to filter by.
+
+        Returns:
+            List of all numeric point IDs stored for the project.
+        """
+        try:
+            if not await self.client.collection_exists(self.collection_name):
+                return []
+            ids = []
+            offset = None
+            project_filter = models.Filter(must=[
+                models.FieldCondition(key="project_key", match=models.MatchValue(value=project_key))
+            ])
+            while True:
+                result, next_offset = await self.client.scroll(
+                    collection_name=self.collection_name,
+                    scroll_filter=project_filter,
+                    limit=1000,
+                    offset=offset,
+                    with_payload=False,
+                    with_vectors=False,
+                )
+                ids.extend(p.id for p in result)
+                if next_offset is None:
+                    break
+                offset = next_offset
+            return ids
+        except Exception:
+            logger.exception("Error scrolling Vector DB")
             raise

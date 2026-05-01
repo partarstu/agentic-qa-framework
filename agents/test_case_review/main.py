@@ -31,6 +31,7 @@ class TestCaseReviewAgent(AgentBase):
             output_type=TestCaseReviewFeedbacks,
             system_prompt=TestCaseReviewWithAttachmentsPrompt().get_prompt(),
             name="review_test_cases_with_attachments",
+            thinking_level=config.TestCaseReviewAgentConfig.THINKING_LEVEL
         )
 
         instruction_prompt = TestCaseReviewSystemPrompt(

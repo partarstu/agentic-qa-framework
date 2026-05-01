@@ -14,6 +14,7 @@ from a2a.types import (
 from a2a.utils import new_agent_text_message, new_artifact
 
 from common import utils
+from common.models import AgentRuntimeError
 
 logger = utils.get_logger("agent_executor")
 
@@ -49,6 +50,17 @@ class DefaultAgentExecutor(AgentExecutor):
 
             await self._update_task_status(context, event_queue, TaskState.completed, final=True)
             logger.info(f"Task {task_id} completed successfully.")
+
+        except AgentRuntimeError as e:
+            logger.error(f"Agent execution failed for task {task_id}: {e}")
+            error_event = TaskArtifactUpdateEvent(
+                context_id=context.context_id,
+                task_id=task_id,
+                artifact=new_artifact(name='agent_execution_result', parts=e.parts)
+            )
+            await event_queue.enqueue_event(error_event)
+            await self._update_task_status(context, event_queue, TaskState.failed,
+                                           final=True, message=str(e))
 
         except Exception as e:
             logger.exception(f"Error executing task {task_id}: {e}")

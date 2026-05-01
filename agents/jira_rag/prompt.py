@@ -17,9 +17,9 @@ class JiraRagUpdateSystemPrompt(PromptBase):
         return Path(__file__).resolve().parent
 
     def __init__(
-        self,
-        valid_statuses: list[str],
-        template_file_name: str = "prompt_template.txt",
+            self,
+            valid_statuses: list[str],
+            template_file_name: str = "prompt_template.txt",
     ):
         """
         Initializes the JiraRagUpdateSystemPrompt instance.

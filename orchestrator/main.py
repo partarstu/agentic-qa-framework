@@ -494,6 +494,8 @@ async def update_rag_db(request: ProjectExecutionRequest, api_key: str = Depends
 
         logger.info(f"RAG update completed: {text_content}")
         return {"message": "RAG update completed.", "details": text_content}
+    except HTTPException:
+        raise
     except Exception as e:
         _handle_exception(f"RAG update failed: {e}")
 

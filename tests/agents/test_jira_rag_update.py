@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -20,10 +20,12 @@ def mock_db_service():
         mock_instance.client = AsyncMock()
         yield mock_instance
 
+
 @pytest.fixture
 def agent(mock_db_service):
     with patch("agents.jira_rag.main.jira_mcp_server"):
         return JiraRagAgent()
+
 
 @pytest.mark.asyncio
 async def test_upsert_issues(agent):
@@ -49,13 +51,7 @@ async def test_upsert_issues(agent):
     # call_args.kwargs['data'] should be a JiraIssue
     jira_issue = call_args.kwargs['data']
     assert isinstance(jira_issue, JiraIssue)
-    assert jira_issue.id == "LOW"1
+    assert jira_issue.id == "LOW"
     assert jira_issue.key == "TEST-1"
     assert jira_issue.issue_type == "Bug"
     assert jira_issue.project_key == "TEST_PROJ"
-
-@pytest.mark.asyncio
-async def test_delete_issues(agent):
-    result = await agent.delete_issues([1001])
-    assert "Deleted 1 issues" in result
-    agent.issues_db.delete.assert_called_once_with([1001])

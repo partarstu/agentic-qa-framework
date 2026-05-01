@@ -49,8 +49,8 @@ class JiraRagAgent(AgentBase):
                 self.get_last_update_timestamp,
                 self.save_last_update_timestamp,
                 self.upsert_issues,
-                self.delete_issues,
                 self.search_issues,
+                self.synch_deleted_issues,
             ]
         )
 
@@ -114,15 +114,25 @@ class JiraRagAgent(AgentBase):
             logger.exception("Error upserting issues")
             raise
 
-    async def delete_issues(self, issue_ids: list[int]) -> str:
-        """Deletes a list of Jira issues from the vector DB by their numeric IDs."""
+    async def synch_deleted_issues(self, project_key: str, existing_jira_issue_ids: list[int]) -> str:
+        """Deletes from the vector DB any issues that no longer exist in Jira.
+
+        Args:
+            project_key: The Jira project key to scope the reconciliation.
+            existing_jira_issue_ids: The complete list of issue IDs currently existing in Jira for the project.
+
+        Returns:
+            A message describing how many stale issues were deleted.
+        """
         try:
-            if not issue_ids:
-                return "No issues to delete."
-            await self.issues_db.delete(issue_ids)
-            return f"Deleted {len(issue_ids)} issues."
+            stored_ids = await self.issues_db.scroll_all_ids_by_project(project_key)
+            stale_ids = list(set(stored_ids) - set(existing_jira_issue_ids))
+            if not stale_ids:
+                return "No stale issues found."
+            await self.issues_db.delete(stale_ids)
+            return f"Deleted {len(stale_ids)} stale issues."
         except Exception:
-            logger.exception("Error deleting issues")
+            logger.exception("Error reconciling deleted issues")
             raise
 
     async def search_issues(

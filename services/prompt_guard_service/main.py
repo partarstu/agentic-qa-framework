@@ -20,7 +20,7 @@ MODEL_PATH = config.PROMPT_INJECTION_DETECTION_MODEL_PATH
 
 class PromptGuardRequest(BaseModel):
     prompt: str
-    prompt_description: str | None = ""
+    prompt_description: str = ""
     threshold: float
 
 class PromptGuardResponse(BaseModel):

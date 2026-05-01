@@ -28,6 +28,7 @@ class RequirementsReviewAgent(AgentBase):
             output_type=RequirementsReviewFeedback,
             system_prompt=RequirementsReviewWithAttachmentsPrompt().get_prompt(),
             name="review_with_attachments",
+            thinking_level=config.RequirementsReviewAgentConfig.THINKING_LEVEL
         )
 
         instruction_prompt = RequirementsReviewSystemPrompt(

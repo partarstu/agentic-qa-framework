@@ -30,6 +30,7 @@ logger = utils.get_logger("incident_creation_agent")
 QDRANT_COLLECTION_NAME = getattr(config.QdrantConfig, "TICKETS_COLLECTION_NAME", "jira_issues")
 RAG_MIN_SIMILARITY = getattr(config.IncidentCreationAgentConfig, "MIN_SIMILARITY_SCORE", 0.7)
 BUG_ISSUE_TYPE = getattr(config.QdrantConfig, "BUG_ISSUE_TYPE", "Bug")
+TERMINAL_STATUSES = set(getattr(config.IncidentCreationAgentConfig, "TERMINAL_STATUSES", []))
 JIRA_MCP_SERVER_URL = config.JIRA_MCP_SERVER_URL
 
 jira_mcp_server = MCPServerSSE(url=JIRA_MCP_SERVER_URL, timeout=config.MCP_SERVER_TIMEOUT_SECONDS)
@@ -42,14 +43,13 @@ class IncidentCreationAgent(AgentBase):
     def __init__(self):
         self.main_prompt = IncidentCreationPrompt()
         self.dup_detect_prompt = DuplicateDetectionPrompt()
-
-        model_name = getattr(config, "IncidentCreationAgentConfig", config.TestCaseGenerationAgentConfig).MODEL_NAME
-
+        model_name = config.IncidentCreationAgentConfig.MODEL_NAME
         self.duplicate_detector = CustomLlmWrapper.create_agent(
             model_name=model_name,
             output_type=DuplicateDetectionResult,
             system_prompt=self.dup_detect_prompt.get_prompt(),
             name="duplicate_detector",
+            thinking_level=config.IncidentCreationAgentConfig.THINKING_LEVEL
         )
 
         self._saved_artifact_paths: list[str] = []
@@ -100,7 +100,13 @@ class IncidentCreationAgent(AgentBase):
                     key="issue_type",
                     match=qdrant_models.MatchValue(value=BUG_ISSUE_TYPE),
                 )
-            ]
+            ],
+            must_not=[
+                qdrant_models.FieldCondition(
+                    key="status",
+                    match=qdrant_models.MatchAny(any=list(TERMINAL_STATUSES)),
+                )
+            ] if TERMINAL_STATUSES else [],
         )
 
         hits = await self.vector_db_service.search(
@@ -114,7 +120,11 @@ class IncidentCreationAgent(AgentBase):
         for hit in hits:
             if hit.payload:
                 try:
-                    candidates.append(JiraIssue.model_validate(hit.payload))
+                    issue = JiraIssue.model_validate(hit.payload)
+                    if issue.status and issue.status in TERMINAL_STATUSES:
+                        logger.info(f"Skipping RAG candidate {issue.key} with terminal status '{issue.status}'.")
+                        continue
+                    candidates.append(issue)
                 except Exception as e:
                     logger.warning(f"Failed to parse JiraIssue from payload: {e}")
 
