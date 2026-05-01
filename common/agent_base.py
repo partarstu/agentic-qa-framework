@@ -2,6 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import asyncio
 import base64
 import logging
 from abc import ABC, abstractmethod
@@ -9,6 +10,7 @@ from collections.abc import Sequence
 from contextlib import asynccontextmanager
 from urllib.parse import urlparse
 
+import httpx
 import uvicorn
 from a2a.server.apps import A2AFastAPIApplication
 from a2a.server.request_handlers import DefaultRequestHandler
@@ -20,6 +22,7 @@ from jira import JIRA
 from pydantic import BaseModel
 from pydantic_ai import Agent, Tool
 from pydantic_ai.agent import AgentRunResult
+from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.mcp import MCPServerSSE
 from pydantic_ai.messages import BinaryContent, UserContent
 from pydantic_ai.tools import AgentDepsT, ToolFuncEither
@@ -33,7 +36,6 @@ from common.custom_llm_wrapper import CustomLlmWrapper
 from common.models import AgentExecutionError, JsonSerializableModel
 from common.services.vector_db_service import VectorDbService
 
-MAX_RETRIES = 3
 REGISTRATION_PATH = f"{config.ORCHESTRATOR_URL}/register"
 MCP_SERVER_ATTACHMENTS_FOLDER_PATH = config.MCP_SERVER_ATTACHMENTS_FOLDER_PATH
 ATTACHMENTS_LOCAL_DESTINATION_FOLDER_PATH = config.ATTACHMENTS_LOCAL_DESTINATION_FOLDER_PATH
@@ -103,14 +105,29 @@ class AgentBase(ABC):
             toolsets=self.mcp_servers,
             tools=self.tools,
             deps_type=self.deps_type,
-            retries=MAX_RETRIES,
-            output_retries=MAX_RETRIES,
+            retries=config.RetryConfig.MAX_RETRIES,
+            output_retries=config.RetryConfig.MAX_RETRIES,
         )
 
     async def _get_agent_execution_result(self, received_request: list[UserContent]) -> AgentRunResult:
         usage_limits = UsageLimits(tool_calls_limit=self.get_max_requests_per_task())
-        async with self.agent:
-            return await self.agent.run(received_request, usage_limits=usage_limits)
+        for attempt in range(config.RetryConfig.MAX_RETRIES):
+            try:
+                async with self.agent:
+                    return await self.agent.run(received_request, usage_limits=usage_limits)
+            except (ModelHTTPError, httpx.TransportError) as e:
+                is_retryable = isinstance(e, httpx.TransportError) or (
+                    isinstance(e, ModelHTTPError) and e.status_code in config.RetryConfig.RETRYABLE_STATUS_CODES
+                )
+                if is_retryable and attempt < config.RetryConfig.MAX_RETRIES - 1:
+                    delay = config.RetryConfig.RETRY_BASE_DELAY_SECONDS * (2 ** attempt)
+                    logger.warning(
+                        f"LLM provider request failed: {e} "
+                        f"(attempt {attempt + 1}/{config.RetryConfig.MAX_RETRIES}), retrying in {delay:.0f}s"
+                    )
+                    await asyncio.sleep(delay)
+                else:
+                    raise
 
     async def run(self, received_message: Message) -> Message:
         self.latest_received_message = received_message

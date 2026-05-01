@@ -68,7 +68,6 @@ from orchestrator.models import (
     task_history,
 )
 
-MAX_RETRIES = 3
 
 logger = utils.get_logger("orchestrator")
 
@@ -355,8 +354,8 @@ discovery_agent = CustomLlmWrapper.create_agent(
                  " (this list has the info about the capabilities of each agent). If there is no agent that can "
                  "execute the target task, return an empty string.",
     name="Discovery Agent",
-    retries=MAX_RETRIES,
-    output_retries=MAX_RETRIES,
+    retries=config.RetryConfig.MAX_RETRIES,
+    output_retries=config.RetryConfig.MAX_RETRIES,
 )
 
 # --- For selecting ALL suitable for the task agents ---
@@ -367,8 +366,8 @@ multi_discovery_agent = CustomLlmWrapper.create_agent(
                  "that can handle the target task based on the task's description and a list of available agents. "
                  "If no agents can execute the task, return an empty list.",
     name="Multi-Discovery Agent",
-    retries=MAX_RETRIES,
-    output_retries=MAX_RETRIES,
+    retries=config.RetryConfig.MAX_RETRIES,
+    output_retries=config.RetryConfig.MAX_RETRIES,
 )
 
 
@@ -383,30 +382,38 @@ def _get_results_extractor_agent(output_type: type[JsonSerializableModel] | type
                      "identified no matching information inside of the provided to you input, return an empty result.",
         name="Results Extractor Agent",
         thinking_level=config.OrchestratorConfig.THINKING_LEVEL,
-        retries=MAX_RETRIES,
-        output_retries=MAX_RETRIES,
+        retries=config.RetryConfig.MAX_RETRIES,
+        output_retries=config.RetryConfig.MAX_RETRIES,
     )
 
 
-async def _run_results_extractor_with_retry(user_prompt: str) -> TestExecutionResult | None:
-    """Runs the results extractor with retry on 429 rate limit errors."""
-    _max_retries = 3
-    _rate_limit_base_delay = 60.0
-    for attempt in range(_max_retries):
+async def _run_agent_with_retry(agent_call, base_delay: float = config.RetryConfig.RETRY_BASE_DELAY_SECONDS):
+    """Runs an agent call with retry on transient LLM provider errors."""
+    for attempt in range(config.RetryConfig.MAX_RETRIES):
         try:
-            result = await _get_results_extractor_agent(TestExecutionResult).run(user_prompt)
-            return result.output
-        except ModelHTTPError as e:
-            if e.status_code == 429 and attempt < _max_retries - 1:
-                delay = _rate_limit_base_delay * (2 ** attempt)
+            return await agent_call()
+        except (ModelHTTPError, httpx.TransportError) as e:
+            is_retryable = isinstance(e, httpx.TransportError) or (
+                isinstance(e, ModelHTTPError) and e.status_code in config.RetryConfig.RETRYABLE_STATUS_CODES
+            )
+            if is_retryable and attempt < config.RetryConfig.MAX_RETRIES - 1:
+                delay = base_delay * (2 ** attempt)
                 logger.warning(
-                    f"Rate limit hit for results extractor (attempt {attempt + 1}/{_max_retries}), "
-                    f"retrying in {delay:.0f}s"
+                    f"LLM provider request failed: {e} "
+                    f"(attempt {attempt + 1}/{config.RetryConfig.MAX_RETRIES}), retrying in {delay:.0f}s"
                 )
                 await asyncio.sleep(delay)
             else:
                 raise
-    return None
+
+
+async def _run_results_extractor_with_retry(user_prompt: str) -> TestExecutionResult | None:
+    """Runs the results extractor with retry on transient LLM provider errors."""
+    result = await _run_agent_with_retry(
+        lambda: _get_results_extractor_agent(TestExecutionResult).run(user_prompt),
+        base_delay=config.RetryConfig.LLM_RESULTS_EXTRACTOR_RETRY_BASE_DELAY_SECONDS,
+    )
+    return result.output
 
 
 async def periodic_agent_discovery():
@@ -1264,7 +1271,7 @@ Target task description: "{task_description}".
 The list of all registered with you agents:\n{agents_info}
 """
 
-    result = await multi_discovery_agent.run(user_prompt)
+    result = await _run_agent_with_retry(lambda: multi_discovery_agent.run(user_prompt))
     selected_agent_ids = result.output.ids or []
     valid_agent_ids = []
     for agent_id in selected_agent_ids:
@@ -1317,7 +1324,7 @@ Target task description: "{task_description}".
 
 The list of all registered with you agents:\n{agents_info}
 """
-    result = await discovery_agent.run(user_prompt)
+    result = await _run_agent_with_retry(lambda: discovery_agent.run(user_prompt))
     selected_agent_id = result.output.id or None
     # Verify the selected agent is in our available list
     if selected_agent_id and selected_agent_id in available_agent_ids:

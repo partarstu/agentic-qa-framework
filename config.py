@@ -189,6 +189,13 @@ class JiraRagUpdateAgentConfig:
     MAX_REQUESTS_PER_TASK = 30
 
 
+class RetryConfig:
+    MAX_RETRIES = 3
+    RETRYABLE_STATUS_CODES = {404, 429, 500, 502, 503, 504}
+    RETRY_BASE_DELAY_SECONDS = 5.0
+    LLM_RESULTS_EXTRACTOR_RETRY_BASE_DELAY_SECONDS = 60.0
+
+
 class QdrantConfig:
     URL = os.environ.get("QDRANT_URL", "http://localhost")
     API_KEY = os.environ.get("QDRANT_API_KEY")

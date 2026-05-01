@@ -2,7 +2,9 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import time
 from collections import defaultdict
+from collections.abc import Callable
 from typing import Any
 
 import httpx
@@ -42,6 +44,34 @@ class ZephyrClient(TestManagementClientBase):
             "Authorization": f"Bearer {self.api_token}",
             "Content-Type": "application/json"
         }
+
+    def _request(self, request_fn: Callable[..., httpx.Response], *args, **kwargs) -> httpx.Response:
+        """Makes an HTTP request with retry on transient errors."""
+        for attempt in range(config.RetryConfig.MAX_RETRIES):
+            try:
+                response = request_fn(*args, **kwargs)
+                response.raise_for_status()
+                return response
+            except (httpx.TimeoutException, httpx.ConnectError) as e:
+                if attempt < config.RetryConfig.MAX_RETRIES - 1:
+                    delay = config.RetryConfig.RETRY_BASE_DELAY_SECONDS * (2 ** attempt)
+                    logger.warning(
+                        f"Zephyr API request failed: {e} (attempt {attempt + 1}/{config.RetryConfig.MAX_RETRIES}), "
+                        f"retrying in {delay:.0f}s"
+                    )
+                    time.sleep(delay)
+                else:
+                    raise
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code in config.RetryConfig.RETRYABLE_STATUS_CODES and attempt < config.RetryConfig.MAX_RETRIES - 1:
+                    delay = config.RetryConfig.RETRY_BASE_DELAY_SECONDS * (2 ** attempt)
+                    logger.warning(
+                        f"Zephyr API HTTP {e.response.status_code} error "
+                        f"(attempt {attempt + 1}/{config.RetryConfig.MAX_RETRIES}), retrying in {delay:.0f}s"
+                    )
+                    time.sleep(delay)
+                else:
+                    raise
 
     def add_test_case_review_comment(self, test_case_key: str, comment: str):
         with httpx.Client() as client:
@@ -92,10 +122,9 @@ class ZephyrClient(TestManagementClientBase):
                     "objective": test_case.summary,
                     "precondition": test_case.preconditions,
                 }
-                response = client.post(f"{self.base_url}/testcases", headers=self.headers, json=payload,
-                                       timeout=CLIENT_TIMEOUT)
+                response = self._request(client.post, f"{self.base_url}/testcases", headers=self.headers,
+                                        json=payload, timeout=CLIENT_TIMEOUT)
                 logger.debug(f"Zephyr API response status for test case creation: {response.status_code}")
-                response.raise_for_status()
                 created_test_case = response.json()
 
                 tc_key = created_test_case.get('key', "")
@@ -113,22 +142,16 @@ class ZephyrClient(TestManagementClientBase):
                             } for step in test_case.steps
                         ]
                     }
-                    steps_response = client.post(f"{self.base_url}/testcases/{tc_key}/teststeps",
-                                                 headers=self.headers,
-                                                 json=steps_payload,
-                                                 timeout=CLIENT_TIMEOUT)
-                    steps_response.raise_for_status()
+                    self._request(client.post, f"{self.base_url}/testcases/{tc_key}/teststeps",
+                                 headers=self.headers, json=steps_payload, timeout=CLIENT_TIMEOUT)
                     logger.info(f"Successfully added test steps to test case {tc_key}")
 
                 logger.info(f"Test case '{test_case.name}' created with key: {tc_key}")
                 if tc_key:
                     created_test_case_keys.append(tc_key)
                     logger.info(f"Linking test case {tc_key} to Jira issue {user_story_id}")
-                    issue_link_response = client.post(f"{self.base_url}/testcases/{tc_key}/links/issues",
-                                                      headers=self.headers,
-                                                      json={"issueId": user_story_id},
-                                                      timeout=CLIENT_TIMEOUT)
-                    issue_link_response.raise_for_status()
+                    self._request(client.post, f"{self.base_url}/testcases/{tc_key}/links/issues",
+                                 headers=self.headers, json={"issueId": user_story_id}, timeout=CLIENT_TIMEOUT)
                     logger.info(f"Successfully linked test case {tc_key} to Jira issue {user_story_id}")
         return created_test_case_keys
 
@@ -179,9 +202,8 @@ class ZephyrClient(TestManagementClientBase):
                                                                      params)
             while True:
                 logger.debug(f"Fetching test cases with params: {params}")
-                response = client.get(search_url, headers=self.headers, params=params)
+                response = self._request(client.get, search_url, headers=self.headers, params=params)
                 logger.debug(f"Zephyr API response status for fetching by labels: {response.status_code}")
-                response.raise_for_status()
                 data = response.json()
                 if data['maxResults']:
                     max_results = data['maxResults']
@@ -238,8 +260,7 @@ class ZephyrClient(TestManagementClientBase):
     def _get_test_case_status_id_by_name(self, client, status_name: str, params):
         statuses_url = f"{self.base_url}/statuses?maxResults=100&statusType=TEST_CASE"
         logger.debug(f"Fetching statuses from {statuses_url}")
-        statuses_response = client.get(statuses_url, headers=self.headers, params=params)
-        statuses_response.raise_for_status()
+        statuses_response = self._request(client.get, statuses_url, headers=self.headers, params=params)
         response_json = statuses_response.json()
         logger.debug(f"Zephyr API response for fetching statuses: {response_json}")
         statuses = response_json.get("values", [])
@@ -315,9 +336,9 @@ class ZephyrClient(TestManagementClientBase):
                 if version_id:
                     payload["versionId"] = version_id
 
-                response = client.post(f"{self.base_url}/testexecutions", headers=self.headers, json=payload, timeout=CLIENT_TIMEOUT)
+                response = self._request(client.post, f"{self.base_url}/testexecutions", headers=self.headers,
+                                        json=payload, timeout=CLIENT_TIMEOUT)
                 logger.debug(f"Zephyr API response status for test execution creation: {response.status_code}")
-                response.raise_for_status()
                 execution_id = response.json().get("id")
                 logger.info(f"Test execution created with ID: {execution_id}")
 
@@ -333,15 +354,13 @@ class ZephyrClient(TestManagementClientBase):
     def _link_issue_to_test_execution(self, client: httpx.Client, test_execution_id: int, issue_id: int | str) -> None:
         url = f"{self.base_url}/testexecutions/{test_execution_id}/links/issues"
         logger.info(f"Linking issue {issue_id} to test execution {test_execution_id} via {url}")
-        response = client.post(url, headers=self.headers, json={"issueId": issue_id}, timeout=CLIENT_TIMEOUT)
-        response.raise_for_status()
+        self._request(client.post, url, headers=self.headers, json={"issueId": issue_id}, timeout=CLIENT_TIMEOUT)
         logger.info(f"Successfully linked issue {issue_id} to test execution {test_execution_id}")
 
     def _get_test_steps(self, client, test_case_key):
         logger.debug(f"Fetching test steps of test case: {test_case_key} in order update their test execution status")
         steps_url = f"{self.base_url}/testcases/{test_case_key}/teststeps?maxResults=1000"
-        test_step_response = client.get(steps_url, headers=self.headers)
-        test_step_response.raise_for_status()
+        test_step_response = self._request(client.get, steps_url, headers=self.headers)
         step_data = test_step_response.json()
         return step_data
 
@@ -362,9 +381,9 @@ class ZephyrClient(TestManagementClientBase):
             if description:
                 payload["description"] = description
 
-            response = client.post(f"{self.base_url}/testcycles", headers=self.headers, json=payload, timeout=CLIENT_TIMEOUT)
+            response = self._request(client.post, f"{self.base_url}/testcycles", headers=self.headers,
+                                     json=payload, timeout=CLIENT_TIMEOUT)
             logger.debug(f"Zephyr API response status for test cycle creation: {response.status_code}")
-            response.raise_for_status()
             test_cycle_key = response.json().get("key")
             if not test_cycle_key:
                 raise RuntimeError("Failed to retrieve test cycle key from Zephyr API response.")
@@ -373,14 +392,12 @@ class ZephyrClient(TestManagementClientBase):
 
     def _update_test_case(self, client, tc_url, test_case_data):
         logger.debug(f"Updating test case using {tc_url}.")
-        put_response = client.put(tc_url, headers=self.headers, json=test_case_data, timeout=CLIENT_TIMEOUT)
-        put_response.raise_for_status()
+        self._request(client.put, tc_url, headers=self.headers, json=test_case_data, timeout=CLIENT_TIMEOUT)
 
     def _parse_tc_json(self, client, issue_key, tc) -> TestCase:
         steps_url = f"{self.base_url}/testcases/{tc['key']}/teststeps?maxResults=1000"
         logger.debug(f"Fetching test steps for test case {tc['key']} from {steps_url}")
-        test_step_response = client.get(steps_url, headers=self.headers)
-        test_step_response.raise_for_status()
+        test_step_response = self._request(client.get, steps_url, headers=self.headers)
         logger.debug(f"Successfully fetched test steps for {tc['key']}.")
         step_data = test_step_response.json()
         steps: list[TestStep] = []
@@ -408,8 +425,7 @@ class ZephyrClient(TestManagementClientBase):
 
     def _get_test_case_data(self, client, tc_url):
         logger.debug(f"Fetching current data for test case from {tc_url}")
-        test_case_response = client.get(tc_url, headers=self.headers, timeout=CLIENT_TIMEOUT)
-        test_case_response.raise_for_status()
+        test_case_response = self._request(client.get, tc_url, headers=self.headers, timeout=CLIENT_TIMEOUT)
         return test_case_response.json()
 
     @staticmethod
@@ -442,8 +458,7 @@ class ZephyrClient(TestManagementClientBase):
         url = f"{self.base_url}/testcases/{test_case_key}/links"
         logger.info(f"Fetching linked issues for test case {test_case_key} from {url}")
         with httpx.Client() as client:
-            response = client.get(url, headers=self.headers, timeout=CLIENT_TIMEOUT)
-            response.raise_for_status()
+            response = self._request(client.get, url, headers=self.headers, timeout=CLIENT_TIMEOUT)
             data = response.json()
 
             # The response contains 'issues' and 'webLinks' arrays
@@ -458,11 +473,6 @@ class ZephyrClient(TestManagementClientBase):
         url = f"{self.base_url}/testcases/{test_case_key}/links/issues"
         logger.info(f"Linking issue {issue_id} to test case {test_case_key} via {url} with type {link_type}")
         with httpx.Client() as client:
-            response = client.post(
-                url,
-                headers=self.headers,
-                json={"issueId": issue_id, "type": link_type},
-                timeout=CLIENT_TIMEOUT
-            )
-            response.raise_for_status()
+            self._request(client.post, url, headers=self.headers,
+                          json={"issueId": issue_id, "type": link_type}, timeout=CLIENT_TIMEOUT)
             logger.info(f"Successfully linked issue {issue_id} to test case {test_case_key}")
