@@ -34,6 +34,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request, Security
 from fastapi.security import APIKeyHeader
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
+from pydantic_ai.exceptions import ModelHTTPError
 
 import config
 from common import utils
@@ -77,6 +78,7 @@ setup_memory_logging("orchestrator")
 execution_lock = asyncio.Lock()
 agent_selection_lock = asyncio.Lock()  # Ensures atomic agent selection and reservation
 cancellation_queue = asyncio.Queue()
+_results_extractor_semaphore = asyncio.Semaphore(1)  # Serializes extractor calls to avoid rate limit errors
 
 API_KEY_NAME = "X-API-Key"
 api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=False)
@@ -384,6 +386,27 @@ def _get_results_extractor_agent(output_type: type[JsonSerializableModel] | type
         retries=MAX_RETRIES,
         output_retries=MAX_RETRIES,
     )
+
+
+async def _run_results_extractor_with_retry(user_prompt: str) -> TestExecutionResult | None:
+    """Runs the results extractor with retry on 429 rate limit errors."""
+    _max_retries = 3
+    _rate_limit_base_delay = 60.0
+    for attempt in range(_max_retries):
+        try:
+            result = await _get_results_extractor_agent(TestExecutionResult).run(user_prompt)
+            return result.output
+        except ModelHTTPError as e:
+            if e.status_code == 429 and attempt < _max_retries - 1:
+                delay = _rate_limit_base_delay * (2 ** attempt)
+                logger.warning(
+                    f"Rate limit hit for results extractor (attempt {attempt + 1}/{_max_retries}), "
+                    f"retrying in {delay:.0f}s"
+                )
+                await asyncio.sleep(delay)
+            else:
+                raise
+    return None
 
 
 async def periodic_agent_discovery():
@@ -738,10 +761,24 @@ async def _execute_single_test(agent_id: str, test_case: TestCase,
     user_prompt = f"""
 Test case execution results:\n```{text_results}```
 """
-    result = await _get_results_extractor_agent(TestExecutionResult).run(user_prompt)
-    test_execution_result: TestExecutionResult = result.output
-    if not test_execution_result:
-        _handle_exception("Couldn't map the test execution results received from the agent to the expected format.")
+    try:
+        async with _results_extractor_semaphore:
+            test_execution_result = await _run_results_extractor_with_retry(user_prompt)
+        if not test_execution_result:
+            raise ValueError("Couldn't map the test execution results received from the agent to the expected format.")
+    except Exception as e:
+        logger.error(f"Results extraction failed for test case {test_case.key}: {e}")
+        return TestExecutionResult(
+            stepResults=[],
+            testCaseKey=test_case.key,
+            testCaseName=test_case.name,
+            testExecutionStatus="error",
+            generalErrorMessage=f"Failed to extract test results: {e}",
+            start_timestamp=start_timestamp.isoformat(),
+            end_timestamp=end_timestamp.isoformat(),
+            system_description=f"Agent: {agent_name}, Environment: Standard Test Environment",
+            test_case=test_case,
+        )
 
     test_execution_result.testCaseKey = test_case.key
     if not test_execution_result.start_timestamp:
