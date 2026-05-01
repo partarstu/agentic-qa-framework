@@ -8,6 +8,7 @@ import logging
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from contextlib import asynccontextmanager
+from typing import Any
 from urllib.parse import urlparse
 
 import httpx
@@ -20,7 +21,8 @@ from a2a.utils import get_message_text, new_agent_text_message
 from fastapi import FastAPI
 from jira import JIRA
 from pydantic import BaseModel
-from pydantic_ai import Agent, Tool
+from pydantic_ai import Agent, Tool, AgentRunResult
+from pydantic_ai.settings import ThinkingLevel
 from pydantic_ai.agent import AgentRunResult
 from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.mcp import MCPServerSSE
@@ -33,7 +35,7 @@ from common import utils
 from common.agent_executor import DefaultAgentExecutor
 from common.agent_log_capture import AgentLogCaptureHandler, create_log_file_part
 from common.custom_llm_wrapper import CustomLlmWrapper
-from common.models import AgentExecutionError, JsonSerializableModel
+from common.models import AgentExecutionError, AgentRuntimeError, JsonSerializableModel
 from common.services.vector_db_service import VectorDbService
 
 REGISTRATION_PATH = f"{config.ORCHESTRATOR_URL}/register"
@@ -82,7 +84,7 @@ class AgentBase(ABC):
         self.latest_received_message: Message | None = None
 
     @abstractmethod
-    def get_thinking_level(self) -> str:
+    def get_thinking_level(self) -> ThinkingLevel:
         pass
 
     @abstractmethod
@@ -109,7 +111,7 @@ class AgentBase(ABC):
             output_retries=config.RetryConfig.MAX_RETRIES,
         )
 
-    async def _get_agent_execution_result(self, received_request: list[UserContent]) -> AgentRunResult:
+    async def _get_agent_execution_result(self, received_request: list[UserContent]) -> AgentRunResult[Any] | None:
         usage_limits = UsageLimits(tool_calls_limit=self.get_max_requests_per_task())
         for attempt in range(config.RetryConfig.MAX_RETRIES):
             try:
@@ -128,6 +130,7 @@ class AgentBase(ABC):
                     await asyncio.sleep(delay)
                 else:
                     raise
+        return None
 
     async def run(self, received_message: Message) -> Message:
         self.latest_received_message = received_message
@@ -151,7 +154,15 @@ class AgentBase(ABC):
             logger.exception("Error during agent execution.")
             captured_logs = log_handler.get_logs()
             root_logger.removeHandler(log_handler)
-            return self._get_error_message_with_logs(e, captured_logs, received_message.context_id, received_message.task_id)
+            error_message = self._get_error_message_with_logs(
+                e, captured_logs, received_message.context_id, received_message.task_id
+            )
+            error_text = (
+                "; ".join(f"{type(sub).__name__}: {sub}" for sub in e.exceptions)
+                if isinstance(e, ExceptionGroup)
+                else str(e)
+            )
+            raise AgentRuntimeError(list(error_message.parts), error_text) from e
 
     def _log_llm_comments_if_result_incomplete(self, output: BaseModel | None | str) -> None:
         """Logs LLM comments if the agent result appears empty or incomplete.
