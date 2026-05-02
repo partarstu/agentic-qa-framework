@@ -406,7 +406,7 @@ class ZephyrClient(TestManagementClientBase):
             steps.append(TestStep(
                 action=inline_data.get('description', ''),
                 expected_results=inline_data.get('expectedResult', '').replace("<br>", "\n"),
-                test_data=inline_data.get('testData', '').split('<br>')
+                test_data=(inline_data.get('testData') or '').split('<br>')
             ))
         logger.debug(f"Parsed test case {tc.get('key')} with {len(steps)} steps.")
         return TestCase(
