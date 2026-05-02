@@ -70,6 +70,12 @@ class AllureClient(TestReportingClientBase):
                 step.statusDetails = StatusDetails(message=step_result.actualResults)
             else:
                 step.statusDetails = StatusDetails(message=step_result.errorMessage)
+            if step_result.executionStartTimestamp:
+                step.start = int(datetime.fromisoformat(
+                    step_result.executionStartTimestamp.replace("Z", "+00:00")).timestamp() * 1000)
+            if step_result.executionEndTimestamp:
+                step.stop = int(datetime.fromisoformat(
+                    step_result.executionEndTimestamp.replace("Z", "+00:00")).timestamp() * 1000)
             test_result.steps.append(step)
         end_timestamp_utc = test_execution_result.end_timestamp.replace("Z", "+00:00")
         test_result.stop = int(datetime.fromisoformat(end_timestamp_utc).timestamp() * 1000)

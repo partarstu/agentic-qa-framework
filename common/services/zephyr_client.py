@@ -295,10 +295,13 @@ class ZephyrClient(TestManagementClientBase):
                 for step_result in result.stepResults:
                     step_status = "Pass" if step_result.success else "Fail"
                     actual_result_comment = step_result.errorMessage or step_result.actualResults
-                    test_script_results.append({
+                    step_entry = {
                         "statusName": step_status,
                         "actualResult": actual_result_comment
-                    })
+                    }
+                    if step_result.executionEndTimestamp:
+                        step_entry["actualEndDate"] = self._parse_timestamp(step_result.executionEndTimestamp)
+                    test_script_results.append(step_entry)
 
                 test_case_key = result.testCaseKey
                 step_data = self._get_test_steps(client, test_case_key)

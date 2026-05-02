@@ -197,6 +197,8 @@ class TestStepResult(JsonSerializableModel):
     actualResults: str = Field(description="Actual results based on the execution")
     success: bool = Field(description="Whether the test step passed or failed")
     errorMessage: str = Field(description="Error message if the test step failed")
+    executionStartTimestamp: str | None = Field(default=None, description="Timestamp when the step execution started")
+    executionEndTimestamp: str | None = Field(default=None, description="Timestamp when the step execution ended")
 
 
 class TestExecutionResult(JsonSerializableModel):
