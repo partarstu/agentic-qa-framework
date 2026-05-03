@@ -59,7 +59,7 @@ class VectorDbService:
                 raise
         return None
 
-    async def _ensure_collection(self):
+    async def ensure_collection(self):
         if not await self.client.collection_exists(self.collection_name):
             # Dynamically detect the vector size by embedding a dummy string
             dummy_vec = await self._get_embedding("test")
@@ -107,9 +107,10 @@ class VectorDbService:
             logger.exception("Error querying Vector DB")
             raise
 
-    async def upsert(self, data: VectorizableBaseModel):
+    async def upsert(self, data: VectorizableBaseModel, ensure: bool = True):
         try:
-            await self._ensure_collection()
+            if ensure:
+                await self.ensure_collection()
             text = data.get_embedding_content()
             payload = data.model_dump()
             point_id = data.get_vector_id()
@@ -137,7 +138,7 @@ class VectorDbService:
             Exception: If retrieval from Vector DB fails.
         """
         try:
-            await self._ensure_collection()
+            await self.ensure_collection()
             return await self.client.retrieve(collection_name=self.collection_name, ids=point_ids, )
         except Exception:
             logger.exception("Error retrieving from Vector DB")

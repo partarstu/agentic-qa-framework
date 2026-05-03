@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2025 Taras Paruta (partarstu@gmail.com)
 #
 # SPDX-License-Identifier: Apache-2.0
+import asyncio
 import time
 
 from pydantic_ai.mcp import MCPServerSSE
@@ -104,12 +105,10 @@ class JiraRagAgent(AgentBase):
          Args:
             issues: The list of Jira issues which need to be upserted.
         """
-        count = 0
         try:
-            for issue in issues:
-                await self.issues_db.upsert(data=issue)
-                count += 1
-            return f"Upserted {count} issues."
+            await self.issues_db.ensure_collection()
+            await asyncio.gather(*(self.issues_db.upsert(data=issue, ensure=False) for issue in issues))
+            return f"Upserted {len(issues)} issues."
         except Exception:
             logger.exception("Error upserting issues")
             raise
