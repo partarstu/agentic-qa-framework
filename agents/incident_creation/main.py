@@ -168,6 +168,8 @@ class IncidentCreationAgent(AgentBase):
         # Ensure the destination folder exists
         os.makedirs(local_folder, exist_ok=True)
 
+        total_parts = len(self.latest_received_message.parts)
+        logger.info(f"Saving artifacts: scanning {total_parts} message part(s).")
         for part in self.latest_received_message.parts:
             if isinstance(part.root, FilePart):
                 file_part = part.root
@@ -190,7 +192,9 @@ class IncidentCreationAgent(AgentBase):
                         logger.exception("Failed to save artifact.")
 
         if saved_paths:
-            logger.info(f"Saved {len(saved_paths)} artifacts so that they could be used by MCP server.")
+            logger.info(f"Saved {len(saved_paths)} artifact(s) for MCP server.")
+        else:
+            logger.info("No file artifacts found in the received message parts.")
         return saved_paths
 
     async def _check_if_duplicate(self, input_data: IncidentCreationInput, candidate_key: str,

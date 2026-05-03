@@ -293,12 +293,14 @@ class AgentBase(ABC):
         text_content: str = get_message_text(received_message)
         files_content: list[BinaryContent] = []
         for part in received_message.parts:
-            if isinstance(part, FilePart):
-                file = part.file
+            if isinstance(part.root, FilePart):
+                file = part.root.file
                 if isinstance(file, FileWithBytes):
                     mime_type = file.mime_type
                     content = base64.b64decode(file.bytes)
                     files_content.append(BinaryContent(data=content, media_type=mime_type))
+        if files_content:
+            logger.info(f"Passing {len(files_content)} file(s) to LLM context.")
         all_contents: list[UserContent] = [text_content, *files_content]
         return all_contents
 
