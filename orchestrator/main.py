@@ -68,7 +68,6 @@ from orchestrator.models import (
     task_history,
 )
 
-
 logger = utils.get_logger("orchestrator")
 
 # Set up memory logging for dashboard
@@ -394,7 +393,7 @@ async def _run_agent_with_retry(agent_call, base_delay: float = config.RetryConf
             return await agent_call()
         except (ModelHTTPError, httpx.TransportError) as e:
             is_retryable = isinstance(e, httpx.TransportError) or (
-                isinstance(e, ModelHTTPError) and e.status_code in config.RetryConfig.RETRYABLE_STATUS_CODES
+                    isinstance(e, ModelHTTPError) and e.status_code in config.RetryConfig.RETRYABLE_STATUS_CODES
             )
             if is_retryable and attempt < config.RetryConfig.MAX_RETRIES - 1:
                 delay = base_delay * (2 ** attempt)
@@ -1187,7 +1186,7 @@ async def reserve_agent_waiting_if_needed(task_description: str, task_id: str | 
                 # available. Continue waiting - the suitable agent might become available later.
 
         # No agent was reserved - wait 1s and retry (outside the lock)
-        await asyncio.sleep(1)
+        await asyncio.sleep(10)
 
     # Timeout reached
     _handle_exception(f"Timeout waiting for an available agent to handle task '{task_description}'. "
@@ -1324,8 +1323,11 @@ The list of all registered with you agents:\n{agents_info}
     if selected_agent_id and selected_agent_id in available_agent_ids:
         logger.info(f"Selected agent ID: {selected_agent_id} for task: '{task_description}'", extra={"task_id": task_id})
         return selected_agent_id
-    else:
+    elif selected_agent_id:
         logger.info(f"Model returned invalid agent ID: {selected_agent_id} for task: '{task_description}'", extra={"task_id": task_id})
+        return None
+    else:
+        logger.info(f"Model identified no suitable agent for the task '{task_description}'")
         return None
 
 
