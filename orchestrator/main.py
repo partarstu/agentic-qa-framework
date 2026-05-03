@@ -1148,9 +1148,6 @@ async def _send_task_to_agent(input_data: str, task_description: str) -> Task | 
 async def reserve_agent_waiting_if_needed(task_description: str, task_id: str | None = None) -> tuple[str, AgentCard] | None:
     """Wait for an available agent and atomically reserve it.
 
-    This function handles the waiting loop outside the lock, and only holds
-    the lock during the atomic check-select-reserve operation.
-
     Args:
         task_description: Description of the task to be assigned.
         task_id: Optional ID of the task for logging purposes.
@@ -1167,8 +1164,6 @@ async def reserve_agent_waiting_if_needed(task_description: str, task_id: str | 
 
     max_wait_time = config.OrchestratorConfig.TASK_EXECUTION_TIMEOUT
     start_time = time.time()
-    wait_interval = 30
-    max_wait_interval = 60
 
     while (time.time() - start_time) < max_wait_time:
         # Try to atomically select and reserve an agent
@@ -1191,11 +1186,8 @@ async def reserve_agent_waiting_if_needed(task_description: str, task_id: str | 
                 # If _select_agent returned None, it means no suitable agent is currently
                 # available. Continue waiting - the suitable agent might become available later.
 
-        # No agent was reserved - wait and retry (outside the lock)
-        logger.info(f"No suitable available agent for task '{task_description}'. "
-                    f"Waiting {wait_interval}s before retry...", extra={"task_id": task_id})
-        await asyncio.sleep(wait_interval)
-        wait_interval = min(wait_interval * 1.5, max_wait_interval)  # Exponential backoff with cap
+        # No agent was reserved - wait 1s and retry (outside the lock)
+        await asyncio.sleep(1)
 
     # Timeout reached
     _handle_exception(f"Timeout waiting for an available agent to handle task '{task_description}'. "
