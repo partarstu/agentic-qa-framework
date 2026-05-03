@@ -543,9 +543,13 @@ async def execute_tests(request: ProjectExecutionRequest, api_key: str = Depends
 async def _generate_test_report(all_execution_results, project_key, test_management_client):
     test_cycle_name = f"Automated Test Execution - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
     test_cycle_key = test_management_client.create_test_plan(project_key, test_cycle_name)
+    logger.info(f"Uploading {len(all_execution_results)} test execution result(s) to test management system.")
     test_management_client.create_test_execution(all_execution_results, project_key, test_cycle_key)
+    logger.info("Test execution results upload to test management system completed.")
     reporting_client = get_test_reporting_client(str(Path(__file__).resolve().parent.parent.resolve()))
+    logger.info("Generating HTML test report.")
     reporting_client.generate_report(all_execution_results)
+    logger.info("HTML test report generation completed.")
 
 
 async def _request_incident_creation_for_failed_tests(
