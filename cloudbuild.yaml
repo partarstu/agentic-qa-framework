@@ -64,8 +64,8 @@ steps:
   - name: 'gcr.io/cloud-builders/docker'
     args: [ 'push', 'gcr.io/$PROJECT_ID/jira-rag-agent' ]
 
-  # Pull, tag, push, and deploy jira-mcp-server to Cloud Run (conditional)
-  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+  # Pull, tag, and push jira-mcp-server image (conditional)
+  - name: 'gcr.io/cloud-builders/docker'
     entrypoint: 'bash'
     args:
       - '-c'
@@ -76,8 +76,19 @@ steps:
           echo "Tagging mcp-atlassian image for Google Container Registry..." && \
           docker tag ghcr.io/sooperset/mcp-atlassian:0.11.12 gcr.io/$PROJECT_ID/mcp-atlassian:latest && \
           echo "Pushing mcp-atlassian image to Container Registry..." && \
-          docker push gcr.io/$PROJECT_ID/mcp-atlassian:latest && \
-          echo "Deploying jira-mcp-server to Cloud Run..." && \
+          docker push gcr.io/$PROJECT_ID/mcp-atlassian:latest
+        else
+          echo "Skipping jira-mcp-server pull/tag/push (variable _DEPLOY_JIRA_MCP and _DEPLOY_ALL_SERVICES are not true)"
+        fi
+
+  # Deploy jira-mcp-server to Cloud Run (conditional)
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        if [ "$_DEPLOY_ALL_SERVICES" = "true" ] || [ "$_DEPLOY_JIRA_MCP" = "true" ]; then
+          echo "Deploying jira-mcp-server to Cloud Run..."
           gcloud beta run deploy jira-mcp-server \
             --image=gcr.io/$PROJECT_ID/mcp-atlassian:latest \
             --network=agent-network \
@@ -97,11 +108,11 @@ steps:
             --add-volume-mount=volume=jira-volume,mount-path=$_JIRA_MCP_SERVER_ATTACHMENTS_MOUNT_PATH \
             --concurrency=100
         else
-          echo "Skipping jira-mcp-server pull/tag/push/deploy (variable _DEPLOY_JIRA_MCP and _DEPLOY_ALL_SERVICES are not true)"
+          echo "Skipping jira-mcp-server deploy (variable _DEPLOY_JIRA_MCP and _DEPLOY_ALL_SERVICES are not true)"
         fi
 
-  # Build, push, and deploy embedding-service to Cloud Run (conditional)
-  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+  # Build and push embedding-service image (conditional)
+  - name: 'gcr.io/cloud-builders/docker'
     entrypoint: 'bash'
     args:
       - '-c'
@@ -110,8 +121,19 @@ steps:
           echo "Building embedding-service image..."
           docker build -t gcr.io/$PROJECT_ID/embedding-service -f services/embedding_service/Dockerfile . && \
           echo "Pushing embedding-service image to Container Registry..." && \
-          docker push gcr.io/$PROJECT_ID/embedding-service && \
-          echo "Deploying embedding-service to Cloud Run..." && \
+          docker push gcr.io/$PROJECT_ID/embedding-service
+        else
+          echo "Skipping embedding-service build/push (variable _DEPLOY_EMBEDDING_SERVICE and _DEPLOY_ALL_SERVICES are not true)"
+        fi
+
+  # Deploy embedding-service to Cloud Run (conditional)
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        if [ "$_DEPLOY_ALL_SERVICES" = "true" ] || [ "$_DEPLOY_EMBEDDING_SERVICE" = "true" ]; then
+          echo "Deploying embedding-service to Cloud Run..."
           gcloud beta run deploy embedding-service \
             --image=gcr.io/$PROJECT_ID/embedding-service \
             --network=agent-network \
@@ -128,11 +150,11 @@ steps:
             --set-env-vars=TZ=$_TIMEZONE \
             --concurrency=5
         else
-          echo "Skipping embedding-service build/push/deploy (variable _DEPLOY_EMBEDDING_SERVICE and _DEPLOY_ALL_SERVICES are not true)"
+          echo "Skipping embedding-service deploy (variable _DEPLOY_EMBEDDING_SERVICE and _DEPLOY_ALL_SERVICES are not true)"
         fi
 
-  # Build, push, and deploy prompt-guard-service to Cloud Run (conditional)
-  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+  # Build and push prompt-guard-service image (conditional)
+  - name: 'gcr.io/cloud-builders/docker'
     entrypoint: 'bash'
     args:
       - '-c'
@@ -141,8 +163,19 @@ steps:
           echo "Building prompt-guard-service image..."
           docker build -t gcr.io/$PROJECT_ID/prompt-guard-service -f services/prompt_guard_service/Dockerfile . && \
           echo "Pushing prompt-guard-service image to Container Registry..." && \
-          docker push gcr.io/$PROJECT_ID/prompt-guard-service && \
-          echo "Deploying prompt-guard-service to Cloud Run..." && \
+          docker push gcr.io/$PROJECT_ID/prompt-guard-service
+        else
+          echo "Skipping prompt-guard-service build/push (variable _DEPLOY_PROMPT_GUARD and _DEPLOY_ALL_SERVICES are not true)"
+        fi
+
+  # Deploy prompt-guard-service to Cloud Run (conditional)
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        if [ "$_DEPLOY_ALL_SERVICES" = "true" ] || [ "$_DEPLOY_PROMPT_GUARD" = "true" ]; then
+          echo "Deploying prompt-guard-service to Cloud Run..."
           gcloud beta run deploy prompt-guard-service \
             --image=gcr.io/$PROJECT_ID/prompt-guard-service \
             --network=agent-network \
@@ -158,7 +191,7 @@ steps:
             --set-env-vars=TZ=$_TIMEZONE \
             --concurrency=5
         else
-          echo "Skipping prompt-guard-service build/push/deploy (variable _DEPLOY_PROMPT_GUARD and _DEPLOY_ALL_SERVICES are not true)"
+          echo "Skipping prompt-guard-service deploy (variable _DEPLOY_PROMPT_GUARD and _DEPLOY_ALL_SERVICES are not true)"
         fi
 
 
