@@ -115,6 +115,7 @@ class AgentBase(ABC):
         usage_limits = UsageLimits(tool_calls_limit=self.get_max_requests_per_task())
         for attempt in range(config.RetryConfig.MAX_RETRIES):
             try:
+                logger.info(f"Starting agent run (attempt {attempt + 1}/{config.RetryConfig.MAX_RETRIES})...")
                 async with self.agent:
                     return await self.agent.run(received_request, usage_limits=usage_limits)
             except (ModelHTTPError, httpx.TransportError) as e:
@@ -231,9 +232,9 @@ class AgentBase(ABC):
     async def _lifespan(self, app: FastAPI):
         logger.info(f"{self.agent_name} started.")
         logger.info(f"Using following MCP server URLs: {[server.url for server in self.mcp_servers]}")
-
         yield
-
+        if self.vector_db_service:
+            await self.vector_db_service.close()
         logger.info("Shutting down.")
 
     @staticmethod

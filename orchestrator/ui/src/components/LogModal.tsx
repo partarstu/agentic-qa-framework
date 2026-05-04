@@ -27,7 +27,7 @@ export function LogModal({ isOpen, onClose, taskId, agentId, title }: LogModalPr
 
   const { data: logs, isLoading } = useQuery({
     queryKey: ['logs', taskId, agentId],
-    queryFn: () => dashboardApi.getLogs(100, undefined, taskId, agentId),
+    queryFn: () => dashboardApi.getLogs(100, 0, undefined, taskId, agentId),
     enabled: isOpen,
     refetchInterval: 2000, // Poll every 2s while open
   });

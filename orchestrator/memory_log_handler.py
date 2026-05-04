@@ -130,12 +130,21 @@ class MemoryLogHandler(logging.Handler):
             self._buffer.clear()
 
 
+class _NoiseFilter(logging.Filter):
+    """Exclude high-volume library loggers from the in-memory dashboard buffer."""
+
+    _EXCLUDED_PREFIXES = ("uvicorn.access", "httpx", "hpack", "h11", "httpcore", "anyio")
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return not any(record.name.startswith(p) for p in self._EXCLUDED_PREFIXES)
+
+
 def setup_memory_logging(logger_name: str = "orchestrator") -> MemoryLogHandler:
     """
-    Set up the memory log handler for a logger.
+    Set up the memory log handler on the root logger to capture all application logs.
 
     Args:
-        logger_name: Name of the logger to attach the handler to.
+        logger_name: Unused; kept for backward compatibility.
 
     Returns:
         The MemoryLogHandler instance.
@@ -143,12 +152,10 @@ def setup_memory_logging(logger_name: str = "orchestrator") -> MemoryLogHandler:
     handler = MemoryLogHandler()
     handler.setLevel(logging.DEBUG)
 
-    # Attach to the specified logger
-    logger = logging.getLogger(logger_name)
-
-    # Avoid adding duplicate handlers
-    if not any(isinstance(h, MemoryLogHandler) for h in logger.handlers):
-        logger.addHandler(handler)
+    root_logger = logging.getLogger()
+    if not any(isinstance(h, MemoryLogHandler) for h in root_logger.handlers):
+        handler.addFilter(_NoiseFilter())
+        root_logger.addHandler(handler)
 
     return handler
 

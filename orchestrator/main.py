@@ -89,12 +89,9 @@ class EndpointFilter(logging.Filter):
 
     def filter(self, record: logging.LogRecord) -> bool:
         try:
-            # Uvicorn access logs usually store the path in args[2]
-            # args: (remote_addr, method, path, http_version, status_code)
-            if record.args and len(record.args) >= 3:
-                path = str(record.args[2])
-                if path.startswith("/api/dashboard/"):
-                    return False
+            if "/api/dashboard/" in record.getMessage():
+                record.levelno = logging.DEBUG
+                record.levelname = "DEBUG"
         except Exception:
             pass
         return True
@@ -114,7 +111,7 @@ async def lifespan(app: FastAPI):
         await _discover_agents()
         logger.info("Initial agent discovery finished.")
     except Exception as e:
-        logger.error(f"Initial agent discovery failed: {e}")
+        _record_error(f"Initial agent discovery failed: {e}")
 
     # Start periodic tasks after initial discovery
     discovery_task = asyncio.create_task(periodic_agent_discovery())
@@ -215,9 +212,10 @@ async def trigger_agent_discovery(_: str = Depends(dashboard_auth)):
     try:
         await _discover_agents()
         return {"message": "Agent discovery triggered successfully"}
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.exception("Manual agent discovery failed.")
-        raise HTTPException(status_code=500, detail=f"Discovery failed: {e}")
+        _handle_exception(f"Manual agent discovery failed: {e}")
 
 
 async def _retry_cancellation_task():
@@ -425,7 +423,7 @@ async def periodic_agent_discovery():
             await _discover_agents()
             logger.info("Periodic agent discovery finished.")
         except Exception as e:
-            _handle_exception(f"An error occurred during periodic agent discovery: {e}")
+            _record_error(f"An error occurred during periodic agent discovery: {e}")
 
 
 # noinspection PyUnusedLocal
@@ -434,14 +432,19 @@ async def review_jira_requirements(request: Request, api_key: str = Depends(_val
     """
     Receives webhook from Jira and triggers the requirements review.
     """
-    logger.info("Received an event from Jira, requesting requirements review from an agent.")
-    user_story_id = await _get_jira_issue_key_from_request(request)
-    task_description = "Review the Jira user story"
-    completed_task = await _send_task_to_agent(f"Jira user story with key {user_story_id}",
-                                               task_description)
-    _validate_task_status(completed_task, f"Review of the user story {user_story_id}")
-    logger.info("Received response from an agent, requirements review seems to be complete.")
-    return {"message": f"Review of the requirements for Jira user story {user_story_id} completed."}
+    try:
+        logger.info("Received an event from Jira, requesting requirements review from an agent.")
+        user_story_id = await _get_jira_issue_key_from_request(request)
+        task_description = "Review the Jira user story"
+        completed_task = await _send_task_to_agent(f"Jira user story with key {user_story_id}",
+                                                   task_description)
+        _validate_task_status(completed_task, f"Review of the user story {user_story_id}")
+        logger.info("Received response from an agent, requirements review seems to be complete.")
+        return {"message": f"Review of the requirements for Jira user story {user_story_id} completed."}
+    except HTTPException:
+        raise
+    except Exception as e:
+        _handle_exception(f"Requirements review failed: {e}")
 
 
 # noinspection PyUnusedLocal
@@ -450,25 +453,30 @@ async def trigger_test_case_generation_workflow(request: Request, api_key: str =
     """
     Receives webhook from Jira and triggers the test case generation.
     """
-    logger.info("Received an event from Jira, requesting test case generation from an agent.")
-    user_story_id = await _get_jira_issue_key_from_request(request)
-    generated_test_cases = await _request_test_cases_generation(user_story_id)
-    if not generated_test_cases:
-        _handle_exception(
-            "Test case generation agent responded provided no generated test cases in its response.")
+    try:
+        logger.info("Received an event from Jira, requesting test case generation from an agent.")
+        user_story_id = await _get_jira_issue_key_from_request(request)
+        generated_test_cases = await _request_test_cases_generation(user_story_id)
+        if not generated_test_cases:
+            _handle_exception(
+                "Test case generation agent responded provided no generated test cases in its response.")
 
-    logger.info(
-        f"Got {len(generated_test_cases.test_cases)} generated test cases, requesting their classification.")
-    await _request_test_cases_classification(generated_test_cases.test_cases, user_story_id)
-    logger.info("Received response from an agent, test case classification seems to be complete.")
+        logger.info(
+            f"Got {len(generated_test_cases.test_cases)} generated test cases, requesting their classification.")
+        await _request_test_cases_classification(generated_test_cases.test_cases, user_story_id)
+        logger.info("Received response from an agent, test case classification seems to be complete.")
 
-    logger.info("Requesting review of all generated test cases.")
-    await _request_test_cases_review(generated_test_cases.test_cases, user_story_id)
-    logger.info("Received response from an agent, test case review seems to be complete.")
+        logger.info("Requesting review of all generated test cases.")
+        await _request_test_cases_review(generated_test_cases.test_cases, user_story_id)
+        logger.info("Received response from an agent, test case review seems to be complete.")
 
-    return {
-        "message": f"Test case generation and classification for Jira user story {user_story_id} completed."
-    }
+        return {
+            "message": f"Test case generation and classification for Jira user story {user_story_id} completed."
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        _handle_exception(f"Test case generation workflow failed: {e}")
 
 
 # noinspection PyUnusedLocal
@@ -535,7 +543,12 @@ async def execute_tests(request: ProjectExecutionRequest, api_key: str = Depends
 
         if all_execution_results:
             logger.info("Generating test execution report based on all execution results.")
-            await _generate_test_report(all_execution_results, project_key, test_management_client)
+            try:
+                await _generate_test_report(all_execution_results, project_key, test_management_client)
+            except HTTPException:
+                raise
+            except Exception as e:
+                _handle_exception(f"Failed to generate test report: {e}")
         return {
             "message": f"Test execution completed for project {project_key}. Ran {len(all_execution_results)} tests."}
 
@@ -591,7 +604,7 @@ async def _request_incident_creation_for_failed_tests(
                 f"Incident key: {incident_result.incident_key if incident_result else 'N/A'}"
             )
         except Exception:
-            logger.exception(f"Failed to create incident for test case {result.testCaseKey}.")
+            _record_error(f"Failed to create incident for test case {result.testCaseKey}.")
 
     # Execute all incident creations in parallel
     await asyncio.gather(*[_create_incident_for_result(result) for result in failed_results])
@@ -748,7 +761,7 @@ async def _agent_worker(agent_id: str, queue: asyncio.Queue, results: list[TestE
     except asyncio.CancelledError:
         logger.info(f"Agent worker for {agent_id} cancelled.")
     except Exception as e:
-        logger.exception(f"Unexpected error in agent worker {agent_id}: {e}")
+        _record_error(f"Unexpected error in agent worker {agent_id}: {e}")
 
 
 async def _execute_single_test(agent_id: str, test_case: TestCase,
@@ -1206,23 +1219,15 @@ async def _get_jira_issue_key_from_request(request):
     return user_story_id
 
 
-def _handle_exception(
-        message: str,
-        status_code: int = 500,
-        task_id: str | None = None,
-        agent_id: str | None = None
-) -> HTTPException:
-    """Handle an exception by logging it and recording it for the dashboard.
+def _record_error(message: str, task_id: str | None = None, agent_id: str | None = None) -> None:
+    """Log an error and record it in error_history without raising. Call from within an except block.
 
     Args:
         message: Error message.
-        status_code: HTTP status code.
         task_id: Optional task ID related to the error.
         agent_id: Optional agent ID related to the error.
     """
     logger.exception(message)
-
-    # Record error for dashboard (run in background to avoid blocking)
     error_record = ErrorRecord(
         error_id=str(uuid4()),
         timestamp=datetime.now(),
@@ -1230,11 +1235,26 @@ def _handle_exception(
         task_id=task_id,
         agent_id=agent_id,
         module="orchestrator.main",
-        traceback_snippet=traceback.format_exc()[-500:]  # Last 500 chars of traceback
+        traceback_snippet=traceback.format_exc()[-500:]
     )
-    # Schedule the async add without waiting
     asyncio.create_task(error_history.add(error_record))  # noqa: RUF006
 
+
+def _handle_exception(
+        message: str,
+        status_code: int = 500,
+        task_id: str | None = None,
+        agent_id: str | None = None
+) -> HTTPException:
+    """Record an error in the dashboard and raise an HTTPException.
+
+    Args:
+        message: Error message.
+        status_code: HTTP status code.
+        task_id: Optional task ID related to the error.
+        agent_id: Optional agent ID related to the error.
+    """
+    _record_error(message, task_id, agent_id)
     raise HTTPException(status_code=status_code, detail=message)
 
 
