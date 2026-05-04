@@ -7,9 +7,11 @@ import logging
 import mimetypes
 import os
 import sys
+from datetime import datetime
 from pathlib import Path
 
 from a2a.types import FileWithBytes
+from dateutil import parser
 from pydantic_ai import BinaryContent
 
 import config
@@ -67,3 +69,28 @@ def get_execution_logs_from_artifacts(artifacts: list[FileWithBytes], log_filena
                 continue
 
     return logs
+
+
+def parse_timestamp(timestamp_str: str | None, field_name: str = "timestamp") -> datetime | None:
+    """Parse a timestamp string after removing comma-delimited trailing content."""
+    if not timestamp_str:
+        return None
+
+    cleaned_timestamp = timestamp_str.split(",", 1)[0].strip()
+    if cleaned_timestamp != timestamp_str.strip():
+        get_logger(__name__).warning(
+            f"Timestamp value for '{field_name}' contained trailing content and was cleaned. "
+            f"Original value: '{timestamp_str}'. Cleaned value: '{cleaned_timestamp}'."
+        )
+
+    if not cleaned_timestamp:
+        get_logger(__name__).warning(f"Ignoring empty timestamp value for '{field_name}'.")
+        return None
+
+    try:
+        return parser.parse(cleaned_timestamp)
+    except (OverflowError, TypeError, ValueError) as e:
+        get_logger(__name__).warning(
+            f"Ignoring invalid timestamp value for '{field_name}': '{timestamp_str}'. Error: {e}"
+        )
+        return None

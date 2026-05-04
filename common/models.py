@@ -260,14 +260,33 @@ class IncidentCreationInput(JsonSerializableModel):
     issue_priority_field_id: str = Field(description="The ID of the Jira issue field for issue priority")
 
 
-class DuplicateDetectionResult(JsonSerializableModel):
+class DuplicateCandidate(JsonSerializableModel):
+    issue_id: str | None = Field(
+        default=None,
+        description="Numeric Jira issue ID of the candidate when available"
+    )
+    key: str = Field(description="Jira issue key of the candidate (e.g. 'PROJ-123')")
+    content: str = Field(description="Full content/description of the candidate issue")
+
+
+class DuplicateIssue(JsonSerializableModel):
     issue_id: str = Field(description="The numeric issue ID of existing incident Jira issue, which is a candidate for duplicate")
     issue_key: str = Field(description="The key of existing incident Jira issue, which is a candidate for duplicate")
-    is_duplicate: bool = Field(description="True if the candidate is indeed a duplicate")
     message: str = Field(description="Elaborate Justification of the decision about being or not being a duplicate")
+
+
+class DuplicateDetectionResult(JsonSerializableModel):
+    duplicates: list[DuplicateIssue] = Field(
+        default_factory=list,
+        description="Only the candidates confirmed to be actual duplicates of the current incident"
+    )
+    message: str = Field(
+        default="",
+        description="Summary of the duplicate detection outcome"
+    )
 
 
 class IncidentCreationResult(BaseAgentResult):
     incident_id: int | None = Field(default=None, description="The numeric issue ID of the created incident")
     incident_key: str | None = Field(description="The key of the created incident, is null if duplicates are detected")
-    duplicates: list[DuplicateDetectionResult] = Field(description="All identified duplicate incident detection results, may be empty")
+    duplicates: list[DuplicateIssue] = Field(description="All identified duplicate incidents, may be empty")

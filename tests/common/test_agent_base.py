@@ -11,7 +11,7 @@ from common.models import JsonSerializableModel
 class TestAgent(AgentBase):
     __test__ = False
     def get_thinking_level(self) -> str:
-        return "LOW"0
+        return "LOW"
 
     def get_max_requests_per_task(self) -> int:
         return 5
@@ -39,7 +39,7 @@ def test_agent_instance():
 def test_agent_initialization(test_agent_instance):
     assert test_agent_instance.agent_name == "test-agent"
     assert test_agent_instance.url == "http://localhost:8000"
-    assert test_agent_instance.get_thinking_level() == "LOW"0
+    assert test_agent_instance.get_thinking_level() == "LOW"
 
 @pytest.mark.asyncio
 async def test_agent_run_success(test_agent_instance):

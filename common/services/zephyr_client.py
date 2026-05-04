@@ -8,7 +8,6 @@ from collections.abc import Callable
 from typing import Any
 
 import httpx
-from dateutil import parser
 
 import config
 from common import utils
@@ -300,7 +299,9 @@ class ZephyrClient(TestManagementClientBase):
                         "actualResult": actual_result_comment
                     }
                     if step_result.executionEndTimestamp:
-                        step_entry["actualEndDate"] = self._parse_timestamp(step_result.executionEndTimestamp)
+                        actual_end_date = self._parse_timestamp(step_result.executionEndTimestamp)
+                        if actual_end_date:
+                            step_entry["actualEndDate"] = actual_end_date
                     test_script_results.append(step_entry)
 
                 test_case_key = result.testCaseKey
@@ -332,10 +333,12 @@ class ZephyrClient(TestManagementClientBase):
                     "testCycleKey": test_cycle_key,
                     "statusName": overall_status,
                     "comment": comment,
-                    "actualStartDate": actual_start_date,
-                    "actualEndDate": actual_end_date,
                     "testScriptResults": test_script_results
                 }
+                if actual_start_date:
+                    payload["actualStartDate"] = actual_start_date
+                if actual_end_date:
+                    payload["actualEndDate"] = actual_end_date
                 if version_id:
                     payload["versionId"] = version_id
 
@@ -432,13 +435,11 @@ class ZephyrClient(TestManagementClientBase):
         return test_case_response.json()
 
     @staticmethod
-    def _parse_timestamp(timestamp_str: str) -> str:
-        try:
-            timestamp = parser.parse(timestamp_str)
-            return timestamp.strftime("%Y-%m-%dT%H:%M:%SZ")
-        except ValueError:
-            logger.exception(f"Could not parse timestamp '{timestamp_str}'.")
-            raise
+    def _parse_timestamp(timestamp_str: str) -> str | None:
+        timestamp = utils.parse_timestamp(timestamp_str)
+        if not timestamp:
+            return None
+        return timestamp.strftime("%Y-%m-%dT%H:%M:%SZ")
 
     def fetch_test_case_by_key(self, test_case_key: str) -> TestCase:
         with httpx.Client() as client:

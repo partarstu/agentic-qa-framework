@@ -4,6 +4,7 @@
 
 
 import asyncio
+import time
 
 import httpx
 from qdrant_client import AsyncQdrantClient, models
@@ -29,21 +30,29 @@ class VectorDbService:
         self.embedding_service_url = getattr(config.QdrantConfig, "EMBEDDING_SERVICE_URL", None)
         if not self.embedding_service_url:
             logger.warning("EMBEDDING_SERVICE_URL is not configured. Vector operations requiring embeddings will fail.")
+        timeout_seconds = getattr(config.QdrantConfig, "EMBEDDING_SERVICE_TIMEOUT_SECONDS", 120.0)
+        self._http_client = httpx.AsyncClient(timeout=httpx.Timeout(timeout_seconds))
 
-    async def _get_embedding(self, text: str) -> list[float]|None:
+    async def close(self):
+        """Closes the shared HTTP client. Call this during application shutdown."""
+        await self._http_client.aclose()
+
+    async def _get_embedding(self, text: str) -> list[float] | None:
         if not self.embedding_service_url:
             raise ValueError("EMBEDDING_SERVICE_URL is not configured.")
 
-        timeout_seconds = getattr(config.QdrantConfig, "EMBEDDING_SERVICE_TIMEOUT_SECONDS", 120.0)
-        timeout = httpx.Timeout(timeout_seconds)
         max_retries = 3
+        logger.info(f"Calling embedding service (text length: {len(text)} chars)...")
+        start = time.monotonic()
 
         for attempt in range(max_retries):
             try:
-                async with httpx.AsyncClient(timeout=timeout) as client:
-                    response = await client.post(f"{self.embedding_service_url}/embed", json={"text": text})
-                    response.raise_for_status()
-                    return response.json()["embedding"]
+                response = await self._http_client.post(
+                    f"{self.embedding_service_url}/embed", json={"text": text}
+                )
+                response.raise_for_status()
+                logger.info(f"Embedding service call completed in {time.monotonic() - start:.3f}s")
+                return response.json()["embedding"]
             except (httpx.TimeoutException, httpx.ConnectError) as e:
                 if attempt == max_retries - 1:
                     logger.exception(f"Failed to call embedding service at {self.embedding_service_url} after {max_retries} attempts.")
@@ -90,6 +99,7 @@ class VectorDbService:
         Returns:
             List of scored points matching the query and filter conditions.
         """
+        logger.info(f"Starting vector DB similarity search in '{self.collection_name}'...")
         try:
             if not await self.client.collection_exists(self.collection_name):
                 logger.warning(f"Collection {self.collection_name} doesn't exist yet in DB")

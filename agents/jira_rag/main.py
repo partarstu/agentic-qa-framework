@@ -5,6 +5,7 @@ import asyncio
 import time
 
 from pydantic_ai.mcp import MCPServerSSE
+from pydantic_ai.settings import ThinkingLevel
 from qdrant_client import models as qdrant_models
 
 import config
@@ -55,7 +56,7 @@ class JiraRagAgent(AgentBase):
             ]
         )
 
-    def get_thinking_level(self) -> str:
+    def get_thinking_level(self) -> ThinkingLevel:
         return config.JiraRagUpdateAgentConfig.THINKING_LEVEL
 
     def get_max_requests_per_task(self) -> int:

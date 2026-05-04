@@ -5,6 +5,7 @@
 from typing import TYPE_CHECKING
 
 from pydantic_ai.mcp import MCPServerSSE
+from pydantic_ai.settings import ThinkingLevel
 
 import config
 from agents.requirements_review.prompt import RequirementsReviewSystemPrompt, RequirementsReviewWithAttachmentsPrompt
@@ -49,7 +50,7 @@ class RequirementsReviewAgent(AgentBase):
             tools=[self._review_with_attachments, self.add_jira_comment]
         )
 
-    def get_thinking_level(self) -> str:
+    def get_thinking_level(self) -> ThinkingLevel:
         return config.RequirementsReviewAgentConfig.THINKING_LEVEL
 
     def get_max_requests_per_task(self) -> int:

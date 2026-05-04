@@ -148,8 +148,6 @@ class XrayClient(TestManagementClientBase):
                               test_plan_key: str, version_id: str | None = None) -> None:
         logger.info(f"Creating test execution for test plan {test_plan_key}")
 
-        from datetime import datetime
-
         test_execution_info = {
             "summary": f"Execution of automated tests for Test Plan {test_plan_key}",
             "project": {"key": project_key},
@@ -157,10 +155,24 @@ class XrayClient(TestManagementClientBase):
         }
 
         if test_execution_results:
-            earliest_start_time = min(datetime.fromisoformat(r.start_timestamp) for r in test_execution_results)
-            latest_finish_time = max(datetime.fromisoformat(r.end_timestamp) for r in test_execution_results)
-            test_execution_info["startDate"] = earliest_start_time.isoformat()
-            test_execution_info["finishDate"] = latest_finish_time.isoformat()
+            start_times = [
+                timestamp for timestamp in (
+                    utils.parse_timestamp(r.start_timestamp, "test execution start timestamp")
+                    for r in test_execution_results
+                )
+                if timestamp
+            ]
+            finish_times = [
+                timestamp for timestamp in (
+                    utils.parse_timestamp(r.end_timestamp, "test execution end timestamp")
+                    for r in test_execution_results
+                )
+                if timestamp
+            ]
+            if start_times:
+                test_execution_info["startDate"] = min(start_times).isoformat()
+            if finish_times:
+                test_execution_info["finishDate"] = max(finish_times).isoformat()
 
         if version_id:
             test_execution_info["version"] = version_id
@@ -178,12 +190,16 @@ class XrayClient(TestManagementClientBase):
             test_data = {
                 "testKey": result.testCaseKey,
                 "status": result.testExecutionStatus.upper(),
-                "start": datetime.fromisoformat(result.start_timestamp).isoformat(),
-                "finish": datetime.fromisoformat(result.end_timestamp).isoformat(),
                 "steps": test_steps,
                 "evidences": [{"filename": art.name, "data": art.bytes, "contentType": art.mimeType} for art in
                               result.artifacts] if result.artifacts else []
             }
+            start_time = utils.parse_timestamp(result.start_timestamp, "test execution start timestamp")
+            finish_time = utils.parse_timestamp(result.end_timestamp, "test execution end timestamp")
+            if start_time:
+                test_data["start"] = start_time.isoformat()
+            if finish_time:
+                test_data["finish"] = finish_time.isoformat()
             if result.testExecutionStatus.lower() in ["failed", "error"]:
                 comment = result.generalErrorMessage
                 if result.incident_creation_result:

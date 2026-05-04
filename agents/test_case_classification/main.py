@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from pydantic_ai.mcp import MCPServerSSE
+from pydantic_ai.settings import ThinkingLevel
 
 import config
 from agents.test_case_classification.prompt import TestCaseClassificationSystemPrompt
@@ -34,7 +35,7 @@ class TestCaseClassificationAgent(AgentBase):
             tools=[self.add_labels_to_test_case]
         )
 
-    def get_thinking_level(self) -> str:
+    def get_thinking_level(self) -> ThinkingLevel:
         return config.TestCaseClassificationAgentConfig.THINKING_LEVEL
 
     def get_max_requests_per_task(self) -> int:

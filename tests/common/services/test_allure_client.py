@@ -51,6 +51,40 @@ def test_generate_report_with_results(mock_logger_cls, allure_client):
         assert len(test_result.attachments) == 1
         assert test_result.attachments[0].name == "screen"
 
+def test_generate_report_cleans_invalid_step_timestamp(mock_logger_cls, allure_client):
+    mock_logger = mock_logger_cls.return_value
+
+    with patch("subprocess.run"):
+        results = [TestExecutionResult(
+            stepResults=[
+                TestStepResult(
+                    stepDescription="Step 1",
+                    success=True,
+                    actualResults="OK",
+                    errorMessage="",
+                    testData=[],
+                    expectedResults="",
+                    executionStartTimestamp="2026-05-04T10:33:56.442422967+00:00,expectedResults:",
+                    executionEndTimestamp="not-a-timestamp",
+                )
+            ],
+            testCaseKey="TEST-1",
+            testCaseName="TC1",
+            testExecutionStatus="passed",
+            generalErrorMessage="",
+            start_timestamp="2026-05-04T10:33:00Z",
+            end_timestamp="2026-05-04T10:34:00Z",
+            artifacts=[],
+        )]
+
+        allure_client.generate_report(results)
+
+        test_result = mock_logger.report_result.call_args[0][0]
+        assert test_result.steps[0].start == int(
+            datetime.datetime.fromisoformat("2026-05-04T10:33:56.442422+00:00").timestamp() * 1000
+        )
+        assert test_result.steps[0].stop is None
+
 def test_generate_report_failed(mock_logger_cls, allure_client):
     mock_logger = mock_logger_cls.return_value
     with patch("subprocess.run"):

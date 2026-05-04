@@ -9,7 +9,14 @@ with patch("pydantic_ai.mcp.MCPServerSSE"):
 
 from a2a.types import FileWithBytes
 
-from common.models import DuplicateDetectionResult, IncidentCreationInput, IncidentCreationResult, TestCase
+from common.models import (
+    DuplicateCandidate,
+    DuplicateIssue,
+    DuplicateDetectionResult,
+    IncidentCreationInput,
+    IncidentCreationResult,
+    TestCase,
+)
 
 
 @pytest.fixture
@@ -33,12 +40,12 @@ def mock_config():
 def agent(mock_config):
     with patch("agents.incident_creation.prompt.IncidentCreationPrompt.get_prompt", return_value="Prompt"), \
          patch("agents.incident_creation.prompt.DuplicateDetectionPrompt.get_prompt", return_value="Dup Prompt"), \
-         patch("agents.incident_creation.main.Agent") as mock_agent_cls:
-
-        mock_agent_cls.side_effect = lambda *args, **kwargs: MagicMock()
+         patch("common.custom_llm_wrapper.CustomLlmWrapper.create_agent") as mock_create_agent, \
+         patch("common.agent_base.AgentBase._get_server", return_value=MagicMock()):
+        mock_create_agent.side_effect = [MagicMock(), MagicMock()]
 
         agent_inst = IncidentCreationAgent()
-        agent_inst.vector_db_service = AsyncMock() # Mock the vector DB service
+        agent_inst.vector_db_service = AsyncMock()
         yield agent_inst
 
 def test_agent_init(agent, mock_config):
@@ -107,3 +114,53 @@ async def test_link_issue_to_test_case_tool(agent):
 
         assert "Successfully linked" in result
         mock_client.link_issue_to_test_case.assert_called_with("TC-123", 10001, "Relates")
+
+
+@pytest.mark.asyncio
+async def test_check_all_duplicates_batches_candidates_and_deduplicates_by_key(agent):
+    test_case = TestCase(
+        key="TC-123",
+        labels=[],
+        name="Sample Test Case",
+        summary="Test case for testing",
+        comment="",
+        preconditions=None,
+        steps=[],
+        parent_issue_key=None
+    )
+    input_data = IncidentCreationInput(
+        test_case=test_case,
+        test_execution_result="Failed with NPE",
+        test_step_results=[],
+        system_description="Win10",
+        issue_priority_field_id="priority",
+        issue_severity_field_name="Severity"
+    )
+    candidates = [
+        DuplicateCandidate(issue_id="10001", key="BUG-1", content="First candidate content"),
+        DuplicateCandidate(issue_id="10001", key="BUG-1", content="Duplicate candidate content"),
+        DuplicateCandidate(issue_id="10002", key="BUG-2", content="Second candidate content"),
+    ]
+    expected_result = DuplicateDetectionResult(
+        duplicates=[
+            DuplicateIssue(
+                issue_id="10001",
+                issue_key="BUG-1",
+                message="Same issue"
+            ),
+        ],
+        message="Found 1 duplicate out of 2 unique candidates."
+    )
+    agent.duplicate_detector.run = AsyncMock(return_value=MagicMock(output=expected_result))
+
+    result = await agent._check_all_duplicates(input_data, candidates)
+
+    assert result == expected_result
+    assert result.duplicates == expected_result.duplicates
+    agent.duplicate_detector.run.assert_awaited_once()
+    prompt = agent.duplicate_detector.run.await_args.args[0]
+    assert '"key": "BUG-1"' in prompt
+    assert '"key": "BUG-2"' in prompt
+    assert "First candidate content" in prompt
+    assert "Second candidate content" in prompt
+    assert "Duplicate candidate content" not in prompt

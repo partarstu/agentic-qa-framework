@@ -4,6 +4,7 @@
 
 from pydantic_ai.mcp import MCPServerSSE
 from pydantic_ai.messages import BinaryContent
+from pydantic_ai.settings import ThinkingLevel
 
 import config
 from agents.test_case_generation.prompt import (
@@ -83,7 +84,7 @@ class TestCaseGenerationAgent(AgentBase):
             tools=[self._upload_test_cases_into_test_management_system, self._generate_test_cases],
         )
 
-    def get_thinking_level(self) -> str:
+    def get_thinking_level(self) -> ThinkingLevel:
         return config.TestCaseGenerationAgentConfig.THINKING_LEVEL
 
     def get_max_requests_per_task(self) -> int:

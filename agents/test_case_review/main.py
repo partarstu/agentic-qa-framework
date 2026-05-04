@@ -5,6 +5,7 @@
 from typing import TYPE_CHECKING
 
 from pydantic_ai.mcp import MCPServerSSE
+from pydantic_ai.settings import ThinkingLevel
 
 import config
 from agents.test_case_review.prompt import TestCaseReviewSystemPrompt, TestCaseReviewWithAttachmentsPrompt
@@ -52,7 +53,7 @@ class TestCaseReviewAgent(AgentBase):
             tools=[self.add_review_feedback, self.set_test_case_status_to_review_complete, self._review_test_cases_with_attachments]
         )
 
-    def get_thinking_level(self) -> str:
+    def get_thinking_level(self) -> ThinkingLevel:
         return config.TestCaseReviewAgentConfig.THINKING_LEVEL
 
     def get_max_requests_per_task(self) -> int:

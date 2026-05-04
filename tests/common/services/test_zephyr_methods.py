@@ -52,6 +52,42 @@ def test_create_test_execution(mock_post, mock_get, zephyr_client):
     assert mock_get.called
     assert mock_post.called
 
+@patch("httpx.Client.get")
+@patch("httpx.Client.post")
+def test_create_test_execution_ignores_invalid_timestamps(mock_post, mock_get, zephyr_client):
+    mock_post.return_value.status_code = 201
+    mock_post.return_value.json.return_value = {"id": "EXEC-1"}
+
+    mock_get.return_value.status_code = 200
+    mock_get.return_value.json.return_value = {"values": []}
+
+    results = [TestExecutionResult(
+        stepResults=[
+            TestStepResult(
+                stepDescription="Step 1",
+                success=True,
+                actualResults="OK",
+                errorMessage="",
+                testData=[],
+                expectedResults="",
+                executionEndTimestamp="not-a-timestamp",
+            )
+        ],
+        testCaseKey="TEST-1",
+        testCaseName="TC1",
+        testExecutionStatus="passed",
+        generalErrorMessage="",
+        start_timestamp="2023-01-01T10:00:00,unexpected",
+        end_timestamp="not-a-timestamp",
+    )]
+
+    zephyr_client.create_test_execution(results, "PROJ", "CYCLE-1")
+
+    payload = mock_post.call_args.kwargs["json"]
+    assert payload["actualStartDate"] == "2023-01-01T10:00:00Z"
+    assert "actualEndDate" not in payload
+    assert "actualEndDate" not in payload["testScriptResults"][0]
+
 @patch("httpx.Client.post")
 def test_create_test_plan(mock_post, zephyr_client):
     mock_post.return_value.status_code = 201

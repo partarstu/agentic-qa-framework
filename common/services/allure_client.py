@@ -42,8 +42,11 @@ class AllureClient(TestReportingClientBase):
         test_result = TestResult()
         test_result.name = test_execution_result.testCaseName
         test_result.uuid = str(uuid.uuid4())
-        test_result.start = int(
-            datetime.fromisoformat(test_execution_result.start_timestamp.replace("Z", "+00:00")).timestamp() * 1000)
+        test_result.start = self._timestamp_to_millis(
+            test_execution_result.start_timestamp,
+            "test execution start timestamp",
+            fallback_to_now=True
+        )
 
         # Extract logs from artifacts if available using the common utility
         logs_list = utils.get_execution_logs_from_artifacts(test_execution_result.artifacts)
@@ -71,14 +74,25 @@ class AllureClient(TestReportingClientBase):
             else:
                 step.statusDetails = StatusDetails(message=step_result.errorMessage)
             if step_result.executionStartTimestamp:
-                step.start = int(datetime.fromisoformat(
-                    step_result.executionStartTimestamp.replace("Z", "+00:00")).timestamp() * 1000)
+                step_start = self._timestamp_to_millis(
+                    step_result.executionStartTimestamp,
+                    "step execution start timestamp"
+                )
+                if step_start is not None:
+                    step.start = step_start
             if step_result.executionEndTimestamp:
-                step.stop = int(datetime.fromisoformat(
-                    step_result.executionEndTimestamp.replace("Z", "+00:00")).timestamp() * 1000)
+                step_stop = self._timestamp_to_millis(
+                    step_result.executionEndTimestamp,
+                    "step execution end timestamp"
+                )
+                if step_stop is not None:
+                    step.stop = step_stop
             test_result.steps.append(step)
-        end_timestamp_utc = test_execution_result.end_timestamp.replace("Z", "+00:00")
-        test_result.stop = int(datetime.fromisoformat(end_timestamp_utc).timestamp() * 1000)
+        test_result.stop = self._timestamp_to_millis(
+            test_execution_result.end_timestamp,
+            "test execution end timestamp",
+            fallback_to_now=True
+        )
 
         if test_execution_result.artifacts:
             for artifact in test_execution_result.artifacts:
@@ -92,6 +106,16 @@ class AllureClient(TestReportingClientBase):
                     test_result.attachments.append(
                         Attachment(name=artifact.name, source=unique_filename, type=artifact.mime_type))
         self.file_logger.report_result(test_result)
+
+    @staticmethod
+    def _timestamp_to_millis(timestamp_str: str | None, field_name: str, fallback_to_now: bool = False) -> int | None:
+        timestamp = utils.parse_timestamp(timestamp_str, field_name)
+        if not timestamp:
+            if fallback_to_now:
+                logger.warning(f"Using current time because '{field_name}' could not be parsed.")
+                return int(datetime.now().timestamp() * 1000)
+            return None
+        return int(timestamp.timestamp() * 1000)
 
     def _generate_html(self):
         logger.info(f"Generating Allure HTML report in {self.report_dir}...")

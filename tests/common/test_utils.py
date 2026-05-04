@@ -52,3 +52,19 @@ def test_fetch_media_file_content_from_local_invalid_mime():
          pytest.raises(RuntimeError, match="not a media file"):
 
          utils.fetch_media_file_content_from_local("test.txt", "/tmp")
+
+
+def test_parse_timestamp_cleans_trailing_comma_content():
+    timestamp = utils.parse_timestamp(
+        "2026-05-04T10:33:56.442422967+00:00,expectedResults:",
+        "step execution start timestamp"
+    )
+
+    assert timestamp is not None
+    assert timestamp.year == 2026
+    assert timestamp.microsecond == 442422
+    assert timestamp.utcoffset().total_seconds() == 0
+
+
+def test_parse_timestamp_returns_none_for_invalid_value():
+    assert utils.parse_timestamp("not-a-timestamp", "step execution start timestamp") is None

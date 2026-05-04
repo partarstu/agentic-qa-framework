@@ -62,6 +62,29 @@ def test_create_test_execution(mock_request, xray_client):
     args, _ = mock_request.call_args
     assert "import/execution" in args[1]
 
+@patch("httpx.Client.request")
+def test_create_test_execution_ignores_invalid_timestamps(mock_request, xray_client):
+    mock_request.return_value.status_code = 200
+    mock_request.return_value.json.return_value = {"id": "EXEC-1"}
+
+    results = [TestExecutionResult(
+        stepResults=[],
+        testCaseKey="TEST-1",
+        testCaseName="TC1",
+        testExecutionStatus="passed",
+        generalErrorMessage="",
+        start_timestamp="2023-01-01T10:00:00,unexpected",
+        end_timestamp="not-a-timestamp",
+    )]
+
+    xray_client.create_test_execution(results, "PROJ", "PLAN-1")
+
+    payload = mock_request.call_args.kwargs["json"]
+    assert payload["info"]["startDate"] == "2023-01-01T10:00:00"
+    assert "finishDate" not in payload["info"]
+    assert payload["tests"][0]["start"] == "2023-01-01T10:00:00"
+    assert "finish" not in payload["tests"][0]
+
 @patch("httpx.Client.post")
 def test_create_test_plan(mock_post, xray_client):
     # create_test_plan calls _execute_graphql_query -> uses mock_post
