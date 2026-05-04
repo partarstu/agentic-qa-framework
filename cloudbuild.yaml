@@ -123,6 +123,7 @@ steps:
             --allow-unauthenticated \
             --memory=8Gi \
             --max-instances=1 \
+            --min-instances=1 \
             --port=8080 \
             --set-env-vars=TZ=$_TIMEZONE \
             --concurrency=5
@@ -180,6 +181,7 @@ steps:
             --memory=2Gi \
             --cpu=1 \
             --max-instances=1 \
+            --min-instances=1 \
             --use-http2 \
             --port=6334 \
             --add-volume=type=cloud-storage,name=qdrant-storage,bucket=$_BUCKET_NAME,mount-options=only-dir=$_QDRANT_STORAGE_FOLDER \

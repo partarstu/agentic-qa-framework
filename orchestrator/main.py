@@ -90,8 +90,7 @@ class EndpointFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         try:
             if "/api/dashboard/" in record.getMessage():
-                record.levelno = logging.DEBUG
-                record.levelname = "DEBUG"
+                return False
         except Exception:
             pass
         return True

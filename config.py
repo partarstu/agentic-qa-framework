@@ -88,7 +88,7 @@ PROMPT_GUARD_SERVICE_URL = os.environ.get("PROMPT_GUARD_SERVICE_URL")
 
 # Orchestrator
 class OrchestratorConfig:
-    THINKING_LEVEL: ThinkingLevel = 'minimal'
+    THINKING_LEVEL: ThinkingLevel = 'low'
     AUTOMATED_TC_LABEL = "automated"
     AGENTS_DISCOVERY_INTERVAL_SECONDS = 300
     TASK_EXECUTION_TIMEOUT = 500.0
