@@ -112,7 +112,7 @@ class RagUpdateResult(BaseAgentResult):
 
 
 class RequirementsReviewFeedback(BaseAgentResult):
-    suggested_improvements: str = Field(description="List of improvements suggested by the requirements review")
+    suggested_improvements: str = Field(description="List of improvements suggested by the requirements review, in plain text")
 
 
 class AcceptanceCriteriaItem(JsonSerializableModel):

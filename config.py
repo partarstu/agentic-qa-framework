@@ -112,7 +112,7 @@ class DashboardAuthConfig:
 
 # Requirements Review Agent
 class RequirementsReviewAgentConfig:
-    THINKING_LEVEL: ThinkingLevel = 'high'
+    THINKING_LEVEL: ThinkingLevel = 'medium'
     OWN_NAME = "Jira Requirements Reviewer"
     PORT = int(os.environ.get("PORT", "8001"))
     EXTERNAL_PORT = int(os.environ.get("EXTERNAL_PORT", PORT))
@@ -145,7 +145,7 @@ class TestCaseGenerationAgentConfig:
 
 # Test Case Review Agent
 class TestCaseReviewAgentConfig:
-    THINKING_LEVEL: ThinkingLevel = 'high'
+    THINKING_LEVEL: ThinkingLevel = 'medium'
     REVIEW_COMPLETE_STATUS_NAME = "Review Complete"
     OWN_NAME = "Test Case Review Agent"
     PORT = int(os.environ.get("PORT", "8004"))

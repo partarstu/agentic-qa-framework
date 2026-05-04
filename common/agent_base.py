@@ -353,7 +353,8 @@ class AgentBase(ABC):
     @staticmethod
     def add_jira_comment(issue_key: str, comment: str) -> str:
         """
-        Adds a comment (e.g. a review feedback et.) to a Jira issue.
+        Adds a comment (e.g. a review feedback et.) to a Jira issue. Always use exactly this tool if you need to add a comment to a Jira
+        issue.
 
         Args:
             issue_key: The key of the Jira issue (e.g., 'PROJ-123').
