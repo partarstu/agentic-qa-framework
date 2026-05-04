@@ -352,6 +352,7 @@ discovery_agent = CustomLlmWrapper.create_agent(
                  "execute the target task, return an empty string.",
     name="Discovery Agent",
     retries=config.RetryConfig.MAX_RETRIES,
+    thinking_level=config.OrchestratorConfig.THINKING_LEVEL,
     output_retries=config.RetryConfig.MAX_RETRIES,
 )
 
@@ -364,6 +365,7 @@ multi_discovery_agent = CustomLlmWrapper.create_agent(
                  "If no agents can execute the task, return an empty list.",
     name="Multi-Discovery Agent",
     retries=config.RetryConfig.MAX_RETRIES,
+    thinking_level=config.OrchestratorConfig.THINKING_LEVEL,
     output_retries=config.RetryConfig.MAX_RETRIES,
 )
 
