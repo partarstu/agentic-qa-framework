@@ -214,9 +214,8 @@ steps:
             --memory=2Gi \
             --cpu=1 \
             --max-instances=1 \
-            --min-instances=1 \
-            --use-http2 \
-            --port=6334 \
+            --min-instances=1 \            
+            --port=6333 \
             --add-volume=type=cloud-storage,name=qdrant-storage,bucket=$_BUCKET_NAME,mount-options=only-dir=$_QDRANT_STORAGE_FOLDER \
             --add-volume-mount=volume=qdrant-storage,mount-path=/qdrant/storage \
             --set-secrets=QDRANT__SERVICE__API_KEY=QDRANT_API_KEY:latest \
