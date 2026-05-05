@@ -4,6 +4,7 @@
 
 
 import asyncio
+import json
 import time
 
 import httpx
@@ -68,8 +69,23 @@ class VectorDbService:
                 raise
         return None
 
+    async def _collection_exists(self) -> bool:
+        """Checks collection existence with retries to handle transient empty-body responses from the server."""
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                return await self.client.collection_exists(self.collection_name)
+            except json.JSONDecodeError:
+                if attempt == max_retries - 1:
+                    logger.exception(f"Failed to check collection existence after {max_retries} attempts.")
+                    raise
+                wait_time = 2 ** attempt
+                logger.warning(f"Empty response body from Qdrant on collection_exists (attempt {attempt + 1}/{max_retries}). Retrying in {wait_time}s...")
+                await asyncio.sleep(wait_time)
+        return False
+
     async def ensure_collection(self):
-        if not await self.client.collection_exists(self.collection_name):
+        if not await self._collection_exists():
             # Dynamically detect the vector size by embedding a dummy string
             dummy_vec = await self._get_embedding("test")
             vector_size = len(dummy_vec)
@@ -101,7 +117,7 @@ class VectorDbService:
         """
         logger.info(f"Starting vector DB similarity search in '{self.collection_name}'...")
         try:
-            if not await self.client.collection_exists(self.collection_name):
+            if not await self._collection_exists():
                 logger.warning(f"Collection {self.collection_name} doesn't exist yet in DB")
                 return []
             embedding = await self._get_embedding(query_text)
@@ -180,7 +196,7 @@ class VectorDbService:
             List of all numeric point IDs stored for the project.
         """
         try:
-            if not await self.client.collection_exists(self.collection_name):
+            if not await self._collection_exists():
                 return []
             ids = []
             offset = None
