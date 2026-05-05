@@ -207,7 +207,6 @@ class QdrantConfig:
     API_KEY = os.environ.get("QDRANT_API_KEY")
     TIMEOUT_SECONDS = int(os.environ.get("QDRANT_TIMEOUT_SECONDS", "30"))
     PORT = int(os.environ.get("QDRANT_PORT", "6333"))
-    GRPC_PORT = int(os.environ.get("QDRANT_GRPC_PORT", "6334"))
     COLLECTION_NAME = os.environ.get("QDRANT_COLLECTION_NAME", "jira_issues")
     TICKETS_COLLECTION_NAME = os.environ.get("QDRANT_TICKETS_COLLECTION_NAME", "jira_issues")
     METADATA_COLLECTION_NAME = os.environ.get("QDRANT_METADATA_COLLECTION_NAME", "rag_metadata")

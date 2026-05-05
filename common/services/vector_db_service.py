@@ -4,7 +4,6 @@
 
 
 import asyncio
-import json
 import time
 
 import httpx
@@ -23,8 +22,6 @@ class VectorDbService:
         self.client = AsyncQdrantClient(
             url=getattr(config.QdrantConfig, "URL", "http://localhost"),
             port=getattr(config.QdrantConfig, "PORT", 6333),
-            grpc_port=getattr(config.QdrantConfig, "GRPC_PORT", 6334),
-            prefer_grpc=False,
             api_key=getattr(config.QdrantConfig, "API_KEY", None),
             timeout=getattr(config.QdrantConfig, "TIMEOUT_SECONDS", 30),
         )
@@ -70,19 +67,9 @@ class VectorDbService:
         return None
 
     async def _collection_exists(self) -> bool:
-        """Checks collection existence with retries to handle transient empty-body responses from the server."""
-        max_retries = 3
-        for attempt in range(max_retries):
-            try:
-                return await self.client.collection_exists(self.collection_name)
-            except json.JSONDecodeError:
-                if attempt == max_retries - 1:
-                    logger.exception(f"Failed to check collection existence after {max_retries} attempts.")
-                    raise
-                wait_time = 2 ** attempt
-                logger.warning(f"Empty response body from Qdrant on collection_exists (attempt {attempt + 1}/{max_retries}). Retrying in {wait_time}s...")
-                await asyncio.sleep(wait_time)
-        return False
+        """Checks collection existence by listing all collections to avoid the /exists endpoint's empty-body issue."""
+        collections = await self.client.get_collections()
+        return any(c.name == self.collection_name for c in collections.collections)
 
     async def ensure_collection(self):
         if not await self._collection_exists():

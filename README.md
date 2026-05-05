@@ -201,7 +201,6 @@ TEMPERATURE=0.0 # Default: 0.0. Temperature parameter for models.
 # Qdrant Vector Database (for RAG and semantic search)
 QDRANT_URL=http://localhost # Default: http://localhost. URL of the Qdrant server.
 QDRANT_PORT=6333 # Default: 6333. Port of the Qdrant server.
-QDRANT_GRPC_PORT=6334 # Default: 6334. gRPC Port of the Qdrant server.
 QDRANT_API_KEY= # Optional. API key for Qdrant authentication.
 QDRANT_COLLECTION_NAME=jira_issues # Default: jira_issues. Name of the main collection for Jira issues.
 QDRANT_METADATA_COLLECTION_NAME=rag_metadata # Default: rag_metadata. Name of the collection for RAG metadata.
