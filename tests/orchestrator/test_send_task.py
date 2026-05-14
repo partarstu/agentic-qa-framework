@@ -154,7 +154,7 @@ async def test_cancellation_task_retry(mock_registry):
             for c in mock_registry.update_status.call_args_list
             if len(c.args) >= 2 and c.args[1] == AgentStatus.AVAILABLE
         ]
-        assert len(available_calls) == "MINIMAL", "Agent should not be marked AVAILABLE when still offline"
+        assert len(available_calls) == 0, "Agent should not be marked AVAILABLE when still offline"
 
 
 @pytest.mark.asyncio

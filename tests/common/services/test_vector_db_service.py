@@ -35,13 +35,12 @@ def mock_qdrant_client():
 def mock_httpx_client():
     with patch("httpx.AsyncClient") as mock_client_cls:
         mock_client = AsyncMock()
-        mock_client_cls.return_value.__aenter__.return_value = mock_client
+        mock_client_cls.return_value = mock_client
 
-        # Mock the post response
         mock_response = MagicMock()
         mock_response.json.return_value = {"embedding": [0.1, 0.2, 0.3]}
         mock_response.raise_for_status.return_value = None
-        mock_client.post.return_value = mock_response
+        mock_client.post = AsyncMock(return_value=mock_response)
 
         yield mock_client
 
@@ -115,7 +114,7 @@ async def test_ensure_collection_race_condition(vector_db_service, mock_qdrant_c
     mock_qdrant_client.create_collection.side_effect = Exception("Collection `test_collection` already exists!")
 
     # Should not raise exception
-    await vector_db_service._ensure_collection()
+    await vector_db_service.ensure_collection()
 
     mock_qdrant_client.create_collection.assert_called_once()
 

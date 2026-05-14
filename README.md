@@ -44,7 +44,7 @@ Watch a demo of QuAIA™ in action:
 * **Integration with External Systems:** Supports integration with Jira by utilizing its MCP server.
 * **Vector Database Integration:** Uses Qdrant for semantic search capabilities, enabling intelligent duplicate detection and RAG-based features.
 * **Embedding Service:** Dedicated microservice for generating text embeddings using SentenceTransformer models.
-* **Test Management System Integration:** Integrates with Zephyr for operations related to test case management.
+* **Test Management System Integration:** Integrates with Zephyr and Xray for operations related to test case management.
 * **Test Reporting:** Generates detailed Allure reports for test execution results.
 * **Extensible:** Designed for easy addition of new agents, tools, and integrations.
 
@@ -350,10 +350,10 @@ access the dashboard. You will be prompted to log in with your configured creden
 #### Dashboard Features
 
 * **Summary View:** Displays orchestrator uptime, total tasks processed, success/failure rates, and agent health overview.
-* **Agent Grid:** Shows all registered agents with their current status (AVAILABLE, BUSY, BROKEN), capabilities, and last activity.
+* **Agent Grid:** Shows all registered agents with their current status (AVAILABLE, BUSY, BROKEN), capabilities, and last activity. Includes a manual "Discover Agents" button to trigger re-discovery on demand.
 * **Task History:** Lists recent tasks with execution details, duration, assigned agent, and status. Click on a task to view its execution logs.
 * **Error Log:** Displays recent errors with context, including traceback snippets and related task/agent information.
-* **Log Viewer:** Filterable log viewer supporting level filtering (INFO, WARNING, ERROR) and task/agent-specific log queries.
+* **Log Viewer:** Filterable log viewer supporting level filtering (INFO, WARNING, ERROR), task/agent-specific log queries, and paginated log loading ("Load More").
 
 #### Starting the UI Development Server (For Development Only)
 
@@ -533,7 +533,8 @@ The dashboard exposes REST API endpoints for programmatic access to monitoring d
 * `GET /api/dashboard/agents` - Get detailed status of all registered agents.
 * `GET /api/dashboard/tasks?limit=50` - Get recent tasks with execution details.
 * `GET /api/dashboard/errors?limit=20` - Get recent errors with context.
-* `GET /api/dashboard/logs?limit=100&level=ERROR&task_id=xxx&agent_id=yyy` - Get filtered application logs.
+* `GET /api/dashboard/logs?limit=100&offset=0&level=ERROR&task_id=xxx&agent_id=yyy` - Get filtered application logs (supports pagination via `offset`).
+* `POST /api/dashboard/discovery` - Manually trigger agent discovery.
 
 ## Running Tests
 

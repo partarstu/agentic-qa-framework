@@ -35,7 +35,7 @@ def agent(mock_config):
         patch("agents.test_case_generation.prompt.AcExtractionPrompt.get_prompt", return_value="AC Prompt"),
         patch("agents.test_case_generation.prompt.StepsGenerationPrompt.get_prompt", return_value="Steps Prompt"),
         patch("agents.test_case_generation.prompt.TestCaseCreationPrompt.get_prompt", return_value="TC Prompt"),
-        patch("agents.test_case_generation.main.Agent") as mock_agent_cls,
+        patch("common.custom_llm_wrapper.Agent") as mock_agent_cls,
     ):
         # Ensure Agent() returns a new mock each time
         mock_agent_cls.side_effect = lambda *args, **kwargs: MagicMock()

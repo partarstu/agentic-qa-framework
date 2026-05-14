@@ -41,8 +41,7 @@ This skill is designed to run with minimal interruption.
 5. Analyze changes and update documentation (README, skills)
 6. Present changes for user review
 7. Commit and push changes
-8. Create clean `temp` branch from `main` with squashed changes
-9. Create pull request
+8. Create pull request
 
 ## Prerequisites
 
@@ -183,36 +182,10 @@ git push -u origin HEAD
 
 Use appropriate commit prefixes: `chore:`, `fix:`, `docs:` for different change types.
 
-### Step 8: Create Clean Temp Branch
-
-#### 8.1: Store Branch and Create Temp
+### Step 8: Create Pull Request
 
 ```powershell
-$currentBranch = git branch --show-current
-git fetch origin main
-git checkout -b temp origin/main
-```
-
-#### 8.2: Squash Merge and Push
-
-```powershell
-git merge --squash $currentBranch
-git commit -m "PR preparation"
-git push -u origin temp
-```
-
-#### 8.3: Clean Up Original Branch
-
-```powershell
-git branch -D $currentBranch
-git push origin --delete $currentBranch
-```
-
-
-### Step 9: Create Pull Request
-
-```powershell
-git branch --show-current  # Verify on temp branch
+git branch --show-current
 gh pr create --title "<short summary>" --body "<detailed description>"
 ```
 
@@ -230,5 +203,4 @@ gh pr create --title "<short summary>" --body "<detailed description>"
 - [ ] `pip-audit` has no unaddressed critical vulnerabilities
 - [ ] README.md reflects current code state
 - [ ] User has reviewed and approved changes
-- [ ] Changes squashed into temp branch, original branch deleted
 - [ ] PR has descriptive title and comprehensive description

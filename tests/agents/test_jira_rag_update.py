@@ -16,7 +16,7 @@ def mock_db_service():
         mock_instance = MockService.return_value
         mock_instance.upsert = AsyncMock()
         mock_instance.delete = AsyncMock()
-        mock_instance._ensure_collection = AsyncMock()
+        mock_instance.ensure_collection = AsyncMock()
         mock_instance.client = AsyncMock()
         yield mock_instance
 
@@ -51,7 +51,7 @@ async def test_upsert_issues(agent):
     # call_args.kwargs['data'] should be a JiraIssue
     jira_issue = call_args.kwargs["data"]
     assert isinstance(jira_issue, JiraIssue)
-    assert jira_issue.id == "LOW"
+    assert jira_issue.id == 1001
     assert jira_issue.key == "TEST-1"
     assert jira_issue.issue_type == "Bug"
     assert jira_issue.project_key == "TEST_PROJ"
