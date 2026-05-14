@@ -21,6 +21,7 @@ exclude = [
     "allure-results",
     "local_models",
     ".agent",
+    ".agents",
 ]
 
 [lint]
