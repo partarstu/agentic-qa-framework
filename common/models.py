@@ -6,7 +6,7 @@ import hashlib
 from abc import ABC, abstractmethod
 from typing import Literal, Optional
 
-from a2a.types import FileWithBytes
+from a2a.types import FileWithBytes, Part
 from pydantic import BaseModel, Field
 
 
@@ -21,6 +21,14 @@ class AgentExecutionError(JsonSerializableModel):
     error_message: str = Field(description="Error message describing the failure")
 
 
+class AgentRuntimeError(Exception):
+    """Raised when agent execution fails; carries artifact parts for the failed task response."""
+
+    def __init__(self, parts: list[Part], message: str = ""):
+        super().__init__(message)
+        self.parts = parts
+
+
 class BaseAgentResult(JsonSerializableModel):
     """Base class for all agent result models.
 
@@ -32,8 +40,8 @@ class BaseAgentResult(JsonSerializableModel):
     llm_comments: str | None = Field(
         default=None,
         description="Debug comments regarding any exceptional situations, missing tools, information gaps, "
-                    "or other issues encountered during task execution. Use this field to explain what prevented "
-                    "full task completion or to provide additional context about the result."
+        "or other issues encountered during task execution. Use this field to explain what prevented "
+        "full task completion or to provide additional context about the result.",
     )
 
 
@@ -91,7 +99,7 @@ class ProjectMetadata(VectorizableBaseModel):
     last_update: str = Field(description="Last update timestamp")
 
     def get_vector_id(self) -> int:
-        return int(hashlib.md5(self.project_key.encode()).hexdigest()[:16], 16)
+        return int(hashlib.md5(self.project_key.encode(), usedforsecurity=False).hexdigest()[:16], 16)
 
     def get_embedding_content(self) -> str:
         return f"Metadata for {self.project_key}"
@@ -99,19 +107,24 @@ class ProjectMetadata(VectorizableBaseModel):
 
 class RagUpdateResult(BaseAgentResult):
     """Result of RAG update operation."""
+
     status: str = Field(description="Status of the RAG update operation")
     processed_count: int = Field(description="Number of items processed during the update")
 
 
 class RequirementsReviewFeedback(BaseAgentResult):
-    suggested_improvements: str = Field(description="List of improvements suggested by the requirements review")
+    suggested_improvements: str = Field(
+        description="List of improvements suggested by the requirements review, in plain text"
+    )
 
 
 class AcceptanceCriteriaItem(JsonSerializableModel):
     id: str = Field(description="The ID of the acceptance criterion (e.g., 'AC-1')")
     text: str = Field(description="The text of the acceptance criterion")
-    attachment_info: str = Field(description="All information extracted from the attachments which might be relevant "
-                                             "to this acceptance criteria item")
+    attachment_info: str = Field(
+        description="All information extracted from the attachments which might be relevant "
+        "to this acceptance criteria item"
+    )
 
 
 class AcceptanceCriteriaList(JsonSerializableModel):
@@ -121,7 +134,8 @@ class AcceptanceCriteriaList(JsonSerializableModel):
 class TestStep(JsonSerializableModel):
     __test__ = False
     action: str = Field(
-        description="The description of the action which needs to be executed in the scope of this test step")
+        description="The description of the action which needs to be executed in the scope of this test step"
+    )
     expected_results: str = Field(description="Results expected after the test step action is executed")
     test_data: list[str] = Field(description="The list of test data items which belong to this test step")
 
@@ -139,19 +153,23 @@ class TestStepsSequenceList(JsonSerializableModel):
 class TestCase(JsonSerializableModel):
     __test__ = False
     key: str | None = Field(description="The ID or key of the generated test case")
-    labels: list[str] = Field(description="The list of the labels which were assigned to this test case, should "
-                                          "be empty for a newly created test case")
+    labels: list[str] = Field(
+        description="The list of the labels which were assigned to this test case, should "
+        "be empty for a newly created test case"
+    )
     name: str = Field(description="The name of this test case")
     summary: str
     comment: str = Field(description="Any important comments or warnings from your side")
     preconditions: str | None = Field(description="Any preconditions relevant for this test case")
     steps: list[TestStep] = Field(description="Test steps of this test case")
     parent_issue_key: str | None = Field(
-        description="The Jira issue key to which this test case is related and will be linked to")
+        description="The Jira issue key to which this test case is related and will be linked to"
+    )
 
 
 class GeneratedTestCases(BaseAgentResult):
     """Result of test case generation."""
+
     test_cases: list[TestCase] = Field(description="The list of generated by you test cases")
 
 
@@ -161,7 +179,9 @@ class ClassifiedTestCase(JsonSerializableModel):
     test_type: Literal["UI", "API", "Performance", "Load/Stress"]
     automation_capability: Literal["automated", "semi-automated", "manual"]
     labels: list[str]
-    tool_use_comment: str = Field(description="Any comments regarding which tools you used, with which arguments and why")
+    tool_use_comment: str = Field(
+        description="Any comments regarding which tools you used, with which arguments and why"
+    )
 
 
 class TestCaseReviewRequest(JsonSerializableModel):
@@ -189,6 +209,8 @@ class TestStepResult(JsonSerializableModel):
     actualResults: str = Field(description="Actual results based on the execution")
     success: bool = Field(description="Whether the test step passed or failed")
     errorMessage: str = Field(description="Error message if the test step failed")
+    executionStartTimestamp: str | None = Field(default=None, description="Timestamp when the step execution started")
+    executionEndTimestamp: str | None = Field(default=None, description="Timestamp when the step execution ended")
 
 
 class TestExecutionResult(JsonSerializableModel):
@@ -196,19 +218,25 @@ class TestExecutionResult(JsonSerializableModel):
     stepResults: list[TestStepResult] = Field(description="List of test step execution results in the test case")
     testCaseKey: str = Field(description="Key of the executed test case")
     testCaseName: str = Field(description="Name of the executed test case")
-    testExecutionStatus: Literal["passed", "failed", "error"] = Field(description="Overall status of the test"
-                                                                                  " execution")
-    generalErrorMessage: str = Field(description=
-                                     "General error message if the test execution failed (e.g. preconditions failed)")
+    testExecutionStatus: Literal["passed", "failed", "error"] = Field(
+        description="Overall status of the test execution"
+    )
+    generalErrorMessage: str = Field(
+        description="General error message if the test execution failed (e.g. preconditions failed)"
+    )
     artifacts: list[FileWithBytes] | None = Field(
-        default=None, description="Optional dictionary of artifacts generated during "
-                                  "execution (e.g., screenshots, reports, stack traces etc.)")
+        default=None,
+        description="Optional dictionary of artifacts generated during "
+        "execution (e.g., screenshots, reports, stack traces etc.)",
+    )
     start_timestamp: str = Field(description="Timestamp when the test execution started")
     end_timestamp: str = Field(description="Timestamp when the test execution ended")
-    system_description: str | None = Field(default=None, description="Description of the system on which the agent "
-                                                                     "executed the test case")
+    system_description: str | None = Field(
+        default=None, description="Description of the system on which the agent executed the test case"
+    )
     incident_creation_result: Optional["IncidentCreationResult"] = Field(
-        default=None, description="Result of the incident creation process if the test failed")
+        default=None, description="Result of the incident creation process if the test failed"
+    )
     test_case: Optional["TestCase"] = Field(default=None, description="The full test case object that was executed")
 
 
@@ -224,11 +252,13 @@ class ClassifiedTestCases(BaseAgentResult):
 
 class ProjectExecutionRequest(JsonSerializableModel):
     """Request to trigger test execution for a project."""
+
     project_key: str = Field(description="The key of the project for which all tests should be executed")
 
 
 class AggregatedTestResults(JsonSerializableModel):
     """Payload for sending aggregated test results to the processing agent."""
+
     results: list[TestExecutionResult]
 
 
@@ -250,14 +280,29 @@ class IncidentCreationInput(JsonSerializableModel):
     issue_priority_field_id: str = Field(description="The ID of the Jira issue field for issue priority")
 
 
-class DuplicateDetectionResult(JsonSerializableModel):
-    issue_id: str = Field(description="The numeric issue ID of existing incident Jira issue, which is a candidate for duplicate")
+class DuplicateCandidate(JsonSerializableModel):
+    issue_id: str | None = Field(default=None, description="Numeric Jira issue ID of the candidate when available")
+    key: str = Field(description="Jira issue key of the candidate (e.g. 'PROJ-123')")
+    content: str = Field(description="Full content/description of the candidate issue")
+
+
+class DuplicateIssue(JsonSerializableModel):
+    issue_id: str = Field(
+        description="The numeric issue ID of existing incident Jira issue, which is a candidate for duplicate"
+    )
     issue_key: str = Field(description="The key of existing incident Jira issue, which is a candidate for duplicate")
-    is_duplicate: bool = Field(description="True if the candidate is indeed a duplicate")
     message: str = Field(description="Elaborate Justification of the decision about being or not being a duplicate")
+
+
+class DuplicateDetectionResult(JsonSerializableModel):
+    duplicates: list[DuplicateIssue] = Field(
+        default_factory=list,
+        description="Only the candidates confirmed to be actual duplicates of the current incident",
+    )
+    message: str = Field(default="", description="Summary of the duplicate detection outcome")
 
 
 class IncidentCreationResult(BaseAgentResult):
     incident_id: int | None = Field(default=None, description="The numeric issue ID of the created incident")
     incident_key: str | None = Field(description="The key of the created incident, is null if duplicates are detected")
-    duplicates: list[DuplicateDetectionResult] = Field(description="All identified duplicate incident detection results, may be empty")
+    duplicates: list[DuplicateIssue] = Field(description="All identified duplicate incidents, may be empty")

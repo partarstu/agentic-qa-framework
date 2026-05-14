@@ -3,6 +3,8 @@ name: adding-orchestrator-workflow
 description: Adds new workflow endpoints to the QuAIA orchestrator. Use when creating new FastAPI endpoints that coordinate agent tasks, handle webhooks, or expose new API functionality.
 ---
 
+// turbo-all
+
 # Adding a New Orchestrator Workflow
 
 This skill provides a comprehensive guide for adding new workflow endpoints to the QuAIA™ orchestrator. Workflows are FastAPI endpoints that trigger and coordinate agent tasks.
@@ -14,6 +16,14 @@ The orchestrator (`orchestrator/main.py`) exposes HTTP endpoints that:
 2. Route tasks to appropriate agents
 3. Coordinate multi-agent workflows
 4. Handle results and trigger follow-up actions
+
+## ⚡ Auto-Run Policy
+
+This skill is designed to run with minimal interruption.
+
+- **Always set `SafeToAutoRun: true`** for all `run_command` calls.
+- **Exceptions:** Only set `SafeToAutoRun: false` if a step specifically instructs you to "Ask" the user, "Wait" for approval, or "Verify" a destructive action before proceeding.
+- **Restricted Symbols:** Never use the redirection operator (`>`) or `2>` in commands. Use alternatives (e.g., `Set-Content`, `Out-File`, or ignoring errors explicitly).
 
 ## Workflow Architecture
 

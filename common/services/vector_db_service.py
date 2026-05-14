@@ -4,6 +4,7 @@
 
 
 import asyncio
+import time
 
 import httpx
 from qdrant_client import AsyncQdrantClient, models
@@ -21,35 +22,43 @@ class VectorDbService:
         self.client = AsyncQdrantClient(
             url=getattr(config.QdrantConfig, "URL", "http://localhost"),
             port=getattr(config.QdrantConfig, "PORT", 6333),
-            grpc_port=getattr(config.QdrantConfig, "GRPC_PORT", 6334),
-            prefer_grpc=True,
             api_key=getattr(config.QdrantConfig, "API_KEY", None),
-            timeout=getattr(config.QdrantConfig, "TIMEOUT_SECONDS", 30.0),
+            timeout=getattr(config.QdrantConfig, "TIMEOUT_SECONDS", 30),
         )
         self.embedding_service_url = getattr(config.QdrantConfig, "EMBEDDING_SERVICE_URL", None)
         if not self.embedding_service_url:
             logger.warning("EMBEDDING_SERVICE_URL is not configured. Vector operations requiring embeddings will fail.")
+        timeout_seconds = getattr(config.QdrantConfig, "EMBEDDING_SERVICE_TIMEOUT_SECONDS", 120.0)
+        self._http_client = httpx.AsyncClient(timeout=httpx.Timeout(timeout_seconds))
 
-    async def _get_embedding(self, text: str) -> list[float]|None:
+    async def close(self):
+        """Closes the shared HTTP client. Call this during application shutdown."""
+        await self._http_client.aclose()
+
+    async def _get_embedding(self, text: str) -> list[float] | None:
         if not self.embedding_service_url:
             raise ValueError("EMBEDDING_SERVICE_URL is not configured.")
 
-        timeout_seconds = getattr(config.QdrantConfig, "EMBEDDING_SERVICE_TIMEOUT_SECONDS", 120.0)
-        timeout = httpx.Timeout(timeout_seconds)
         max_retries = 3
+        logger.info(f"Calling embedding service (text length: {len(text)} chars)...")
+        start = time.monotonic()
 
         for attempt in range(max_retries):
             try:
-                async with httpx.AsyncClient(timeout=timeout) as client:
-                    response = await client.post(f"{self.embedding_service_url}/embed", json={"text": text})
-                    response.raise_for_status()
-                    return response.json()["embedding"]
+                response = await self._http_client.post(f"{self.embedding_service_url}/embed", json={"text": text})
+                response.raise_for_status()
+                logger.info(f"Embedding service call completed in {time.monotonic() - start:.3f}s")
+                return response.json()["embedding"]
             except (httpx.TimeoutException, httpx.ConnectError) as e:
                 if attempt == max_retries - 1:
-                    logger.exception(f"Failed to call embedding service at {self.embedding_service_url} after {max_retries} attempts.")
+                    logger.exception(
+                        f"Failed to call embedding service at {self.embedding_service_url} after {max_retries} attempts."
+                    )
                     raise
-                wait_time = 2 ** attempt
-                logger.warning(f"Attempt {attempt + 1}/{max_retries} failed calling embedding service: {e}. Retrying in {wait_time}s...")
+                wait_time = 2**attempt
+                logger.warning(
+                    f"Attempt {attempt + 1}/{max_retries} failed calling embedding service: {e}. Retrying in {wait_time}s..."
+                )
                 await asyncio.sleep(wait_time)
             except httpx.HTTPStatusError as e:
                 logger.exception(f"HTTP error from embedding service: {e.response.status_code} - {e.response.text}")
@@ -59,8 +68,13 @@ class VectorDbService:
                 raise
         return None
 
-    async def _ensure_collection(self):
-        if not await self.client.collection_exists(self.collection_name):
+    async def _collection_exists(self) -> bool:
+        """Checks collection existence by listing all collections to avoid the /exists endpoint's empty-body issue."""
+        collections = await self.client.get_collections()
+        return any(c.name == self.collection_name for c in collections.collections)
+
+    async def ensure_collection(self):
+        if not await self._collection_exists():
             # Dynamically detect the vector size by embedding a dummy string
             dummy_vec = await self._get_embedding("test")
             vector_size = len(dummy_vec)
@@ -68,7 +82,7 @@ class VectorDbService:
             try:
                 await self.client.create_collection(
                     collection_name=self.collection_name,
-                    vectors_config=models.VectorParams(size=vector_size, distance=models.Distance.COSINE)
+                    vectors_config=models.VectorParams(size=vector_size, distance=models.Distance.COSINE),
                 )
             except Exception as e:
                 # Handle race condition where collection is created concurrently
@@ -77,8 +91,13 @@ class VectorDbService:
                 else:
                     raise e
 
-    async def search(self, query_text: str, limit: int = 5, score_threshold: float = 0.7, query_filter: models.Filter | None = None,
-                     ) -> list[models.ScoredPoint]:
+    async def search(
+        self,
+        query_text: str,
+        limit: int = 5,
+        score_threshold: float = 0.7,
+        query_filter: models.Filter | None = None,
+    ) -> list[models.ScoredPoint]:
         """Search for similar vectors in the collection.
 
         Args:
@@ -90,8 +109,9 @@ class VectorDbService:
         Returns:
             List of scored points matching the query and filter conditions.
         """
+        logger.info(f"Starting vector DB similarity search in '{self.collection_name}'...")
         try:
-            if not await self.client.collection_exists(self.collection_name):
+            if not await self._collection_exists():
                 logger.warning(f"Collection {self.collection_name} doesn't exist yet in DB")
                 return []
             embedding = await self._get_embedding(query_text)
@@ -107,9 +127,10 @@ class VectorDbService:
             logger.exception("Error querying Vector DB")
             raise
 
-    async def upsert(self, data: VectorizableBaseModel):
+    async def upsert(self, data: VectorizableBaseModel, ensure: bool = True):
         try:
-            await self._ensure_collection()
+            if ensure:
+                await self.ensure_collection()
             text = data.get_embedding_content()
             payload = data.model_dump()
             point_id = data.get_vector_id()
@@ -117,7 +138,7 @@ class VectorDbService:
             embedding = await self._get_embedding(text)
             await self.client.upsert(
                 collection_name=self.collection_name,
-                points=[models.PointStruct(id=point_id, vector=embedding, payload=payload)]
+                points=[models.PointStruct(id=point_id, vector=embedding, payload=payload)],
             )
             logger.info(f"Upserted document with ID {point_id} to collection {self.collection_name}")
         except Exception:
@@ -137,8 +158,11 @@ class VectorDbService:
             Exception: If retrieval from Vector DB fails.
         """
         try:
-            await self._ensure_collection()
-            return await self.client.retrieve(collection_name=self.collection_name, ids=point_ids, )
+            await self.ensure_collection()
+            return await self.client.retrieve(
+                collection_name=self.collection_name,
+                ids=point_ids,
+            )
         except Exception:
             logger.exception("Error retrieving from Vector DB")
             raise
@@ -153,8 +177,45 @@ class VectorDbService:
             Exception: If deletion from Vector DB fails.
         """
         try:
-            await self.client.delete(collection_name=self.collection_name, points_selector=models.PointIdsList(points=point_ids))
+            await self.client.delete(
+                collection_name=self.collection_name, points_selector=models.PointIdsList(points=point_ids)
+            )
             logger.info(f"Deleted documents with IDs {point_ids} from collection {self.collection_name}")
         except Exception:
             logger.exception("Error deleting from Vector DB")
+            raise
+
+    async def scroll_all_ids_by_project(self, project_key: str) -> list[int]:
+        """Retrieves all stored point IDs for a given project key using Qdrant scroll pagination.
+
+        Args:
+            project_key: The project key to filter by.
+
+        Returns:
+            List of all numeric point IDs stored for the project.
+        """
+        try:
+            if not await self._collection_exists():
+                return []
+            ids = []
+            offset = None
+            project_filter = models.Filter(
+                must=[models.FieldCondition(key="project_key", match=models.MatchValue(value=project_key))]
+            )
+            while True:
+                result, next_offset = await self.client.scroll(
+                    collection_name=self.collection_name,
+                    scroll_filter=project_filter,
+                    limit=1000,
+                    offset=offset,
+                    with_payload=False,
+                    with_vectors=False,
+                )
+                ids.extend(p.id for p in result)
+                if next_offset is None:
+                    break
+                offset = next_offset
+            return ids
+        except Exception:
+            logger.exception("Error scrolling Vector DB")
             raise

@@ -1,4 +1,3 @@
-
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -9,14 +8,17 @@ from common.services.xray_client import XrayClient
 
 @pytest.fixture
 def xray_client():
-    with patch("config.XRAY_BASE_URL", "http://xray"), \
-         patch("config.XRAY_CLIENT_ID", "id"), \
-         patch("config.XRAY_CLIENT_SECRET", "secret"), \
-         patch("config.JIRA_BASE_URL", "http://jira"), \
-         patch("config.JIRA_USER", "user"), \
-         patch("config.JIRA_TOKEN", "token"), \
-         patch("common.services.xray_client.XrayClient._get_token", return_value="mock_token"):
+    with (
+        patch("config.XRAY_BASE_URL", "http://xray"),
+        patch("config.XRAY_CLIENT_ID", "id"),
+        patch("config.XRAY_CLIENT_SECRET", "secret"),
+        patch("config.JIRA_BASE_URL", "http://jira"),
+        patch("config.JIRA_USER", "user"),
+        patch("config.JIRA_TOKEN", "token"),
+        patch("common.services.xray_client.XrayClient._get_token", return_value="mock_token"),
+    ):
         return XrayClient()
+
 
 @patch("httpx.Client.request")
 @patch("httpx.Client.post")
@@ -28,21 +30,34 @@ def test_create_test_cases(mock_post, mock_request, xray_client):
 
     # Mock Jira Bulk Create
     mock_request.side_effect = [
-        MagicMock(status_code=201, json=lambda: {"issues": [{"key": "TEST-1", "id": "100"}]}), # Bulk Create
-        MagicMock(status_code=201, json=lambda: {}), # Link
+        MagicMock(status_code=201, json=lambda: {"issues": [{"key": "TEST-1", "id": "100"}]}),  # Bulk Create
+        MagicMock(status_code=201, json=lambda: {}),  # Link
     ]
 
     # Mock GraphQL for adding steps
     mock_post.return_value.status_code = 200
     mock_post.return_value.json.return_value = {"data": {"updateTest": {"warnings": []}}}
 
-    test_cases = [TestCase(key=None, name="TC1", summary="Sum", steps=[TestStep(action="A", expected_results="E", test_data=[])],
-                           test_data=[], expected_results=[], labels=[], comment="", preconditions="", parent_issue_key="STORY-1")]
+    test_cases = [
+        TestCase(
+            key=None,
+            name="TC1",
+            summary="Sum",
+            steps=[TestStep(action="A", expected_results="E", test_data=[])],
+            test_data=[],
+            expected_results=[],
+            labels=[],
+            comment="",
+            preconditions="",
+            parent_issue_key="STORY-1",
+        )
+    ]
 
     keys = xray_client.create_test_cases(test_cases, "PROJ", "STORY-1")
     assert keys == ["TEST-1"]
     assert mock_request.call_count == 2
     assert mock_post.called
+
 
 @patch("httpx.Client.request")
 def test_create_test_execution(mock_request, xray_client):
@@ -50,11 +65,17 @@ def test_create_test_execution(mock_request, xray_client):
     mock_request.return_value.status_code = 200
     mock_request.return_value.json.return_value = {"id": "EXEC-1"}
 
-    results = [TestExecutionResult(
-        stepResults=[], testCaseKey="TEST-1", testCaseName="TC1",
-        testExecutionStatus="passed", generalErrorMessage="",
-        start_timestamp="2023-01-01T10:00:00", end_timestamp="2023-01-01T10:01:00"
-    )]
+    results = [
+        TestExecutionResult(
+            stepResults=[],
+            testCaseKey="TEST-1",
+            testCaseName="TC1",
+            testExecutionStatus="passed",
+            generalErrorMessage="",
+            start_timestamp="2023-01-01T10:00:00",
+            end_timestamp="2023-01-01T10:01:00",
+        )
+    ]
 
     xray_client.create_test_execution(results, "PROJ", "PLAN-1")
     assert mock_request.called
@@ -62,22 +83,42 @@ def test_create_test_execution(mock_request, xray_client):
     args, _ = mock_request.call_args
     assert "import/execution" in args[1]
 
+
+@patch("httpx.Client.request")
+def test_create_test_execution_ignores_invalid_timestamps(mock_request, xray_client):
+    mock_request.return_value.status_code = 200
+    mock_request.return_value.json.return_value = {"id": "EXEC-1"}
+
+    results = [
+        TestExecutionResult(
+            stepResults=[],
+            testCaseKey="TEST-1",
+            testCaseName="TC1",
+            testExecutionStatus="passed",
+            generalErrorMessage="",
+            start_timestamp="2023-01-01T10:00:00,unexpected",
+            end_timestamp="not-a-timestamp",
+        )
+    ]
+
+    xray_client.create_test_execution(results, "PROJ", "PLAN-1")
+
+    payload = mock_request.call_args.kwargs["json"]
+    assert payload["info"]["startDate"] == "2023-01-01T10:00:00"
+    assert "finishDate" not in payload["info"]
+    assert payload["tests"][0]["start"] == "2023-01-01T10:00:00"
+    assert "finish" not in payload["tests"][0]
+
+
 @patch("httpx.Client.post")
 def test_create_test_plan(mock_post, xray_client):
     # create_test_plan calls _execute_graphql_query -> uses mock_post
     mock_post.return_value.status_code = 200
-    mock_post.return_value.json.return_value = {
-        "data": {
-            "createTestPlan": {
-                "testPlan": {
-                    "jira": {"key": "PLAN-1"}
-                }
-            }
-        }
-    }
+    mock_post.return_value.json.return_value = {"data": {"createTestPlan": {"testPlan": {"jira": {"key": "PLAN-1"}}}}}
 
     key = xray_client.create_test_plan("PROJ", "Plan Name")
     assert key == "PLAN-1"
+
 
 @patch("httpx.Client.post")
 def test_fetch_test_cases_by_jira_issue(mock_post, xray_client):
@@ -90,7 +131,7 @@ def test_fetch_test_cases_by_jira_issue(mock_post, xray_client):
                     {
                         "issueId": "TEST-1",
                         "jira": {"summary": "TC1", "labels": [], "parent": {"key": "STORY-1"}},
-                        "steps": []
+                        "steps": [],
                     }
                 ]
             }

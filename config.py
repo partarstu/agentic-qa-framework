@@ -9,11 +9,12 @@ Centralized configuration for the application.
 import os
 
 from dotenv import load_dotenv
+from pydantic_ai.settings import ThinkingLevel
 
 load_dotenv()
 
 # Logging
-LOG_LEVEL = os.environ.get('LOG_LEVEL', 'INFO').upper()
+LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
 GOOGLE_CLOUD_LOGGING_ENABLED = os.environ.get("GOOGLE_CLOUD_LOGGING_ENABLED", "False").lower() in ("true", "1", "t")
 
 # URLs
@@ -48,13 +49,30 @@ JIRA_ATTACHMENT_SKIP_POSTFIX = os.environ.get("JIRA_ATTACHMENT_SKIP_POSTFIX", "_
 MCP_SERVER_TIMEOUT_SECONDS = 30
 SUPPORTED_ATTACHMENT_MIME_TYPES: set[str] = {
     # Images
-    "image/png", "image/jpeg", "image/gif", "image/webp",
+    "image/png",
+    "image/jpeg",
+    "image/gif",
+    "image/webp",
     # Documents
-    "application/pdf", "text/plain", "application/json",
+    "application/pdf",
+    "text/plain",
+    "application/json",
     # Audio
-    "audio/mpeg", "audio/wav", "audio/flac", "audio/ogg", "audio/aac", "audio/aiff",
+    "audio/mpeg",
+    "audio/wav",
+    "audio/flac",
+    "audio/ogg",
+    "audio/aac",
+    "audio/aiff",
     # Video
-    "video/mp4", "video/webm", "video/quicktime", "video/x-matroska", "video/x-flv", "video/mpeg", "video/x-ms-wmv", "video/3gpp"
+    "video/mp4",
+    "video/webm",
+    "video/quicktime",
+    "video/x-matroska",
+    "video/x-flv",
+    "video/mpeg",
+    "video/x-ms-wmv",
+    "video/3gpp",
 }
 
 # Test Management System
@@ -69,7 +87,7 @@ ALLURE_RESULTS_DIR = "allure-results"
 ALLURE_REPORT_DIR = "allure-report"
 
 # OpenTelemetry
-OPEN_TELEMETRY_URL = os.environ.get('OTEL_EXPORTER_OTLP_ENDPOINT')
+OPEN_TELEMETRY_URL = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT")
 
 # Common model config
 TOP_P = 1.0
@@ -81,12 +99,15 @@ PROMPT_GUARD_PROVIDER = os.environ.get("PROMPT_GUARD_PROVIDER", "protect_ai")
 PROMPT_INJECTION_MIN_SCORE = float(os.environ.get("PROMPT_INJECTION_MIN_SCORE", "0.8"))
 LOCAL_MODELS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "local_models")
 PROMPT_INJECTION_DETECTION_MODEL_PATH = os.path.join(LOCAL_MODELS_PATH, "prompt_detection_model")
-PROMPT_INJECTION_DETECTION_MODEL_NAME = os.environ.get("PROMPT_INJECTION_MODEL_NAME", "ProtectAI/deberta-v3-base-prompt-injection-v2")
+PROMPT_INJECTION_DETECTION_MODEL_NAME = os.environ.get(
+    "PROMPT_INJECTION_MODEL_NAME", "ProtectAI/deberta-v3-base-prompt-injection-v2"
+)
 PROMPT_GUARD_SERVICE_URL = os.environ.get("PROMPT_GUARD_SERVICE_URL")
 
 
 # Orchestrator
 class OrchestratorConfig:
+    THINKING_LEVEL: ThinkingLevel = "low"
     AUTOMATED_TC_LABEL = "automated"
     AGENTS_DISCOVERY_INTERVAL_SECONDS = 300
     TASK_EXECUTION_TIMEOUT = 500.0
@@ -101,6 +122,7 @@ class OrchestratorConfig:
 # Dashboard Authentication
 class DashboardAuthConfig:
     """Configuration for UI dashboard authentication."""
+
     USERNAME = os.environ.get("DASHBOARD_USERNAME", "")
     PASSWORD = os.environ.get("DASHBOARD_PASSWORD", "")
     JWT_SECRET = os.environ.get("DASHBOARD_JWT_SECRET", "")
@@ -110,7 +132,7 @@ class DashboardAuthConfig:
 
 # Requirements Review Agent
 class RequirementsReviewAgentConfig:
-    THINKING_BUDGET = 1000
+    THINKING_LEVEL: ThinkingLevel = "medium"
     OWN_NAME = "Jira Requirements Reviewer"
     PORT = int(os.environ.get("PORT", "8001"))
     EXTERNAL_PORT = int(os.environ.get("EXTERNAL_PORT", PORT))
@@ -121,7 +143,7 @@ class RequirementsReviewAgentConfig:
 
 # Test Case Classification Agent
 class TestCaseClassificationAgentConfig:
-    THINKING_BUDGET = 2000
+    THINKING_LEVEL: ThinkingLevel = "minimal"
     OWN_NAME = "Test Case Classification Agent"
     PORT = int(os.environ.get("PORT", "8003"))
     EXTERNAL_PORT = int(os.environ.get("EXTERNAL_PORT", PORT))
@@ -132,7 +154,7 @@ class TestCaseClassificationAgentConfig:
 
 # Test Case Generation Agent
 class TestCaseGenerationAgentConfig:
-    THINKING_BUDGET = 0
+    THINKING_LEVEL: ThinkingLevel = "minimal"
     OWN_NAME = "Test Case Generation Agent"
     PORT = int(os.environ.get("PORT", "8002"))
     EXTERNAL_PORT = int(os.environ.get("EXTERNAL_PORT", PORT))
@@ -143,7 +165,7 @@ class TestCaseGenerationAgentConfig:
 
 # Test Case Review Agent
 class TestCaseReviewAgentConfig:
-    THINKING_BUDGET = 5000
+    THINKING_LEVEL: ThinkingLevel = "medium"
     REVIEW_COMPLETE_STATUS_NAME = "Review Complete"
     OWN_NAME = "Test Case Review Agent"
     PORT = int(os.environ.get("PORT", "8004"))
@@ -155,7 +177,7 @@ class TestCaseReviewAgentConfig:
 
 # Incident Creation Agent
 class IncidentCreationAgentConfig:
-    THINKING_BUDGET = 5000
+    THINKING_LEVEL: ThinkingLevel = "medium"
     OWN_NAME = "Incident Creation Agent"
     PORT = int(os.environ.get("PORT", "8007"))
     EXTERNAL_PORT = int(os.environ.get("EXTERNAL_PORT", PORT))
@@ -168,18 +190,21 @@ class IncidentCreationAgentConfig:
     # Severity values: comma-separated list of "value:description" pairs
     SEVERITY_VALUES = os.environ.get(
         "INCIDENT_AGENT_SEVERITY_VALUES",
-        "'10020':blocker or crash,'10021':functional failure,'10022':UI/UX issue,'10023':typo or minor visual issue"
+        "'10020':blocker or crash,'10021':functional failure,'10022':UI/UX issue,'10023':typo or minor visual issue",
     )
     # Priority values: comma-separated list of "value:description" pairs
     PRIORITY_VALUES = os.environ.get(
-        "INCIDENT_AGENT_PRIORITY_VALUES",
-        "High:immediate fix,Medium:normal release,Low:backlog"
+        "INCIDENT_AGENT_PRIORITY_VALUES", "High:immediate fix,Medium:normal release,Low:backlog"
     )
+    # Jira statuses considered terminal — bugs in these statuses are excluded from duplicate detection
+    TERMINAL_STATUSES = os.environ.get(
+        "INCIDENT_AGENT_TERMINAL_STATUSES", "Closed,Done,Duplicate,Rejected,Won't Fix,Cannot Reproduce,Resolved"
+    ).split(",")
 
 
 # RAG Update Agent
 class JiraRagUpdateAgentConfig:
-    THINKING_BUDGET = 2000
+    THINKING_LEVEL: ThinkingLevel = "medium"
     OWN_NAME = "Jira RAG Update Agent"
     PORT = int(os.environ.get("PORT", "8006"))
     EXTERNAL_PORT = int(os.environ.get("EXTERNAL_PORT", PORT))
@@ -188,12 +213,18 @@ class JiraRagUpdateAgentConfig:
     MAX_REQUESTS_PER_TASK = 30
 
 
+class RetryConfig:
+    MAX_RETRIES = 3
+    RETRYABLE_STATUS_CODES = {404, 429, 500, 502, 503, 504}
+    RETRY_BASE_DELAY_SECONDS = 5.0
+    LLM_RESULTS_EXTRACTOR_RETRY_BASE_DELAY_SECONDS = 60.0
+
+
 class QdrantConfig:
     URL = os.environ.get("QDRANT_URL", "http://localhost")
     API_KEY = os.environ.get("QDRANT_API_KEY")
-    TIMEOUT_SECONDS = float(os.environ.get("QDRANT_TIMEOUT_SECONDS", "30.0"))
+    TIMEOUT_SECONDS = int(os.environ.get("QDRANT_TIMEOUT_SECONDS", "30"))
     PORT = int(os.environ.get("QDRANT_PORT", "6333"))
-    GRPC_PORT = int(os.environ.get("QDRANT_GRPC_PORT", "6334"))
     COLLECTION_NAME = os.environ.get("QDRANT_COLLECTION_NAME", "jira_issues")
     TICKETS_COLLECTION_NAME = os.environ.get("QDRANT_TICKETS_COLLECTION_NAME", "jira_issues")
     METADATA_COLLECTION_NAME = os.environ.get("QDRANT_METADATA_COLLECTION_NAME", "rag_metadata")
@@ -203,5 +234,7 @@ class QdrantConfig:
     EMBEDDING_MODEL_PATH = os.path.join(LOCAL_MODELS_PATH, "embedding_model")
     EMBEDDING_SERVICE_URL = os.environ.get("EMBEDDING_SERVICE_URL")
     EMBEDDING_SERVICE_TIMEOUT_SECONDS = float(os.environ.get("EMBEDDING_SERVICE_TIMEOUT_SECONDS", "120.0"))
-    VALID_STATUSES = os.environ.get("JIRA_VALID_STATUSES", "To Do,In Review,Ready for Development,In Progress,Done").split(",")
+    VALID_STATUSES = os.environ.get(
+        "JIRA_VALID_STATUSES", "To Do,In Review,Ready for Development,In Progress,Done"
+    ).split(",")
     BUG_ISSUE_TYPE = os.environ.get("JIRA_BUG_ISSUE_TYPE", "Bug")

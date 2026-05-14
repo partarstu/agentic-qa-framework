@@ -15,6 +15,7 @@ def get_test_management_client() -> TestManagementClientBase:
     elif test_management_system == "xray":
         client = XrayClient()
     else:
-        raise ValueError(f"Unsupported value of the environment variable JIRA_TEST_MANAGEMENT_SYSTEM: "
-                         f"{test_management_system}")
+        raise ValueError(
+            f"Unsupported value of the environment variable JIRA_TEST_MANAGEMENT_SYSTEM: {test_management_system}"
+        )
     return client

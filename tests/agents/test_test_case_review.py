@@ -1,4 +1,3 @@
-
 import sys
 from unittest.mock import MagicMock, patch
 
@@ -20,12 +19,13 @@ def mock_config():
         mock_conf.TestCaseReviewAgentConfig.EXTERNAL_PORT = 8003
         mock_conf.TestCaseReviewAgentConfig.PROTOCOL = "http"
         mock_conf.TestCaseReviewAgentConfig.MODEL_NAME = "test"
-        mock_conf.TestCaseReviewAgentConfig.THINKING_BUDGET = 1500
+        mock_conf.TestCaseReviewAgentConfig.THINKING_LEVEL = "LOW"
         mock_conf.TestCaseReviewAgentConfig.MAX_REQUESTS_PER_TASK = 8
         mock_conf.TestCaseReviewAgentConfig.REVIEW_COMPLETE_STATUS_NAME = "Review Complete"
         mock_conf.JIRA_MCP_SERVER_URL = "http://jira-mcp"
         mock_conf.MCP_SERVER_TIMEOUT_SECONDS = 30
         yield mock_conf
+
 
 @pytest.fixture
 def agent(mock_config):
@@ -33,10 +33,12 @@ def agent(mock_config):
     with patch("agents.test_case_review.prompt.TestCaseReviewSystemPrompt.get_prompt", return_value="Prompt"):
         return TestCaseReviewAgent()
 
+
 def test_agent_init(agent, mock_config):
     assert agent.agent_name == "review_agent"
-    assert agent.get_thinking_budget() == 1500
+    assert agent.get_thinking_level() == "LOW"
     assert agent.get_max_requests_per_task() == 8
+
 
 @patch("agents.test_case_review.main.get_test_management_client")
 def test_add_review_feedback(mock_get_client, agent):
@@ -47,6 +49,7 @@ def test_add_review_feedback(mock_get_client, agent):
 
     mock_client.add_test_case_review_comment.assert_called_once_with("TEST-1", "Feedback")
     assert "Successfully added" in result
+
 
 @patch("agents.test_case_review.main.get_test_management_client")
 def test_set_test_case_status(mock_get_client, agent):

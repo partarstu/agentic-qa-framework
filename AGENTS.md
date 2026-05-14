@@ -12,10 +12,40 @@ expertise in working with agentic systems.
 
 ### Coding guidelines and rules
 
-* Before implementing any logic, always use Google search in order to find the most adequate and most efficient
-  solution.
-* Every time you work with OS-specific commands, check the OS version and type in order to know which commands are
-  correct.
+* Before implementing:
+  - State your assumptions explicitly. If uncertain, ask.
+  - If multiple interpretations exist, present them - don't pick silently.
+  - If a simpler approach exists, say so. Push back when warranted.
+  - If something is unclear, stop. Name what's confusing. Ask.
+* Keep your implementation simple and short:
+  - No features beyond what was asked.
+  - No abstractions for single-use code.
+  - No "flexibility" or "configurability" that wasn't requested.
+  - No error handling for impossible scenarios.
+  - If you write 200 lines and it could be 50, rewrite it.
+* When editing existing code:
+  - Don't "improve" adjacent code, comments, or formatting.
+  - Don't refactor things that aren't broken.
+  - Match existing style, even if you'd do it differently.
+  - If you notice unrelated dead code, mention it - don't delete it.
+* Every changed by you line of code should trace directly to the user's request.
+* Transform tasks into verifiable goals:
+  - "Add validation" → "Write tests for invalid inputs, then make them pass"
+  - "Fix the bug" → "Write a test that reproduces it, then make it pass"
+  - "Refactor X" → "Ensure tests pass before and after".
+  For multi-step tasks, state a brief plan:
+  ```
+  1. [Step] → verify: [check]
+  2. [Step] → verify: [check]
+  3. [Step] → verify: [check]
+  ```
+* The code which you create must be easily readable and clear to understand.
+* Never keep redundant code.
+* If anything about provided to you request or requests is not clear to you or if you need clarifications - always ask user to clarify!
+* While implementing any change, always try to create as minimum code as possible, but enough to fully implement what was requested from
+  you. 
+* Before implementing any logic, always use Google search in order to find the most adequate and most efficient solution.
+* Every time you work with OS-specific commands, check the OS version and type in order to know which commands are correct.
 * Never reformat the code which you haven't modified!
 * Before implementing anything, always let the user know what you plan to do and ask the user to confirm it.
 * Never duplicate existing functionality. If you've noticed any existing logic or functionality which you need for your implementation, 

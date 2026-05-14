@@ -1,4 +1,3 @@
-
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -15,13 +14,22 @@ async def test_load_test_case_success():
         mock_get_client.return_value = mock_client
 
         mock_tc = TestCase(
-            key="TC-1", summary="S", name="N", steps=[], test_data=[], expected_results=[],
-            labels=[], comment="", preconditions="", parent_issue_key="P"
+            key="TC-1",
+            summary="S",
+            name="N",
+            steps=[],
+            test_data=[],
+            expected_results=[],
+            labels=[],
+            comment="",
+            preconditions="",
+            parent_issue_key="P",
         )
         mock_client.fetch_test_case_by_key.return_value = mock_tc
 
         tc = await load_test_case("TC-1")
         assert tc.key == "TC-1"
+
 
 @pytest.mark.asyncio
 async def test_load_test_case_not_found():
@@ -33,11 +41,20 @@ async def test_load_test_case_not_found():
         with pytest.raises(ValueError):
             await load_test_case("TC-1")
 
+
 @pytest.mark.asyncio
 async def test_send_test_case_to_agent_success():
     test_case = TestCase(
-        key="TC-1", summary="S", name="N", steps=[], test_data=[], expected_results=[],
-        labels=[], comment="", preconditions="", parent_issue_key="P"
+        key="TC-1",
+        summary="S",
+        name="N",
+        steps=[],
+        test_data=[],
+        expected_results=[],
+        labels=[],
+        comment="",
+        preconditions="",
+        parent_issue_key="P",
     )
 
     with patch("httpx.AsyncClient") as mock_client_cls:
@@ -68,16 +85,18 @@ async def test_send_test_case_to_agent_success():
 
             # Check logs? We assume success if no exception and it ran through
 
+
 @pytest.mark.asyncio
 async def test_main_execution():
-    with patch("argparse.ArgumentParser.parse_args") as mock_args, \
-         patch("execute_test_case.load_test_case", new_callable=AsyncMock) as mock_load, \
-         patch("execute_test_case.send_test_case_to_agent", new_callable=AsyncMock) as mock_send:
+    with (
+        patch("argparse.ArgumentParser.parse_args") as mock_args,
+        patch("execute_test_case.load_test_case", new_callable=AsyncMock) as mock_load,
+        patch("execute_test_case.send_test_case_to_agent", new_callable=AsyncMock) as mock_send,
+    ):
+        mock_args.return_value = MagicMock(test_case_key="TC-1", agent_port=8000)
+        mock_load.return_value = MagicMock()
 
-         mock_args.return_value = MagicMock(test_case_key="TC-1", agent_port=8000)
-         mock_load.return_value = MagicMock()
+        await main()
 
-         await main()
-
-         mock_load.assert_called_with("TC-1")
-         mock_send.assert_called_once()
+        mock_load.assert_called_with("TC-1")
+        mock_send.assert_called_once()

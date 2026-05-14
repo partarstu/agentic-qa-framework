@@ -18,12 +18,14 @@ import config
 
 class LoginRequest(BaseModel):
     """Request model for login endpoint."""
+
     username: str
     password: str
 
 
 class TokenResponse(BaseModel):
     """Response model for successful login."""
+
     access_token: str
     token_type: str = "bearer"
     expires_at: str
@@ -39,10 +41,7 @@ class AuthService:
 
     def authenticate(self, username: str, password: str) -> bool:
         """Validate username and password against configured credentials."""
-        return (
-            username == config.DashboardAuthConfig.USERNAME and
-            password == config.DashboardAuthConfig.PASSWORD
-        )
+        return username == config.DashboardAuthConfig.USERNAME and password == config.DashboardAuthConfig.PASSWORD
 
     def create_token(self, username: str) -> TokenResponse:
         """Create a JWT token for an authenticated user."""

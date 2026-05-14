@@ -8,10 +8,13 @@ from common.services.zephyr_client import ZephyrClient
 
 @pytest.fixture
 def zephyr_client():
-    with patch("config.ZEPHYR_BASE_URL", "http://zephyr"), \
-         patch("config.JIRA_USER", "user"), \
-         patch("config.ZEPHYR_API_TOKEN", "token"):
+    with (
+        patch("config.ZEPHYR_BASE_URL", "http://zephyr"),
+        patch("config.JIRA_USER", "user"),
+        patch("config.ZEPHYR_API_TOKEN", "token"),
+    ):
         return ZephyrClient()
+
 
 @patch("httpx.Client.post")
 def test_create_test_cases(mock_post, zephyr_client):
@@ -21,15 +24,29 @@ def test_create_test_cases(mock_post, zephyr_client):
     # 3. If steps were present, there would be another call.
 
     mock_post.side_effect = [
-        MagicMock(status_code=201, json=lambda: {"key": "TEST-1", "id": 100}), # Create
-        MagicMock(status_code=201, json=lambda: {}), # Link
+        MagicMock(status_code=201, json=lambda: {"key": "TEST-1", "id": 100}),  # Create
+        MagicMock(status_code=201, json=lambda: {}),  # Link
     ]
 
-    test_cases = [TestCase(key=None, name="TC1", summary="Sum", steps=[], test_data=[], expected_results=[], labels=[], comment="", preconditions="", parent_issue_key="STORY-1")]
+    test_cases = [
+        TestCase(
+            key=None,
+            name="TC1",
+            summary="Sum",
+            steps=[],
+            test_data=[],
+            expected_results=[],
+            labels=[],
+            comment="",
+            preconditions="",
+            parent_issue_key="STORY-1",
+        )
+    ]
 
     keys = zephyr_client.create_test_cases(test_cases, "PROJ", 123)
     assert keys == ["TEST-1"]
     assert mock_post.call_count == 2
+
 
 @patch("httpx.Client.get")
 @patch("httpx.Client.post")
@@ -39,18 +56,64 @@ def test_create_test_execution(mock_post, mock_get, zephyr_client):
 
     # Mock _get_test_steps response
     mock_get.return_value.status_code = 200
-    mock_get.return_value.json.return_value = {"values": []} # No steps in existing TC
+    mock_get.return_value.json.return_value = {"values": []}  # No steps in existing TC
 
-    results = [TestExecutionResult(
-        stepResults=[], testCaseKey="TEST-1", testCaseName="TC1",
-        testExecutionStatus="passed", generalErrorMessage="",
-        start_timestamp="2023-01-01T10:00:00", end_timestamp="2023-01-01T10:01:00"
-    )]
+    results = [
+        TestExecutionResult(
+            stepResults=[],
+            testCaseKey="TEST-1",
+            testCaseName="TC1",
+            testExecutionStatus="passed",
+            generalErrorMessage="",
+            start_timestamp="2023-01-01T10:00:00",
+            end_timestamp="2023-01-01T10:01:00",
+        )
+    ]
 
     zephyr_client.create_test_execution(results, "PROJ", "CYCLE-1")
 
     assert mock_get.called
     assert mock_post.called
+
+
+@patch("httpx.Client.get")
+@patch("httpx.Client.post")
+def test_create_test_execution_ignores_invalid_timestamps(mock_post, mock_get, zephyr_client):
+    mock_post.return_value.status_code = 201
+    mock_post.return_value.json.return_value = {"id": "EXEC-1"}
+
+    mock_get.return_value.status_code = 200
+    mock_get.return_value.json.return_value = {"values": []}
+
+    results = [
+        TestExecutionResult(
+            stepResults=[
+                TestStepResult(
+                    stepDescription="Step 1",
+                    success=True,
+                    actualResults="OK",
+                    errorMessage="",
+                    testData=[],
+                    expectedResults="",
+                    executionEndTimestamp="not-a-timestamp",
+                )
+            ],
+            testCaseKey="TEST-1",
+            testCaseName="TC1",
+            testExecutionStatus="passed",
+            generalErrorMessage="",
+            start_timestamp="2023-01-01T10:00:00,unexpected",
+            end_timestamp="not-a-timestamp",
+        )
+    ]
+
+    zephyr_client.create_test_execution(results, "PROJ", "CYCLE-1")
+
+    payload = mock_post.call_args.kwargs["json"]
+    assert payload["actualStartDate"] == "2023-01-01T10:00:00Z"
+    assert "actualEndDate" not in payload
+    assert "actualEndDate" not in payload["testScriptResults"][0]
+
 
 @patch("httpx.Client.post")
 def test_create_test_plan(mock_post, zephyr_client):
@@ -60,6 +123,7 @@ def test_create_test_plan(mock_post, zephyr_client):
     key = zephyr_client.create_test_plan("PROJ", "Cycle Name")
     assert key == "CYCLE-1"
 
+
 @patch("httpx.Client.post")
 def test_link_issue_to_test_case(mock_post, zephyr_client):
     mock_post.return_value.status_code = 201
@@ -68,4 +132,4 @@ def test_link_issue_to_test_case(mock_post, zephyr_client):
 
     assert mock_post.called
     _, kwargs = mock_post.call_args
-    assert kwargs['json'] == {"issueId": 10001, "type": "Relates"}
+    assert kwargs["json"] == {"issueId": 10001, "type": "Relates"}

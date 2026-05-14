@@ -1,5 +1,7 @@
 import { useState } from 'react';
-import { Server, Wifi, WifiOff, Loader2 } from 'lucide-react';
+import { Server, Wifi, WifiOff, Loader2, RefreshCw } from 'lucide-react';
+import { useQueryClient } from '@tanstack/react-query';
+import { dashboardApi } from '../api/dashboardApi';
 import { LogModal } from './LogModal';
 import type { AgentInfo } from '../types/dashboard';
 
@@ -10,14 +12,32 @@ interface AgentGridProps {
 
 export function AgentGrid({ agents, isLoading }: AgentGridProps) {
   const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
+  const [isDiscovering, setIsDiscovering] = useState(false);
+  const queryClient = useQueryClient();
+
+  const handleDiscoverAgents = async () => {
+    setIsDiscovering(true);
+    try {
+      await dashboardApi.triggerDiscovery();
+      // Invalidate agents query to refresh the list
+      await queryClient.invalidateQueries({ queryKey: ['agents'] });
+      // We can use a simple alert/toast here or rely on the query refresh
+    } catch (error) {
+      console.error('Discovery failed:', error);
+    } finally {
+      setIsDiscovering(false);
+    }
+  };
 
   if (isLoading) {
     return (
       <div className="bg-slate-800/50 rounded-xl p-6 border border-slate-700">
-        <h2 className="text-xl font-semibold mb-4 flex items-center gap-2">
-          <Server className="w-5 h-5 text-indigo-400" />
-          Agents
-        </h2>
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-xl font-semibold flex items-center gap-2">
+            <Server className="w-5 h-5 text-indigo-400" />
+            Agents
+          </h2>
+        </div>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {[...Array(3)].map((_, i) => (
             <div key={i} className="bg-slate-700/50 rounded-lg p-4 animate-pulse">
@@ -26,18 +46,6 @@ export function AgentGrid({ agents, isLoading }: AgentGridProps) {
             </div>
           ))}
         </div>
-      </div>
-    );
-  }
-
-  if (!agents || agents.length === 0) {
-    return (
-      <div className="bg-slate-800/50 rounded-xl p-6 border border-slate-700">
-        <h2 className="text-xl font-semibold mb-4 flex items-center gap-2">
-          <Server className="w-5 h-5 text-indigo-400" />
-          Agents
-        </h2>
-        <p className="text-slate-400 text-center py-8">No agents registered</p>
       </div>
     );
   }
@@ -70,10 +78,26 @@ export function AgentGrid({ agents, isLoading }: AgentGridProps) {
 
   return (
     <div className="bg-slate-800/50 rounded-xl p-6 border border-slate-700">
-      <h2 className="text-xl font-semibold mb-4 flex items-center gap-2">
-        <Server className="w-5 h-5 text-indigo-400" />
-        Agents ({agents.length})
-      </h2>
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="text-xl font-semibold flex items-center gap-2">
+          <Server className="w-5 h-5 text-indigo-400" />
+          Agents ({agents?.length || 0})
+        </h2>
+        
+        <button
+          onClick={handleDiscoverAgents}
+          disabled={isDiscovering}
+          className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-slate-300 bg-slate-700 hover:bg-slate-600 rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          title="Discover Agents"
+        >
+          <RefreshCw className={`w-4 h-4 ${isDiscovering ? 'animate-spin' : ''}`} />
+          <span>{isDiscovering ? 'Discovering...' : 'Discover'}</span>
+        </button>
+      </div>
+
+      {(!agents || agents.length === 0) ? (
+        <p className="text-slate-400 text-center py-8">No agents registered</p>
+      ) : (
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {agents.map((agent) => (
           <div
@@ -112,6 +136,7 @@ export function AgentGrid({ agents, isLoading }: AgentGridProps) {
           </div>
         ))}
       </div>
+      )}
 
       {selectedAgent && (
         <LogModal

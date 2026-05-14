@@ -42,8 +42,9 @@ class AllureClient(TestReportingClientBase):
         test_result = TestResult()
         test_result.name = test_execution_result.testCaseName
         test_result.uuid = str(uuid.uuid4())
-        test_result.start = int(
-            datetime.fromisoformat(test_execution_result.start_timestamp.replace("Z", "+00:00")).timestamp() * 1000)
+        test_result.start = self._timestamp_to_millis(
+            test_execution_result.start_timestamp, "test execution start timestamp", fallback_to_now=True
+        )
 
         # Extract logs from artifacts if available using the common utility
         logs_list = utils.get_execution_logs_from_artifacts(test_execution_result.artifacts)
@@ -54,12 +55,10 @@ class AllureClient(TestReportingClientBase):
             test_result.status = Status.PASSED
         elif test_execution_result.testExecutionStatus == "failed":
             test_result.status = Status.FAILED
-            test_result.statusDetails = StatusDetails(message=test_execution_result.generalErrorMessage,
-                                                      trace=logs)
+            test_result.statusDetails = StatusDetails(message=test_execution_result.generalErrorMessage, trace=logs)
         elif test_execution_result.testExecutionStatus == "error":
             test_result.status = Status.BROKEN
-            test_result.statusDetails = StatusDetails(message=test_execution_result.generalErrorMessage,
-                                                      trace=logs)
+            test_result.statusDetails = StatusDetails(message=test_execution_result.generalErrorMessage, trace=logs)
 
         # Add steps
         for step_result in test_execution_result.stepResults:
@@ -70,35 +69,65 @@ class AllureClient(TestReportingClientBase):
                 step.statusDetails = StatusDetails(message=step_result.actualResults)
             else:
                 step.statusDetails = StatusDetails(message=step_result.errorMessage)
+            if step_result.executionStartTimestamp:
+                step_start = self._timestamp_to_millis(
+                    step_result.executionStartTimestamp, "step execution start timestamp"
+                )
+                if step_start is not None:
+                    step.start = step_start
+            if step_result.executionEndTimestamp:
+                step_stop = self._timestamp_to_millis(step_result.executionEndTimestamp, "step execution end timestamp")
+                if step_stop is not None:
+                    step.stop = step_stop
             test_result.steps.append(step)
-        end_timestamp_utc = test_execution_result.end_timestamp.replace("Z", "+00:00")
-        test_result.stop = int(datetime.fromisoformat(end_timestamp_utc).timestamp() * 1000)
+        test_result.stop = self._timestamp_to_millis(
+            test_execution_result.end_timestamp, "test execution end timestamp", fallback_to_now=True
+        )
 
         if test_execution_result.artifacts:
             for artifact in test_execution_result.artifacts:
                 if artifact.bytes:
                     decoded_bytes = base64.b64decode(artifact.bytes)
-                    extension = artifact.mime_type.split('/')[-1] if artifact.mime_type else 'bin'
+                    extension = artifact.mime_type.split("/")[-1] if artifact.mime_type else "bin"
                     unique_filename = f"{uuid.uuid4()}-attachment.{extension}"
                     attachment_file_path = self.results_dir / unique_filename
-                    with open(attachment_file_path, 'wb') as f:
+                    with open(attachment_file_path, "wb") as f:
                         f.write(decoded_bytes)
                     test_result.attachments.append(
-                        Attachment(name=artifact.name, source=unique_filename, type=artifact.mime_type))
+                        Attachment(name=artifact.name, source=unique_filename, type=artifact.mime_type)
+                    )
         self.file_logger.report_result(test_result)
+
+    @staticmethod
+    def _timestamp_to_millis(timestamp_str: str | None, field_name: str, fallback_to_now: bool = False) -> int | None:
+        timestamp = utils.parse_timestamp(timestamp_str, field_name)
+        if not timestamp:
+            if fallback_to_now:
+                logger.warning(f"Using current time because '{field_name}' could not be parsed.")
+                return int(datetime.now().timestamp() * 1000)
+            return None
+        return int(timestamp.timestamp() * 1000)
 
     def _generate_html(self):
         logger.info(f"Generating Allure HTML report in {self.report_dir}...")
         try:
-            allure_home = os.environ.get('ALLURE_HOME')
+            allure_home = os.environ.get("ALLURE_HOME")
             if allure_home:
-                allure_executable = os.path.join(allure_home, 'bin', 'allure')
+                allure_executable = os.path.join(allure_home, "bin", "allure")
             else:
-                allure_executable = 'allure'
+                allure_executable = "allure"
                 logger.warning("ALLURE_HOME environment variable not set. Assuming 'allure' is in the system's PATH.")
 
-            command = [allure_executable, '-v', "generate", "-o", str(self.report_dir), "--clean", '--single-file',
-                       str(self.results_dir)]
+            command = [
+                allure_executable,
+                "-v",
+                "generate",
+                "-o",
+                str(self.report_dir),
+                "--clean",
+                "--single-file",
+                str(self.results_dir),
+            ]
             subprocess.run(command, check=True, capture_output=True, text=True)
             logger.info("Allure report generated successfully.")
         except subprocess.CalledProcessError as e:
@@ -107,8 +136,10 @@ class AllureClient(TestReportingClientBase):
             logger.error(f"Stderr: {e.stderr}")
             raise
         except FileNotFoundError:
-            logger.error("Allure command not found. Please ensure Allure is installed and ALLURE_HOME is set, "
-                         "or that 'allure' is in your PATH.")
+            logger.error(
+                "Allure command not found. Please ensure Allure is installed and ALLURE_HOME is set, "
+                "or that 'allure' is in your PATH."
+            )
             raise
 
     def _clean_directories(self):

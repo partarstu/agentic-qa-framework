@@ -34,6 +34,4 @@ class JiraRagUpdateSystemPrompt(PromptBase):
     def get_prompt(self) -> str:
         """Returns the formatted prompt string with substituted values."""
         logger.info("Generating Jira RAG update system prompt")
-        return self.template.format(
-            valid_statuses=self.valid_statuses
-        )
+        return self.template.format(valid_statuses=self.valid_statuses)

@@ -60,5 +60,7 @@ class TestCaseReviewWithAttachmentsPrompt(PromptBase):
 
     def get_prompt(self) -> str:
         """Returns the formatted prompt as a string."""
-        logger.info("Generating system prompt for sub-agent which performs test case review with all attachments included")
+        logger.info(
+            "Generating system prompt for sub-agent which performs test case review with all attachments included"
+        )
         return self.template

@@ -45,16 +45,10 @@ class IncidentCreationPrompt(PromptBase):
 
     def get_prompt(self) -> str:
         logger.info("Generating incident creation system prompt")
-        severity_values = _format_values_for_prompt(
-            config.IncidentCreationAgentConfig.SEVERITY_VALUES
-        )
-        priority_values = _format_values_for_prompt(
-            config.IncidentCreationAgentConfig.PRIORITY_VALUES
-        )
-        return self.template.format(
-            SEVERITY_VALUES=severity_values,
-            PRIORITY_VALUES=priority_values
-        )
+        severity_values = _format_values_for_prompt(config.IncidentCreationAgentConfig.SEVERITY_VALUES)
+        priority_values = _format_values_for_prompt(config.IncidentCreationAgentConfig.PRIORITY_VALUES)
+        return self.template.format(SEVERITY_VALUES=severity_values, PRIORITY_VALUES=priority_values)
+
 
 class DuplicateDetectionPrompt(PromptBase):
     def get_script_dir(self) -> Path:

@@ -7,9 +7,11 @@ import logging
 import mimetypes
 import os
 import sys
+from datetime import datetime
 from pathlib import Path
 
 from a2a.types import FileWithBytes
+from dateutil import parser
 from pydantic_ai import BinaryContent
 
 import config
@@ -21,10 +23,11 @@ def _initialize_logging():
     global logging_initialized
     if config.GOOGLE_CLOUD_LOGGING_ENABLED:
         import google.cloud.logging
+
         client = google.cloud.logging.Client()
         client.setup_logging()
     else:
-        logging.basicConfig(stream=sys.stdout, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        logging.basicConfig(stream=sys.stdout, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
     logging_initialized = True
 
 
@@ -58,12 +61,41 @@ def get_execution_logs_from_artifacts(artifacts: list[FileWithBytes], log_filena
 
     logs = []
     for artifact in artifacts:
-        if artifact.name and (log_filename_pattern.lower() in artifact.name.lower()) and (
-                artifact.name.endswith(".txt") or artifact.name.endswith(".log")) and artifact.bytes:
+        if (
+            artifact.name
+            and (log_filename_pattern.lower() in artifact.name.lower())
+            and (artifact.name.endswith(".txt") or artifact.name.endswith(".log"))
+            and artifact.bytes
+        ):
             try:
-                logs.append(base64.b64decode(artifact.bytes).decode('utf-8'))
+                logs.append(base64.b64decode(artifact.bytes).decode("utf-8"))
             except (UnicodeDecodeError, ValueError) as e:
                 get_logger(__name__).warning(f"Failed to decode logs from artifact '{artifact.name}': {e}")
                 continue
 
     return logs
+
+
+def parse_timestamp(timestamp_str: str | None, field_name: str = "timestamp") -> datetime | None:
+    """Parse a timestamp string after removing comma-delimited trailing content."""
+    if not timestamp_str:
+        return None
+
+    cleaned_timestamp = timestamp_str.split(",", 1)[0].strip()
+    if cleaned_timestamp != timestamp_str.strip():
+        get_logger(__name__).warning(
+            f"Timestamp value for '{field_name}' contained trailing content and was cleaned. "
+            f"Original value: '{timestamp_str}'. Cleaned value: '{cleaned_timestamp}'."
+        )
+
+    if not cleaned_timestamp:
+        get_logger(__name__).warning(f"Ignoring empty timestamp value for '{field_name}'.")
+        return None
+
+    try:
+        return parser.parse(cleaned_timestamp)
+    except (OverflowError, TypeError, ValueError) as e:
+        get_logger(__name__).warning(
+            f"Ignoring invalid timestamp value for '{field_name}': '{timestamp_str}'. Error: {e}"
+        )
+        return None

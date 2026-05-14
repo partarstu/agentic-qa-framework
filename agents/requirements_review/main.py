@@ -4,8 +4,8 @@
 
 from typing import TYPE_CHECKING
 
-from pydantic_ai import Agent
 from pydantic_ai.mcp import MCPServerSSE
+from pydantic_ai.settings import ThinkingLevel
 
 import config
 from agents.requirements_review.prompt import RequirementsReviewSystemPrompt, RequirementsReviewWithAttachmentsPrompt
@@ -24,11 +24,12 @@ jira_mcp_server = MCPServerSSE(url=config.JIRA_MCP_SERVER_URL, timeout=config.MC
 class RequirementsReviewAgent(AgentBase):
     def __init__(self):
         # Create a sub-agent for reviewing with attachments
-        self.review_agent = Agent(
-            model=CustomLlmWrapper(wrapped=config.RequirementsReviewAgentConfig.MODEL_NAME),
+        self.review_agent = CustomLlmWrapper.create_agent(
+            model_name=config.RequirementsReviewAgentConfig.MODEL_NAME,
             output_type=RequirementsReviewFeedback,
             system_prompt=RequirementsReviewWithAttachmentsPrompt().get_prompt(),
             name="review_with_attachments",
+            thinking_level=config.RequirementsReviewAgentConfig.THINKING_LEVEL,
         )
 
         instruction_prompt = RequirementsReviewSystemPrompt(
@@ -46,16 +47,18 @@ class RequirementsReviewAgent(AgentBase):
             mcp_servers=[jira_mcp_server],
             deps_type=JiraUserStory,
             description="Agent which does the review of requirements including Jira user stories",
-            tools=[self._review_with_attachments, self.add_jira_comment]
+            tools=[self._review_with_attachments, self.add_jira_comment],
         )
 
-    def get_thinking_budget(self) -> int:
-        return config.RequirementsReviewAgentConfig.THINKING_BUDGET
+    def get_thinking_level(self) -> ThinkingLevel:
+        return config.RequirementsReviewAgentConfig.THINKING_LEVEL
 
     def get_max_requests_per_task(self) -> int:
         return config.RequirementsReviewAgentConfig.MAX_REQUESTS_PER_TASK
 
-    async def _review_with_attachments(self, jira_issue_content: str, attachment_paths: list[str]) -> RequirementsReviewFeedback:
+    async def _review_with_attachments(
+        self, jira_issue_content: str, attachment_paths: list[str]
+    ) -> RequirementsReviewFeedback:
         """
         Reviews a Jira issue, taking into account all its attachments.
 
@@ -68,9 +71,7 @@ class RequirementsReviewAgent(AgentBase):
         """
 
         attachments_content = self._fetch_attachments(attachment_paths)
-        user_message_parts: list[str | BinaryContent] = [
-            f"Jira Issue content:\n```{jira_issue_content}```"
-        ]
+        user_message_parts: list[str | BinaryContent] = [f"Jira Issue content:\n```{jira_issue_content}```"]
         if attachments_content:
             for filename, binary_content in attachments_content.items():
                 user_message_parts.append(f"Attachment: {filename}")

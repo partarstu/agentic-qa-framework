@@ -4,8 +4,8 @@
 
 from typing import TYPE_CHECKING
 
-from pydantic_ai import Agent
 from pydantic_ai.mcp import MCPServerSSE
+from pydantic_ai.settings import ThinkingLevel
 
 import config
 from agents.test_case_review.prompt import TestCaseReviewSystemPrompt, TestCaseReviewWithAttachmentsPrompt
@@ -27,11 +27,12 @@ class TestCaseReviewAgent(AgentBase):
 
     def __init__(self):
         # Create a sub-agent for reviewing with attachments
-        self.review_agent = Agent(
-            model=CustomLlmWrapper(wrapped=config.TestCaseReviewAgentConfig.MODEL_NAME),
+        self.review_agent = CustomLlmWrapper.create_agent(
+            model_name=config.TestCaseReviewAgentConfig.MODEL_NAME,
             output_type=TestCaseReviewFeedbacks,
             system_prompt=TestCaseReviewWithAttachmentsPrompt().get_prompt(),
             name="review_test_cases_with_attachments",
+            thinking_level=config.TestCaseReviewAgentConfig.THINKING_LEVEL,
         )
 
         instruction_prompt = TestCaseReviewSystemPrompt(
@@ -49,17 +50,22 @@ class TestCaseReviewAgent(AgentBase):
             instructions=instruction_prompt.get_prompt(),
             mcp_servers=[jira_mcp_server],
             description="Agent which reviews generated test cases for coherence, redundancy, and effectiveness.",
-            tools=[self.add_review_feedback, self.set_test_case_status_to_review_complete, self._review_test_cases_with_attachments]
+            tools=[
+                self.add_review_feedback,
+                self.set_test_case_status_to_review_complete,
+                self._review_test_cases_with_attachments,
+            ],
         )
 
-    def get_thinking_budget(self) -> int:
-        return config.TestCaseReviewAgentConfig.THINKING_BUDGET
+    def get_thinking_level(self) -> ThinkingLevel:
+        return config.TestCaseReviewAgentConfig.THINKING_LEVEL
 
     def get_max_requests_per_task(self) -> int:
         return config.TestCaseReviewAgentConfig.MAX_REQUESTS_PER_TASK
 
-    async def _review_test_cases_with_attachments(self, jira_issue_content: str, attachment_paths: list[str],
-                                                  test_cases: list[TestCase]) -> TestCaseReviewFeedbacks:
+    async def _review_test_cases_with_attachments(
+        self, jira_issue_content: str, attachment_paths: list[str], test_cases: list[TestCase]
+    ) -> TestCaseReviewFeedbacks:
         """
         Reviews a list of test cases, taking into account the Jira issue content and its attachments.
 
@@ -77,15 +83,17 @@ class TestCaseReviewAgent(AgentBase):
 
         user_message_parts: list[str | BinaryContent] = [
             f"Jira Issue content:\n```{jira_issue_content}```",
-            f"Test Cases to Review:\n```{test_cases_str}```"
+            f"Test Cases to Review:\n```{test_cases_str}```",
         ]
         if attachments_content:
             for filename, binary_content in attachments_content.items():
                 user_message_parts.append(f"Attachment: {filename}")
                 user_message_parts.append(binary_content)
 
-        logger.info(f"Starting review of {len(test_cases)} referring to the Jira issue content "
-                    f"and {len(attachments_content) if attachments_content else 0} attachments.")
+        logger.info(
+            f"Starting review of {len(test_cases)} referring to the Jira issue content "
+            f"and {len(attachments_content) if attachments_content else 0} attachments."
+        )
         result = await self.review_agent.run(user_message_parts)
         feedbacks: TestCaseReviewFeedbacks = result.output
         logger.info(f"Generated review feedbacks for {len(feedbacks.review_feedbacks)} test cases")
@@ -105,7 +113,9 @@ class TestCaseReviewAgent(AgentBase):
         """
         client = get_test_management_client()
         client.add_test_case_review_comment(test_case_key, feedback)
-        result_info = f"Successfully added the test case review feedback for the test case with key(ID) '{test_case_key}'"
+        result_info = (
+            f"Successfully added the test case review feedback for the test case with key(ID) '{test_case_key}'"
+        )
         logger.info(result_info)
         return result_info
 
@@ -122,8 +132,9 @@ class TestCaseReviewAgent(AgentBase):
             A confirmation message informing if the status was successfully updated.
         """
         client = get_test_management_client()
-        client.change_test_case_status(project_key, test_case_key,
-                                       config.TestCaseReviewAgentConfig.REVIEW_COMPLETE_STATUS_NAME)
+        client.change_test_case_status(
+            project_key, test_case_key, config.TestCaseReviewAgentConfig.REVIEW_COMPLETE_STATUS_NAME
+        )
         result_info = f"Successfully set status of test case '{test_case_key}' to '{config.TestCaseReviewAgentConfig.REVIEW_COMPLETE_STATUS_NAME}'"
         logger.info(result_info)
         return result_info

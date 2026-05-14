@@ -16,6 +16,7 @@ from datetime import datetime
 @dataclass
 class LogEntry:
     """Represents a single log entry."""
+
     timestamp: str
     level: str
     logger_name: str
@@ -30,7 +31,7 @@ class LogEntry:
             "logger": self.logger_name,
             "message": self.message,
             "task_id": self.task_id,
-            "agent_id": self.agent_id
+            "agent_id": self.agent_id,
         }
 
 
@@ -43,7 +44,7 @@ class MemoryLogHandler(logging.Handler):
     _instance: "MemoryLogHandler | None" = None
     _lock = threading.Lock()
 
-    def __new__(cls, max_size: int = 500):
+    def __new__(cls, max_size: int = 50000):
         """Singleton pattern to ensure only one instance exists."""
         with cls._lock:
             if cls._instance is None:
@@ -51,16 +52,14 @@ class MemoryLogHandler(logging.Handler):
                 cls._instance._initialized = False
             return cls._instance
 
-    def __init__(self, max_size: int = 500):
+    def __init__(self, max_size: int = 50000):
         if self._initialized:
             return
         super().__init__()
         self._buffer: deque[LogEntry] = deque(maxlen=max_size)
         self._buffer_lock = threading.Lock()
         self._initialized = True
-        self.setFormatter(logging.Formatter(
-            '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-        ))
+        self.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
 
     def emit(self, record: logging.LogRecord) -> None:
         """Store the log record in the buffer."""
@@ -71,15 +70,21 @@ class MemoryLogHandler(logging.Handler):
                 logger_name=record.name,
                 message=self.format(record),
                 task_id=getattr(record, "task_id", None),
-                agent_id=getattr(record, "agent_id", None)
+                agent_id=getattr(record, "agent_id", None),
             )
             with self._buffer_lock:
                 self._buffer.append(entry)
         except Exception:
             self.handleError(record)
 
-    def get_logs(self, limit: int = 100, level: str | None = None,
-                 task_id: str | None = None, agent_id: str | None = None) -> list[LogEntry]:
+    def get_logs(
+        self,
+        limit: int = 100,
+        offset: int = 0,
+        level: str | None = None,
+        task_id: str | None = None,
+        agent_id: str | None = None,
+    ) -> list[LogEntry]:
         """
         Get the most recent log entries.
 
@@ -106,8 +111,23 @@ class MemoryLogHandler(logging.Handler):
         if agent_id:
             logs = [log for log in logs if log.agent_id == agent_id]
 
-        # Return newest first, limited
-        return list(reversed(logs[-limit:]))
+        if not logs:
+            return []
+
+        # Return newest first, limited with offset
+        # logs is [oldest, ..., newest]
+        # with offset=0, limit=100 -> we want logs[-100:] reversed
+        # with offset=100, limit=100 -> we want logs[-200:-100] reversed
+
+        total_logs = len(logs)
+        if offset >= total_logs:
+            return []
+
+        end = total_logs - offset
+        start = max(0, end - limit)
+
+        sliced_logs = logs[start:end]
+        return list(reversed(sliced_logs))
 
     def clear(self) -> None:
         """Clear all buffered logs."""
@@ -115,12 +135,21 @@ class MemoryLogHandler(logging.Handler):
             self._buffer.clear()
 
 
+class _NoiseFilter(logging.Filter):
+    """Exclude high-volume library loggers from the in-memory dashboard buffer."""
+
+    _EXCLUDED_PREFIXES = ("uvicorn.access", "httpx", "hpack", "h11", "httpcore", "anyio")
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return not any(record.name.startswith(p) for p in self._EXCLUDED_PREFIXES)
+
+
 def setup_memory_logging(logger_name: str = "orchestrator") -> MemoryLogHandler:
     """
-    Set up the memory log handler for a logger.
+    Set up the memory log handler on the root logger to capture all application logs.
 
     Args:
-        logger_name: Name of the logger to attach the handler to.
+        logger_name: Unused; kept for backward compatibility.
 
     Returns:
         The MemoryLogHandler instance.
@@ -128,12 +157,10 @@ def setup_memory_logging(logger_name: str = "orchestrator") -> MemoryLogHandler:
     handler = MemoryLogHandler()
     handler.setLevel(logging.DEBUG)
 
-    # Attach to the specified logger
-    logger = logging.getLogger(logger_name)
-
-    # Avoid adding duplicate handlers
-    if not any(isinstance(h, MemoryLogHandler) for h in logger.handlers):
-        logger.addHandler(handler)
+    root_logger = logging.getLogger()
+    if not any(isinstance(h, MemoryLogHandler) for h in root_logger.handlers):
+        handler.addFilter(_NoiseFilter())
+        root_logger.addHandler(handler)
 
     return handler
 

@@ -1,9 +1,11 @@
 # SPDX-FileCopyrightText: 2025 Taras Paruta (partarstu@gmail.com)
 #
 # SPDX-License-Identifier: Apache-2.0
+import asyncio
 import time
 
 from pydantic_ai.mcp import MCPServerSSE
+from pydantic_ai.settings import ThinkingLevel
 from qdrant_client import models as qdrant_models
 
 import config
@@ -30,9 +32,7 @@ class JiraRagAgent(AgentBase):
         self.issues_db = VectorDbService(RAG_COLLECTION)
         self.metadata_db = VectorDbService(METADATA_COLLECTION)
 
-        instruction_prompt = JiraRagUpdateSystemPrompt(
-            valid_statuses=VALID_STATUSES
-        )
+        instruction_prompt = JiraRagUpdateSystemPrompt(valid_statuses=VALID_STATUSES)
 
         super().__init__(
             agent_name=config.JiraRagUpdateAgentConfig.OWN_NAME,
@@ -49,23 +49,23 @@ class JiraRagAgent(AgentBase):
                 self.get_last_update_timestamp,
                 self.save_last_update_timestamp,
                 self.upsert_issues,
-                self.delete_issues,
                 self.search_issues,
-            ]
+                self.synch_deleted_issues,
+            ],
         )
 
-    def get_thinking_budget(self) -> int:
-        return config.JiraRagUpdateAgentConfig.THINKING_BUDGET
+    def get_thinking_level(self) -> ThinkingLevel:
+        return config.JiraRagUpdateAgentConfig.THINKING_LEVEL
 
     def get_max_requests_per_task(self) -> int:
         return config.JiraRagUpdateAgentConfig.MAX_REQUESTS_PER_TASK
 
     @staticmethod
     def _key_to_int(key: str) -> int:
-        """Convert a project key to an integer ID for ProjectMetadata storage.
-        """
+        """Convert a project key to an integer ID for ProjectMetadata storage."""
         import hashlib
-        return int(hashlib.md5(key.encode()).hexdigest()[:16], 16)
+
+        return int(hashlib.md5(key.encode(), usedforsecurity=False).hexdigest()[:16], 16)
 
     async def get_last_update_timestamp(self, project_key: str) -> str:
         """Retrieves the timestamp of the last project update from the metadata DB.
@@ -86,8 +86,8 @@ class JiraRagAgent(AgentBase):
     async def save_last_update_timestamp(self, project_key: str) -> str:
         """Saves the current timestamp as the last project update timestamp in the metadata DB.
 
-         Args:
-            project_key: The key of the project for which the current timestamp needs to be saved.
+        Args:
+           project_key: The key of the project for which the current timestamp needs to be saved.
         """
         try:
             timestamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - EXECUTION_DELAY_SECONDS))
@@ -101,40 +101,48 @@ class JiraRagAgent(AgentBase):
     async def upsert_issues(self, issues: list[JiraIssue]) -> str:
         """Upserts a list of Jira issues into the vector DB.
 
-         Args:
-            issues: The list of Jira issues which need to be upserted.
+        Args:
+           issues: The list of Jira issues which need to be upserted.
         """
-        count = 0
         try:
-            for issue in issues:
-                await self.issues_db.upsert(data=issue)
-                count += 1
-            return f"Upserted {count} issues."
+            await self.issues_db.ensure_collection()
+            await asyncio.gather(*(self.issues_db.upsert(data=issue, ensure=False) for issue in issues))
+            return f"Upserted {len(issues)} issues."
         except Exception:
             logger.exception("Error upserting issues")
             raise
 
-    async def delete_issues(self, issue_ids: list[int]) -> str:
-        """Deletes a list of Jira issues from the vector DB by their numeric IDs."""
+    async def synch_deleted_issues(self, project_key: str, existing_jira_issue_ids: list[int]) -> str:
+        """Deletes from the vector DB any issues that no longer exist in Jira.
+
+        Args:
+            project_key: The Jira project key to scope the reconciliation.
+            existing_jira_issue_ids: The complete list of issue IDs currently existing in Jira for the project.
+
+        Returns:
+            A message describing how many stale issues were deleted.
+        """
         try:
-            if not issue_ids:
-                return "No issues to delete."
-            await self.issues_db.delete(issue_ids)
-            return f"Deleted {len(issue_ids)} issues."
+            stored_ids = await self.issues_db.scroll_all_ids_by_project(project_key)
+            stale_ids = list(set(stored_ids) - set(existing_jira_issue_ids))
+            if not stale_ids:
+                return "No stale issues found."
+            await self.issues_db.delete(stale_ids)
+            return f"Deleted {len(stale_ids)} stale issues."
         except Exception:
-            logger.exception("Error deleting issues")
+            logger.exception("Error reconciling deleted issues")
             raise
 
     async def search_issues(
-            self,
-            query_text: str,
-            limit: int = 10,
-            score_threshold: float = 0.7,
-            issue_type: str | None = None,
-            status: str | None = None,
-            project_key: str | None = None,
-            updated_after: str | None = None,
-            updated_before: str | None = None,
+        self,
+        query_text: str,
+        limit: int = 10,
+        score_threshold: float = 0.7,
+        issue_type: str | None = None,
+        status: str | None = None,
+        project_key: str | None = None,
+        updated_after: str | None = None,
+        updated_before: str | None = None,
     ) -> list[dict]:
         """Searches for Jira issues in the vector DB with optional payload filters.
 
@@ -204,17 +212,19 @@ class JiraRagAgent(AgentBase):
             results = []
             for point in points:
                 payload = point.payload or {}
-                results.append({
-                    "id": point.id,
-                    "key": payload.get("key"),
-                    "summary": payload.get("summary"),
-                    "description": payload.get("description"),
-                    "issue_type": payload.get("issue_type"),
-                    "status": payload.get("status"),
-                    "project_key": payload.get("project_key"),
-                    "updated_at": payload.get("updated_at"),
-                    "score": point.score,
-                })
+                results.append(
+                    {
+                        "id": point.id,
+                        "key": payload.get("key"),
+                        "summary": payload.get("summary"),
+                        "description": payload.get("description"),
+                        "issue_type": payload.get("issue_type"),
+                        "status": payload.get("status"),
+                        "project_key": payload.get("project_key"),
+                        "updated_at": payload.get("updated_at"),
+                        "score": point.score,
+                    }
+                )
 
             return results
         except Exception:

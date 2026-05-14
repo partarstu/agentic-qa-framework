@@ -13,7 +13,7 @@ import os
 
 
 class <AgentName>AgentConfig:
-    THINKING_BUDGET = 2000  # Token budget for thinking (0 to disable)
+    THINKING_LEVEL = "MEDIUM"  # Token budget for thinking (0 to disable)
     OWN_NAME = "<Human-Readable Agent Name>"
     PORT = int(os.environ.get("PORT", "<unique_port>"))  # e.g., 8008
     EXTERNAL_PORT = int(os.environ.get("EXTERNAL_PORT", PORT))

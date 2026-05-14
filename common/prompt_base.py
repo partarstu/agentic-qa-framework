@@ -21,8 +21,9 @@ class PromptBase(ABC):
         """
         self.template_path = Path(os.path.join(self.get_script_dir(), template_file_name)).resolve()
         if not self.template_path.is_file():
-            raise FileNotFoundError(f"Error: The prompt template file was not found at the specified "
-                                    f"path: {self.template_path}")
+            raise FileNotFoundError(
+                f"Error: The prompt template file was not found at the specified path: {self.template_path}"
+            )
         self.template = self._load_template()
 
     def _load_template(self) -> str:

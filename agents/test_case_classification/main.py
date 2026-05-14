@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from pydantic_ai.mcp import MCPServerSSE
+from pydantic_ai.settings import ThinkingLevel
 
 import config
 from agents.test_case_classification.prompt import TestCaseClassificationSystemPrompt
@@ -17,6 +18,7 @@ jira_mcp_server = MCPServerSSE(url=config.JIRA_MCP_SERVER_URL, timeout=config.MC
 
 class TestCaseClassificationAgent(AgentBase):
     __test__ = False
+
     def __init__(self):
         instruction_prompt = TestCaseClassificationSystemPrompt()
         super().__init__(
@@ -31,11 +33,11 @@ class TestCaseClassificationAgent(AgentBase):
             mcp_servers=[jira_mcp_server],
             deps_type=TestCaseKeys,
             description="Agent which classifies test cases based on their content",
-            tools=[self.add_labels_to_test_case]
+            tools=[self.add_labels_to_test_case],
         )
 
-    def get_thinking_budget(self) -> int:
-        return config.TestCaseClassificationAgentConfig.THINKING_BUDGET
+    def get_thinking_level(self) -> ThinkingLevel:
+        return config.TestCaseClassificationAgentConfig.THINKING_LEVEL
 
     def get_max_requests_per_task(self) -> int:
         return config.TestCaseClassificationAgentConfig.MAX_REQUESTS_PER_TASK

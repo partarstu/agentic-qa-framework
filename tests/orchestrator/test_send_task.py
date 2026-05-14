@@ -1,4 +1,3 @@
-
 import asyncio
 import contextlib
 import time
@@ -33,14 +32,16 @@ def mock_registry():
         mock.set_current_task = AsyncMock()
         yield mock
 
+
 @pytest.mark.asyncio
 async def test_send_task_success(mock_registry):
     mock_registry.get_card = AsyncMock(return_value=MagicMock())
 
-    with patch("orchestrator.main.httpx.AsyncClient"), \
-         patch("orchestrator.main.ClientFactory") as mock_factory_cls, \
-         patch("orchestrator.main.reserve_agent_waiting_if_needed", new_callable=AsyncMock) as mock_reserve:
-
+    with (
+        patch("orchestrator.main.httpx.AsyncClient"),
+        patch("orchestrator.main.ClientFactory") as mock_factory_cls,
+        patch("orchestrator.main.reserve_agent_waiting_if_needed", new_callable=AsyncMock) as mock_reserve,
+    ):
         mock_reserve.return_value = ("agent-1", MagicMock())
         mock_a2a_client = MagicMock()
         mock_factory_cls.return_value.create.return_value = mock_a2a_client
@@ -59,15 +60,17 @@ async def test_send_task_success(mock_registry):
         # _wait_and_reserve_agent handles reservation, so we just check if registry was updated by the main flow (e.g. releasing agent)
         mock_registry.update_status.assert_any_call("agent-1", AgentStatus.AVAILABLE)
 
+
 @pytest.mark.asyncio
 async def test_send_task_timeout(mock_registry):
     mock_registry.get_card = AsyncMock(return_value=MagicMock())
 
-    with patch("orchestrator.main.httpx.AsyncClient"), \
-         patch("orchestrator.main.ClientFactory") as mock_factory_cls, \
-         patch("orchestrator.main.config.OrchestratorConfig.TASK_EXECUTION_TIMEOUT", 0.1), \
-         patch("orchestrator.main.reserve_agent_waiting_if_needed", new_callable=AsyncMock) as mock_reserve:
-
+    with (
+        patch("orchestrator.main.httpx.AsyncClient"),
+        patch("orchestrator.main.ClientFactory") as mock_factory_cls,
+        patch("orchestrator.main.config.OrchestratorConfig.TASK_EXECUTION_TIMEOUT", 0.1),
+        patch("orchestrator.main.reserve_agent_waiting_if_needed", new_callable=AsyncMock) as mock_reserve,
+    ):
         mock_reserve.return_value = ("agent-1", MagicMock())
         mock_a2a_client = MagicMock()
         mock_factory_cls.return_value.create.return_value = mock_a2a_client
@@ -80,15 +83,20 @@ async def test_send_task_timeout(mock_registry):
         mock_a2a_client.send_message.return_value = response_generator()
 
         from fastapi import HTTPException
+
         with pytest.raises(HTTPException) as exc:
             await _send_task_to_agent("input", "desc")
 
         assert exc.value.status_code == 408
         # Check that update_status was called with BROKEN status and TASK_STUCK reason
         # The call should include agent_id, status, broken_reason, and optionally stuck_task_id
-        broken_calls = [c for c in mock_registry.update_status.call_args_list
-                        if len(c.args) >= 2 and c.args[1] == AgentStatus.BROKEN]
+        broken_calls = [
+            c
+            for c in mock_registry.update_status.call_args_list
+            if len(c.args) >= 2 and c.args[1] == AgentStatus.BROKEN
+        ]
         assert len(broken_calls) > 0, "Expected at least one call with AgentStatus.BROKEN"
+
 
 @pytest.mark.asyncio
 async def test_cancellation_task_offline_recovery(mock_registry):
@@ -117,6 +125,7 @@ async def test_cancellation_task_offline_recovery(mock_registry):
         mock_registry.update_status.assert_called_with("agent-1", AgentStatus.AVAILABLE)
         assert cancellation_queue.empty()
 
+
 @pytest.mark.asyncio
 async def test_cancellation_task_retry(mock_registry):
     """Test that agents that fail recovery check are re-queued for retry."""
@@ -140,8 +149,11 @@ async def test_cancellation_task_retry(mock_registry):
             await task
 
         # Agent should not be marked as AVAILABLE since it's still offline
-        available_calls = [c for c in mock_registry.update_status.call_args_list
-                          if len(c.args) >= 2 and c.args[1] == AgentStatus.AVAILABLE]
+        available_calls = [
+            c
+            for c in mock_registry.update_status.call_args_list
+            if len(c.args) >= 2 and c.args[1] == AgentStatus.AVAILABLE
+        ]
         assert len(available_calls) == 0, "Agent should not be marked AVAILABLE when still offline"
 
 
@@ -169,4 +181,3 @@ async def test_cancellation_task_stuck_with_cancel(mock_registry):
         # Should have attempted to cancel the stuck task
         mock_cancel.assert_called_once()
         mock_registry.update_status.assert_called_with("agent-1", AgentStatus.AVAILABLE)
-

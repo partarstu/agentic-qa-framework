@@ -2,13 +2,16 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import asyncio
 import base64
 import logging
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from contextlib import asynccontextmanager
+from typing import Any
 from urllib.parse import urlparse
 
+import httpx
 import uvicorn
 from a2a.server.apps import A2AFastAPIApplication
 from a2a.server.request_handlers import DefaultRequestHandler
@@ -20,11 +23,10 @@ from jira import JIRA
 from pydantic import BaseModel
 from pydantic_ai import Agent, Tool
 from pydantic_ai.agent import AgentRunResult
+from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.mcp import MCPServerSSE
 from pydantic_ai.messages import BinaryContent, UserContent
-from pydantic_ai.models.gemini import GeminiModelSettings
-from pydantic_ai.models.groq import GroqModelSettings
-from pydantic_ai.settings import ModelSettings
+from pydantic_ai.settings import ThinkingLevel
 from pydantic_ai.tools import AgentDepsT, ToolFuncEither
 from pydantic_ai.usage import UsageLimits
 
@@ -33,10 +35,9 @@ from common import utils
 from common.agent_executor import DefaultAgentExecutor
 from common.agent_log_capture import AgentLogCaptureHandler, create_log_file_part
 from common.custom_llm_wrapper import CustomLlmWrapper
-from common.models import AgentExecutionError, JsonSerializableModel
+from common.models import AgentExecutionError, AgentRuntimeError, JsonSerializableModel
 from common.services.vector_db_service import VectorDbService
 
-MAX_RETRIES = 3
 REGISTRATION_PATH = f"{config.ORCHESTRATOR_URL}/register"
 MCP_SERVER_ATTACHMENTS_FOLDER_PATH = config.MCP_SERVER_ATTACHMENTS_FOLDER_PATH
 ATTACHMENTS_LOCAL_DESTINATION_FOLDER_PATH = config.ATTACHMENTS_LOCAL_DESTINATION_FOLDER_PATH
@@ -46,21 +47,20 @@ logger = utils.get_logger("agent_base")
 
 class AgentBase(ABC):
     def __init__(
-            self,
-            agent_name: str,
-            base_url: str,
-            protocol: str,
-            port: int,
-            external_port: int,
-            model_name: str,
-            output_type: type[BaseModel],
-            instructions: str,
-            mcp_servers: list[MCPServerSSE],
-            model_settings: ModelSettings = None,
-            deps_type: type[BaseModel] | None = None,
-            description: str = "",
-            tools: Sequence[Tool[AgentDepsT] | ToolFuncEither[AgentDepsT, ...]] = (),
-            vector_db_collection_name: str | None = None
+        self,
+        agent_name: str,
+        base_url: str,
+        protocol: str,
+        port: int,
+        external_port: int,
+        model_name: str,
+        output_type: type[BaseModel],
+        instructions: str,
+        mcp_servers: list[MCPServerSSE],
+        deps_type: type[BaseModel] | None = None,
+        description: str = "",
+        tools: Sequence[Tool[AgentDepsT] | ToolFuncEither[AgentDepsT, ...]] = (),
+        vector_db_collection_name: str | None = None,
     ):
         self.agent_name = agent_name
         self.base_url = base_url
@@ -73,7 +73,6 @@ class AgentBase(ABC):
         self.instructions = instructions
         self.deps_type = deps_type
         self.description = description
-        self.model_settings = model_settings if model_settings else self.get_default_model_settings(model_name)
         self.mcp_servers = mcp_servers or []
         self.tools = tools
         self.agent = self._create_agent()
@@ -85,49 +84,54 @@ class AgentBase(ABC):
         self.latest_received_message: Message | None = None
 
     @abstractmethod
-    def get_thinking_budget(self) -> int:
+    def get_thinking_level(self) -> ThinkingLevel:
         pass
 
     @abstractmethod
     def get_max_requests_per_task(self) -> int:
         pass
 
-    def get_default_model_settings(self, model_name: str) -> ModelSettings:
-        if model_name.startswith("google"):
-            return GeminiModelSettings(
-                top_p=config.TOP_P,
-                temperature=config.TEMPERATURE,
-                gemini_thinking_config={'include_thoughts': True, 'thinking_budget': self.get_thinking_budget()})
-        elif model_name.startswith("groq"):
-            return GroqModelSettings(top_p=config.TOP_P, temperature=config.TEMPERATURE)
-        else:
-            return ModelSettings(top_p=config.TOP_P, temperature=config.TEMPERATURE)
-
     def _create_agent(self) -> Agent:
         logger.info(f"""Creating agent '{self.agent_name}' with the following configuration:
         - Model: {self.model_name}
         - Output Type: {self.output_type.__name__}
-        - Model Settings: {self.model_settings}
         - MCP Servers: {[server.url for server in self.mcp_servers]}
         - Tools: {[tool.__name__ for tool in self.tools]}""")
 
-        return Agent(
-            model=CustomLlmWrapper(wrapped=self.model_name),
-            deps_type=self.deps_type,
+        return CustomLlmWrapper.create_agent(
+            model_name=self.model_name,
             output_type=self.output_type,
             instructions=self.instructions,
             name=self.agent_name,
-            model_settings=self.model_settings,
+            thinking_level=self.get_thinking_level(),
             toolsets=self.mcp_servers,
             tools=self.tools,
-            retries=MAX_RETRIES,
-            output_retries=MAX_RETRIES
+            deps_type=self.deps_type,
+            retries=config.RetryConfig.MAX_RETRIES,
+            output_retries=config.RetryConfig.MAX_RETRIES,
         )
 
-    async def _get_agent_execution_result(self, received_request: list[UserContent]) -> AgentRunResult:
+    async def _get_agent_execution_result(self, received_request: list[UserContent]) -> AgentRunResult[Any] | None:
         usage_limits = UsageLimits(tool_calls_limit=self.get_max_requests_per_task())
-        async with self.agent:
-            return await self.agent.run(received_request, usage_limits=usage_limits)
+        for attempt in range(config.RetryConfig.MAX_RETRIES):
+            try:
+                logger.info(f"Starting agent run (attempt {attempt + 1}/{config.RetryConfig.MAX_RETRIES})...")
+                async with self.agent:
+                    return await self.agent.run(received_request, usage_limits=usage_limits)
+            except (ModelHTTPError, httpx.TransportError) as e:
+                is_retryable = isinstance(e, httpx.TransportError) or (
+                    isinstance(e, ModelHTTPError) and e.status_code in config.RetryConfig.RETRYABLE_STATUS_CODES
+                )
+                if is_retryable and attempt < config.RetryConfig.MAX_RETRIES - 1:
+                    delay = config.RetryConfig.RETRY_BASE_DELAY_SECONDS * (2**attempt)
+                    logger.warning(
+                        f"LLM provider request failed: {e} "
+                        f"(attempt {attempt + 1}/{config.RetryConfig.MAX_RETRIES}), retrying in {delay:.0f}s"
+                    )
+                    await asyncio.sleep(delay)
+                else:
+                    raise
+        return None
 
     async def run(self, received_message: Message) -> Message:
         self.latest_received_message = received_message
@@ -151,7 +155,15 @@ class AgentBase(ABC):
             logger.exception("Error during agent execution.")
             captured_logs = log_handler.get_logs()
             root_logger.removeHandler(log_handler)
-            return self._get_error_message_with_logs(e, captured_logs, received_message.context_id, received_message.task_id)
+            error_message = self._get_error_message_with_logs(
+                e, captured_logs, received_message.context_id, received_message.task_id
+            )
+            error_text = (
+                "; ".join(f"{type(sub).__name__}: {sub}" for sub in e.exceptions)
+                if isinstance(e, ExceptionGroup)
+                else str(e)
+            )
+            raise AgentRuntimeError(list(error_message.parts), error_text) from e
 
     def _log_llm_comments_if_result_incomplete(self, output: BaseModel | None | str) -> None:
         """Logs LLM comments if the agent result appears empty or incomplete.
@@ -171,9 +183,7 @@ class AgentBase(ABC):
         # Check if the result appears to be empty or incomplete
         is_incomplete = self._check_if_result_incomplete(output)
         if is_incomplete:
-            logger.warning(
-                f"Agent returned incomplete result. LLM comments: {llm_comments}"
-            )
+            logger.warning(f"Agent returned incomplete result. LLM comments: {llm_comments}")
 
     @staticmethod
     def _check_if_result_incomplete(output: BaseModel) -> bool:
@@ -189,10 +199,7 @@ class AgentBase(ABC):
             return True
 
         # Get all field names, excluding llm_comments which is metadata
-        field_names = [
-            name for name in output.model_fields
-            if name != "llm_comments"
-        ]
+        field_names = [name for name in output.model_fields if name != "llm_comments"]
 
         if not field_names:
             return False
@@ -220,9 +227,9 @@ class AgentBase(ABC):
     async def _lifespan(self, app: FastAPI):
         logger.info(f"{self.agent_name} started.")
         logger.info(f"Using following MCP server URLs: {[server.url for server in self.mcp_servers]}")
-
         yield
-
+        if self.vector_db_service:
+            await self.vector_db_service.close()
         logger.info("Shutting down.")
 
     @staticmethod
@@ -236,6 +243,7 @@ class AgentBase(ABC):
             Dictionary mapping filename to BinaryContent for valid, supported attachments.
         """
         from common.attachment_handler import fetch_all_attachments
+
         return fetch_all_attachments(attachment_paths)
 
     def _get_server(self) -> FastAPI:
@@ -247,15 +255,13 @@ class AgentBase(ABC):
             name=self.agent_name,
             description=self.description,
             url=self.url,
-            version='1.0.0',
-            default_input_modes=['text'],
-            default_output_modes=['text', 'image'],
+            version="1.0.0",
+            default_input_modes=["text"],
+            default_output_modes=["text", "image"],
             capabilities=AgentCapabilities(streaming=False),
             skills=[],
         )
-        server = A2AFastAPIApplication(
-            agent_card=agent_card, http_handler=request_handler
-        )
+        server = A2AFastAPIApplication(agent_card=agent_card, http_handler=request_handler)
         a2a_app: FastAPI = server.build()
         original_lifespan = a2a_app.router.lifespan_context
 
@@ -282,44 +288,50 @@ class AgentBase(ABC):
         text_content: str = get_message_text(received_message)
         files_content: list[BinaryContent] = []
         for part in received_message.parts:
-            if isinstance(part, FilePart):
-                file = part.file
+            if isinstance(part.root, FilePart):
+                file = part.root.file
                 if isinstance(file, FileWithBytes):
                     mime_type = file.mime_type
                     content = base64.b64decode(file.bytes)
                     files_content.append(BinaryContent(data=content, media_type=mime_type))
+        if files_content:
+            logger.info(f"Passing {len(files_content)} file(s) to LLM context.")
         all_contents: list[UserContent] = [text_content, *files_content]
         return all_contents
 
     @staticmethod
-    def _get_text_message_from_results(result: AgentRunResult, context_id: str | None = None, task_id: str | None = None) -> Message:
+    def _get_text_message_from_results(
+        result: AgentRunResult, context_id: str | None = None, task_id: str | None = None
+    ) -> Message:
         output = result.output
         if isinstance(output, JsonSerializableModel):
             return new_agent_text_message(text=output.model_dump_json(), context_id=context_id, task_id=task_id)
         if isinstance(output, dict):
             text_parts = []
-            for part in output.get('parts', []):
-                if part.get('type', "") == 'text':
+            for part in output.get("parts", []):
+                if part.get("type", "") == "text":
                     text_parts.append(part)
             return new_agent_text_message(text="\n".join(text_parts), context_id=context_id, task_id=task_id)
         else:
             return new_agent_text_message(text=str(output), context_id=context_id, task_id=task_id)
 
-    def _get_message_with_logs(self, result: AgentRunResult, captured_logs: str,
-                               context_id: str | None = None, task_id: str | None = None) -> Message:
-        """Create a message with text result and log file artifact.
-        """
+    def _get_message_with_logs(
+        self, result: AgentRunResult, captured_logs: str, context_id: str | None = None, task_id: str | None = None
+    ) -> Message:
+        """Create a message with text result and log file artifact."""
         base_message = self._get_text_message_from_results(result, context_id, task_id)
         if not captured_logs or not captured_logs.strip():
             return base_message
         return self._get_final_message_with_logs(base_message, captured_logs)
 
-    def _get_error_message_with_logs(self, exception: Exception, captured_logs: str,
-                                     context_id: str | None = None, task_id: str | None = None) -> Message:
-        """Create a message with error details and log file artifact.
-        """
+    def _get_error_message_with_logs(
+        self, exception: Exception, captured_logs: str, context_id: str | None = None, task_id: str | None = None
+    ) -> Message:
+        """Create a message with error details and log file artifact."""
         error_model = AgentExecutionError(error_message=f"Agent execution failed with error: {exception}")
-        base_message = new_agent_text_message(text=error_model.model_dump_json(), context_id=context_id, task_id=task_id)
+        base_message = new_agent_text_message(
+            text=error_model.model_dump_json(), context_id=context_id, task_id=task_id
+        )
         if not captured_logs or not captured_logs.strip():
             return base_message
         return self._get_final_message_with_logs(base_message, captured_logs)
@@ -333,13 +345,14 @@ class AgentBase(ABC):
             message_id=base_message.message_id,
             role=base_message.role,
             context_id=base_message.context_id,
-            task_id=base_message.task_id
+            task_id=base_message.task_id,
         )
 
     @staticmethod
     def add_jira_comment(issue_key: str, comment: str) -> str:
         """
-        Adds a comment (e.g. a review feedback et.) to a Jira issue.
+        Adds a comment (e.g. a review feedback et.) to a Jira issue. Always use exactly this tool if you need to add a comment to a Jira
+        issue.
 
         Args:
             issue_key: The key of the Jira issue (e.g., 'PROJ-123').
@@ -352,10 +365,7 @@ class AgentBase(ABC):
         if not config.JIRA_BASE_URL or not config.JIRA_USER or not config.JIRA_TOKEN:
             logger.error("Jira configuration is missing (JIRA_URL, JIRA_USERNAME, or JIRA_API_TOKEN).")
             raise RuntimeError("Jira configuration is missing (JIRA_URL, JIRA_USERNAME, or JIRA_API_TOKEN).")
-        jira = JIRA(
-            server=config.JIRA_BASE_URL,
-            basic_auth=(config.JIRA_USER, config.JIRA_TOKEN)
-        )
+        jira = JIRA(server=config.JIRA_BASE_URL, basic_auth=(config.JIRA_USER, config.JIRA_TOKEN))
 
         try:
             created_comment = jira.add_comment(issue_key, comment)

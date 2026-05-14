@@ -1,4 +1,3 @@
-
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -14,11 +13,12 @@ def mock_config(monkeypatch):
     monkeypatch.setattr(config.RequirementsReviewAgentConfig, "EXTERNAL_PORT", 8001)
     monkeypatch.setattr(config.RequirementsReviewAgentConfig, "PROTOCOL", "http")
     monkeypatch.setattr(config.RequirementsReviewAgentConfig, "MODEL_NAME", "test")
-    monkeypatch.setattr(config.RequirementsReviewAgentConfig, "THINKING_BUDGET", 100)
+    monkeypatch.setattr(config.RequirementsReviewAgentConfig, "THINKING_LEVEL", "LOW")
     monkeypatch.setattr(config.RequirementsReviewAgentConfig, "MAX_REQUESTS_PER_TASK", 5)
     monkeypatch.setattr(config, "AGENT_BASE_URL", "http://localhost")
     monkeypatch.setattr(config, "JIRA_MCP_SERVER_URL", "http://jira")
     monkeypatch.setattr(config, "MCP_SERVER_TIMEOUT_SECONDS", 30)
+
 
 @patch("agents.requirements_review.main.RequirementsReviewSystemPrompt")
 @patch("agents.requirements_review.main.AgentBase.__init__")
@@ -34,5 +34,5 @@ def test_requirements_review_agent_init(mock_super_init, mock_prompt_cls, mock_c
     assert kwargs["agent_name"] == "Test Agent"
     assert kwargs["instructions"] == "system prompt"
 
-    assert agent.get_thinking_budget() == 100
+    assert agent.get_thinking_level() == "LOW"
     assert agent.get_max_requests_per_task() == 5

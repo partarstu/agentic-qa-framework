@@ -1,5 +1,6 @@
 import os
 
+import torch
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
@@ -7,6 +8,8 @@ from sentence_transformers import SentenceTransformer
 
 import config
 from common import utils
+
+os.environ["TOKENIZERS_PARALLELISM"] = "true"
 
 logger = utils.get_logger("embedding_service")
 
@@ -28,6 +31,7 @@ def _get_embedding_model() -> SentenceTransformer:
     """
     global _embedding_model
     if _embedding_model is None:
+        torch.set_num_threads(os.cpu_count() or 1)
         logger.info(f"Initializing embedding service with model: {_model_name}")
 
         if _model_path and os.path.exists(_model_path) and os.listdir(_model_path):

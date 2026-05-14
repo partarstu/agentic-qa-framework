@@ -16,3 +16,4 @@ orchestrator/static/
 bandit-report.json
 coverage.xml
 test-results.xml
+.editorconfig

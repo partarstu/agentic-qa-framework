@@ -3,6 +3,8 @@ name: writing-unit-tests
 description: Writes unit tests for agents, orchestrator logic, and common utilities in the QuAIA framework using pytest. Use when adding tests for new or existing components.
 ---
 
+// turbo-all
+
 # Writing Unit Tests
 
 This skill provides a comprehensive guide for writing unit tests for the QuAIA™ framework, covering agents, orchestrator logic, and common utilities.
@@ -24,6 +26,14 @@ tests/
 ├── common/              # Common utilities tests
 └── scripts/             # Script tests
 ```
+
+## ⚡ Auto-Run Policy
+
+This skill is designed to run with minimal interruption.
+
+- **Always set `SafeToAutoRun: true`** for all `run_command` calls.
+- **Exceptions:** Only set `SafeToAutoRun: false` if a step specifically instructs you to "Ask" the user, "Wait" for approval, or "Verify" a destructive action before proceeding.
+- **Restricted Symbols:** Never use the redirection operator (`>`) or `2>` in commands. Use alternatives (e.g., `Set-Content`, `Out-File`, or ignoring errors explicitly).
 
 ## Test Configuration
 
@@ -160,44 +170,6 @@ async def test_status_handling(status, should_succeed, clear_registry):
 Use the provided helper utilities for creating mock objects:
 
 📄 **Template:** [resources/test_helpers.py](resources/test_helpers.py)
-
-## Running Tests
-
-### Running All Tests
-
-```bash
-# Run all tests
-pytest
-
-# Run with verbose output
-pytest -v
-
-# Run with coverage report
-pytest --cov=. --cov-report=html
-```
-
-### Running Specific Tests
-
-```bash
-# Run tests for a specific module
-pytest tests/agents/
-
-# Run tests for a specific file
-pytest tests/agents/test_requirements_review.py
-
-# Run a specific test function
-pytest tests/orchestrator/test_parsing_logic.py::TestGetModelFromArtifacts::test_parse_valid_model
-
-# Run tests matching a pattern
-pytest -k "test_agent"
-```
-
-### Running Async Tests
-
-```bash
-# Ensure pytest-asyncio is configured
-pytest tests/orchestrator/test_orchestrator_logic.py -v
-```
 
 ## Verification Checklist
 

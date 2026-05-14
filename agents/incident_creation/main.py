@@ -5,11 +5,12 @@
 import base64
 import json
 import os
+import time
 import uuid
 
 from a2a.types import FilePart, FileWithBytes
-from pydantic_ai import Agent
 from pydantic_ai.mcp import MCPServerSSE
+from pydantic_ai.settings import ThinkingLevel
 from qdrant_client import models as qdrant_models
 
 import config
@@ -18,6 +19,7 @@ from common import utils
 from common.agent_base import AgentBase
 from common.custom_llm_wrapper import CustomLlmWrapper
 from common.models import (
+    DuplicateCandidate,
     DuplicateDetectionResult,
     IncidentCreationInput,
     IncidentCreationResult,
@@ -31,64 +33,60 @@ logger = utils.get_logger("incident_creation_agent")
 QDRANT_COLLECTION_NAME = getattr(config.QdrantConfig, "TICKETS_COLLECTION_NAME", "jira_issues")
 RAG_MIN_SIMILARITY = getattr(config.IncidentCreationAgentConfig, "MIN_SIMILARITY_SCORE", 0.7)
 BUG_ISSUE_TYPE = getattr(config.QdrantConfig, "BUG_ISSUE_TYPE", "Bug")
+TERMINAL_STATUSES = set(getattr(config.IncidentCreationAgentConfig, "TERMINAL_STATUSES", []))
 JIRA_MCP_SERVER_URL = config.JIRA_MCP_SERVER_URL
 
 jira_mcp_server = MCPServerSSE(url=JIRA_MCP_SERVER_URL, timeout=config.MCP_SERVER_TIMEOUT_SECONDS)
 
 
 class IncidentCreationAgent(AgentBase):
-    """Agent for creating incident reports in Jira.
-    """
+    """Agent for creating incident reports in Jira."""
 
     def __init__(self):
         self.main_prompt = IncidentCreationPrompt()
         self.dup_detect_prompt = DuplicateDetectionPrompt()
-
-        model_name = getattr(config, "IncidentCreationAgentConfig", config.TestCaseGenerationAgentConfig).MODEL_NAME
-
-        self.duplicate_detector = Agent(
-            model=CustomLlmWrapper(wrapped=model_name),
+        model_name = config.IncidentCreationAgentConfig.MODEL_NAME
+        self.duplicate_detector = CustomLlmWrapper.create_agent(
+            model_name=model_name,
             output_type=DuplicateDetectionResult,
             system_prompt=self.dup_detect_prompt.get_prompt(),
             name="duplicate_detector",
+            thinking_level=config.IncidentCreationAgentConfig.THINKING_LEVEL,
         )
 
-        agent_config = getattr(config, "IncidentCreationAgentConfig", None)
-        port = agent_config.PORT if agent_config else 8005
-        ext_port = agent_config.EXTERNAL_PORT if agent_config else 8005
-        own_name = agent_config.OWN_NAME if agent_config else "Incident Creation Agent"
-        thinking_budget = agent_config.THINKING_BUDGET if agent_config else 16000
-        self._thinking_budget = thinking_budget
         self._saved_artifact_paths: list[str] = []
         self._media_files: list[FileWithBytes] = []
 
         super().__init__(
-            agent_name=own_name,
+            agent_name=config.IncidentCreationAgentConfig.OWN_NAME,
             base_url=config.AGENT_BASE_URL,
-            protocol="http",
-            port=port,
-            external_port=ext_port,
+            protocol=config.IncidentCreationAgentConfig.PROTOCOL,
+            port=config.IncidentCreationAgentConfig.PORT,
+            external_port=config.IncidentCreationAgentConfig.EXTERNAL_PORT,
             model_name=model_name,
             output_type=IncidentCreationResult,
             instructions=self.main_prompt.get_prompt(),
             mcp_servers=[jira_mcp_server],
             deps_type=IncidentCreationInput,
             description="Agent which creates detailed incident reports in Jira based on test execution results.",
-            tools=[self._search_duplicate_candidates_in_rag, self._get_linked_issues, self._check_if_duplicate, self._save_artifacts,
-                   self._link_issue_to_test_case],
-            vector_db_collection_name=QDRANT_COLLECTION_NAME
+            tools=[
+                self._search_duplicate_candidates_in_rag,
+                self._get_linked_issues,
+                self._check_all_duplicates,
+                self._save_artifacts,
+                self._link_issue_to_test_case,
+            ],
+            vector_db_collection_name=QDRANT_COLLECTION_NAME,
         )
 
-    def get_thinking_budget(self) -> int:
-        return self._thinking_budget
+    def get_thinking_level(self) -> ThinkingLevel:
+        return config.IncidentCreationAgentConfig.THINKING_LEVEL
 
     def get_max_requests_per_task(self) -> int:
         return config.IncidentCreationAgentConfig.MAX_REQUESTS_PER_TASK
 
     async def _search_duplicate_candidates_in_rag(self, incident_description: str) -> list[JiraIssue]:
         """Searches for potential duplicate incidents using the RAG vector database.
-
-        This tool searches the vector database for semantically similar incidents based on the incident description.
 
         Args:
             incident_description: Description of the incident including the error description,
@@ -97,6 +95,7 @@ class IncidentCreationAgent(AgentBase):
         Returns:
             List of JiraIssue objects representing potential duplicate incidents.
         """
+        logger.info("Starting RAG duplicate candidate search...")
         if not self.vector_db_service:
             logger.warning("Vector DB service not initialized, skipping RAG search.")
             return []
@@ -107,7 +106,15 @@ class IncidentCreationAgent(AgentBase):
                     key="issue_type",
                     match=qdrant_models.MatchValue(value=BUG_ISSUE_TYPE),
                 )
+            ],
+            must_not=[
+                qdrant_models.FieldCondition(
+                    key="status",
+                    match=qdrant_models.MatchAny(any=list(TERMINAL_STATUSES)),
+                )
             ]
+            if TERMINAL_STATUSES
+            else [],
         )
 
         hits = await self.vector_db_service.search(
@@ -121,7 +128,11 @@ class IncidentCreationAgent(AgentBase):
         for hit in hits:
             if hit.payload:
                 try:
-                    candidates.append(JiraIssue.model_validate(hit.payload))
+                    issue = JiraIssue.model_validate(hit.payload)
+                    if issue.status and issue.status in TERMINAL_STATUSES:
+                        logger.info(f"Skipping RAG candidate {issue.key} with terminal status '{issue.status}'.")
+                        continue
+                    candidates.append(issue)
                 except Exception as e:
                     logger.warning(f"Failed to parse JiraIssue from payload: {e}")
 
@@ -165,6 +176,8 @@ class IncidentCreationAgent(AgentBase):
         # Ensure the destination folder exists
         os.makedirs(local_folder, exist_ok=True)
 
+        total_parts = len(self.latest_received_message.parts)
+        logger.info(f"Saving artifacts: scanning {total_parts} message part(s).")
         for part in self.latest_received_message.parts:
             if isinstance(part.root, FilePart):
                 file_part = part.root
@@ -177,34 +190,62 @@ class IncidentCreationAgent(AgentBase):
                         safe_filename = f"{unique_id}_{original_name}"
                         # Save to the local/host filesystem
                         local_file_path = os.path.join(local_folder, safe_filename)
-                        with open(local_file_path, 'wb') as f:
+                        with open(local_file_path, "wb") as f:
                             f.write(file_content)
                         # Return the MCP container path (with forward slashes for Docker)
                         mcp_file_path = posixpath.join(mcp_folder, safe_filename)
                         saved_paths.append(mcp_file_path)
-                        logger.info(f"Saved artifact '{original_name}' to {local_file_path} (MCP path: {mcp_file_path})")
+                        logger.info(
+                            f"Saved artifact '{original_name}' to {local_file_path} (MCP path: {mcp_file_path})"
+                        )
                     except Exception:
                         logger.exception("Failed to save artifact.")
 
         if saved_paths:
-            logger.info(f"Saved {len(saved_paths)} artifacts so that they could be used by MCP server.")
+            logger.info(f"Saved {len(saved_paths)} artifact(s) for MCP server.")
+        else:
+            logger.info("No file artifacts found in the received message parts.")
         return saved_paths
 
-    async def _check_if_duplicate(self, input_data: IncidentCreationInput, candidate_key: str,
-                                  candidate_content: str) -> DuplicateDetectionResult:
-        """Checks if a candidate issue is a duplicate of the current incident.
+    async def _check_all_duplicates(
+        self, input_data: IncidentCreationInput, candidates: list[DuplicateCandidate]
+    ) -> DuplicateDetectionResult:
+        """Checks which candidate incidents are the duplicates of the current incident.
 
         Args:
             input_data: The incident info which contains all available details about the failure.
-            candidate_key: The Jira issue key of the candidate duplicate (e.g., 'PROJ-123').
-            candidate_content: The full content/description of the candidate issue to compare against.
+            candidates: All candidate incidents to check.
 
-        Returns: duplicate detection result.
+        Returns: A single duplicate detection result containing duplicate detection result.
         """
-        prompt = (f"Current Incident:\n{input_data.model_dump_json()}\n\n"
-                  f"Candidate Incident ({candidate_key}):\n{candidate_content}")
-        result = await self.duplicate_detector.run(prompt)
-        logger.info(f"Duplicate detection result for candidate {candidate_key}: {result.output}")
+        if not candidates:
+            return DuplicateDetectionResult(message="No duplicate candidates were provided.")
+
+        unique_candidates: list[DuplicateCandidate] = []
+        seen_keys: set[str] = set()
+        for candidate in candidates:
+            if candidate.key in seen_keys:
+                continue
+            seen_keys.add(candidate.key)
+            unique_candidates.append(candidate)
+
+        duplicate_count = len(candidates) - len(unique_candidates)
+        if duplicate_count:
+            logger.info(f"Removed {duplicate_count} candidate(s) because they are the instances of the same issue.")
+
+        user_message = (
+            "New incident:\n"
+            f"```\n{input_data.model_dump_json(indent=2)}\n```\n\n"
+            "Already reported incidents:\n"
+            f"```\n{json.dumps([candidate.model_dump() for candidate in unique_candidates], indent=2)}\n```"
+        )
+
+        logger.info(f"Starting duplicate check for {len(unique_candidates)} candidate(s)...")
+        start = time.monotonic()
+        result = await self.duplicate_detector.run(user_message)
+        logger.info(
+            f"Duplicate check for {len(unique_candidates)} candidate(s) completed in {time.monotonic() - start:.3f}s"
+        )
         return result.output
 
     @staticmethod
