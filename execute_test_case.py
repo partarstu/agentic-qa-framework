@@ -63,7 +63,10 @@ async def send_test_case_to_agent(agent_port: int, test_case: TestCase):
                     response = await asyncio.wait_for(response_iterator.__anext__(), timeout=time_left)
                 except StopAsyncIteration:
                     if last_task and last_task.status.state in (
-                            TaskState.completed, TaskState.failed, TaskState.rejected):
+                        TaskState.completed,
+                        TaskState.failed,
+                        TaskState.rejected,
+                    ):
                         completed_task = last_task
                     else:
                         logger.error(f"Task '{task_description}' iterator finished before completion.")
@@ -85,20 +88,27 @@ async def send_test_case_to_agent(agent_port: int, test_case: TestCase):
                     else:
                         logger.debug(
                             f"Task for {task_description} is still in '{task.status.state}' state. Waiting for its "
-                            f"completion.")
+                            f"completion."
+                        )
                 elif isinstance(response, Message):
                     logger.info(
-                        f"Received a message from agent during task '{task_description}': {get_message_text(response)}")
+                        f"Received a message from agent during task '{task_description}': {get_message_text(response)}"
+                    )
 
             if not completed_task:
                 logger.error(f"Task for {task_description} wasn't complete within timeout.")
                 return
 
             if completed_task.status.state != TaskState.completed:
-                status_message = get_message_text(
-                    completed_task.status.message) if completed_task.status.message else "No details provided."
-                logger.error(f"Task for {task_description} has an unexpected status "
-                             f"'{completed_task.status.state!s}'. Root cause: {status_message}")
+                status_message = (
+                    get_message_text(completed_task.status.message)
+                    if completed_task.status.message
+                    else "No details provided."
+                )
+                logger.error(
+                    f"Task for {task_description} has an unexpected status "
+                    f"'{completed_task.status.state!s}'. Root cause: {status_message}"
+                )
                 return
 
             logger.info("Retrieving agent's response.")
@@ -142,6 +152,7 @@ async def main():
 
     try:
         from dotenv import load_dotenv
+
         load_dotenv()
 
         test_case = await load_test_case(args.test_case_key)

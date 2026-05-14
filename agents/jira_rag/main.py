@@ -32,9 +32,7 @@ class JiraRagAgent(AgentBase):
         self.issues_db = VectorDbService(RAG_COLLECTION)
         self.metadata_db = VectorDbService(METADATA_COLLECTION)
 
-        instruction_prompt = JiraRagUpdateSystemPrompt(
-            valid_statuses=VALID_STATUSES
-        )
+        instruction_prompt = JiraRagUpdateSystemPrompt(valid_statuses=VALID_STATUSES)
 
         super().__init__(
             agent_name=config.JiraRagUpdateAgentConfig.OWN_NAME,
@@ -53,7 +51,7 @@ class JiraRagAgent(AgentBase):
                 self.upsert_issues,
                 self.search_issues,
                 self.synch_deleted_issues,
-            ]
+            ],
         )
 
     def get_thinking_level(self) -> ThinkingLevel:
@@ -64,10 +62,10 @@ class JiraRagAgent(AgentBase):
 
     @staticmethod
     def _key_to_int(key: str) -> int:
-        """Convert a project key to an integer ID for ProjectMetadata storage.
-        """
+        """Convert a project key to an integer ID for ProjectMetadata storage."""
         import hashlib
-        return int(hashlib.md5(key.encode()).hexdigest()[:16], 16)
+
+        return int(hashlib.md5(key.encode(), usedforsecurity=False).hexdigest()[:16], 16)
 
     async def get_last_update_timestamp(self, project_key: str) -> str:
         """Retrieves the timestamp of the last project update from the metadata DB.
@@ -88,8 +86,8 @@ class JiraRagAgent(AgentBase):
     async def save_last_update_timestamp(self, project_key: str) -> str:
         """Saves the current timestamp as the last project update timestamp in the metadata DB.
 
-         Args:
-            project_key: The key of the project for which the current timestamp needs to be saved.
+        Args:
+           project_key: The key of the project for which the current timestamp needs to be saved.
         """
         try:
             timestamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - EXECUTION_DELAY_SECONDS))
@@ -103,8 +101,8 @@ class JiraRagAgent(AgentBase):
     async def upsert_issues(self, issues: list[JiraIssue]) -> str:
         """Upserts a list of Jira issues into the vector DB.
 
-         Args:
-            issues: The list of Jira issues which need to be upserted.
+        Args:
+           issues: The list of Jira issues which need to be upserted.
         """
         try:
             await self.issues_db.ensure_collection()
@@ -136,15 +134,15 @@ class JiraRagAgent(AgentBase):
             raise
 
     async def search_issues(
-            self,
-            query_text: str,
-            limit: int = 10,
-            score_threshold: float = 0.7,
-            issue_type: str | None = None,
-            status: str | None = None,
-            project_key: str | None = None,
-            updated_after: str | None = None,
-            updated_before: str | None = None,
+        self,
+        query_text: str,
+        limit: int = 10,
+        score_threshold: float = 0.7,
+        issue_type: str | None = None,
+        status: str | None = None,
+        project_key: str | None = None,
+        updated_after: str | None = None,
+        updated_before: str | None = None,
     ) -> list[dict]:
         """Searches for Jira issues in the vector DB with optional payload filters.
 
@@ -214,17 +212,19 @@ class JiraRagAgent(AgentBase):
             results = []
             for point in points:
                 payload = point.payload or {}
-                results.append({
-                    "id": point.id,
-                    "key": payload.get("key"),
-                    "summary": payload.get("summary"),
-                    "description": payload.get("description"),
-                    "issue_type": payload.get("issue_type"),
-                    "status": payload.get("status"),
-                    "project_key": payload.get("project_key"),
-                    "updated_at": payload.get("updated_at"),
-                    "score": point.score,
-                })
+                results.append(
+                    {
+                        "id": point.id,
+                        "key": payload.get("key"),
+                        "summary": payload.get("summary"),
+                        "description": payload.get("description"),
+                        "issue_type": payload.get("issue_type"),
+                        "status": payload.get("status"),
+                        "project_key": payload.get("project_key"),
+                        "updated_at": payload.get("updated_at"),
+                        "score": point.score,
+                    }
+                )
 
             return results
         except Exception:

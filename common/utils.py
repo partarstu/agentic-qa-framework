@@ -23,10 +23,11 @@ def _initialize_logging():
     global logging_initialized
     if config.GOOGLE_CLOUD_LOGGING_ENABLED:
         import google.cloud.logging
+
         client = google.cloud.logging.Client()
         client.setup_logging()
     else:
-        logging.basicConfig(stream=sys.stdout, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        logging.basicConfig(stream=sys.stdout, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
     logging_initialized = True
 
 
@@ -60,10 +61,14 @@ def get_execution_logs_from_artifacts(artifacts: list[FileWithBytes], log_filena
 
     logs = []
     for artifact in artifacts:
-        if artifact.name and (log_filename_pattern.lower() in artifact.name.lower()) and (
-                artifact.name.endswith(".txt") or artifact.name.endswith(".log")) and artifact.bytes:
+        if (
+            artifact.name
+            and (log_filename_pattern.lower() in artifact.name.lower())
+            and (artifact.name.endswith(".txt") or artifact.name.endswith(".log"))
+            and artifact.bytes
+        ):
             try:
-                logs.append(base64.b64decode(artifact.bytes).decode('utf-8'))
+                logs.append(base64.b64decode(artifact.bytes).decode("utf-8"))
             except (UnicodeDecodeError, ValueError) as e:
                 get_logger(__name__).warning(f"Failed to decode logs from artifact '{artifact.name}': {e}")
                 continue

@@ -17,6 +17,7 @@ try:
     import magic
 except ImportError:
     import warnings
+
     warnings.warn("python-magic not available, MIME detection will rely on file extensions only.", stacklevel=2)
     magic = None
 from pydantic_ai.messages import (
@@ -39,10 +40,10 @@ PYDANTIC_SUPPORTED_VIDEO_TYPES: set[str] = set(get_args(VideoMediaType))
 PYDANTIC_SUPPORTED_DOCUMENT_TYPES: set[str] = set(get_args(DocumentMediaType))
 
 PYDANTIC_SUPPORTED_MIME_TYPES: set[str] = (
-        PYDANTIC_SUPPORTED_IMAGE_TYPES
-        | PYDANTIC_SUPPORTED_AUDIO_TYPES
-        | PYDANTIC_SUPPORTED_VIDEO_TYPES
-        | PYDANTIC_SUPPORTED_DOCUMENT_TYPES
+    PYDANTIC_SUPPORTED_IMAGE_TYPES
+    | PYDANTIC_SUPPORTED_AUDIO_TYPES
+    | PYDANTIC_SUPPORTED_VIDEO_TYPES
+    | PYDANTIC_SUPPORTED_DOCUMENT_TYPES
 )
 
 # Final supported MIME types: intersection of config-defined types and Pydantic AI types
@@ -207,10 +208,12 @@ def fetch_all_attachments(attachment_paths: list[str], skip_postfix: str | None 
         attachments[filename] = binary_content
         logger.debug("Added attachment '%s' with MIME type '%s'", filename, mime_type)
 
-    logger.info("Processed %d attachments: %d valid, %d skipped (postfix), %d unsupported, %d errors",
-                len(attachment_paths),
-                len(attachments),
-                skipped_count,
-                unsupported_count,
-                error_count)
+    logger.info(
+        "Processed %d attachments: %d valid, %d skipped (postfix), %d unsupported, %d errors",
+        len(attachment_paths),
+        len(attachments),
+        skipped_count,
+        unsupported_count,
+        error_count,
+    )
     return attachments

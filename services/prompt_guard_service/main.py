@@ -18,20 +18,23 @@ SLIDING_WINDOW_SIZE = 128
 MAX_TOKEN_LENGTH = 512
 MODEL_PATH = config.PROMPT_INJECTION_DETECTION_MODEL_PATH
 
+
 class PromptGuardRequest(BaseModel):
     prompt: str
     prompt_description: str = ""
     threshold: float
 
+
 class PromptGuardResponse(BaseModel):
     is_injection: bool
 
+
 class ProtectAiPromptGuard:
-    _instance: 'ProtectAiPromptGuard' = None
+    _instance: "ProtectAiPromptGuard" = None
     _lock = threading.Lock()
 
     @staticmethod
-    def get_instance() -> 'ProtectAiPromptGuard':
+    def get_instance() -> "ProtectAiPromptGuard":
         if not ProtectAiPromptGuard._instance:
             with ProtectAiPromptGuard._lock:
                 if not ProtectAiPromptGuard._instance:
@@ -64,8 +67,8 @@ class ProtectAiPromptGuard:
 
         positive_detections = []
         for chunk, result in zip(chunks, results, strict=False):
-            if result.get('label', '').lower() != 'safe' and result.get('score', 0.0) >= threshold:
-                positive_detections.append({'result': result, 'chunk': chunk})
+            if result.get("label", "").lower() != "safe" and result.get("score", 0.0) >= threshold:
+                positive_detections.append({"result": result, "chunk": chunk})
 
         if positive_detections:
             logger.warning("Got positive prompt injection identification results:")
@@ -77,15 +80,17 @@ class ProtectAiPromptGuard:
     def _split_prompt_into_chunks(self, tokens):
         chunks = []
         for i in range(0, len(tokens), MAX_TOKEN_LENGTH - SLIDING_WINDOW_SIZE):
-            chunk = tokens[i:(i + MAX_TOKEN_LENGTH)]
+            chunk = tokens[i : (i + MAX_TOKEN_LENGTH)]
             chunks.append(self.tokenizer.decode(chunk, skip_special_tokens=True))
         if len(chunks) > 1 and chunks[-1] in chunks[-2]:
             chunks.pop()
         return chunks
 
+
 @app.get("/health")
 def health_check():
     return {"status": "ok"}
+
 
 @app.post("/check", response_model=PromptGuardResponse)
 async def check_injection(request: PromptGuardRequest):
@@ -96,6 +101,7 @@ async def check_injection(request: PromptGuardRequest):
     except Exception as e:
         logger.exception("Error checking for prompt injection")
         raise HTTPException(status_code=500, detail=str(e))
+
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))

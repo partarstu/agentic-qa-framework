@@ -433,9 +433,10 @@ class TestRequestIncidentCreationErrorHandling:
         error_json = '{"error_message": "Failed to create incident: API rate limit exceeded"}'
         error_artifact = _create_text_artifact([error_json])
 
-        with patch("orchestrator.main._send_task_to_agent_with_message", new_callable=AsyncMock) as mock_send, \
-             patch("orchestrator.main._get_artifacts_from_task") as mock_get_artifacts:
-
+        with (
+            patch("orchestrator.main._send_task_to_agent_with_message", new_callable=AsyncMock) as mock_send,
+            patch("orchestrator.main._get_artifacts_from_task") as mock_get_artifacts,
+        ):
             mock_task = MagicMock()
             mock_task.artifacts = [error_artifact]
             mock_send.return_value = mock_task
@@ -475,9 +476,10 @@ class TestRequestIncidentCreationErrorHandling:
         success_json = '{"incident_id": 12345, "incident_key": "BUG-123", "duplicates": []}'
         success_artifact = _create_text_artifact([success_json])
 
-        with patch("orchestrator.main._send_task_to_agent_with_message", new_callable=AsyncMock) as mock_send, \
-             patch("orchestrator.main._get_artifacts_from_task") as mock_get_artifacts:
-
+        with (
+            patch("orchestrator.main._send_task_to_agent_with_message", new_callable=AsyncMock) as mock_send,
+            patch("orchestrator.main._get_artifacts_from_task") as mock_get_artifacts,
+        ):
             mock_task = MagicMock()
             mock_task.artifacts = [success_artifact]
             mock_send.return_value = mock_task
@@ -504,9 +506,10 @@ class TestRequestTestCasesGenerationErrorHandling:
         error_json = '{"error_message": "Failed to generate test cases: User story not found"}'
         error_artifact = _create_text_artifact([error_json])
 
-        with patch("orchestrator.main._send_task_to_agent", new_callable=AsyncMock) as mock_send, \
-             patch("orchestrator.main._get_artifacts_from_task") as mock_get_artifacts:
-
+        with (
+            patch("orchestrator.main._send_task_to_agent", new_callable=AsyncMock) as mock_send,
+            patch("orchestrator.main._get_artifacts_from_task") as mock_get_artifacts,
+        ):
             mock_task = MagicMock()
             mock_task.artifacts = [error_artifact]
             mock_send.return_value = mock_task
@@ -539,9 +542,10 @@ class TestRequestTestCasesGenerationErrorHandling:
         }"""
         success_artifact = _create_text_artifact([success_json])
 
-        with patch("orchestrator.main._send_task_to_agent", new_callable=AsyncMock) as mock_send, \
-             patch("orchestrator.main._get_artifacts_from_task") as mock_get_artifacts:
-
+        with (
+            patch("orchestrator.main._send_task_to_agent", new_callable=AsyncMock) as mock_send,
+            patch("orchestrator.main._get_artifacts_from_task") as mock_get_artifacts,
+        ):
             mock_task = MagicMock()
             mock_task.artifacts = [success_artifact]
             mock_send.return_value = mock_task
@@ -576,18 +580,21 @@ class TestExecuteSingleTestMultipleTextParts:
         )
 
         # Create artifact with multiple text parts
-        multi_part_artifact = _create_text_artifact([
-            '{"stepResults": [], "testCaseKey": "TC-001", ',
-            '"testCaseName": "Test Case", "testExecutionStatus": "passed", ',
-            '"generalErrorMessage": "", "start_timestamp": "2025-01-01", "end_timestamp": "2025-01-01"}'
-        ])
+        multi_part_artifact = _create_text_artifact(
+            [
+                '{"stepResults": [], "testCaseKey": "TC-001", ',
+                '"testCaseName": "Test Case", "testExecutionStatus": "passed", ',
+                '"generalErrorMessage": "", "start_timestamp": "2025-01-01", "end_timestamp": "2025-01-01"}',
+            ]
+        )
 
         # We need to mock the entire test execution flow
-        with patch("orchestrator.main._send_task_to_agent", new_callable=AsyncMock) as mock_send, \
-             patch("orchestrator.main._get_artifacts_from_task") as mock_get_artifacts, \
-             patch("orchestrator.main.agent_registry") as mock_registry, \
-             patch("orchestrator.main._get_results_extractor_agent") as mock_extractor:
-
+        with (
+            patch("orchestrator.main._send_task_to_agent", new_callable=AsyncMock) as mock_send,
+            patch("orchestrator.main._get_artifacts_from_task") as mock_get_artifacts,
+            patch("orchestrator.main.agent_registry") as mock_registry,
+            patch("orchestrator.main._get_results_extractor_agent") as mock_extractor,
+        ):
             mock_task = MagicMock()
             mock_task.artifacts = [multi_part_artifact]
             mock_send.return_value = mock_task
@@ -596,6 +603,7 @@ class TestExecuteSingleTestMultipleTextParts:
 
             # Mock the results extractor to return a proper TestExecutionResult
             from common.models import TestExecutionResult
+
             mock_result = TestExecutionResult(
                 stepResults=[],
                 testCaseKey="TC-001",
@@ -641,11 +649,12 @@ class TestExecuteSingleTestMultipleTextParts:
         single_part_result = '{"stepResults": [], "testCaseKey": "TC-002", "testCaseName": "API Test", "testExecutionStatus": "failed", "generalErrorMessage": "API error", "start_timestamp": "2025-01-01", "end_timestamp": "2025-01-01"}'
         single_part_artifact = _create_text_artifact([single_part_result])
 
-        with patch("orchestrator.main._send_task_to_agent", new_callable=AsyncMock) as mock_send, \
-             patch("orchestrator.main._get_artifacts_from_task") as mock_get_artifacts, \
-             patch("orchestrator.main.agent_registry") as mock_registry, \
-             patch("orchestrator.main._get_results_extractor_agent") as mock_extractor:
-
+        with (
+            patch("orchestrator.main._send_task_to_agent", new_callable=AsyncMock) as mock_send,
+            patch("orchestrator.main._get_artifacts_from_task") as mock_get_artifacts,
+            patch("orchestrator.main.agent_registry") as mock_registry,
+            patch("orchestrator.main._get_results_extractor_agent") as mock_extractor,
+        ):
             mock_task = MagicMock()
             mock_task.artifacts = [single_part_artifact]
             mock_send.return_value = mock_task
@@ -653,6 +662,7 @@ class TestExecuteSingleTestMultipleTextParts:
             mock_registry.get_name = AsyncMock(return_value="Test Agent")
 
             from common.models import TestExecutionResult
+
             mock_result = TestExecutionResult(
                 stepResults=[],
                 testCaseKey="TC-002",

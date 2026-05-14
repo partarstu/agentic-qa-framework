@@ -18,6 +18,7 @@ jira_mcp_server = MCPServerSSE(url=config.JIRA_MCP_SERVER_URL, timeout=config.MC
 
 class TestCaseClassificationAgent(AgentBase):
     __test__ = False
+
     def __init__(self):
         instruction_prompt = TestCaseClassificationSystemPrompt()
         super().__init__(
@@ -32,7 +33,7 @@ class TestCaseClassificationAgent(AgentBase):
             mcp_servers=[jira_mcp_server],
             deps_type=TestCaseKeys,
             description="Agent which classifies test cases based on their content",
-            tools=[self.add_labels_to_test_case]
+            tools=[self.add_labels_to_test_case],
         )
 
     def get_thinking_level(self) -> ThinkingLevel:

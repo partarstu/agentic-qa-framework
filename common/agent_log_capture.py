@@ -29,9 +29,7 @@ class AgentLogCaptureHandler(logging.Handler):
         super().__init__()
         self._buffer: deque[str] = deque(maxlen=max_records)
         self._lock = threading.Lock()
-        self.setFormatter(logging.Formatter(
-            '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-        ))
+        self.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
 
     def emit(self, record: logging.LogRecord) -> None:
         """Store the formatted log record in the buffer."""
@@ -92,6 +90,7 @@ class AgentLogCapture:
     def __enter__(self) -> "AgentLogCapture":
         """Start capturing logs."""
         import config
+
         self._logger = logging.getLogger(self.logger_name)
         self._logger.addHandler(self.handler)
         # Use configured log level
@@ -132,10 +131,6 @@ def create_log_file_part(logs: str, agent_name: str) -> "FileWithBytes":
     safe_name = agent_name.replace(" ", "_").lower()
     filename = f"{safe_name}_execution_logs.txt"
 
-    encoded_logs = base64.b64encode(logs.encode('utf-8')).decode('utf-8')
+    encoded_logs = base64.b64encode(logs.encode("utf-8")).decode("utf-8")
 
-    return FileWithBytes(
-        name=filename,
-        bytes=encoded_logs,
-        mime_type="text/plain"
-    )
+    return FileWithBytes(name=filename, bytes=encoded_logs, mime_type="text/plain")

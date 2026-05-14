@@ -46,7 +46,7 @@ class TestCaseGenerationAgent(AgentBase):
             system_prompt=self.ac_extraction_prompt.get_prompt(),
             toolsets=[jira_mcp_server],
             name="ac_extractor",
-            thinking_level=config.TestCaseGenerationAgentConfig.THINKING_LEVEL
+            thinking_level=config.TestCaseGenerationAgentConfig.THINKING_LEVEL,
         )
 
         self.steps_generator_agent = CustomLlmWrapper.create_agent(
@@ -54,7 +54,7 @@ class TestCaseGenerationAgent(AgentBase):
             output_type=TestStepsSequenceList,
             system_prompt=self.steps_generation_prompt.get_prompt(),
             name="steps_generator",
-            thinking_level=config.TestCaseGenerationAgentConfig.THINKING_LEVEL
+            thinking_level=config.TestCaseGenerationAgentConfig.THINKING_LEVEL,
         )
 
         self.test_case_creator_agent = CustomLlmWrapper.create_agent(
@@ -62,7 +62,7 @@ class TestCaseGenerationAgent(AgentBase):
             output_type=GeneratedTestCases,
             system_prompt=self.test_case_creation_prompt.get_prompt(),
             name="test_case_creator",
-            thinking_level=config.TestCaseGenerationAgentConfig.THINKING_LEVEL
+            thinking_level=config.TestCaseGenerationAgentConfig.THINKING_LEVEL,
         )
 
         # Initialize base agent (as orchestrator placeholder)
@@ -104,12 +104,17 @@ class TestCaseGenerationAgent(AgentBase):
         attachments_content = self._fetch_attachments(attachment_paths)
         extracted_acceptance_criteria = await self.extract_acceptance_criteria(attachments_content, jira_issue_content)
         test_steps_sequences = await self.generate_test_steps(extracted_acceptance_criteria)
-        generated_test_cases = await self.create_test_cases_from_steps(extracted_acceptance_criteria, jira_issue_content,
-                                                                       test_steps_sequences)
+        generated_test_cases = await self.create_test_cases_from_steps(
+            extracted_acceptance_criteria, jira_issue_content, test_steps_sequences
+        )
         return generated_test_cases
 
-    async def create_test_cases_from_steps(self, extracted_acceptance_criteria: AcceptanceCriteriaList, jira_issue_content: str,
-                                           test_steps_sequences: TestStepsSequenceList) -> GeneratedTestCases:
+    async def create_test_cases_from_steps(
+        self,
+        extracted_acceptance_criteria: AcceptanceCriteriaList,
+        jira_issue_content: str,
+        test_steps_sequences: TestStepsSequenceList,
+    ) -> GeneratedTestCases:
         logger.info("Generating Test Cases for all step sequences")
         user_message = f"""
 Jira Issue content:
@@ -133,15 +138,16 @@ Test Step Sequences:
         user_message = f"Acceptance Criteria Items:\n{extracted_acceptance_criteria.model_dump_json()}"
         result = await self.steps_generator_agent.run(user_message)
         test_steps_sequences: TestStepsSequenceList = result.output
-        logger.info(f"Generated {len(test_steps_sequences.items)} test step sequences with total "
-                    f"of {sum(len(s.steps) for s in test_steps_sequences.items)} steps.")
+        logger.info(
+            f"Generated {len(test_steps_sequences.items)} test step sequences with total "
+            f"of {sum(len(s.steps) for s in test_steps_sequences.items)} steps."
+        )
         return test_steps_sequences
 
-    async def extract_acceptance_criteria(self, attachments_content: dict[str, BinaryContent],
-                                          jira_issue_content: str) -> AcceptanceCriteriaList:
-        user_message_parts: list[str | BinaryContent] = [
-            f"Jira Issue content:\n{jira_issue_content}"
-        ]
+    async def extract_acceptance_criteria(
+        self, attachments_content: dict[str, BinaryContent], jira_issue_content: str
+    ) -> AcceptanceCriteriaList:
+        user_message_parts: list[str | BinaryContent] = [f"Jira Issue content:\n{jira_issue_content}"]
         # Add attachment identifiers as context
         if attachments_content:
             for filename, binary_content in attachments_content.items():
@@ -155,8 +161,9 @@ Test Step Sequences:
         return extracted_acceptance_criteria
 
     @staticmethod
-    def _upload_test_cases_into_test_management_system(test_cases: GeneratedTestCases, project_key: str,
-                                                       user_story_id: int) -> str:
+    def _upload_test_cases_into_test_management_system(
+        test_cases: GeneratedTestCases, project_key: str, user_story_id: int
+    ) -> str:
         """
         Uploads the provided test cases in the configured test management system.
 

@@ -10,6 +10,7 @@ from common.models import JsonSerializableModel
 
 class TestAgent(AgentBase):
     __test__ = False
+
     def get_thinking_level(self) -> str:
         return "LOW"
 
@@ -20,9 +21,10 @@ class TestAgent(AgentBase):
 class MockOutput(JsonSerializableModel):
     result: str
 
+
 @pytest.fixture
 def test_agent_instance():
-    with patch("common.agent_base.Agent"): # Mock the actual pydantic_ai Agent class
+    with patch("common.agent_base.Agent"):  # Mock the actual pydantic_ai Agent class
         agent = TestAgent(
             agent_name="test-agent",
             base_url="http://localhost",
@@ -32,14 +34,16 @@ def test_agent_instance():
             model_name="openai:test-model",
             output_type=MockOutput,
             instructions="test instructions",
-            mcp_servers=[]
+            mcp_servers=[],
         )
         return agent
+
 
 def test_agent_initialization(test_agent_instance):
     assert test_agent_instance.agent_name == "test-agent"
     assert test_agent_instance.url == "http://localhost:8000"
     assert test_agent_instance.get_thinking_level() == "LOW"
+
 
 @pytest.mark.asyncio
 async def test_agent_run_success(test_agent_instance):

@@ -10,6 +10,7 @@ from common.prompt_base import PromptBase
 logger = utils.get_logger("test_case_generation_agent")
 PROMPTS_ROOT = "system_prompts"
 
+
 def _get_prompts_root() -> Path:
     return Path(__file__).resolve().parent.joinpath(PROMPTS_ROOT)
 

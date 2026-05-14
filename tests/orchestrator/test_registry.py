@@ -1,4 +1,3 @@
-
 import asyncio
 
 import pytest
@@ -11,6 +10,7 @@ from orchestrator.models import AgentRegistry, AgentStatus, BrokenReason
 def registry():
     return AgentRegistry()
 
+
 @pytest.fixture
 def sample_card():
     return AgentCard(
@@ -20,9 +20,10 @@ def sample_card():
         version="1.0.0",
         capabilities=AgentCapabilities(streaming=False),
         skills=[],
-        defaultInputModes=['text'],
-        defaultOutputModes=['text']
+        defaultInputModes=["text"],
+        defaultOutputModes=["text"],
     )
+
 
 @pytest.mark.asyncio
 async def test_register_and_get(registry, sample_card):
@@ -35,6 +36,7 @@ async def test_register_and_get(registry, sample_card):
     assert await registry.get_status(agent_id) == AgentStatus.AVAILABLE
     assert await registry.contains(agent_id)
 
+
 @pytest.mark.asyncio
 async def test_update_status(registry, sample_card):
     agent_id = "agent-1"
@@ -42,6 +44,7 @@ async def test_update_status(registry, sample_card):
 
     await registry.update_status(agent_id, AgentStatus.BUSY)
     assert await registry.get_status(agent_id) == AgentStatus.BUSY
+
 
 @pytest.mark.asyncio
 async def test_update_status_with_broken_reason(registry, sample_card):
@@ -69,6 +72,7 @@ async def test_update_status_with_broken_reason(registry, sample_card):
     assert reason is None
     assert task_id is None
 
+
 @pytest.mark.asyncio
 async def test_remove(registry, sample_card):
     agent_id = "agent-1"
@@ -76,8 +80,9 @@ async def test_remove(registry, sample_card):
 
     await registry.remove(agent_id)
     assert await registry.get_card(agent_id) is None
-    assert await registry.get_status(agent_id) == AgentStatus.BROKEN # Default if not found
+    assert await registry.get_status(agent_id) == AgentStatus.BROKEN  # Default if not found
     assert not await registry.contains(agent_id)
+
 
 @pytest.mark.asyncio
 async def test_get_valid_agents(registry, sample_card):
@@ -90,11 +95,13 @@ async def test_get_valid_agents(registry, sample_card):
     assert "a2" in valid
     assert "a1" not in valid
 
+
 @pytest.mark.asyncio
 async def test_is_empty(registry, sample_card):
     assert await registry.is_empty()
     await registry.register("a1", sample_card)
     assert not await registry.is_empty()
+
 
 @pytest.mark.asyncio
 async def test_get_agent_id_by_url(registry, sample_card):
@@ -108,6 +115,7 @@ async def test_get_agent_id_by_url(registry, sample_card):
     # Non-existent URL should return None
     not_found = await registry.get_agent_id_by_url("http://unknown:9999")
     assert not_found is None
+
 
 @pytest.mark.asyncio
 async def test_get_broken_agents(registry, sample_card):
@@ -128,4 +136,3 @@ async def test_get_broken_agents(registry, sample_card):
 
     assert broken["a1"] == (BrokenReason.OFFLINE, None)
     assert broken["a2"] == (BrokenReason.TASK_STUCK, "task-456")
-

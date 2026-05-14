@@ -40,8 +40,7 @@ jira_mcp_server = MCPServerSSE(url=JIRA_MCP_SERVER_URL, timeout=config.MCP_SERVE
 
 
 class IncidentCreationAgent(AgentBase):
-    """Agent for creating incident reports in Jira.
-    """
+    """Agent for creating incident reports in Jira."""
 
     def __init__(self):
         self.main_prompt = IncidentCreationPrompt()
@@ -52,7 +51,7 @@ class IncidentCreationAgent(AgentBase):
             output_type=DuplicateDetectionResult,
             system_prompt=self.dup_detect_prompt.get_prompt(),
             name="duplicate_detector",
-            thinking_level=config.IncidentCreationAgentConfig.THINKING_LEVEL
+            thinking_level=config.IncidentCreationAgentConfig.THINKING_LEVEL,
         )
 
         self._saved_artifact_paths: list[str] = []
@@ -70,9 +69,14 @@ class IncidentCreationAgent(AgentBase):
             mcp_servers=[jira_mcp_server],
             deps_type=IncidentCreationInput,
             description="Agent which creates detailed incident reports in Jira based on test execution results.",
-            tools=[self._search_duplicate_candidates_in_rag, self._get_linked_issues, self._check_all_duplicates, self._save_artifacts,
-                   self._link_issue_to_test_case],
-            vector_db_collection_name=QDRANT_COLLECTION_NAME
+            tools=[
+                self._search_duplicate_candidates_in_rag,
+                self._get_linked_issues,
+                self._check_all_duplicates,
+                self._save_artifacts,
+                self._link_issue_to_test_case,
+            ],
+            vector_db_collection_name=QDRANT_COLLECTION_NAME,
         )
 
     def get_thinking_level(self) -> ThinkingLevel:
@@ -108,7 +112,9 @@ class IncidentCreationAgent(AgentBase):
                     key="status",
                     match=qdrant_models.MatchAny(any=list(TERMINAL_STATUSES)),
                 )
-            ] if TERMINAL_STATUSES else [],
+            ]
+            if TERMINAL_STATUSES
+            else [],
         )
 
         hits = await self.vector_db_service.search(
@@ -184,12 +190,14 @@ class IncidentCreationAgent(AgentBase):
                         safe_filename = f"{unique_id}_{original_name}"
                         # Save to the local/host filesystem
                         local_file_path = os.path.join(local_folder, safe_filename)
-                        with open(local_file_path, 'wb') as f:
+                        with open(local_file_path, "wb") as f:
                             f.write(file_content)
                         # Return the MCP container path (with forward slashes for Docker)
                         mcp_file_path = posixpath.join(mcp_folder, safe_filename)
                         saved_paths.append(mcp_file_path)
-                        logger.info(f"Saved artifact '{original_name}' to {local_file_path} (MCP path: {mcp_file_path})")
+                        logger.info(
+                            f"Saved artifact '{original_name}' to {local_file_path} (MCP path: {mcp_file_path})"
+                        )
                     except Exception:
                         logger.exception("Failed to save artifact.")
 
@@ -200,9 +208,8 @@ class IncidentCreationAgent(AgentBase):
         return saved_paths
 
     async def _check_all_duplicates(
-            self,
-            input_data: IncidentCreationInput,
-            candidates: list[DuplicateCandidate]) -> DuplicateDetectionResult:
+        self, input_data: IncidentCreationInput, candidates: list[DuplicateCandidate]
+    ) -> DuplicateDetectionResult:
         """Checks which candidate incidents are the duplicates of the current incident.
 
         Args:

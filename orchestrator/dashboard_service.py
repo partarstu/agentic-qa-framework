@@ -28,12 +28,7 @@ logger = utils.get_logger("orchestrator_dashboard")
 class OrchestratorDashboardService:
     """Service for providing dashboard data to the Web UI."""
 
-    def __init__(
-        self,
-        registry: AgentRegistry,
-        tasks: TaskHistory,
-        errors: ErrorHistory
-    ):
+    def __init__(self, registry: AgentRegistry, tasks: TaskHistory, errors: ErrorHistory):
         self.registry = registry
         self.tasks = tasks
         self.errors = errors
@@ -79,7 +74,7 @@ class OrchestratorDashboardService:
             "errors_total": len(all_errors),
             "orchestrator_start_time": ORCHESTRATOR_START_TIME.isoformat(),
             "uptime_seconds": uptime_seconds,
-            "current_time": datetime.now().isoformat()
+            "current_time": datetime.now().isoformat(),
         }
 
     async def get_agents_status(self) -> list[dict[str, Any]]:
@@ -100,19 +95,21 @@ class OrchestratorDashboardService:
                     current_task_info = {
                         "task_id": task.task_id,
                         "description": task.description,
-                        "start_time": task.start_time.isoformat()
+                        "start_time": task.start_time.isoformat(),
                     }
 
-            result.append({
-                "id": agent_id,
-                "name": card.name,
-                "url": card.url,
-                "status": status.value,
-                "capabilities": card.capabilities.model_dump() if card.capabilities else None,
-                "current_task": current_task_info,
-                "broken_reason": broken_reason.value if broken_reason else None,
-                "stuck_task_id": stuck_task_id
-            })
+            result.append(
+                {
+                    "id": agent_id,
+                    "name": card.name,
+                    "url": card.url,
+                    "status": status.value,
+                    "capabilities": card.capabilities.model_dump() if card.capabilities else None,
+                    "current_task": current_task_info,
+                    "broken_reason": broken_reason.value if broken_reason else None,
+                    "stuck_task_id": stuck_task_id,
+                }
+            )
 
         return result
 
@@ -126,8 +123,14 @@ class OrchestratorDashboardService:
         errors = await self.errors.get_recent(limit)
         return [error.to_dict() for error in errors]
 
-    async def get_logs(self, limit: int = 100, offset: int = 0, level: str | None = None,
-                       task_id: str | None = None, agent_id: str | None = None) -> list[dict[str, Any]]:
+    async def get_logs(
+        self,
+        limit: int = 100,
+        offset: int = 0,
+        level: str | None = None,
+        task_id: str | None = None,
+        agent_id: str | None = None,
+    ) -> list[dict[str, Any]]:
         """Returns recent application logs.
 
         When task_id or agent_id is provided, returns only agent execution logs
@@ -139,9 +142,7 @@ class OrchestratorDashboardService:
         if task_id:
             task_record = await self.tasks.get_by_id(task_id)
             if task_record and task_record.agent_logs:
-                result_entries = self._parse_agent_logs(
-                    task_record.agent_logs, task_id, task_record.agent_id
-                )
+                result_entries = self._parse_agent_logs(task_record.agent_logs, task_id, task_record.agent_id)
 
         # If agent_id is provided (and no task_id), return agent logs from all tasks of this agent
         elif agent_id:
@@ -150,9 +151,7 @@ class OrchestratorDashboardService:
             agent_tasks = [t for t in all_tasks if t.agent_id == agent_id]
             for task in agent_tasks:  # Check all tasks for this agent
                 if task.agent_logs:
-                    result_entries.extend(
-                        self._parse_agent_logs(task.agent_logs, task.task_id, agent_id)
-                    )
+                    result_entries.extend(self._parse_agent_logs(task.agent_logs, task.task_id, agent_id))
 
         # If neither task_id nor agent_id is provided, return orchestrator logs only
         else:
@@ -174,9 +173,9 @@ class OrchestratorDashboardService:
 
         end = total_logs - offset
         start = max(0, end - limit)
-        
+
         sliced_logs = result_entries[start:end]
-        
+
         # We need to return them reversed (newest first) to match get_logs behavior
         return [entry.to_dict() for entry in reversed(sliced_logs)]
 
@@ -251,7 +250,7 @@ class OrchestratorDashboardService:
                         for lvl in ("ERROR", "WARNING", "DEBUG", "INFO", "CRITICAL"):
                             if part3.startswith(lvl):
                                 level = lvl
-                                message = part3[len(lvl):].lstrip(" -:")
+                                message = part3[len(lvl) :].lstrip(" -:")
                                 break
                         else:
                             message = part3
@@ -273,20 +272,18 @@ class OrchestratorDashboardService:
                 if timestamp is None:
                     timestamp = ""
 
-                entries.append(LogEntry(
-                    timestamp=timestamp,
-                    level=level,
-                    logger_name=logger_name,
-                    message=message,
-                    task_id=task_id,
-                    agent_id=agent_id
-                ))
+                entries.append(
+                    LogEntry(
+                        timestamp=timestamp,
+                        level=level,
+                        logger_name=logger_name,
+                        message=message,
+                        task_id=task_id,
+                        agent_id=agent_id,
+                    )
+                )
         return entries
 
 
 # Global service instance
-dashboard_service = OrchestratorDashboardService(
-    registry=agent_registry,
-    tasks=task_history,
-    errors=error_history
-)
+dashboard_service = OrchestratorDashboardService(registry=agent_registry, tasks=task_history, errors=error_history)

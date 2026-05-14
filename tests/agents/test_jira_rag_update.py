@@ -49,7 +49,7 @@ async def test_upsert_issues(agent):
     # Verify arguments
     call_args = agent.issues_db.upsert.call_args
     # call_args.kwargs['data'] should be a JiraIssue
-    jira_issue = call_args.kwargs['data']
+    jira_issue = call_args.kwargs["data"]
     assert isinstance(jira_issue, JiraIssue)
     assert jira_issue.id == "LOW"
     assert jira_issue.key == "TEST-1"

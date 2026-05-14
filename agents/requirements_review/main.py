@@ -29,7 +29,7 @@ class RequirementsReviewAgent(AgentBase):
             output_type=RequirementsReviewFeedback,
             system_prompt=RequirementsReviewWithAttachmentsPrompt().get_prompt(),
             name="review_with_attachments",
-            thinking_level=config.RequirementsReviewAgentConfig.THINKING_LEVEL
+            thinking_level=config.RequirementsReviewAgentConfig.THINKING_LEVEL,
         )
 
         instruction_prompt = RequirementsReviewSystemPrompt(
@@ -47,7 +47,7 @@ class RequirementsReviewAgent(AgentBase):
             mcp_servers=[jira_mcp_server],
             deps_type=JiraUserStory,
             description="Agent which does the review of requirements including Jira user stories",
-            tools=[self._review_with_attachments, self.add_jira_comment]
+            tools=[self._review_with_attachments, self.add_jira_comment],
         )
 
     def get_thinking_level(self) -> ThinkingLevel:
@@ -56,7 +56,9 @@ class RequirementsReviewAgent(AgentBase):
     def get_max_requests_per_task(self) -> int:
         return config.RequirementsReviewAgentConfig.MAX_REQUESTS_PER_TASK
 
-    async def _review_with_attachments(self, jira_issue_content: str, attachment_paths: list[str]) -> RequirementsReviewFeedback:
+    async def _review_with_attachments(
+        self, jira_issue_content: str, attachment_paths: list[str]
+    ) -> RequirementsReviewFeedback:
         """
         Reviews a Jira issue, taking into account all its attachments.
 
@@ -69,9 +71,7 @@ class RequirementsReviewAgent(AgentBase):
         """
 
         attachments_content = self._fetch_attachments(attachment_paths)
-        user_message_parts: list[str | BinaryContent] = [
-            f"Jira Issue content:\n```{jira_issue_content}```"
-        ]
+        user_message_parts: list[str | BinaryContent] = [f"Jira Issue content:\n```{jira_issue_content}```"]
         if attachments_content:
             for filename, binary_content in attachments_content.items():
                 user_message_parts.append(f"Attachment: {filename}")

@@ -40,11 +40,12 @@ class ProtectAiPromptGuard(PromptGuard):
     """
     A client class to detect prompt injection attacks using a remote guard service.
     """
-    _instance: 'ProtectAiPromptGuard' = None
+
+    _instance: "ProtectAiPromptGuard" = None
     _lock = threading.Lock()
 
     @staticmethod
-    def get_instance() -> 'ProtectAiPromptGuard':
+    def get_instance() -> "ProtectAiPromptGuard":
         if not ProtectAiPromptGuard._instance:
             with ProtectAiPromptGuard._lock:
                 if not ProtectAiPromptGuard._instance:
@@ -72,14 +73,10 @@ class ProtectAiPromptGuard(PromptGuard):
             raise TypeError(f"Prompt must be a GuardPrompt, got {type(prompt)}")
 
         if not PROMPT_GUARD_SERVICE_URL:
-             raise RuntimeError("PROMPT_GUARD_SERVICE_URL is not set in configuration")
+            raise RuntimeError("PROMPT_GUARD_SERVICE_URL is not set in configuration")
 
         try:
-            payload = {
-                "prompt": prompt.prompt,
-                "prompt_description": prompt.prompt_description,
-                "threshold": threshold
-            }
+            payload = {"prompt": prompt.prompt, "prompt_description": prompt.prompt_description, "threshold": threshold}
             response = requests.post(f"{PROMPT_GUARD_SERVICE_URL}/check", json=payload, timeout=30)
             response.raise_for_status()
             result = response.json()

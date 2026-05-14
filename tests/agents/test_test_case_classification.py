@@ -1,4 +1,3 @@
-
 import sys
 from unittest.mock import MagicMock, patch
 
@@ -27,16 +26,21 @@ def mock_config():
         mock_conf.MCP_SERVER_TIMEOUT_SECONDS = 30
         yield mock_conf
 
+
 @pytest.fixture
 def agent(mock_config):
     # Patch PromptBase.get_prompt to avoid file reading issues
-    with patch("agents.test_case_classification.prompt.TestCaseClassificationSystemPrompt.get_prompt", return_value="Prompt"):
+    with patch(
+        "agents.test_case_classification.prompt.TestCaseClassificationSystemPrompt.get_prompt", return_value="Prompt"
+    ):
         return TestCaseClassificationAgent()
+
 
 def test_agent_init(agent, mock_config):
     assert agent.agent_name == "classification_agent"
-    assert agent.get_thinking_level() == "LOW"0
+    assert agent.get_thinking_level() == "LOW"
     assert agent.get_max_requests_per_task() == 5
+
 
 @patch("agents.test_case_classification.main.get_test_management_client")
 def test_add_labels_to_test_case(mock_get_client, agent):

@@ -37,14 +37,11 @@ class DefaultAgentExecutor(AgentExecutor):
                 raise ValueError("No message found in the request message.")
             await self._update_task_status(context, event_queue, TaskState.working)
 
-            result:Message = await self.agent.run(received_message)
+            result: Message = await self.agent.run(received_message)
             event = TaskArtifactUpdateEvent(
                 context_id=context.context_id,
                 task_id=task_id,
-                artifact=new_artifact(
-                    name='agent_execution_result',
-                    parts=result.parts
-                )
+                artifact=new_artifact(name="agent_execution_result", parts=result.parts),
             )
             await event_queue.enqueue_event(event)
 
@@ -56,29 +53,25 @@ class DefaultAgentExecutor(AgentExecutor):
             error_event = TaskArtifactUpdateEvent(
                 context_id=context.context_id,
                 task_id=task_id,
-                artifact=new_artifact(name='agent_execution_result', parts=e.parts)
+                artifact=new_artifact(name="agent_execution_result", parts=e.parts),
             )
             await event_queue.enqueue_event(error_event)
-            await self._update_task_status(context, event_queue, TaskState.failed,
-                                           final=True, message=str(e))
+            await self._update_task_status(context, event_queue, TaskState.failed, final=True, message=str(e))
 
         except Exception as e:
             logger.exception(f"Error executing task {task_id}: {e}")
             error_message = f"An error occurred: {e!s}"
-            await self._update_task_status(context, event_queue, TaskState.failed,
-                                           final=True, message=error_message)
+            await self._update_task_status(context, event_queue, TaskState.failed, final=True, message=error_message)
 
     @staticmethod
-    async def _update_task_status(context: RequestContext, event_queue: EventQueue, state: TaskState, final=False,
-                                  message: str | None = None):
+    async def _update_task_status(
+        context: RequestContext, event_queue: EventQueue, state: TaskState, final=False, message: str | None = None
+    ):
         status = TaskStatus(state=state)
         if message:
             status.message = new_agent_text_message(message)
         event = TaskStatusUpdateEvent(
-            context_id=context.context_id,
-            task_id=context.task_id,
-            status=status,
-            final=final
+            context_id=context.context_id, task_id=context.task_id, status=status, final=final
         )
         await event_queue.enqueue_event(event)
 

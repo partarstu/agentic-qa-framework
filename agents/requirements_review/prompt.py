@@ -59,5 +59,7 @@ class RequirementsReviewWithAttachmentsPrompt(PromptBase):
 
     def get_prompt(self) -> str:
         """Returns the prompt as a string."""
-        logger.info("Generating system prompt for sub-agent which performs requirements review with all attachments included")
+        logger.info(
+            "Generating system prompt for sub-agent which performs requirements review with all attachments included"
+        )
         return self.template

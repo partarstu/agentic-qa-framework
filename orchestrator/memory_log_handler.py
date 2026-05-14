@@ -16,6 +16,7 @@ from datetime import datetime
 @dataclass
 class LogEntry:
     """Represents a single log entry."""
+
     timestamp: str
     level: str
     logger_name: str
@@ -30,7 +31,7 @@ class LogEntry:
             "logger": self.logger_name,
             "message": self.message,
             "task_id": self.task_id,
-            "agent_id": self.agent_id
+            "agent_id": self.agent_id,
         }
 
 
@@ -58,9 +59,7 @@ class MemoryLogHandler(logging.Handler):
         self._buffer: deque[LogEntry] = deque(maxlen=max_size)
         self._buffer_lock = threading.Lock()
         self._initialized = True
-        self.setFormatter(logging.Formatter(
-            '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-        ))
+        self.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
 
     def emit(self, record: logging.LogRecord) -> None:
         """Store the log record in the buffer."""
@@ -71,15 +70,21 @@ class MemoryLogHandler(logging.Handler):
                 logger_name=record.name,
                 message=self.format(record),
                 task_id=getattr(record, "task_id", None),
-                agent_id=getattr(record, "agent_id", None)
+                agent_id=getattr(record, "agent_id", None),
             )
             with self._buffer_lock:
                 self._buffer.append(entry)
         except Exception:
             self.handleError(record)
 
-    def get_logs(self, limit: int = 100, offset: int = 0, level: str | None = None,
-                 task_id: str | None = None, agent_id: str | None = None) -> list[LogEntry]:
+    def get_logs(
+        self,
+        limit: int = 100,
+        offset: int = 0,
+        level: str | None = None,
+        task_id: str | None = None,
+        agent_id: str | None = None,
+    ) -> list[LogEntry]:
         """
         Get the most recent log entries.
 

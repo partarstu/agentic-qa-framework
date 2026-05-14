@@ -1,4 +1,3 @@
-
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -14,6 +13,7 @@ def mock_agent():
     agent.run = AsyncMock()
     return agent
 
+
 @pytest.fixture
 def mock_context():
     context = MagicMock(spec=RequestContext)
@@ -21,11 +21,13 @@ def mock_context():
     context.context_id = "test-context-123"
     return context
 
+
 @pytest.fixture
 def mock_event_queue():
     queue = MagicMock()
     queue.enqueue_event = AsyncMock()
     return queue
+
 
 @pytest.mark.asyncio
 async def test_execute_success(mock_agent, mock_context, mock_event_queue):
@@ -56,11 +58,12 @@ async def test_execute_success(mock_agent, mock_context, mock_event_queue):
     assert calls[0][0][0].status.state == TaskState.working
 
     assert isinstance(calls[1][0][0], TaskArtifactUpdateEvent)
-    assert calls[1][0][0].artifact.name == 'agent_execution_result'
+    assert calls[1][0][0].artifact.name == "agent_execution_result"
 
     assert isinstance(calls[2][0][0], TaskStatusUpdateEvent)
     assert calls[2][0][0].status.state == TaskState.completed
     assert calls[2][0][0].final is True
+
 
 @pytest.mark.asyncio
 async def test_execute_no_message(mock_agent, mock_context, mock_event_queue):
@@ -84,6 +87,7 @@ async def test_execute_no_message(mock_agent, mock_context, mock_event_queue):
     assert isinstance(call, TaskStatusUpdateEvent)
     assert call.status.state == TaskState.failed
     assert "No message found" in str(call.status.message)
+
 
 @pytest.mark.asyncio
 async def test_execute_agent_failure(mock_agent, mock_context, mock_event_queue):

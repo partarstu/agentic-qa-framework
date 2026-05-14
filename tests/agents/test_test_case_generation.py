@@ -1,4 +1,3 @@
-
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -27,15 +26,17 @@ def mock_config():
         mock_conf.MCP_SERVER_TIMEOUT_SECONDS = 30
         yield mock_conf
 
+
 @pytest.fixture
 def agent(mock_config):
     # Patch PromptBase.get_prompt to avoid file reading issues
-    with patch("agents.test_case_generation.prompt.TestCaseGenerationSystemPrompt.get_prompt", return_value="Prompt"), \
-         patch("agents.test_case_generation.prompt.AcExtractionPrompt.get_prompt", return_value="AC Prompt"), \
-         patch("agents.test_case_generation.prompt.StepsGenerationPrompt.get_prompt", return_value="Steps Prompt"), \
-         patch("agents.test_case_generation.prompt.TestCaseCreationPrompt.get_prompt", return_value="TC Prompt"), \
-         patch("agents.test_case_generation.main.Agent") as mock_agent_cls:
-
+    with (
+        patch("agents.test_case_generation.prompt.TestCaseGenerationSystemPrompt.get_prompt", return_value="Prompt"),
+        patch("agents.test_case_generation.prompt.AcExtractionPrompt.get_prompt", return_value="AC Prompt"),
+        patch("agents.test_case_generation.prompt.StepsGenerationPrompt.get_prompt", return_value="Steps Prompt"),
+        patch("agents.test_case_generation.prompt.TestCaseCreationPrompt.get_prompt", return_value="TC Prompt"),
+        patch("agents.test_case_generation.main.Agent") as mock_agent_cls,
+    ):
         # Ensure Agent() returns a new mock each time
         mock_agent_cls.side_effect = lambda *args, **kwargs: MagicMock()
 
@@ -45,6 +46,7 @@ def agent(mock_config):
         # We can inspect agent_inst.ac_extractor_agent etc.
         yield agent_inst
 
+
 def test_agent_init(agent, mock_config):
     assert agent.agent_name == "generation_agent"
     assert agent.get_thinking_level() == "MEDIUM"
@@ -53,6 +55,7 @@ def test_agent_init(agent, mock_config):
     assert agent.ac_extractor_agent is not None
     assert agent.steps_generator_agent is not None
     assert agent.test_case_creator_agent is not None
+
 
 @pytest.mark.asyncio
 async def test_generate_test_cases_flow(agent):

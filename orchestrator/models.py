@@ -13,27 +13,30 @@ import asyncio
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 from a2a.types import AgentCard
 
 
-class AgentStatus(str, Enum):
+class AgentStatus(StrEnum):
     """Status of an agent in the registry."""
+
     AVAILABLE = "AVAILABLE"
     BUSY = "BUSY"
     BROKEN = "BROKEN"
 
 
-class BrokenReason(str, Enum):
+class BrokenReason(StrEnum):
     """Reason why an agent is marked as BROKEN."""
+
     OFFLINE = "OFFLINE"  # Agent was unreachable (network error, crashed)
     TASK_STUCK = "TASK_STUCK"  # Agent is reachable but a task timed out or is stuck
 
 
-class TaskStatus(str, Enum):
+class TaskStatus(StrEnum):
     """Status of a task in the history."""
+
     PENDING = "PENDING"
     RUNNING = "RUNNING"
     COMPLETED = "COMPLETED"
@@ -44,6 +47,7 @@ class TaskStatus(str, Enum):
 @dataclass
 class TaskRecord:
     """Record of a task for history tracking."""
+
     task_id: str
     agent_id: str
     agent_name: str
@@ -73,13 +77,14 @@ class TaskRecord:
             "end_time": self.end_time.isoformat() if self.end_time else None,
             "duration_ms": self.duration_ms,
             "error_message": self.error_message,
-            "agent_logs": self.agent_logs
+            "agent_logs": self.agent_logs,
         }
 
 
 @dataclass
 class ErrorRecord:
     """Record of an error for history tracking."""
+
     error_id: str
     timestamp: datetime
     message: str
@@ -97,7 +102,7 @@ class ErrorRecord:
             "task_id": self.task_id,
             "agent_id": self.agent_id,
             "module": self.module,
-            "traceback_snippet": self.traceback_snippet
+            "traceback_snippet": self.traceback_snippet,
         }
 
 
@@ -115,9 +120,9 @@ class TaskHistory:
             self._tasks.append(task)
             self._tasks_by_id[task.task_id] = task
 
-    async def update(self, task_id: str, status: TaskStatus,
-                     end_time: datetime | None = None,
-                     error_message: str | None = None) -> None:
+    async def update(
+        self, task_id: str, status: TaskStatus, end_time: datetime | None = None, error_message: str | None = None
+    ) -> None:
         """Update an existing task record."""
         async with self._lock:
             if task_id in self._tasks_by_id:
@@ -196,11 +201,11 @@ class AgentRegistry:
                 self._statuses[agent_id] = AgentStatus.AVAILABLE
 
     async def update_status(
-            self,
-            agent_id: str,
-            status: AgentStatus,
-            broken_reason: BrokenReason | None = None,
-            stuck_task_id: str | None = None
+        self,
+        agent_id: str,
+        status: AgentStatus,
+        broken_reason: BrokenReason | None = None,
+        stuck_task_id: str | None = None,
     ):
         async with self._lock:
             if agent_id in self._cards:
@@ -261,14 +266,16 @@ class AgentRegistry:
 
     async def get_valid_agents(self) -> list[str]:
         async with self._lock:
-            return [aid for aid, status in self._statuses.items()
-                    if status != AgentStatus.BROKEN and aid in self._cards]
+            return [
+                aid for aid, status in self._statuses.items() if status != AgentStatus.BROKEN and aid in self._cards
+            ]
 
     async def get_available_agents(self) -> list[str]:
         """Get agents that are AVAILABLE for new tasks (not BUSY or BROKEN)."""
         async with self._lock:
-            return [aid for aid, status in self._statuses.items()
-                    if status == AgentStatus.AVAILABLE and aid in self._cards]
+            return [
+                aid for aid, status in self._statuses.items() if status == AgentStatus.AVAILABLE and aid in self._cards
+            ]
 
     async def get_agent_id_by_url(self, url: str) -> str | None:
         async with self._lock:

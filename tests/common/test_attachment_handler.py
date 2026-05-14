@@ -117,8 +117,18 @@ class TestIsSupportedMimeType:
     def test_types_not_in_config_whitelist(self):
         """Test document types not in config.SUPPORTED_ATTACHMENT_MIME_TYPES are filtered."""
         # These are in Pydantic AI's DocumentMediaType but not in the config whitelist
-        assert attachment_handler.is_supported_mime_type("application/vnd.openxmlformats-officedocument.wordprocessingml.document") is False  # .docx
-        assert attachment_handler.is_supported_mime_type("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet") is False  # .xlsx
+        assert (
+            attachment_handler.is_supported_mime_type(
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            )
+            is False
+        )  # .docx
+        assert (
+            attachment_handler.is_supported_mime_type(
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+            is False
+        )  # .xlsx
         assert attachment_handler.is_supported_mime_type("application/vnd.ms-excel") is False  # .xls
         assert attachment_handler.is_supported_mime_type("text/csv") is False  # .csv
         assert attachment_handler.is_supported_mime_type("text/html") is False  # .html
@@ -171,18 +181,14 @@ class TestFetchAllAttachments:
     @patch.object(attachment_handler.config, "JIRA_ATTACHMENT_SKIP_POSTFIX", "_SKIP")
     def test_mixed_valid_and_invalid_attachments(self, mock_fetch_bytes):
         """Test mixed valid and invalid attachments returns only valid ones."""
+
         def side_effect(path):
             filename = Path(path).name
             return (b"fake data", filename)
 
         mock_fetch_bytes.side_effect = side_effect
 
-        paths = [
-            "path/to/image.png",
-            "path/to/mockup_SKIP.jpg",
-            "path/to/archive.zip",
-            "path/to/document.pdf"
-        ]
+        paths = ["path/to/image.png", "path/to/mockup_SKIP.jpg", "path/to/archive.zip", "path/to/document.pdf"]
 
         result = attachment_handler.fetch_all_attachments(paths)
 

@@ -12,6 +12,7 @@ def mock_transformers():
     with patch.dict(sys.modules, {"transformers": mock}):
         yield mock
 
+
 def test_download_enabled(mock_transformers):
     # Setup mocks
     mock_tokenizer = MagicMock()
@@ -29,10 +30,11 @@ def test_download_enabled(mock_transformers):
     mock_config.PROMPT_INJECTION_DETECTION_MODEL_PATH = "models/pi"
     mock_config.PROMPT_INJECTION_DETECTION_MODEL_NAME = "model-name"
 
-    with patch.dict(sys.modules, {"config": mock_config}), \
-         patch("os.path.exists", return_value=False), \
-         patch("os.makedirs") as mock_makedirs:
-
+    with (
+        patch.dict(sys.modules, {"config": mock_config}),
+        patch("os.path.exists", return_value=False),
+        patch("os.makedirs") as mock_makedirs,
+    ):
         # Execute the script
         runpy.run_module("scripts.download_prompt_guard_model", run_name="__main__")
 
@@ -42,6 +44,7 @@ def test_download_enabled(mock_transformers):
         mock_tokenizer.save_pretrained.assert_called_with("models/pi")
         mock_transformers.AutoModelForSequenceClassification.from_pretrained.assert_called_with("model-name")
         mock_model.save_pretrained.assert_called_with("models/pi")
+
 
 def test_download_disabled(mock_transformers):
     mock_config = MagicMock()

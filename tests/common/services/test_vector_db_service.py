@@ -22,12 +22,14 @@ class DummyModel(VectorizableBaseModel):
     def get_embedding_content(self) -> str:
         return self.content
 
+
 @pytest.fixture
 def mock_qdrant_client():
     with patch("common.services.vector_db_service.AsyncQdrantClient") as mock:
         client_instance = AsyncMock()
         mock.return_value = client_instance
         yield client_instance
+
 
 @pytest.fixture
 def mock_httpx_client():
@@ -43,6 +45,7 @@ def mock_httpx_client():
 
         yield mock_client
 
+
 @pytest.fixture
 def vector_db_service(mock_qdrant_client, mock_httpx_client):
     with patch("common.services.vector_db_service.config.QdrantConfig") as mock_config:
@@ -55,6 +58,7 @@ def vector_db_service(mock_qdrant_client, mock_httpx_client):
 
         return VectorDbService("test_collection")
 
+
 def test_init(mock_qdrant_client):
     with patch("common.services.vector_db_service.config.QdrantConfig") as mock_config:
         mock_config.URL = "http://localhost"
@@ -66,12 +70,9 @@ def test_init(mock_qdrant_client):
         VectorDbService("test_collection")
 
         from common.services.vector_db_service import AsyncQdrantClient
-        AsyncQdrantClient.assert_called_with(
-            url="http://localhost",
-            port=6333,
-            api_key="test_key",
-            timeout=30.0
-        )
+
+        AsyncQdrantClient.assert_called_with(url="http://localhost", port=6333, api_key="test_key", timeout=30.0)
+
 
 def test_init_missing_service_url(mock_qdrant_client):
     with patch("common.services.vector_db_service.config.QdrantConfig") as mock_config:
@@ -84,6 +85,7 @@ def test_init_missing_service_url(mock_qdrant_client):
         # It logs a warning but doesn't crash on init
         VectorDbService("test_collection")
 
+
 def _mock_collections_exist(mock_qdrant_client, collection_name: str, exists: bool):
     mock_collection = MagicMock()
     mock_collection.name = collection_name
@@ -91,11 +93,13 @@ def _mock_collections_exist(mock_qdrant_client, collection_name: str, exists: bo
     mock_result.collections = [mock_collection] if exists else []
     mock_qdrant_client.get_collections.return_value = mock_result
 
+
 @pytest.mark.asyncio
 async def test_ensure_collection_exists(vector_db_service, mock_qdrant_client):
     _mock_collections_exist(mock_qdrant_client, "test_collection", exists=True)
     await vector_db_service.ensure_collection()
     mock_qdrant_client.create_collection.assert_not_called()
+
 
 @pytest.mark.asyncio
 async def test_ensure_collection_creates(vector_db_service, mock_qdrant_client, mock_httpx_client):
@@ -103,6 +107,7 @@ async def test_ensure_collection_creates(vector_db_service, mock_qdrant_client, 
     await vector_db_service.ensure_collection()
     mock_qdrant_client.create_collection.assert_called_once()
     mock_httpx_client.post.assert_called()
+
 
 @pytest.mark.asyncio
 async def test_ensure_collection_race_condition(vector_db_service, mock_qdrant_client):
@@ -113,6 +118,7 @@ async def test_ensure_collection_race_condition(vector_db_service, mock_qdrant_c
     await vector_db_service._ensure_collection()
 
     mock_qdrant_client.create_collection.assert_called_once()
+
 
 @pytest.mark.asyncio
 async def test_search(vector_db_service, mock_qdrant_client, mock_httpx_client):
@@ -126,6 +132,7 @@ async def test_search(vector_db_service, mock_qdrant_client, mock_httpx_client):
     mock_qdrant_client.query_points.assert_called_once()
     mock_httpx_client.post.assert_called()
 
+
 @pytest.mark.asyncio
 async def test_upsert(vector_db_service, mock_qdrant_client, mock_httpx_client):
     _mock_collections_exist(mock_qdrant_client, "test_collection", exists=True)
@@ -133,6 +140,7 @@ async def test_upsert(vector_db_service, mock_qdrant_client, mock_httpx_client):
     await vector_db_service.upsert(data)
     mock_qdrant_client.upsert.assert_called_once()
     mock_httpx_client.post.assert_called()
+
 
 @pytest.mark.asyncio
 async def test_delete(vector_db_service, mock_qdrant_client):

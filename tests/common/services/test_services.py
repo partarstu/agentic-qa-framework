@@ -14,13 +14,17 @@ from common.services.zephyr_client import ZephyrClient
 # Zephyr Client Tests
 @pytest.fixture
 def zephyr_client():
-    with patch("config.ZEPHYR_BASE_URL", "http://zephyr"), \
-         patch("config.JIRA_USER", "user"), \
-         patch("config.ZEPHYR_API_TOKEN", "token"):
+    with (
+        patch("config.ZEPHYR_BASE_URL", "http://zephyr"),
+        patch("config.JIRA_USER", "user"),
+        patch("config.ZEPHYR_API_TOKEN", "token"),
+    ):
         return ZephyrClient()
+
 
 def test_zephyr_client_init(zephyr_client):
     assert zephyr_client.base_url == "http://zephyr"
+
 
 @patch("httpx.Client.get")
 def test_zephyr_fetch_test_cases(mock_get, zephyr_client):
@@ -31,9 +35,7 @@ def test_zephyr_fetch_test_cases(mock_get, zephyr_client):
 
     mock_statuses_resp = MagicMock()
     mock_statuses_resp.status_code = 200
-    mock_statuses_resp.json.return_value = {
-        "values": [{"id": 1, "name": "Approved", "archived": False}]
-    }
+    mock_statuses_resp.json.return_value = {"values": [{"id": 1, "name": "Approved", "archived": False}]}
 
     mock_tc_resp = MagicMock()
     mock_tc_resp.status_code = 200
@@ -54,21 +56,26 @@ def test_zephyr_fetch_test_cases(mock_get, zephyr_client):
     result = zephyr_client.fetch_ready_for_execution_test_cases_by_labels("PROJ", ["L1"])
     assert isinstance(result, dict)
 
+
 # Xray Client Tests
 @pytest.fixture
 def xray_client():
-    with patch("config.XRAY_BASE_URL", "http://xray"), \
-         patch("config.XRAY_CLIENT_ID", "id"), \
-         patch("config.XRAY_CLIENT_SECRET", "secret"), \
-         patch("config.JIRA_BASE_URL", "http://jira"), \
-         patch("config.JIRA_USER", "user"), \
-         patch("config.JIRA_TOKEN", "token"), \
-         patch("common.services.xray_client.XrayClient._get_token", return_value="mock_token"):
+    with (
+        patch("config.XRAY_BASE_URL", "http://xray"),
+        patch("config.XRAY_CLIENT_ID", "id"),
+        patch("config.XRAY_CLIENT_SECRET", "secret"),
+        patch("config.JIRA_BASE_URL", "http://jira"),
+        patch("config.JIRA_USER", "user"),
+        patch("config.JIRA_TOKEN", "token"),
+        patch("common.services.xray_client.XrayClient._get_token", return_value="mock_token"),
+    ):
         return XrayClient()
+
 
 def test_xray_client_init(xray_client):
     assert xray_client.base_url == "http://xray"
     # assert "Bearer mock_token" in xray_client.headers["Authorization"] # Mocking _get_token skips setting headers
+
 
 @patch("httpx.Client.post")
 def test_xray_authenticate(mock_post):
@@ -78,15 +85,17 @@ def test_xray_authenticate(mock_post):
     mock_response.text = '"real_token"'
     mock_post.return_value = mock_response
 
-    with patch("config.XRAY_BASE_URL", "http://xray"), \
-         patch("config.XRAY_CLIENT_ID", "id"), \
-         patch("config.XRAY_CLIENT_SECRET", "secret"), \
-         patch("config.JIRA_BASE_URL", "http://jira"), \
-         patch("config.JIRA_USER", "user"), \
-         patch("config.JIRA_TOKEN", "token"):
+    with (
+        patch("config.XRAY_BASE_URL", "http://xray"),
+        patch("config.XRAY_CLIENT_ID", "id"),
+        patch("config.XRAY_CLIENT_SECRET", "secret"),
+        patch("config.JIRA_BASE_URL", "http://jira"),
+        patch("config.JIRA_USER", "user"),
+        patch("config.JIRA_TOKEN", "token"),
+    ):
+        client = XrayClient()
+        assert "Bearer real_token" in client.xray_headers["Authorization"]
 
-         client = XrayClient()
-         assert "Bearer real_token" in client.xray_headers["Authorization"]
 
 # Allure Client Tests
 def test_allure_client_generate_report(tmp_path):
@@ -98,31 +107,35 @@ def test_allure_client_generate_report(tmp_path):
     with patch("common.services.allure_client.utils.get_logger"), patch("subprocess.run"):
         client.generate_report([])
 
+
 # Provider Tests
 def test_get_test_management_client_zephyr():
-    with patch("config.TEST_MANAGEMENT_SYSTEM", "zephyr"), \
-         patch("config.ZEPHYR_BASE_URL", "http://zephyr"), \
-         patch("config.JIRA_USER", "user"), \
-         patch("config.ZEPHYR_API_TOKEN", "token"):
-
+    with (
+        patch("config.TEST_MANAGEMENT_SYSTEM", "zephyr"),
+        patch("config.ZEPHYR_BASE_URL", "http://zephyr"),
+        patch("config.JIRA_USER", "user"),
+        patch("config.ZEPHYR_API_TOKEN", "token"),
+    ):
         client = get_test_management_client()
         assert isinstance(client, ZephyrClient)
 
-def test_get_test_management_client_xray():
-    with patch("config.TEST_MANAGEMENT_SYSTEM", "xray"), \
-         patch("config.XRAY_BASE_URL", "http://xray"), \
-         patch("config.XRAY_CLIENT_ID", "id"), \
-         patch("config.XRAY_CLIENT_SECRET", "secret"), \
-         patch("config.JIRA_BASE_URL", "http://jira"), \
-         patch("config.JIRA_USER", "user"), \
-         patch("config.JIRA_TOKEN", "token"), \
-         patch("common.services.xray_client.XrayClient._get_token", return_value="token"):
 
+def test_get_test_management_client_xray():
+    with (
+        patch("config.TEST_MANAGEMENT_SYSTEM", "xray"),
+        patch("config.XRAY_BASE_URL", "http://xray"),
+        patch("config.XRAY_CLIENT_ID", "id"),
+        patch("config.XRAY_CLIENT_SECRET", "secret"),
+        patch("config.JIRA_BASE_URL", "http://jira"),
+        patch("config.JIRA_USER", "user"),
+        patch("config.JIRA_TOKEN", "token"),
+        patch("common.services.xray_client.XrayClient._get_token", return_value="token"),
+    ):
         client = get_test_management_client()
         assert isinstance(client, XrayClient)
 
+
 def test_get_test_reporting_client_allure():
-    with patch("config.TEST_REPORTER", "allure"), \
-         patch("os.path.exists", return_value=True), patch("os.makedirs"):
+    with patch("config.TEST_REPORTER", "allure"), patch("os.path.exists", return_value=True), patch("os.makedirs"):
         client = get_test_reporting_client("root")
         assert isinstance(client, AllureClient)

@@ -17,9 +17,9 @@ class JiraRagUpdateSystemPrompt(PromptBase):
         return Path(__file__).resolve().parent
 
     def __init__(
-            self,
-            valid_statuses: list[str],
-            template_file_name: str = "prompt_template.txt",
+        self,
+        valid_statuses: list[str],
+        template_file_name: str = "prompt_template.txt",
     ):
         """
         Initializes the JiraRagUpdateSystemPrompt instance.
@@ -34,6 +34,4 @@ class JiraRagUpdateSystemPrompt(PromptBase):
     def get_prompt(self) -> str:
         """Returns the formatted prompt string with substituted values."""
         logger.info("Generating Jira RAG update system prompt")
-        return self.template.format(
-            valid_statuses=self.valid_statuses
-        )
+        return self.template.format(valid_statuses=self.valid_statuses)

@@ -9,7 +9,7 @@ from common.models import TestCase, TestExecutionResult
 
 class TestManagementClientBase(ABC):
     @abstractmethod
-    def create_test_cases(self, test_cases: list[TestCase], project_key: str, user_story_id:int) -> list[str]:
+    def create_test_cases(self, test_cases: list[TestCase], project_key: str, user_story_id: int) -> list[str]:
         raise NotImplementedError
 
     @abstractmethod
@@ -17,8 +17,9 @@ class TestManagementClientBase(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def fetch_ready_for_execution_test_cases_by_labels(self, project_key: str, target_labels: list[str], max_results=100) -> dict[
-        str, list[TestCase]]:
+    def fetch_ready_for_execution_test_cases_by_labels(
+        self, project_key: str, target_labels: list[str], max_results=100
+    ) -> dict[str, list[TestCase]]:
         raise NotImplementedError
 
     @abstractmethod
@@ -26,7 +27,9 @@ class TestManagementClientBase(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def create_test_execution(self, test_execution_results: list[TestExecutionResult], project_key: str, version_id: str) -> None:
+    def create_test_execution(
+        self, test_execution_results: list[TestExecutionResult], project_key: str, version_id: str
+    ) -> None:
         raise NotImplementedError
 
     @abstractmethod
@@ -38,7 +41,7 @@ class TestManagementClientBase(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def change_test_case_status(self,  project_key :str,test_case_key: str, new_status: str) -> TestCase:
+    def change_test_case_status(self, project_key: str, test_case_key: str, new_status: str) -> TestCase:
         raise NotImplementedError
 
     @abstractmethod

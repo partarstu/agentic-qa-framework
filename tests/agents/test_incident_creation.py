@@ -11,8 +11,8 @@ from a2a.types import FileWithBytes
 
 from common.models import (
     DuplicateCandidate,
-    DuplicateIssue,
     DuplicateDetectionResult,
+    DuplicateIssue,
     IncidentCreationInput,
     IncidentCreationResult,
     TestCase,
@@ -36,22 +36,27 @@ def mock_config():
         mock_conf.QdrantConfig.MAX_RESULTS = 5
         yield mock_conf
 
+
 @pytest.fixture
 def agent(mock_config):
-    with patch("agents.incident_creation.prompt.IncidentCreationPrompt.get_prompt", return_value="Prompt"), \
-         patch("agents.incident_creation.prompt.DuplicateDetectionPrompt.get_prompt", return_value="Dup Prompt"), \
-         patch("common.custom_llm_wrapper.CustomLlmWrapper.create_agent") as mock_create_agent, \
-         patch("common.agent_base.AgentBase._get_server", return_value=MagicMock()):
+    with (
+        patch("agents.incident_creation.prompt.IncidentCreationPrompt.get_prompt", return_value="Prompt"),
+        patch("agents.incident_creation.prompt.DuplicateDetectionPrompt.get_prompt", return_value="Dup Prompt"),
+        patch("common.custom_llm_wrapper.CustomLlmWrapper.create_agent") as mock_create_agent,
+        patch("common.agent_base.AgentBase._get_server", return_value=MagicMock()),
+    ):
         mock_create_agent.side_effect = [MagicMock(), MagicMock()]
 
         agent_inst = IncidentCreationAgent()
         agent_inst.vector_db_service = AsyncMock()
         yield agent_inst
 
+
 def test_agent_init(agent, mock_config):
     assert agent.agent_name == "incident_creation_agent"
     assert agent.get_thinking_level() == "HIGH"
     assert agent.duplicate_detector is not None
+
 
 @pytest.mark.asyncio
 async def test_search_duplicates_in_rag(agent):
@@ -64,7 +69,7 @@ async def test_search_duplicates_in_rag(agent):
         comment="",
         preconditions=None,
         steps=[],
-        parent_issue_key=None
+        parent_issue_key=None,
     )
     input_data = IncidentCreationInput(
         test_case=test_case,
@@ -72,7 +77,7 @@ async def test_search_duplicates_in_rag(agent):
         test_step_results=[],
         system_description="Win10",
         issue_priority_field_id="priority",
-        issue_severity_field_name="Severity"
+        issue_severity_field_name="Severity",
     )
 
     # Create incident description
@@ -104,6 +109,7 @@ System: {input_data.system_description}"""
 
     agent.vector_db_service.search.assert_called_once()
 
+
 @pytest.mark.asyncio
 async def test_link_issue_to_test_case_tool(agent):
     with patch("agents.incident_creation.main.get_test_management_client") as mock_get_client:
@@ -126,7 +132,7 @@ async def test_check_all_duplicates_batches_candidates_and_deduplicates_by_key(a
         comment="",
         preconditions=None,
         steps=[],
-        parent_issue_key=None
+        parent_issue_key=None,
     )
     input_data = IncidentCreationInput(
         test_case=test_case,
@@ -134,7 +140,7 @@ async def test_check_all_duplicates_batches_candidates_and_deduplicates_by_key(a
         test_step_results=[],
         system_description="Win10",
         issue_priority_field_id="priority",
-        issue_severity_field_name="Severity"
+        issue_severity_field_name="Severity",
     )
     candidates = [
         DuplicateCandidate(issue_id="10001", key="BUG-1", content="First candidate content"),
@@ -143,13 +149,9 @@ async def test_check_all_duplicates_batches_candidates_and_deduplicates_by_key(a
     ]
     expected_result = DuplicateDetectionResult(
         duplicates=[
-            DuplicateIssue(
-                issue_id="10001",
-                issue_key="BUG-1",
-                message="Same issue"
-            ),
+            DuplicateIssue(issue_id="10001", issue_key="BUG-1", message="Same issue"),
         ],
-        message="Found 1 duplicate out of 2 unique candidates."
+        message="Found 1 duplicate out of 2 unique candidates.",
     )
     agent.duplicate_detector.run = AsyncMock(return_value=MagicMock(output=expected_result))
 

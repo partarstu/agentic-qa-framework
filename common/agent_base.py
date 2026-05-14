@@ -21,12 +21,12 @@ from a2a.utils import get_message_text, new_agent_text_message
 from fastapi import FastAPI
 from jira import JIRA
 from pydantic import BaseModel
-from pydantic_ai import Agent, Tool, AgentRunResult
-from pydantic_ai.settings import ThinkingLevel
+from pydantic_ai import Agent, Tool
 from pydantic_ai.agent import AgentRunResult
 from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.mcp import MCPServerSSE
 from pydantic_ai.messages import BinaryContent, UserContent
+from pydantic_ai.settings import ThinkingLevel
 from pydantic_ai.tools import AgentDepsT, ToolFuncEither
 from pydantic_ai.usage import UsageLimits
 
@@ -47,20 +47,20 @@ logger = utils.get_logger("agent_base")
 
 class AgentBase(ABC):
     def __init__(
-            self,
-            agent_name: str,
-            base_url: str,
-            protocol: str,
-            port: int,
-            external_port: int,
-            model_name: str,
-            output_type: type[BaseModel],
-            instructions: str,
-            mcp_servers: list[MCPServerSSE],
-            deps_type: type[BaseModel] | None = None,
-            description: str = "",
-            tools: Sequence[Tool[AgentDepsT] | ToolFuncEither[AgentDepsT, ...]] = (),
-            vector_db_collection_name: str | None = None
+        self,
+        agent_name: str,
+        base_url: str,
+        protocol: str,
+        port: int,
+        external_port: int,
+        model_name: str,
+        output_type: type[BaseModel],
+        instructions: str,
+        mcp_servers: list[MCPServerSSE],
+        deps_type: type[BaseModel] | None = None,
+        description: str = "",
+        tools: Sequence[Tool[AgentDepsT] | ToolFuncEither[AgentDepsT, ...]] = (),
+        vector_db_collection_name: str | None = None,
     ):
         self.agent_name = agent_name
         self.base_url = base_url
@@ -123,7 +123,7 @@ class AgentBase(ABC):
                     isinstance(e, ModelHTTPError) and e.status_code in config.RetryConfig.RETRYABLE_STATUS_CODES
                 )
                 if is_retryable and attempt < config.RetryConfig.MAX_RETRIES - 1:
-                    delay = config.RetryConfig.RETRY_BASE_DELAY_SECONDS * (2 ** attempt)
+                    delay = config.RetryConfig.RETRY_BASE_DELAY_SECONDS * (2**attempt)
                     logger.warning(
                         f"LLM provider request failed: {e} "
                         f"(attempt {attempt + 1}/{config.RetryConfig.MAX_RETRIES}), retrying in {delay:.0f}s"
@@ -183,9 +183,7 @@ class AgentBase(ABC):
         # Check if the result appears to be empty or incomplete
         is_incomplete = self._check_if_result_incomplete(output)
         if is_incomplete:
-            logger.warning(
-                f"Agent returned incomplete result. LLM comments: {llm_comments}"
-            )
+            logger.warning(f"Agent returned incomplete result. LLM comments: {llm_comments}")
 
     @staticmethod
     def _check_if_result_incomplete(output: BaseModel) -> bool:
@@ -201,10 +199,7 @@ class AgentBase(ABC):
             return True
 
         # Get all field names, excluding llm_comments which is metadata
-        field_names = [
-            name for name in output.model_fields
-            if name != "llm_comments"
-        ]
+        field_names = [name for name in output.model_fields if name != "llm_comments"]
 
         if not field_names:
             return False
@@ -248,6 +243,7 @@ class AgentBase(ABC):
             Dictionary mapping filename to BinaryContent for valid, supported attachments.
         """
         from common.attachment_handler import fetch_all_attachments
+
         return fetch_all_attachments(attachment_paths)
 
     def _get_server(self) -> FastAPI:
@@ -259,15 +255,13 @@ class AgentBase(ABC):
             name=self.agent_name,
             description=self.description,
             url=self.url,
-            version='1.0.0',
-            default_input_modes=['text'],
-            default_output_modes=['text', 'image'],
+            version="1.0.0",
+            default_input_modes=["text"],
+            default_output_modes=["text", "image"],
             capabilities=AgentCapabilities(streaming=False),
             skills=[],
         )
-        server = A2AFastAPIApplication(
-            agent_card=agent_card, http_handler=request_handler
-        )
+        server = A2AFastAPIApplication(agent_card=agent_card, http_handler=request_handler)
         a2a_app: FastAPI = server.build()
         original_lifespan = a2a_app.router.lifespan_context
 
@@ -306,34 +300,38 @@ class AgentBase(ABC):
         return all_contents
 
     @staticmethod
-    def _get_text_message_from_results(result: AgentRunResult, context_id: str | None = None, task_id: str | None = None) -> Message:
+    def _get_text_message_from_results(
+        result: AgentRunResult, context_id: str | None = None, task_id: str | None = None
+    ) -> Message:
         output = result.output
         if isinstance(output, JsonSerializableModel):
             return new_agent_text_message(text=output.model_dump_json(), context_id=context_id, task_id=task_id)
         if isinstance(output, dict):
             text_parts = []
-            for part in output.get('parts', []):
-                if part.get('type', "") == 'text':
+            for part in output.get("parts", []):
+                if part.get("type", "") == "text":
                     text_parts.append(part)
             return new_agent_text_message(text="\n".join(text_parts), context_id=context_id, task_id=task_id)
         else:
             return new_agent_text_message(text=str(output), context_id=context_id, task_id=task_id)
 
-    def _get_message_with_logs(self, result: AgentRunResult, captured_logs: str,
-                               context_id: str | None = None, task_id: str | None = None) -> Message:
-        """Create a message with text result and log file artifact.
-        """
+    def _get_message_with_logs(
+        self, result: AgentRunResult, captured_logs: str, context_id: str | None = None, task_id: str | None = None
+    ) -> Message:
+        """Create a message with text result and log file artifact."""
         base_message = self._get_text_message_from_results(result, context_id, task_id)
         if not captured_logs or not captured_logs.strip():
             return base_message
         return self._get_final_message_with_logs(base_message, captured_logs)
 
-    def _get_error_message_with_logs(self, exception: Exception, captured_logs: str,
-                                     context_id: str | None = None, task_id: str | None = None) -> Message:
-        """Create a message with error details and log file artifact.
-        """
+    def _get_error_message_with_logs(
+        self, exception: Exception, captured_logs: str, context_id: str | None = None, task_id: str | None = None
+    ) -> Message:
+        """Create a message with error details and log file artifact."""
         error_model = AgentExecutionError(error_message=f"Agent execution failed with error: {exception}")
-        base_message = new_agent_text_message(text=error_model.model_dump_json(), context_id=context_id, task_id=task_id)
+        base_message = new_agent_text_message(
+            text=error_model.model_dump_json(), context_id=context_id, task_id=task_id
+        )
         if not captured_logs or not captured_logs.strip():
             return base_message
         return self._get_final_message_with_logs(base_message, captured_logs)
@@ -347,7 +345,7 @@ class AgentBase(ABC):
             message_id=base_message.message_id,
             role=base_message.role,
             context_id=base_message.context_id,
-            task_id=base_message.task_id
+            task_id=base_message.task_id,
         )
 
     @staticmethod
@@ -367,10 +365,7 @@ class AgentBase(ABC):
         if not config.JIRA_BASE_URL or not config.JIRA_USER or not config.JIRA_TOKEN:
             logger.error("Jira configuration is missing (JIRA_URL, JIRA_USERNAME, or JIRA_API_TOKEN).")
             raise RuntimeError("Jira configuration is missing (JIRA_URL, JIRA_USERNAME, or JIRA_API_TOKEN).")
-        jira = JIRA(
-            server=config.JIRA_BASE_URL,
-            basic_auth=(config.JIRA_USER, config.JIRA_TOKEN)
-        )
+        jira = JIRA(server=config.JIRA_BASE_URL, basic_auth=(config.JIRA_USER, config.JIRA_TOKEN))
 
         try:
             created_comment = jira.add_comment(issue_key, comment)

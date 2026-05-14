@@ -45,18 +45,20 @@ class VectorDbService:
 
         for attempt in range(max_retries):
             try:
-                response = await self._http_client.post(
-                    f"{self.embedding_service_url}/embed", json={"text": text}
-                )
+                response = await self._http_client.post(f"{self.embedding_service_url}/embed", json={"text": text})
                 response.raise_for_status()
                 logger.info(f"Embedding service call completed in {time.monotonic() - start:.3f}s")
                 return response.json()["embedding"]
             except (httpx.TimeoutException, httpx.ConnectError) as e:
                 if attempt == max_retries - 1:
-                    logger.exception(f"Failed to call embedding service at {self.embedding_service_url} after {max_retries} attempts.")
+                    logger.exception(
+                        f"Failed to call embedding service at {self.embedding_service_url} after {max_retries} attempts."
+                    )
                     raise
-                wait_time = 2 ** attempt
-                logger.warning(f"Attempt {attempt + 1}/{max_retries} failed calling embedding service: {e}. Retrying in {wait_time}s...")
+                wait_time = 2**attempt
+                logger.warning(
+                    f"Attempt {attempt + 1}/{max_retries} failed calling embedding service: {e}. Retrying in {wait_time}s..."
+                )
                 await asyncio.sleep(wait_time)
             except httpx.HTTPStatusError as e:
                 logger.exception(f"HTTP error from embedding service: {e.response.status_code} - {e.response.text}")
@@ -80,7 +82,7 @@ class VectorDbService:
             try:
                 await self.client.create_collection(
                     collection_name=self.collection_name,
-                    vectors_config=models.VectorParams(size=vector_size, distance=models.Distance.COSINE)
+                    vectors_config=models.VectorParams(size=vector_size, distance=models.Distance.COSINE),
                 )
             except Exception as e:
                 # Handle race condition where collection is created concurrently
@@ -89,8 +91,13 @@ class VectorDbService:
                 else:
                     raise e
 
-    async def search(self, query_text: str, limit: int = 5, score_threshold: float = 0.7, query_filter: models.Filter | None = None,
-                     ) -> list[models.ScoredPoint]:
+    async def search(
+        self,
+        query_text: str,
+        limit: int = 5,
+        score_threshold: float = 0.7,
+        query_filter: models.Filter | None = None,
+    ) -> list[models.ScoredPoint]:
         """Search for similar vectors in the collection.
 
         Args:
@@ -131,7 +138,7 @@ class VectorDbService:
             embedding = await self._get_embedding(text)
             await self.client.upsert(
                 collection_name=self.collection_name,
-                points=[models.PointStruct(id=point_id, vector=embedding, payload=payload)]
+                points=[models.PointStruct(id=point_id, vector=embedding, payload=payload)],
             )
             logger.info(f"Upserted document with ID {point_id} to collection {self.collection_name}")
         except Exception:
@@ -152,7 +159,10 @@ class VectorDbService:
         """
         try:
             await self.ensure_collection()
-            return await self.client.retrieve(collection_name=self.collection_name, ids=point_ids, )
+            return await self.client.retrieve(
+                collection_name=self.collection_name,
+                ids=point_ids,
+            )
         except Exception:
             logger.exception("Error retrieving from Vector DB")
             raise
@@ -167,7 +177,9 @@ class VectorDbService:
             Exception: If deletion from Vector DB fails.
         """
         try:
-            await self.client.delete(collection_name=self.collection_name, points_selector=models.PointIdsList(points=point_ids))
+            await self.client.delete(
+                collection_name=self.collection_name, points_selector=models.PointIdsList(points=point_ids)
+            )
             logger.info(f"Deleted documents with IDs {point_ids} from collection {self.collection_name}")
         except Exception:
             logger.exception("Error deleting from Vector DB")
@@ -187,9 +199,9 @@ class VectorDbService:
                 return []
             ids = []
             offset = None
-            project_filter = models.Filter(must=[
-                models.FieldCondition(key="project_key", match=models.MatchValue(value=project_key))
-            ])
+            project_filter = models.Filter(
+                must=[models.FieldCondition(key="project_key", match=models.MatchValue(value=project_key))]
+            )
             while True:
                 result, next_offset = await self.client.scroll(
                     collection_name=self.collection_name,
