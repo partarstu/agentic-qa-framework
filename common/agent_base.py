@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
-import base64
 import logging
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
@@ -13,11 +12,11 @@ from urllib.parse import urlparse
 
 import httpx
 import uvicorn
-from a2a.server.apps import A2AFastAPIApplication
+from a2a.helpers import get_message_text, new_text_message
 from a2a.server.request_handlers import DefaultRequestHandler
+from a2a.server.routes import create_agent_card_routes, create_jsonrpc_routes
 from a2a.server.tasks import InMemoryTaskStore
-from a2a.types import AgentCapabilities, AgentCard, FilePart, FileWithBytes, Message, Part
-from a2a.utils import get_message_text, new_agent_text_message
+from a2a.types import AgentCapabilities, AgentCard, AgentInterface, Message, Part
 from fastapi import FastAPI
 from jira import JIRA
 from pydantic import BaseModel
@@ -247,36 +246,31 @@ class AgentBase(ABC):
         return fetch_all_attachments(attachment_paths)
 
     def _get_server(self) -> FastAPI:
-        request_handler = DefaultRequestHandler(
-            agent_executor=DefaultAgentExecutor(self),
-            task_store=InMemoryTaskStore(),
-        )
         agent_card = AgentCard(
             name=self.agent_name,
             description=self.description,
-            url=self.url,
             version="1.0.0",
             default_input_modes=["text"],
             default_output_modes=["text", "image"],
             capabilities=AgentCapabilities(streaming=False),
             skills=[],
+            supported_interfaces=[
+                AgentInterface(
+                    protocol_binding="JSONRPC",
+                    url=self.url,
+                )
+            ],
         )
-        server = A2AFastAPIApplication(agent_card=agent_card, http_handler=request_handler)
-        a2a_app: FastAPI = server.build()
-        original_lifespan = a2a_app.router.lifespan_context
-
-        @asynccontextmanager
-        async def combined_lifespan(app: FastAPI):
-            # `self` is captured from the outer scope
-            if original_lifespan:
-                async with original_lifespan(app), self._lifespan(app):
-                    yield
-            else:
-                async with self._lifespan(app):
-                    yield
-
-        a2a_app.router.lifespan_context = combined_lifespan
-        return a2a_app
+        request_handler = DefaultRequestHandler(
+            agent_executor=DefaultAgentExecutor(self),
+            task_store=InMemoryTaskStore(),
+            agent_card=agent_card,
+        )
+        routes = [
+            *create_agent_card_routes(agent_card),
+            *create_jsonrpc_routes(request_handler),
+        ]
+        return FastAPI(routes=routes, lifespan=self._lifespan)
 
     def start_as_server(self):
         parsed_url = urlparse(self.base_url)
@@ -288,12 +282,8 @@ class AgentBase(ABC):
         text_content: str = get_message_text(received_message)
         files_content: list[BinaryContent] = []
         for part in received_message.parts:
-            if isinstance(part.root, FilePart):
-                file = part.root.file
-                if isinstance(file, FileWithBytes):
-                    mime_type = file.mime_type
-                    content = base64.b64decode(file.bytes)
-                    files_content.append(BinaryContent(data=content, media_type=mime_type))
+            if part.HasField("raw"):
+                files_content.append(BinaryContent(data=part.raw, media_type=part.media_type))
         if files_content:
             logger.info(f"Passing {len(files_content)} file(s) to LLM context.")
         all_contents: list[UserContent] = [text_content, *files_content]
@@ -305,15 +295,15 @@ class AgentBase(ABC):
     ) -> Message:
         output = result.output
         if isinstance(output, JsonSerializableModel):
-            return new_agent_text_message(text=output.model_dump_json(), context_id=context_id, task_id=task_id)
+            return new_text_message(text=output.model_dump_json(), context_id=context_id, task_id=task_id)
         if isinstance(output, dict):
             text_parts = []
             for part in output.get("parts", []):
                 if part.get("type", "") == "text":
                     text_parts.append(part)
-            return new_agent_text_message(text="\n".join(text_parts), context_id=context_id, task_id=task_id)
+            return new_text_message(text="\n".join(text_parts), context_id=context_id, task_id=task_id)
         else:
-            return new_agent_text_message(text=str(output), context_id=context_id, task_id=task_id)
+            return new_text_message(text=str(output), context_id=context_id, task_id=task_id)
 
     def _get_message_with_logs(
         self, result: AgentRunResult, captured_logs: str, context_id: str | None = None, task_id: str | None = None
@@ -329,7 +319,7 @@ class AgentBase(ABC):
     ) -> Message:
         """Create a message with error details and log file artifact."""
         error_model = AgentExecutionError(error_message=f"Agent execution failed with error: {exception}")
-        base_message = new_agent_text_message(
+        base_message = new_text_message(
             text=error_model.model_dump_json(), context_id=context_id, task_id=task_id
         )
         if not captured_logs or not captured_logs.strip():
@@ -337,8 +327,8 @@ class AgentBase(ABC):
         return self._get_final_message_with_logs(base_message, captured_logs)
 
     def _get_final_message_with_logs(self, base_message: Message, captured_logs: str) -> Message:
-        log_file_with_bytes = create_log_file_part(captured_logs, self.agent_name)
-        log_part = Part(root=FilePart(file=log_file_with_bytes))
+        log_file = create_log_file_part(captured_logs, self.agent_name)
+        log_part = Part(raw=log_file.raw, media_type=log_file.media_type, filename=log_file.filename)
         new_parts = [*list(base_message.parts), log_part]
         return Message(
             parts=new_parts,

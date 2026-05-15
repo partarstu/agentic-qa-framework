@@ -5,13 +5,18 @@
 from a2a.server.agent_execution import AgentExecutor, RequestContext
 from a2a.server.events import EventQueue
 from a2a.types import (
-    Message,
+    Artifact,
+    Task,
     TaskArtifactUpdateEvent,
     TaskState,
     TaskStatus,
     TaskStatusUpdateEvent,
 )
-from a2a.utils import new_agent_text_message, new_artifact
+from a2a.helpers import (
+    new_text_message,
+    new_text_status_update_event,
+    new_task_from_user_message,
+)
 
 from common import utils
 from common.models import AgentRuntimeError
@@ -35,17 +40,22 @@ class DefaultAgentExecutor(AgentExecutor):
             received_message = context.message
             if not received_message:
                 raise ValueError("No message found in the request message.")
-            await self._update_task_status(context, event_queue, TaskState.working)
 
-            result: Message = await self.agent.run(received_message)
+            # v1.0: Must enqueue the Task object FIRST
+            task = context.current_task or new_task_from_user_message(context.message)
+            await event_queue.enqueue_event(task)
+
+            await self._update_task_status(context, event_queue, TaskState.TASK_STATE_WORKING)
+
+            result = await self.agent.run(received_message)
             event = TaskArtifactUpdateEvent(
                 context_id=context.context_id,
                 task_id=task_id,
-                artifact=new_artifact(name="agent_execution_result", parts=result.parts),
+                artifact=Artifact(name="agent_execution_result", parts=result.parts),
             )
             await event_queue.enqueue_event(event)
 
-            await self._update_task_status(context, event_queue, TaskState.completed, final=True)
+            await self._update_task_status(context, event_queue, TaskState.TASK_STATE_COMPLETED, final=True)
             logger.info(f"Task {task_id} completed successfully.")
 
         except AgentRuntimeError as e:
@@ -53,15 +63,15 @@ class DefaultAgentExecutor(AgentExecutor):
             error_event = TaskArtifactUpdateEvent(
                 context_id=context.context_id,
                 task_id=task_id,
-                artifact=new_artifact(name="agent_execution_result", parts=e.parts),
+                artifact=Artifact(name="agent_execution_result", parts=e.parts),
             )
             await event_queue.enqueue_event(error_event)
-            await self._update_task_status(context, event_queue, TaskState.failed, final=True, message=str(e))
+            await self._update_task_status(context, event_queue, TaskState.TASK_STATE_FAILED, final=True, message=str(e))
 
         except Exception as e:
             logger.exception(f"Error executing task {task_id}: {e}")
             error_message = f"An error occurred: {e!s}"
-            await self._update_task_status(context, event_queue, TaskState.failed, final=True, message=error_message)
+            await self._update_task_status(context, event_queue, TaskState.TASK_STATE_FAILED, final=True, message=error_message)
 
     @staticmethod
     async def _update_task_status(
@@ -69,7 +79,7 @@ class DefaultAgentExecutor(AgentExecutor):
     ):
         status = TaskStatus(state=state)
         if message:
-            status.message = new_agent_text_message(message)
+            status.message = new_text_message(message)
         event = TaskStatusUpdateEvent(
             context_id=context.context_id, task_id=context.task_id, status=status, final=final
         )

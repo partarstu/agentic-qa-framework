@@ -9,12 +9,10 @@ This module provides a log handler that captures log records during agent
 execution and can export them as a string for inclusion in task artifacts.
 """
 
-import base64
 import logging
 import threading
 from collections import deque
-
-from a2a.types import FileWithBytes
+from dataclasses import dataclass
 
 
 class AgentLogCaptureHandler(logging.Handler):
@@ -115,7 +113,16 @@ class AgentLogCapture:
         self.handler.clear()
 
 
-def create_log_file_part(logs: str, agent_name: str) -> "FileWithBytes":
+@dataclass(slots=True)
+class RawFilePart:
+    """Raw file data for use with the a2a v1.0 Part type."""
+
+    filename: str
+    raw: bytes
+    media_type: str
+
+
+def create_log_file_part(logs: str, agent_name: str) -> RawFilePart:
     """
     Create a FilePart containing agent execution logs.
 
@@ -124,13 +131,8 @@ def create_log_file_part(logs: str, agent_name: str) -> "FileWithBytes":
         agent_name: Name of the agent (used in filename).
 
     Returns:
-        A FileWithBytes object containing the logs.
+        A RawFilePart containing the logs as raw bytes.
     """
-
-    # Replace spaces with underscores in agent name for filename
     safe_name = agent_name.replace(" ", "_").lower()
     filename = f"{safe_name}_execution_logs.txt"
-
-    encoded_logs = base64.b64encode(logs.encode("utf-8")).decode("utf-8")
-
-    return FileWithBytes(name=filename, bytes=encoded_logs, mime_type="text/plain")
+    return RawFilePart(filename=filename, raw=logs.encode("utf-8"), media_type="text/plain")

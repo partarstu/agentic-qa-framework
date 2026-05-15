@@ -1,5 +1,5 @@
 pydantic-ai==1.89.0
-a2a-sdk==0.3.26
+a2a-sdk>=1.0.3
 allure-python-commons==2.15.2
 python-dotenv==1.2.2
 gunicorn==23.0.0

@@ -7,10 +7,9 @@ import asyncio
 import json
 import time
 
-import httpx
-from a2a.client import ClientConfig, ClientFactory, minimal_agent_card
-from a2a.types import Artifact, JSONRPCErrorResponse, Message, TaskState, TextPart
-from a2a.utils import get_message_text, new_agent_text_message
+from a2a.client import create_client
+from a2a.types import Artifact, TaskState
+from a2a.helpers import get_message_text, new_text_message
 
 import config
 from common import utils
@@ -44,98 +43,98 @@ async def send_test_case_to_agent(agent_port: int, test_case: TestCase):
     task_completion_timeout = 5000  # seconds
 
     try:
-        async with httpx.AsyncClient(timeout=task_completion_timeout) as client:
-            client_config = ClientConfig(httpx_client=client)
-            client_factory = ClientFactory(config=client_config)
-            a2a_client = client_factory.create(minimal_agent_card(url=agent_base_url))
+        a2a_client = await create_client(agent_base_url)
 
-            response_iterator = a2a_client.send_message(request=new_agent_text_message(test_case.model_dump_json()))
-            logger.info(f"Successfully sent task for test case {test_case.key} to agent on port {agent_port}.")
-            logger.info("Waiting for agent's response.")
-            start_time = time.time()
-            last_task = None
-            completed_task = None
-            while (time.time() - start_time) < task_completion_timeout:
-                time_left = task_completion_timeout - (time.time() - start_time)
-                if time_left <= 0:
+        response_iterator = a2a_client.send_message(request=new_text_message(test_case.model_dump_json()))
+        logger.info(f"Successfully sent task for test case {test_case.key} to agent on port {agent_port}.")
+        logger.info("Waiting for agent's response.")
+        start_time = time.time()
+        final_state = None
+        final_status_message = None
+        artifacts: list[Artifact] = []
+        while (time.time() - start_time) < task_completion_timeout:
+            time_left = task_completion_timeout - (time.time() - start_time)
+            if time_left <= 0:
+                break
+            try:
+                chunk = await asyncio.wait_for(response_iterator.__anext__(), timeout=time_left)
+            except StopAsyncIteration:
+                if final_state not in (
+                    TaskState.TASK_STATE_COMPLETED,
+                    TaskState.TASK_STATE_FAILED,
+                    TaskState.TASK_STATE_REJECTED,
+                ):
+                    logger.error(f"Task '{task_description}' iterator finished before completion.")
+                break
+            except TimeoutError:
+                logger.error(f"Task '{task_description}' timed out while waiting for completion.")
+                break
+
+            if chunk.HasField("error"):
+                logger.error(f"Couldn't execute the task '{task_description}'. Root cause: {chunk.error}")
+                return
+            elif chunk.HasField("status_update"):
+                task_status = chunk.status_update.status
+                final_state = task_status.state
+                final_status_message = task_status.message
+                if final_state in (
+                    TaskState.TASK_STATE_COMPLETED,
+                    TaskState.TASK_STATE_FAILED,
+                    TaskState.TASK_STATE_REJECTED,
+                ):
                     break
-                try:
-                    response = await asyncio.wait_for(response_iterator.__anext__(), timeout=time_left)
-                except StopAsyncIteration:
-                    if last_task and last_task.status.state in (
-                        TaskState.completed,
-                        TaskState.failed,
-                        TaskState.rejected,
-                    ):
-                        completed_task = last_task
-                    else:
-                        logger.error(f"Task '{task_description}' iterator finished before completion.")
-                    break  # Exit while loop
-                except TimeoutError:
-                    logger.error(f"Task '{task_description}' timed out while waiting for completion.")
-                    break  # Exit while loop
-
-                if isinstance(response, JSONRPCErrorResponse):
-                    logger.error(f"Couldn't execute the task '{task_description}'. Root cause: {response.error}")
-                    return
-
-                if isinstance(response, tuple):
-                    task, _ = response
-                    last_task = task
-                    if task.status.state in (TaskState.completed, TaskState.failed, TaskState.rejected):
-                        completed_task = task
-                        break
-                    else:
-                        logger.debug(
-                            f"Task for {task_description} is still in '{task.status.state}' state. Waiting for its "
-                            f"completion."
-                        )
-                elif isinstance(response, Message):
-                    logger.info(
-                        f"Received a message from agent during task '{task_description}': {get_message_text(response)}"
+                else:
+                    logger.debug(
+                        f"Task for {task_description} is still in '{final_state}' state. Waiting for its completion."
                     )
-
-            if not completed_task:
-                logger.error(f"Task for {task_description} wasn't complete within timeout.")
-                return
-
-            if completed_task.status.state != TaskState.completed:
-                status_message = (
-                    get_message_text(completed_task.status.message)
-                    if completed_task.status.message
-                    else "No details provided."
+            elif chunk.HasField("artifact_update"):
+                artifacts.append(chunk.artifact_update.artifact)
+            elif chunk.HasField("message"):
+                logger.info(
+                    f"Received a message from agent during task '{task_description}': {get_message_text(chunk.message)}"
                 )
-                logger.error(
-                    f"Task for {task_description} has an unexpected status "
-                    f"'{completed_task.status.state!s}'. Root cause: {status_message}"
-                )
-                return
 
-            logger.info("Retrieving agent's response.")
-            results: list[Artifact] = completed_task.artifacts
-            if not results:
-                logger.warning(f"Agent provided no artifacts for task '{task_description}'.")
-                return
+        if final_state not in (
+            TaskState.TASK_STATE_COMPLETED,
+            TaskState.TASK_STATE_FAILED,
+            TaskState.TASK_STATE_REJECTED,
+        ):
+            logger.error(f"Task for {task_description} wasn't complete within timeout.")
+            return
 
-            text_parts: list[str] = []
-            if results and results[0] and results[0].parts:
-                for part in results[0].parts:
-                    if isinstance(part.root, TextPart):
-                        text_parts.append(part.root.text)
+        if final_state != TaskState.TASK_STATE_COMPLETED:
+            status_message = (
+                get_message_text(final_status_message) if final_status_message else "No details provided."
+            )
+            logger.error(
+                f"Task for {task_description} has an unexpected status '{final_state!s}'. Root cause: {status_message}"
+            )
+            return
 
-            if not text_parts:
-                logger.info("No text parts in the result artifacts.")
-                return
+        logger.info("Retrieving agent's response.")
+        if not artifacts:
+            logger.warning(f"Agent provided no artifacts for task '{task_description}'.")
+            return
 
-            logger.info(f"Successfully processed task for test case {test_case.key} from agent on port {agent_port}.")
+        text_parts: list[str] = []
+        if artifacts and artifacts[0] and artifacts[0].parts:
+            for part in artifacts[0].parts:
+                if part.HasField("text") and part.text:
+                    text_parts.append(part.text)
 
-            for text_part in text_parts:
-                try:
-                    parsed_json = json.loads(text_part)
-                    pretty_results = json.dumps(parsed_json, indent=2)
-                    logger.info(f"Results:\n{pretty_results}")
-                except json.JSONDecodeError:
-                    logger.info(f"Results (raw):\n{text_part}")
+        if not text_parts:
+            logger.info("No text parts in the result artifacts.")
+            return
+
+        logger.info(f"Successfully processed task for test case {test_case.key} from agent on port {agent_port}.")
+
+        for text_part in text_parts:
+            try:
+                parsed_json = json.loads(text_part)
+                pretty_results = json.dumps(parsed_json, indent=2)
+                logger.info(f"Results:\n{pretty_results}")
+            except json.JSONDecodeError:
+                logger.info(f"Results (raw):\n{text_part}")
 
     except Exception as e:
         logger.exception(f"Failed to send test case to agent on port {agent_port}. Error: {e}")

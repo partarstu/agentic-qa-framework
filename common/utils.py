@@ -2,7 +2,6 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-import base64
 import logging
 import mimetypes
 import os
@@ -10,7 +9,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from a2a.types import FileWithBytes
+from common.models import FileArtifact
 from dateutil import parser
 from pydantic_ai import BinaryContent
 
@@ -55,7 +54,7 @@ def fetch_media_file_content_from_local(remote_file_path: str, attachments_folde
         raise RuntimeError(f"File {local_file_path} is not a media file or mime type could not be determined.")
 
 
-def get_execution_logs_from_artifacts(artifacts: list[FileWithBytes], log_filename_pattern: str = "logs") -> list[str]:
+def get_execution_logs_from_artifacts(artifacts: list[FileArtifact], log_filename_pattern: str = "logs") -> list[str]:
     if not artifacts:
         return []
 
@@ -65,10 +64,10 @@ def get_execution_logs_from_artifacts(artifacts: list[FileWithBytes], log_filena
             artifact.name
             and (log_filename_pattern.lower() in artifact.name.lower())
             and (artifact.name.endswith(".txt") or artifact.name.endswith(".log"))
-            and artifact.bytes
+            and artifact.raw
         ):
             try:
-                logs.append(base64.b64decode(artifact.bytes).decode("utf-8"))
+                logs.append(artifact.raw.decode("utf-8"))
             except (UnicodeDecodeError, ValueError) as e:
                 get_logger(__name__).warning(f"Failed to decode logs from artifact '{artifact.name}': {e}")
                 continue

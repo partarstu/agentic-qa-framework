@@ -14,22 +14,9 @@ from uuid import uuid4
 
 import httpx
 import uvicorn
-from a2a.client import ClientConfig, ClientFactory
-from a2a.types import (
-    AgentCard,
-    Artifact,
-    FilePart,
-    FileWithBytes,
-    JSONRPCErrorResponse,
-    Message,
-    Part,
-    Role,
-    Task,
-    TaskIdParams,
-    TaskState,
-    TextPart,
-)
-from a2a.utils import get_message_text, new_agent_text_message
+from a2a.client import create_client
+from a2a.types import AgentCard, AgentInterface, Artifact, Message, Part, Role, Task, TaskIdParams, TaskState
+from a2a.helpers import get_message_text, new_text_message
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Security
 from fastapi.security import APIKeyHeader
 from fastapi.staticfiles import StaticFiles
@@ -41,6 +28,7 @@ from common import utils
 from common.custom_llm_wrapper import CustomLlmWrapper
 from common.models import (
     AgentExecutionError,
+    FileArtifact,
     GeneratedTestCases,
     IncidentCreationInput,
     IncidentCreationResult,
@@ -251,7 +239,7 @@ async def _retry_cancellation_task():
 
             if broken_reason == BrokenReason.OFFLINE:
                 # For OFFLINE agents: check if they respond to card fetch
-                if await _fetch_agent_card(agent_card.url):
+                if await _fetch_agent_card(agent_card.supported_interfaces[0].url):
                     logger.info(f"Agent {agent_id} is back online.")
                     is_recovered = True
                 else:
@@ -266,7 +254,7 @@ async def _retry_cancellation_task():
                         is_recovered = True
                     else:
                         # Cancellation failed - check if agent is at least responsive
-                        if await _fetch_agent_card(agent_card.url):
+                        if await _fetch_agent_card(agent_card.supported_interfaces[0].url):
                             logger.warning(
                                 f"Could not cancel task {stuck_task_id} on agent {agent_id}, "
                                 f"but agent is responsive. Marking as available anyway."
@@ -278,13 +266,13 @@ async def _retry_cancellation_task():
                             await agent_registry.update_status(agent_id, AgentStatus.BROKEN, BrokenReason.OFFLINE)
                 else:
                     # No stuck task ID tracked, just check if agent responds
-                    if await _fetch_agent_card(agent_card.url):
+                    if await _fetch_agent_card(agent_card.supported_interfaces[0].url):
                         logger.info(f"Agent {agent_id} is responsive (no task ID to cancel).")
                         is_recovered = True
 
             else:
                 # Unknown or None reason - fall back to simple reachability check
-                if await _fetch_agent_card(agent_card.url):
+                if await _fetch_agent_card(agent_card.supported_interfaces[0].url):
                     logger.info(f"Agent {agent_id} is responsive.")
                     is_recovered = True
 
@@ -316,26 +304,22 @@ async def _cancel_agent_task(agent_card: AgentCard, task_id: str) -> bool:
         True if cancellation was successful or acknowledged, False otherwise.
     """
     try:
-        async with httpx.AsyncClient(timeout=config.OrchestratorConfig.AGENT_DISCOVERY_TIMEOUT_SECONDS) as client:
-            client_config = ClientConfig(httpx_client=client)
-            client_factory = ClientFactory(config=client_config)
-            a2a_client = client_factory.create(card=agent_card)
+        a2a_client = await create_client(agent_card)
+        cancelled_task = await a2a_client.cancel_task(TaskIdParams(id=task_id))
 
-            cancelled_task = await a2a_client.cancel_task(TaskIdParams(id=task_id))
+        # Check if cancellation was accepted
+        if not cancelled_task.status:
+            logger.warning(f"Task got no status, artefacts: {cancelled_task.artifacts}")
+            return False
+        if cancelled_task.status.state != TaskState.TASK_STATE_CANCELED:
+            logger.warning(
+                f"Task cancellation failed: got status {cancelled_task.status.state} and "
+                f"message {cancelled_task.status.message}"
+            )
+            return False
 
-            # Check if cancellation was accepted
-            if not cancelled_task.status:
-                logger.warning(f"Task got no status, artefacts: {cancelled_task.artifacts}")
-                return False
-            if cancelled_task.status.state != TaskState.canceled:
-                logger.warning(
-                    f"Task cancellation failed: got status {cancelled_task.status.state} and "
-                    f"message {cancelled_task.status.message}"
-                )
-                return False
-
-            logger.info(f"Task {task_id} cancellation request sent successfully.")
-            return True
+        logger.info(f"Task {task_id} cancellation request sent successfully.")
+        return True
 
     except Exception as e:
         logger.warning(f"Failed to cancel task {task_id}: {e}")
@@ -825,7 +809,7 @@ Test case execution results:\n```{text_results}```
 
 
 async def _request_incident_creation(
-    incident_input: IncidentCreationInput, artifacts: list[FileWithBytes]
+    incident_input: IncidentCreationInput, artifacts: list[FileArtifact]
 ) -> IncidentCreationResult | None:
     """Request incident creation with all artifacts sent as file parts.
 
@@ -840,15 +824,15 @@ async def _request_incident_creation(
     task_description = "Create incident report"
 
     # Create message with JSON text part and ALL artifact file parts
-    message_parts: list[Part] = [Part(TextPart(text=incident_input.model_dump_json()))]
+    message_parts: list[Part] = [Part(text=incident_input.model_dump_json())]
 
     # Add ALL artifacts as file parts (agent will handle them)
     for artifact in artifacts:
-        message_parts.append(Part(FilePart(file=artifact)))
+        message_parts.append(Part(raw=artifact.raw, media_type=artifact.media_type, filename=artifact.name))
         logger.info(f"Adding artifact '{artifact.name}' as file part to incident creation message")
 
     # Create the message
-    message = Message(parts=message_parts, message_id="", role=Role("agent"))
+    message = Message(parts=message_parts, role=Role.ROLE_AGENT)
 
     completed_task = await _send_task_to_agent_with_message(message, task_description)
 
@@ -951,8 +935,8 @@ def _get_text_content_from_artifacts(
     if artifacts:
         for artifact in artifacts:
             for part in artifact.parts:
-                if isinstance(part.root, TextPart) and part.root.text:
-                    text_parts.append(part.root.text)
+                if part.HasField('text') and part.text:
+                    text_parts.append(part.text)
     if any_content_expected and not text_parts:
         _handle_exception(f"Received no text results from the agent after it executed {task_description}.")
 
@@ -1002,14 +986,14 @@ def _get_model_from_artifacts[T: JsonSerializableModel](
         )
 
 
-def _get_file_contents_from_artifacts(artifacts: list[Artifact] | None) -> list[FileWithBytes]:
-    file_parts: list[FileWithBytes] = []
+def _get_file_contents_from_artifacts(artifacts: list[Artifact] | None) -> list[FileArtifact]:
+    file_parts: list[FileArtifact] = []
     if not artifacts:
         return file_parts
     for artifact in artifacts:
         for part in artifact.parts:
-            if isinstance(part.root, FilePart):
-                file_parts.append(part.root.file)
+            if part.HasField('raw'):
+                file_parts.append(FileArtifact(name=part.filename or "", raw=part.raw, media_type=part.media_type))
     return file_parts
 
 
@@ -1060,118 +1044,130 @@ async def _send_task_to_agent_with_message(message: Message, task_description: s
         await task_history.add(task_record)
         await agent_registry.set_current_task(agent_id, internal_task_id)
 
-        async with httpx.AsyncClient(timeout=config.OrchestratorConfig.TASK_EXECUTION_TIMEOUT) as client:
-            client_config = ClientConfig(httpx_client=client)
-            client_factory = ClientFactory(config=client_config)
-            a2a_client = client_factory.create(card=agent_card)
-
-            response_iterator = a2a_client.send_message(message)
-            start_time = time.time()
-            last_task = None
-            while (time_left := _get_time_left_for_task_completion_waiting(start_time)) > 0:
-                try:
-                    response = await asyncio.wait_for(response_iterator.__anext__(), timeout=time_left)
-                except StopAsyncIteration:
-                    if last_task and last_task.status.state in (
-                        TaskState.completed,
-                        TaskState.failed,
-                        TaskState.rejected,
-                    ):
-                        # Update task history with completion
-                        final_status = (
-                            TaskStatus.COMPLETED if last_task.status.state == TaskState.completed else TaskStatus.FAILED
-                        )
-                        await task_history.update(internal_task_id, status=final_status, end_time=datetime.now())
-                        await _save_agent_logs_from_task(last_task, internal_task_id)
-                        await agent_registry.update_status(agent_id, AgentStatus.AVAILABLE)
-                        await agent_registry.set_current_task(agent_id, None)
-                        return last_task
-                    await task_history.update(
-                        internal_task_id, TaskStatus.FAILED, datetime.now(), "Iterator finished before completion"
+        a2a_client = await create_client(agent_card)
+        response_iterator = a2a_client.send_message(message)
+        start_time = time.time()
+        last_task_id = None
+        last_status = None
+        collected_artifacts: list[Artifact] = []
+        while (time_left := _get_time_left_for_task_completion_waiting(start_time)) > 0:
+            try:
+                chunk = await asyncio.wait_for(response_iterator.__anext__(), timeout=time_left)
+            except StopAsyncIteration:
+                if last_status and last_status.state in (
+                    TaskState.TASK_STATE_COMPLETED,
+                    TaskState.TASK_STATE_FAILED,
+                    TaskState.TASK_STATE_REJECTED,
+                ):
+                    # Update task history with completion
+                    final_status = (
+                        TaskStatus.COMPLETED
+                        if last_status.state == TaskState.TASK_STATE_COMPLETED
+                        else TaskStatus.FAILED
                     )
-                    # Release agent as AVAILABLE since this is a protocol issue, not agent issue
+                    completed_task = Task(id=last_task_id or "", status=last_status, artifacts=collected_artifacts)
+                    await task_history.update(internal_task_id, status=final_status, end_time=datetime.now())
+                    await _save_agent_logs_from_task(completed_task, internal_task_id)
                     await agent_registry.update_status(agent_id, AgentStatus.AVAILABLE)
                     await agent_registry.set_current_task(agent_id, None)
-                    _handle_exception(
-                        f"Task '{task_description}' iterator finished before completion.",
-                        500,
-                        internal_task_id,
-                        agent_id,
-                    )
-                except TimeoutError:
-                    logger.error(
-                        f"Task '{task_description}' timed out while waiting for completion.",
-                        extra={"task_id": internal_task_id, "agent_id": agent_id},
-                    )
-                    await task_history.update(internal_task_id, TaskStatus.FAILED, datetime.now(), "Task timed out")
-                    stuck_task_id = last_task.id if last_task else None
-                    await agent_registry.update_status(
-                        agent_id, AgentStatus.BROKEN, BrokenReason.TASK_STUCK, stuck_task_id
-                    )
-                    await agent_registry.set_current_task(agent_id, None)
-                    await cancellation_queue.put((agent_id, time.time()))
-                    _handle_exception(
-                        f"Task '{task_description}' timed out while waiting for completion.",
-                        408,
-                        internal_task_id,
-                        agent_id,
-                    )
+                    return completed_task
+                await task_history.update(
+                    internal_task_id, TaskStatus.FAILED, datetime.now(), "Iterator finished before completion"
+                )
+                # Release agent as AVAILABLE since this is a protocol issue, not agent issue
+                await agent_registry.update_status(agent_id, AgentStatus.AVAILABLE)
+                await agent_registry.set_current_task(agent_id, None)
+                _handle_exception(
+                    f"Task '{task_description}' iterator finished before completion.",
+                    500,
+                    internal_task_id,
+                    agent_id,
+                )
+            except TimeoutError:
+                logger.error(
+                    f"Task '{task_description}' timed out while waiting for completion.",
+                    extra={"task_id": internal_task_id, "agent_id": agent_id},
+                )
+                await task_history.update(internal_task_id, TaskStatus.FAILED, datetime.now(), "Task timed out")
+                await agent_registry.update_status(
+                    agent_id, AgentStatus.BROKEN, BrokenReason.TASK_STUCK, last_task_id
+                )
+                await agent_registry.set_current_task(agent_id, None)
+                await cancellation_queue.put((agent_id, time.time()))
+                _handle_exception(
+                    f"Task '{task_description}' timed out while waiting for completion.",
+                    408,
+                    internal_task_id,
+                    agent_id,
+                )
 
-                if isinstance(response, JSONRPCErrorResponse):
-                    await task_history.update(internal_task_id, TaskStatus.FAILED, datetime.now(), str(response.error))
-                    # Release agent as AVAILABLE since this is a task-level error
-                    await agent_registry.update_status(agent_id, AgentStatus.AVAILABLE)
-                    await agent_registry.set_current_task(agent_id, None)
-                    _handle_exception(
-                        f"Couldn't execute the task '{task_description}'. Root cause: {response.error}",
-                        500,
-                        internal_task_id,
-                        agent_id,
-                    )
+            if chunk.HasField('error'):
+                await task_history.update(internal_task_id, TaskStatus.FAILED, datetime.now(), str(chunk.error))
+                # Release agent as AVAILABLE since this is a task-level error
+                await agent_registry.update_status(agent_id, AgentStatus.AVAILABLE)
+                await agent_registry.set_current_task(agent_id, None)
+                _handle_exception(
+                    f"Couldn't execute the task '{task_description}'. Root cause: {chunk.error}",
+                    500,
+                    internal_task_id,
+                    agent_id,
+                )
 
-                if isinstance(response, tuple):
-                    task, _ = response
-                    last_task = task
-                    if task.status.state in (TaskState.completed, TaskState.failed, TaskState.rejected):
-                        logger.info(
-                            f"Task '{task_description}' was completed with status '{task.status.state!s}'.",
-                            extra={"task_id": internal_task_id, "agent_id": agent_id},
-                        )
-                        final_status = (
-                            TaskStatus.COMPLETED if task.status.state == TaskState.completed else TaskStatus.FAILED
-                        )
-                        error_msg = (
-                            get_message_text(task.status.message) if task.status.state != TaskState.completed else None
-                        )
-                        await task_history.update(internal_task_id, final_status, datetime.now(), error_msg)
-                        await _save_agent_logs_from_task(task, internal_task_id)
-                        await agent_registry.update_status(agent_id, AgentStatus.AVAILABLE)
-                        await agent_registry.set_current_task(agent_id, None)
-                        return task
-                    else:
-                        logger.debug(
-                            f"Task for {task_description} is still in '{task.status.state}' state. Waiting for its "
-                            f"completion. Agent: '{agent_card.name}' (ID: {agent_id})",
-                            extra={"task_id": internal_task_id, "agent_id": agent_id},
-                        )
-                elif isinstance(response, Message):
-                    msg_text = get_message_text(response)
+            if chunk.HasField('status_update'):
+                status_event = chunk.status_update
+                last_task_id = status_event.task_id
+                last_status = status_event.status
+                if last_status.state in (
+                    TaskState.TASK_STATE_COMPLETED,
+                    TaskState.TASK_STATE_FAILED,
+                    TaskState.TASK_STATE_REJECTED,
+                ):
                     logger.info(
-                        f"Received a message from agent in the scope of the task '{task_description}': {msg_text}",
+                        f"Task '{task_description}' was completed with status '{last_status.state!s}'.",
                         extra={"task_id": internal_task_id, "agent_id": agent_id},
                     )
+                    final_status = (
+                        TaskStatus.COMPLETED
+                        if last_status.state == TaskState.TASK_STATE_COMPLETED
+                        else TaskStatus.FAILED
+                    )
+                    error_msg = (
+                        get_message_text(last_status.message)
+                        if last_status.state != TaskState.TASK_STATE_COMPLETED
+                        else None
+                    )
+                    await task_history.update(internal_task_id, final_status, datetime.now(), error_msg)
+                    completed_task = Task(id=last_task_id, status=last_status, artifacts=collected_artifacts)
+                    await _save_agent_logs_from_task(completed_task, internal_task_id)
+                    await agent_registry.update_status(agent_id, AgentStatus.AVAILABLE)
+                    await agent_registry.set_current_task(agent_id, None)
+                    return completed_task
+                else:
+                    logger.debug(
+                        f"Task for {task_description} is still in '{last_status.state}' state. Waiting for its "
+                        f"completion. Agent: '{agent_card.name}' (ID: {agent_id})",
+                        extra={"task_id": internal_task_id, "agent_id": agent_id},
+                    )
+            elif chunk.HasField('artifact_update'):
+                collected_artifacts.append(chunk.artifact_update.artifact)
+            elif chunk.HasField('message'):
+                msg_text = get_message_text(chunk.message)
+                logger.info(
+                    f"Received a message from agent in the scope of the task '{task_description}': {msg_text}",
+                    extra={"task_id": internal_task_id, "agent_id": agent_id},
+                )
 
-            await task_history.update(
-                internal_task_id, TaskStatus.FAILED, datetime.now(), "Timeout waiting for completion"
-            )
-            # Release agent as BROKEN since we hit overall timeout
-            await agent_registry.update_status(agent_id, AgentStatus.BROKEN, BrokenReason.TASK_STUCK)
-            await agent_registry.set_current_task(agent_id, None)
-            await cancellation_queue.put((agent_id, time.time()))
-            _handle_exception(
-                f"Task for {task_description} wasn't complete within timeout.", 408, internal_task_id, agent_id
-            )
-            return None
+        await task_history.update(
+            internal_task_id, TaskStatus.FAILED, datetime.now(), "Timeout waiting for completion"
+        )
+        # Release agent as BROKEN since we hit overall timeout
+        await agent_registry.update_status(agent_id, AgentStatus.BROKEN, BrokenReason.TASK_STUCK)
+        await agent_registry.set_current_task(agent_id, None)
+        await cancellation_queue.put((agent_id, time.time()))
+        _handle_exception(
+            f"Task for {task_description} wasn't complete within timeout.", 408, internal_task_id, agent_id
+        )
+        return None
 
     except HTTPException:
         # HTTPException is raised by _handle_exception, agent status already handled above
@@ -1199,7 +1195,7 @@ async def _send_task_to_agent(input_data: str, task_description: str) -> Task | 
     Returns:
         The completed Task, or None if the task failed to complete.
     """
-    message = new_agent_text_message(input_data)
+    message = new_text_message(input_data)
     return await _send_task_to_agent_with_message(message, task_description)
 
 
@@ -1306,14 +1302,14 @@ def _handle_exception(
 
 
 def _is_task_still_running(task_state: TaskState) -> bool:
-    return task_state in (TaskState.submitted, TaskState.working)
+    return task_state in (TaskState.TASK_STATE_SUBMITTED, TaskState.TASK_STATE_WORKING)
 
 
 def _validate_task_status(task: Task, task_description: str):
     if not task:
         _handle_exception(f"Something went wrong while executing the task for {task_description}.")
     task_state = task.status.state
-    if task_state != TaskState.completed:
+    if task_state != TaskState.TASK_STATE_COMPLETED:
         _handle_exception(
             f"Task for {task_description} has an unexpected status '{task_state!s}'. "
             f"Root cause: {get_message_text(task.status.message)}"
@@ -1462,13 +1458,13 @@ async def _process_url_discovery(url: str):
     else:
         agent_card = await _fetch_agent_card(url)
         if agent_card:
-            existing_agent_id = await agent_registry.get_agent_id_by_url(agent_card.url)
+            existing_agent_id = await agent_registry.get_agent_id_by_url(agent_card.supported_interfaces[0].url)
             if existing_agent_id:
-                logger.debug(f"Agent with URL {agent_card.url} is already registered with ID {existing_agent_id}.")
+                logger.debug(f"Agent with URL {agent_card.supported_interfaces[0].url} is already registered with ID {existing_agent_id}.")
             else:
                 new_agent_id = str(uuid4())
                 await agent_registry.register(new_agent_id, agent_card)
-                logger.info(f"Discovered and registered agent with URL: {agent_card.url}")
+                logger.info(f"Discovered and registered agent with URL: {agent_card.supported_interfaces[0].url}")
 
 
 async def _discover_agents():
