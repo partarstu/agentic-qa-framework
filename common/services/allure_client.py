@@ -2,7 +2,6 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-import base64
 import os
 import shutil
 import subprocess
@@ -86,15 +85,14 @@ class AllureClient(TestReportingClientBase):
 
         if test_execution_result.artifacts:
             for artifact in test_execution_result.artifacts:
-                if artifact.bytes:
-                    decoded_bytes = base64.b64decode(artifact.bytes)
-                    extension = artifact.mime_type.split("/")[-1] if artifact.mime_type else "bin"
+                if artifact.raw:
+                    extension = artifact.media_type.split("/")[-1] if artifact.media_type else "bin"
                     unique_filename = f"{uuid.uuid4()}-attachment.{extension}"
                     attachment_file_path = self.results_dir / unique_filename
                     with open(attachment_file_path, "wb") as f:
-                        f.write(decoded_bytes)
+                        f.write(artifact.raw)
                     test_result.attachments.append(
-                        Attachment(name=artifact.name, source=unique_filename, type=artifact.mime_type)
+                        Attachment(name=artifact.name, source=unique_filename, type=artifact.media_type)
                     )
         self.file_logger.report_result(test_result)
 

@@ -3,7 +3,7 @@ import contextlib
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from a2a.types import Artifact, TaskState, TaskStatus, TextPart
+from a2a.types import TaskState
 
 from common.models import TestCase, TestExecutionResult
 from orchestrator.main import AgentStatus, _agent_worker, _execute_single_test
@@ -88,8 +88,14 @@ async def test_execute_single_test_success(mock_registry):
     )
 
     mock_task = MagicMock()
-    mock_task.status.state = TaskState.completed
-    mock_task.artifacts = [Artifact(artifactId="a1", parts=[TextPart(text='{"testExecutionStatus": "passed"}')])]
+    mock_task.status.state = TaskState.TASK_STATE_COMPLETED
+
+    mock_part = MagicMock()
+    mock_part.HasField.side_effect = lambda field: field == "text"
+    mock_part.text = '{"testExecutionStatus": "passed"}'
+    mock_artifact = MagicMock()
+    mock_artifact.parts = [mock_part]
+    mock_task.artifacts = [mock_artifact]
 
     mock_registry.get_name.return_value = "Agent 1"
 

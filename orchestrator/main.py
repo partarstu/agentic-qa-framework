@@ -14,9 +14,10 @@ from uuid import uuid4
 
 import httpx
 import uvicorn
-from a2a.client import create_client
-from a2a.types import AgentCard, AgentInterface, Artifact, Message, Part, Role, Task, TaskIdParams, TaskState
+from a2a.client import ClientConfig, create_client
+from a2a.client.card_resolver import parse_agent_card
 from a2a.helpers import get_message_text, new_text_message
+from a2a.types import AgentCard, Artifact, CancelTaskRequest, Message, Part, Role, SendMessageRequest, Task, TaskState
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Security
 from fastapi.security import APIKeyHeader
 from fastapi.staticfiles import StaticFiles
@@ -305,7 +306,7 @@ async def _cancel_agent_task(agent_card: AgentCard, task_id: str) -> bool:
     """
     try:
         a2a_client = await create_client(agent_card)
-        cancelled_task = await a2a_client.cancel_task(TaskIdParams(id=task_id))
+        cancelled_task = await a2a_client.cancel_task(CancelTaskRequest(id=task_id))
 
         # Check if cancellation was accepted
         if not cancelled_task.status:
@@ -832,7 +833,7 @@ async def _request_incident_creation(
         logger.info(f"Adding artifact '{artifact.name}' as file part to incident creation message")
 
     # Create the message
-    message = Message(parts=message_parts, role=Role.ROLE_AGENT)
+    message = Message(parts=message_parts, role=Role.ROLE_USER)
 
     completed_task = await _send_task_to_agent_with_message(message, task_description)
 
@@ -1026,6 +1027,7 @@ async def _send_task_to_agent_with_message(message: Message, task_description: s
 
     internal_task_id = str(uuid4())
     agent_id = None
+    httpx_client: httpx.AsyncClient | None = None
     try:
         # Wait for an agent and reserve it atomically
         agent_id, agent_card = await reserve_agent_waiting_if_needed(task_description, internal_task_id)
@@ -1044,8 +1046,12 @@ async def _send_task_to_agent_with_message(message: Message, task_description: s
         await task_history.add(task_record)
         await agent_registry.set_current_task(agent_id, internal_task_id)
 
-        a2a_client = await create_client(agent_card)
-        response_iterator = a2a_client.send_message(message)
+        httpx_client = httpx.AsyncClient(timeout=config.OrchestratorConfig.TASK_EXECUTION_TIMEOUT)
+        a2a_client = await create_client(
+            agent_card,
+            client_config=ClientConfig(httpx_client=httpx_client),
+        )
+        response_iterator = a2a_client.send_message(SendMessageRequest(message=message))
         start_time = time.time()
         last_task_id = None
         last_status = None
@@ -1183,6 +1189,9 @@ async def _send_task_to_agent_with_message(message: Message, task_description: s
         await agent_registry.set_current_task(agent_id, None)
         await cancellation_queue.put((agent_id, time.time()))
         raise
+    finally:
+        if httpx_client is not None:
+            await httpx_client.aclose()
 
 
 async def _send_task_to_agent(input_data: str, task_description: str) -> Task | None:
@@ -1195,7 +1204,7 @@ async def _send_task_to_agent(input_data: str, task_description: str) -> Task | 
     Returns:
         The completed Task, or None if the task failed to complete.
     """
-    message = new_text_message(input_data)
+    message = new_text_message(input_data, role=Role.ROLE_USER)
     return await _send_task_to_agent_with_message(message, task_description)
 
 
@@ -1418,7 +1427,7 @@ async def _fetch_agent_card(agent_base_url: str) -> AgentCard | None:
                 agent_card_url, timeout=config.OrchestratorConfig.AGENT_DISCOVERY_TIMEOUT_SECONDS
             )
             response.raise_for_status()
-            agent_card = AgentCard(**response.json())
+            agent_card = parse_agent_card(response.json())
             actual_agent_name = agent_card.name
             logger.info(f"Successfully retrieved and registered the agent card for '{actual_agent_name}'.")
             return agent_card

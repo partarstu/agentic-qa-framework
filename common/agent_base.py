@@ -36,6 +36,7 @@ from common.agent_log_capture import AgentLogCaptureHandler, create_log_file_par
 from common.custom_llm_wrapper import CustomLlmWrapper
 from common.models import AgentExecutionError, AgentRuntimeError, JsonSerializableModel
 from common.services.vector_db_service import VectorDbService
+from common.streaming import compute_activity_budget, current_log_handler, report_activity
 
 REGISTRATION_PATH = f"{config.ORCHESTRATOR_URL}/register"
 MCP_SERVER_ATTACHMENTS_FOLDER_PATH = config.MCP_SERVER_ATTACHMENTS_FOLDER_PATH
@@ -73,7 +74,11 @@ class AgentBase(ABC):
         self.deps_type = deps_type
         self.description = description
         self.mcp_servers = mcp_servers or []
-        self.tools = tools
+        self.tools = [*tools, report_activity]
+        self.instructions = (
+            self.instructions
+            + "\nA `report_activity` tool is available — use it as described in its tool description."
+        )
         self.agent = self._create_agent()
         self.a2a_server = self._get_server()
 
@@ -111,7 +116,7 @@ class AgentBase(ABC):
         )
 
     async def _get_agent_execution_result(self, received_request: list[UserContent]) -> AgentRunResult[Any] | None:
-        usage_limits = UsageLimits(tool_calls_limit=self.get_max_requests_per_task())
+        usage_limits = UsageLimits(tool_calls_limit=compute_activity_budget(self.get_max_requests_per_task()))
         for attempt in range(config.RetryConfig.MAX_RETRIES):
             try:
                 logger.info(f"Starting agent run (attempt {attempt + 1}/{config.RetryConfig.MAX_RETRIES})...")
@@ -136,11 +141,16 @@ class AgentBase(ABC):
         self.latest_received_message = received_message
         received_request = self._get_all_received_contents(received_message)
 
-        # Set up log capture for this execution
-        log_handler = AgentLogCaptureHandler()
-        log_handler.setLevel(config.LOG_LEVEL)
-        root_logger = logging.getLogger()
-        root_logger.addHandler(log_handler)
+        # Prefer the executor-provided handler (set via contextvar); fall back to self-managed.
+        contextvar_handler = current_log_handler.get()
+        own_handler = contextvar_handler is None
+        if own_handler:
+            log_handler = AgentLogCaptureHandler()
+            log_handler.setLevel(config.LOG_LEVEL)
+            root_logger = logging.getLogger()
+            root_logger.addHandler(log_handler)
+        else:
+            log_handler = contextvar_handler
 
         logger.info("Got a task to execute, starting execution.")
         try:
@@ -148,12 +158,14 @@ class AgentBase(ABC):
             logger.info("Completed execution of the task.")
             self._log_llm_comments_if_result_incomplete(result.output)
             captured_logs = log_handler.get_logs()
-            root_logger.removeHandler(log_handler)
+            if own_handler:
+                logging.getLogger().removeHandler(log_handler)
             return self._get_message_with_logs(result, captured_logs)
         except Exception as e:
             logger.exception("Error during agent execution.")
             captured_logs = log_handler.get_logs()
-            root_logger.removeHandler(log_handler)
+            if own_handler:
+                logging.getLogger().removeHandler(log_handler)
             error_message = self._get_error_message_with_logs(
                 e, captured_logs, received_message.context_id, received_message.task_id
             )
@@ -252,7 +264,7 @@ class AgentBase(ABC):
             version="1.0.0",
             default_input_modes=["text"],
             default_output_modes=["text", "image"],
-            capabilities=AgentCapabilities(streaming=False),
+            capabilities=AgentCapabilities(streaming=True),
             skills=[],
             supported_interfaces=[
                 AgentInterface(
@@ -268,7 +280,7 @@ class AgentBase(ABC):
         )
         routes = [
             *create_agent_card_routes(agent_card),
-            *create_jsonrpc_routes(request_handler),
+            *create_jsonrpc_routes(request_handler, "/"),
         ]
         return FastAPI(routes=routes, lifespan=self._lifespan)
 

@@ -8,7 +8,7 @@ import json
 import time
 
 from a2a.client import create_client
-from a2a.types import Artifact, TaskState
+from a2a.types import Artifact, SendMessageRequest, TaskState
 from a2a.helpers import get_message_text, new_text_message
 
 import config
@@ -45,7 +45,7 @@ async def send_test_case_to_agent(agent_port: int, test_case: TestCase):
     try:
         a2a_client = await create_client(agent_base_url)
 
-        response_iterator = a2a_client.send_message(request=new_text_message(test_case.model_dump_json()))
+        response_iterator = a2a_client.send_message(SendMessageRequest(message=new_text_message(test_case.model_dump_json())))
         logger.info(f"Successfully sent task for test case {test_case.key} to agent on port {agent_port}.")
         logger.info("Waiting for agent's response.")
         start_time = time.time()

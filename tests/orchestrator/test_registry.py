@@ -1,7 +1,7 @@
 import asyncio
 
 import pytest
-from a2a.types import AgentCapabilities, AgentCard
+from a2a.types import AgentCapabilities, AgentCard, AgentInterface
 
 from orchestrator.models import AgentRegistry, AgentStatus, BrokenReason
 
@@ -16,12 +16,12 @@ def sample_card():
     return AgentCard(
         name="Test Agent",
         description="A test agent",
-        url="http://localhost:8000",
         version="1.0.0",
         capabilities=AgentCapabilities(streaming=False),
         skills=[],
-        defaultInputModes=["text"],
-        defaultOutputModes=["text"],
+        default_input_modes=["text"],
+        default_output_modes=["text"],
+        supported_interfaces=[AgentInterface(protocol_binding="JSONRPC", url="http://localhost:8000")],
     )
 
 

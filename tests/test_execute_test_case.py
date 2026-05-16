@@ -1,7 +1,7 @@
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from a2a.types import Task, TaskState, TaskStatus
+from a2a.types import TaskState
 
 from common.models import TestCase
 from execute_test_case import load_test_case, main, send_test_case_to_agent
@@ -57,33 +57,20 @@ async def test_send_test_case_to_agent_success():
         parent_issue_key="P",
     )
 
-    with patch("httpx.AsyncClient") as mock_client_cls:
-        mock_client = AsyncMock()
-        mock_client_cls.return_value.__aenter__.return_value = mock_client
+    with patch("execute_test_case.create_client", new_callable=AsyncMock) as mock_create_client:
+        mock_a2a_client = MagicMock()
+        mock_create_client.return_value = mock_a2a_client
 
-        # Mock client factory and a2a client
-        # send_test_case_to_agent creates ClientFactory internally
-        # We need to mock ClientFactory
+        mock_chunk = MagicMock()
+        mock_chunk.HasField.side_effect = lambda field: field == "status_update"
+        mock_chunk.status_update.status.state = TaskState.TASK_STATE_COMPLETED
 
-        with patch("execute_test_case.ClientFactory") as mock_factory_cls:
-            mock_factory = MagicMock()
-            mock_factory_cls.return_value = mock_factory
-            mock_a2a_client = MagicMock()
-            mock_factory.create.return_value = mock_a2a_client
+        async def async_iter():
+            yield mock_chunk
 
-            # Mock iterator
-            mock_task = MagicMock(spec=Task)
-            mock_task.status = TaskStatus(state=TaskState.completed)
-            mock_task.artifacts = []
+        mock_a2a_client.send_message.return_value = async_iter()
 
-            async def async_iter():
-                yield (mock_task, None)
-
-            mock_a2a_client.send_message.return_value = async_iter()
-
-            await send_test_case_to_agent(8000, test_case)
-
-            # Check logs? We assume success if no exception and it ran through
+        await send_test_case_to_agent(8000, test_case)
 
 
 @pytest.mark.asyncio

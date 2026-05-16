@@ -7,8 +7,6 @@ import pytest
 with patch("pydantic_ai.mcp.MCPServerSSE"):
     from agents.incident_creation.main import IncidentCreationAgent
 
-from a2a.types import FileWithBytes
-
 from common.models import (
     DuplicateCandidate,
     DuplicateDetectionResult,

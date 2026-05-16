@@ -27,6 +27,7 @@ class AgentLogCaptureHandler(logging.Handler):
         super().__init__()
         self._buffer: deque[str] = deque(maxlen=max_records)
         self._lock = threading.Lock()
+        self._drain_cursor: int = 0
         self.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
 
     def emit(self, record: logging.LogRecord) -> None:
@@ -37,6 +38,19 @@ class AgentLogCaptureHandler(logging.Handler):
                 self._buffer.append(log_entry)
         except Exception:
             self.handleError(record)
+
+    def drain(self) -> list[str]:
+        """Return lines appended since the last drain() and advance the cursor.
+
+        Thread-safe. If the buffer has overflowed and old entries were dropped,
+        the cursor is clamped to the current buffer length.
+        """
+        with self._lock:
+            buffer_list = list(self._buffer)
+            start = min(self._drain_cursor, len(buffer_list))
+            new_items = buffer_list[start:]
+            self._drain_cursor = len(buffer_list)
+            return new_items
 
     def get_logs(self) -> str:
         """

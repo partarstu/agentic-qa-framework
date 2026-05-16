@@ -1,7 +1,7 @@
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from a2a.types import Artifact, Task, TaskState, TaskStatus, TextPart
+from a2a.types import Artifact, Part, Task, TaskState, TaskStatus
 from fastapi.testclient import TestClient
 
 import config
@@ -21,8 +21,8 @@ orchestrator_app.dependency_overrides[_validate_api_key] = mock_validate_api_key
 @pytest.fixture
 def mock_task_completed():
     task = MagicMock(spec=Task)
-    task.status = TaskStatus(state=TaskState.completed)
-    task.artifacts = [Artifact(artifactId="art-1", parts=[TextPart(text='{"message": "success"}')])]
+    task.status = TaskStatus(state=TaskState.TASK_STATE_COMPLETED)
+    task.artifacts = [Artifact(name="art-1", parts=[Part(text='{"message": "success"}')])]
     return task
 
 

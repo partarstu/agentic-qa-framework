@@ -11,12 +11,16 @@ logic and the dashboard service, avoiding circular imports.
 
 import asyncio
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
 from typing import Any
 
 from a2a.types import AgentCard
+
+from common.models import TestStepResult
+
+MAX_STEP_SUMMARIES = 500
 
 
 class AgentStatus(StrEnum):
@@ -57,6 +61,9 @@ class TaskRecord:
     end_time: datetime | None = None
     error_message: str | None = None
     agent_logs: list[str] | None = None
+    current_activity: str | None = None
+    step_summaries: list[str] = field(default_factory=list)
+    step_results: list[TestStepResult] = field(default_factory=list)
 
     @property
     def duration_ms(self) -> int | None:
@@ -78,6 +85,9 @@ class TaskRecord:
             "duration_ms": self.duration_ms,
             "error_message": self.error_message,
             "agent_logs": self.agent_logs,
+            "current_activity": self.current_activity,
+            "step_summaries": self.step_summaries,
+            "step_results": [r.model_dump() for r in self.step_results],
         }
 
 
@@ -149,6 +159,42 @@ class TaskHistory:
         """Get a specific task by ID."""
         async with self._lock:
             return self._tasks_by_id.get(task_id)
+
+    async def set_current_activity(self, task_id: str, text: str) -> None:
+        """Set the live activity text for a running task."""
+        async with self._lock:
+            if task_id in self._tasks_by_id:
+                self._tasks_by_id[task_id].current_activity = text
+
+    async def clear_current_activity(self, task_id: str) -> None:
+        """Clear the activity text when a task reaches a terminal state."""
+        async with self._lock:
+            if task_id in self._tasks_by_id:
+                self._tasks_by_id[task_id].current_activity = None
+
+    async def append_step_summary(self, task_id: str, text: str) -> None:
+        """Append a step summary; older entries are dropped when the cap is exceeded."""
+        async with self._lock:
+            if task_id in self._tasks_by_id:
+                task = self._tasks_by_id[task_id]
+                task.step_summaries.append(text)
+                if len(task.step_summaries) > MAX_STEP_SUMMARIES:
+                    task.step_summaries = task.step_summaries[1:]
+
+    async def append_step_result(self, task_id: str, result: TestStepResult) -> None:
+        """Append a structured test-step result."""
+        async with self._lock:
+            if task_id in self._tasks_by_id:
+                self._tasks_by_id[task_id].step_results.append(result)
+
+    async def append_log_batch(self, task_id: str, lines: list[str]) -> None:
+        """Append a batch of streamed log lines to the task's running log buffer."""
+        async with self._lock:
+            if task_id in self._tasks_by_id:
+                task = self._tasks_by_id[task_id]
+                if task.agent_logs is None:
+                    task.agent_logs = []
+                task.agent_logs.extend(lines)
 
 
 class ErrorHistory:
@@ -280,7 +326,7 @@ class AgentRegistry:
     async def get_agent_id_by_url(self, url: str) -> str | None:
         async with self._lock:
             for agent_id, card in self._cards.items():
-                if card.url == url:
+                if card.supported_interfaces and card.supported_interfaces[0].url == url:
                     return agent_id
             return None
 

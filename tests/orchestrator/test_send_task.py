@@ -4,7 +4,7 @@ import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from a2a.types import JSONRPCErrorResponse, Message, Task, TaskState, TaskStatus
+from a2a.types import Task, TaskState, TaskStatus as A2ATaskStatus
 
 from orchestrator.main import (
     AgentStatus,
@@ -38,26 +38,30 @@ async def test_send_task_success(mock_registry):
     mock_registry.get_card = AsyncMock(return_value=MagicMock())
 
     with (
-        patch("orchestrator.main.httpx.AsyncClient"),
-        patch("orchestrator.main.ClientFactory") as mock_factory_cls,
+        patch("orchestrator.main.create_client", new_callable=AsyncMock) as mock_create_client,
         patch("orchestrator.main.reserve_agent_waiting_if_needed", new_callable=AsyncMock) as mock_reserve,
     ):
         mock_reserve.return_value = ("agent-1", MagicMock())
         mock_a2a_client = MagicMock()
-        mock_factory_cls.return_value.create.return_value = mock_a2a_client
+        mock_create_client.return_value = mock_a2a_client
 
-        # Mock iterator response
+        real_status = A2ATaskStatus(state=TaskState.TASK_STATE_COMPLETED)
+        mock_status_update = MagicMock()
+        mock_status_update.task_id = "task-1"
+        mock_status_update.status = real_status
+
+        mock_chunk = MagicMock()
+        mock_chunk.HasField.side_effect = lambda field: field == "status_update"
+        mock_chunk.status_update = mock_status_update
+
         async def response_generator():
-            task = MagicMock()
-            task.status.state = TaskState.completed
-            yield (task, None)
+            yield mock_chunk
 
         mock_a2a_client.send_message.return_value = response_generator()
 
         task = await _send_task_to_agent("input", "desc")
 
-        assert task.status.state == TaskState.completed
-        # _wait_and_reserve_agent handles reservation, so we just check if registry was updated by the main flow (e.g. releasing agent)
+        assert task.status.state == TaskState.TASK_STATE_COMPLETED
         mock_registry.update_status.assert_any_call("agent-1", AgentStatus.AVAILABLE)
 
 
@@ -66,14 +70,13 @@ async def test_send_task_timeout(mock_registry):
     mock_registry.get_card = AsyncMock(return_value=MagicMock())
 
     with (
-        patch("orchestrator.main.httpx.AsyncClient"),
-        patch("orchestrator.main.ClientFactory") as mock_factory_cls,
+        patch("orchestrator.main.create_client", new_callable=AsyncMock) as mock_create_client,
         patch("orchestrator.main.config.OrchestratorConfig.TASK_EXECUTION_TIMEOUT", 0.1),
         patch("orchestrator.main.reserve_agent_waiting_if_needed", new_callable=AsyncMock) as mock_reserve,
     ):
         mock_reserve.return_value = ("agent-1", MagicMock())
         mock_a2a_client = MagicMock()
-        mock_factory_cls.return_value.create.return_value = mock_a2a_client
+        mock_create_client.return_value = mock_a2a_client
 
         # Iterator that sleeps longer than timeout
         async def response_generator():
@@ -88,8 +91,6 @@ async def test_send_task_timeout(mock_registry):
             await _send_task_to_agent("input", "desc")
 
         assert exc.value.status_code == 408
-        # Check that update_status was called with BROKEN status and TASK_STUCK reason
-        # The call should include agent_id, status, broken_reason, and optionally stuck_task_id
         broken_calls = [
             c
             for c in mock_registry.update_status.call_args_list
@@ -101,21 +102,16 @@ async def test_send_task_timeout(mock_registry):
 @pytest.mark.asyncio
 async def test_cancellation_task_offline_recovery(mock_registry):
     """Test that OFFLINE agents can be recovered when they respond to card fetch."""
-    # Setup queue with one item
     await cancellation_queue.put(("agent-1", time.time()))
 
-    mock_registry.get_card.return_value = MagicMock(url="http://agent")
-    # Simulate OFFLINE agent
+    mock_registry.get_card.return_value = MagicMock()
     mock_registry.get_broken_context.return_value = (BrokenReason.OFFLINE, None)
 
-    # Mock _fetch_agent_card to return success (agent is back online)
     with patch("orchestrator.main._fetch_agent_card", new_callable=AsyncMock) as mock_fetch:
         mock_fetch.return_value = True
 
-        # Run _retry_cancellation_task in a task, then cancel it
         task = asyncio.create_task(_retry_cancellation_task())
 
-        # Wait for queue processing
         await asyncio.sleep(0.1)
 
         task.cancel()
@@ -129,14 +125,11 @@ async def test_cancellation_task_offline_recovery(mock_registry):
 @pytest.mark.asyncio
 async def test_cancellation_task_retry(mock_registry):
     """Test that agents that fail recovery check are re-queued for retry."""
-    # Setup queue
     await cancellation_queue.put(("agent-1", time.time()))
 
-    mock_registry.get_card.return_value = MagicMock(url="http://agent")
-    # Simulate OFFLINE agent that is still offline
+    mock_registry.get_card.return_value = MagicMock()
     mock_registry.get_broken_context.return_value = (BrokenReason.OFFLINE, None)
 
-    # Mock _fetch_agent_card to return False (still offline)
     with patch("orchestrator.main._fetch_agent_card", new_callable=AsyncMock) as mock_fetch:
         mock_fetch.return_value = False
 
@@ -148,7 +141,6 @@ async def test_cancellation_task_retry(mock_registry):
         with contextlib.suppress(asyncio.CancelledError):
             await task
 
-        # Agent should not be marked as AVAILABLE since it's still offline
         available_calls = [
             c
             for c in mock_registry.update_status.call_args_list
@@ -160,15 +152,13 @@ async def test_cancellation_task_retry(mock_registry):
 @pytest.mark.asyncio
 async def test_cancellation_task_stuck_with_cancel(mock_registry):
     """Test that TASK_STUCK agents trigger task cancellation before recovery."""
-    # Setup queue
     await cancellation_queue.put(("agent-1", time.time()))
 
-    mock_registry.get_card.return_value = MagicMock(url="http://agent")
-    # Simulate TASK_STUCK agent with a known task ID
+    mock_registry.get_card.return_value = MagicMock()
     mock_registry.get_broken_context.return_value = (BrokenReason.TASK_STUCK, "task-123")
 
     with patch("orchestrator.main._cancel_agent_task", new_callable=AsyncMock) as mock_cancel:
-        mock_cancel.return_value = True  # Cancellation succeeds
+        mock_cancel.return_value = True
 
         task = asyncio.create_task(_retry_cancellation_task())
 
@@ -178,6 +168,5 @@ async def test_cancellation_task_stuck_with_cancel(mock_registry):
         with contextlib.suppress(asyncio.CancelledError):
             await task
 
-        # Should have attempted to cancel the stuck task
         mock_cancel.assert_called_once()
         mock_registry.update_status.assert_called_with("agent-1", AgentStatus.AVAILABLE)

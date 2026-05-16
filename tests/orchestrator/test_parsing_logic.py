@@ -12,7 +12,7 @@ Tests cover:
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from a2a.types import Artifact, FilePart, FileWithBytes, Part, TextPart
+from a2a.types import Artifact, Part
 
 from common.models import (
     AgentExecutionError,
@@ -32,21 +32,27 @@ from orchestrator.main import (
 
 def _create_text_artifact(texts: list[str]) -> Artifact:
     """Helper to create an artifact with text parts."""
-    parts = [Part(root=TextPart(text=text)) for text in texts]
-    return Artifact(artifactId="test-artifact", parts=parts)
+    parts = [Part(text=text) for text in texts]
+    return Artifact(name="test-artifact", parts=parts)
 
 
 def _create_file_artifact(filename: str = "test.txt") -> Artifact:
     """Helper to create an artifact with a file part."""
-    file_part = FilePart(file=FileWithBytes(name=filename, mimeType="text/plain", bytes=b"content"))
-    return Artifact(artifactId="file-artifact", parts=[Part(root=file_part)])
+    return Artifact(
+        name="file-artifact",
+        parts=[Part(raw=b"content", media_type="text/plain", filename=filename)],
+    )
 
 
 def _create_mixed_artifact(text: str, filename: str = "test.txt") -> Artifact:
     """Helper to create an artifact with both text and file parts."""
-    text_part = Part(root=TextPart(text=text))
-    file_part = Part(root=FilePart(file=FileWithBytes(name=filename, mimeType="text/plain", bytes=b"content")))
-    return Artifact(artifactId="mixed-artifact", parts=[text_part, file_part])
+    return Artifact(
+        name="mixed-artifact",
+        parts=[
+            Part(text=text),
+            Part(raw=b"content", media_type="text/plain", filename=filename),
+        ],
+    )
 
 
 class SampleModel(JsonSerializableModel):
@@ -174,11 +180,10 @@ class TestGetTextContentFromArtifacts:
     def test_empty_text_parts_are_excluded(self):
         """Test that empty text parts are excluded from results."""
         artifact = Artifact(
-            artifactId="test",
+            name="test",
             parts=[
-                Part(root=TextPart(text="Valid text")),
-                Part(root=TextPart(text="")),
-                Part(root=TextPart(text="Another valid")),
+                Part(text="Valid text"),
+                Part(text="Another valid"),
             ],
         )
 
@@ -189,8 +194,8 @@ class TestGetTextContentFromArtifacts:
     def test_whitespace_only_text_is_included(self):
         """Test that whitespace-only text parts are included (they're non-empty)."""
         artifact = Artifact(
-            artifactId="test",
-            parts=[Part(root=TextPart(text="  "))],
+            name="test",
+            parts=[Part(text="  ")],
         )
 
         result = _get_text_content_from_artifacts([artifact], "test task")

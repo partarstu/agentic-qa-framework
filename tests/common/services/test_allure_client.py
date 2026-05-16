@@ -3,10 +3,9 @@ import os
 from unittest.mock import MagicMock, patch
 
 import pytest
-from a2a.types import FileWithBytes
 from allure_commons.model2 import Status
 
-from common.models import TestExecutionResult, TestStepResult
+from common.models import FileArtifact, TestExecutionResult, TestStepResult
 from common.services.allure_client import AllureClient
 
 
@@ -46,7 +45,7 @@ def test_generate_report_with_results(mock_logger_cls, allure_client):
                 generalErrorMessage="",
                 start_timestamp="2023-01-01T10:00:00Z",
                 end_timestamp="2023-01-01T10:01:00Z",
-                artifacts=[FileWithBytes(name="screen", bytes=b"MTIz", mime_type="image/png")],
+                artifacts=[FileArtifact(name="screen", raw=b"MTIz", media_type="image/png")],
             )
         ]
 
@@ -102,10 +101,7 @@ def test_generate_report_cleans_invalid_step_timestamp(mock_logger_cls, allure_c
 def test_generate_report_failed(mock_logger_cls, allure_client):
     mock_logger = mock_logger_cls.return_value
     with patch("subprocess.run"):
-        import base64
-
         logs_content = "Error logs"
-        encoded_logs = base64.b64encode(logs_content.encode("utf-8")).decode("utf-8")
 
         results = [
             TestExecutionResult(
@@ -116,7 +112,13 @@ def test_generate_report_failed(mock_logger_cls, allure_client):
                 generalErrorMessage="Failure msg",
                 start_timestamp="2023-01-01T10:00:00Z",
                 end_timestamp="2023-01-01T10:01:00Z",
-                artifacts=[FileWithBytes(name="execution_logs.txt", bytes=encoded_logs, mime_type="text/plain")],
+                artifacts=[
+                    FileArtifact(
+                        name="execution_logs.txt",
+                        raw=logs_content.encode("utf-8"),
+                        media_type="text/plain",
+                    )
+                ],
             )
         ]
 

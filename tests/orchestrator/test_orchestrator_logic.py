@@ -1,7 +1,7 @@
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from a2a.types import AgentCapabilities, AgentCard
+from a2a.types import AgentCapabilities, AgentCard, AgentInterface
 
 import config
 from orchestrator.main import (
@@ -34,12 +34,12 @@ def mock_agent_card():
     return AgentCard(
         name="Discovered Agent",
         description="Desc",
-        url="http://localhost:8001",
         version="1.0.0",
         capabilities=AgentCapabilities(streaming=False),
         skills=[],
-        defaultInputModes=["text"],
-        defaultOutputModes=["text"],
+        default_input_modes=["text"],
+        default_output_modes=["text"],
+        supported_interfaces=[AgentInterface(protocol_binding="JSONRPC", url="http://localhost:8001")],
     )
 
 
