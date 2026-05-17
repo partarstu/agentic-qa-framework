@@ -24,7 +24,7 @@ const notifyHandlers = (isOnline: boolean) => {
   handlers.forEach(handler => handler(isOnline));
 };
 
-const notifyAuthHandlers = (isAuthenticated: boolean) => {
+export const notifyAuthHandlers = (isAuthenticated: boolean) => {
   authHandlers.forEach(handler => handler(isAuthenticated));
 };
 

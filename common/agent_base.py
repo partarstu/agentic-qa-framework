@@ -62,6 +62,12 @@ class AgentBase(ABC):
         tools: Sequence[Tool[AgentDepsT] | ToolFuncEither[AgentDepsT, ...]] = (),
         vector_db_collection_name: str | None = None,
     ):
+        """Initialise the agent and its underlying A2A server.
+
+        Note for prompt-template authors: the ``report_activity`` tool and a one-line
+        instruction snippet are appended to *instructions* automatically here.
+        Do **not** include them in your system-prompt template files.
+        """
         self.agent_name = agent_name
         self.base_url = base_url
         self.port = port

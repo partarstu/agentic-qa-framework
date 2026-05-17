@@ -4,13 +4,15 @@ import { useQueryClient } from '@tanstack/react-query';
 import { dashboardApi } from '../api/dashboardApi';
 import { LogModal } from './LogModal';
 import type { AgentInfo } from '../types/dashboard';
+import type { TaskLiveState } from '../types/dashboard';
 
 interface AgentGridProps {
   agents: AgentInfo[] | undefined;
   isLoading: boolean;
+  liveTaskStates: Record<string, TaskLiveState>;
 }
 
-export function AgentGrid({ agents, isLoading }: AgentGridProps) {
+export function AgentGrid({ agents, isLoading, liveTaskStates }: AgentGridProps) {
   const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
   const [isDiscovering, setIsDiscovering] = useState(false);
   const queryClient = useQueryClient();
@@ -19,9 +21,7 @@ export function AgentGrid({ agents, isLoading }: AgentGridProps) {
     setIsDiscovering(true);
     try {
       await dashboardApi.triggerDiscovery();
-      // Invalidate agents query to refresh the list
       await queryClient.invalidateQueries({ queryKey: ['agents'] });
-      // We can use a simple alert/toast here or rely on the query refresh
     } catch (error) {
       console.error('Discovery failed:', error);
     } finally {
@@ -83,7 +83,7 @@ export function AgentGrid({ agents, isLoading }: AgentGridProps) {
           <Server className="w-5 h-5 text-indigo-400" />
           Agents ({agents?.length || 0})
         </h2>
-        
+
         <button
           onClick={handleDiscoverAgents}
           disabled={isDiscovering}
@@ -98,44 +98,61 @@ export function AgentGrid({ agents, isLoading }: AgentGridProps) {
       {(!agents || agents.length === 0) ? (
         <p className="text-slate-400 text-center py-8">No agents registered</p>
       ) : (
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {agents.map((agent) => (
-          <div
-            key={agent.id}
-            onClick={() => setSelectedAgent(agent.id)}
-            className={`bg-slate-700/30 rounded-lg p-4 border border-slate-600/50 transition-all hover:border-slate-500 cursor-pointer ${
-              agent.status === 'AVAILABLE' ? 'status-available' : agent.status === 'BUSY' ? 'status-busy' : ''
-            }`}
-          >
-            <div className="flex items-start justify-between mb-2">
-              <div className="flex items-center gap-2">
-                <div className={`w-2.5 h-2.5 rounded-full ${getStatusColor(agent.status)}`}></div>
-                <h3 className="font-medium text-slate-100 truncate">{agent.name}</h3>
-              </div>
-              {getStatusIcon(agent.status)}
-            </div>
-            
-            <p className="text-xs text-slate-400 truncate mb-2" title={agent.url}>
-              {agent.url}
-            </p>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {agents.map((agent) => {
+            const liveState = agent.current_task
+              ? liveTaskStates[agent.current_task.task_id]
+              : undefined;
+            const currentActivity = liveState?.current_activity ?? null;
 
-            {agent.current_task && (
-              <div className="mt-3 p-2 bg-amber-500/10 rounded border border-amber-500/20">
-                <p className="text-xs text-amber-300 font-medium">Current Task:</p>
-                <p className="text-xs text-slate-300 truncate">{agent.current_task.description}</p>
-              </div>
-            )}
+            return (
+              <div
+                key={agent.id}
+                onClick={() => setSelectedAgent(agent.id)}
+                className={`bg-slate-700/30 rounded-lg p-4 border border-slate-600/50 transition-all hover:border-slate-500 cursor-pointer ${
+                  agent.status === 'AVAILABLE' ? 'status-available' : agent.status === 'BUSY' ? 'status-busy' : ''
+                }`}
+              >
+                <div className="flex items-start justify-between mb-2">
+                  <div className="flex items-center gap-2">
+                    <div className={`w-2.5 h-2.5 rounded-full ${getStatusColor(agent.status)}`}></div>
+                    <h3 className="font-medium text-slate-100 truncate">{agent.name}</h3>
+                  </div>
+                  {getStatusIcon(agent.status)}
+                </div>
 
-            {agent.status === 'BROKEN' && agent.broken_reason && (
-              <div className="mt-3 p-2 bg-red-500/10 rounded border border-red-500/20">
-                <p className="text-xs text-red-300">
-                  {agent.broken_reason === 'OFFLINE' ? 'Agent is offline' : 'Task stuck'}
+                <p className="text-xs text-slate-400 truncate mb-2" title={agent.url}>
+                  {agent.url}
                 </p>
+
+                {agent.current_task && (
+                  <div className="mt-3 p-2 bg-amber-500/10 rounded border border-amber-500/20">
+                    <p className="text-xs text-amber-300 font-medium">Current Task:</p>
+                    <p className="text-xs text-slate-300 truncate">{agent.current_task.description}</p>
+                  </div>
+                )}
+
+                {currentActivity && (
+                  <div className="mt-2 p-2 bg-indigo-500/10 rounded border border-indigo-500/20">
+                    <p className="text-xs text-indigo-300 font-medium flex items-center gap-1">
+                      <Loader2 className="w-3 h-3 animate-spin" />
+                      Activity
+                    </p>
+                    <p className="text-xs text-slate-300 mt-0.5 break-words">{currentActivity}</p>
+                  </div>
+                )}
+
+                {agent.status === 'BROKEN' && agent.broken_reason && (
+                  <div className="mt-3 p-2 bg-red-500/10 rounded border border-red-500/20">
+                    <p className="text-xs text-red-300">
+                      {agent.broken_reason === 'OFFLINE' ? 'Agent is offline' : 'Task stuck'}
+                    </p>
+                  </div>
+                )}
               </div>
-            )}
-          </div>
-        ))}
-      </div>
+            );
+          })}
+        </div>
       )}
 
       {selectedAgent && (

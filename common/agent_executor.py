@@ -2,6 +2,17 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+"""
+Agent executor for pydantic-ai agents over the A2A protocol.
+
+Log-handler ownership: DefaultAgentExecutor creates one AgentLogCaptureHandler per task
+execution, attaches it to the root logger for the duration of the run, and exposes it via
+current_log_handler (ContextVar from common.streaming) so that AgentBase.run can reuse the
+same buffer when building the final message-with-logs artifact. The handler is detached in
+the finally block after a final drain, ensuring no log lines are lost between the periodic
+flush loop and task completion.
+"""
+
 import asyncio
 import contextlib
 import logging
@@ -76,7 +87,6 @@ class DefaultAgentExecutor(AgentExecutor):
             # v1.0: Must enqueue the Task object FIRST
             task = context.current_task or new_task_from_user_message(context.message)
             await event_queue.enqueue_event(task)
-
             await self._update_task_status(context, event_queue, TaskState.TASK_STATE_WORKING)
 
             emitter = self._build_emitter(task_id, context.context_id, event_queue)
@@ -142,14 +152,7 @@ class DefaultAgentExecutor(AgentExecutor):
                 )
             )
 
-        def on_step_result(payload_json: str) -> None:
-            asyncio.get_running_loop().create_task(
-                event_queue.enqueue_event(
-                    _make_artifact_event(task_id, context_id, "test_step_result", [Part(text=payload_json)])
-                )
-            )
-
-        return StreamEmitter(on_activity=on_activity, on_log_batch=on_log_batch, on_step_result=on_step_result)
+        return StreamEmitter(on_activity=on_activity, on_log_batch=on_log_batch)
 
     @staticmethod
     async def _flush_logs_loop(handler: AgentLogCaptureHandler, emitter: StreamEmitter) -> None:

@@ -28,11 +28,10 @@ logger = utils.get_logger("streaming")
 
 @dataclass(slots=True)
 class StreamEmitter:
-    """Carries the three streaming callbacks bound to a single task execution."""
+    """Carries the streaming callbacks bound to a single task execution."""
 
     on_activity: Callable[[str], None]
     on_log_batch: Callable[[list[str]], None]
-    on_step_result: Callable[[str], None]
 
 
 # ---------------------------------------------------------------------------
@@ -116,14 +115,6 @@ class LogBatchEvent(BaseModel):
     lines: list[str]
 
 
-class StepResultEvent(BaseModel):
-    version: int = 1
-    type: str = "step_result"
-    task_id: str
-    agent_id: str
-    result: dict
-
-
 class TaskDoneEvent(BaseModel):
     version: int = 1
     type: str = "task_done"
@@ -153,7 +144,6 @@ class RunningTaskSnapshot(BaseModel):
     agent_id: str
     description: str
     current_activity: str | None = None
-    step_summaries: list[str] = []
 
 
 class SnapshotEvent(BaseModel):

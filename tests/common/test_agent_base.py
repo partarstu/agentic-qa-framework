@@ -1,3 +1,4 @@
+import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -6,8 +7,9 @@ from a2a.helpers import get_message_text
 from pydantic_ai.usage import UsageLimits
 
 from common.agent_base import AgentBase
+from common.agent_log_capture import AgentLogCaptureHandler
 from common.models import JsonSerializableModel
-from common.streaming import report_activity
+from common.streaming import report_activity, reset_current_log_handler, set_current_log_handler
 
 
 class TestAgent(AgentBase):
@@ -122,3 +124,52 @@ async def test_agent_run_success(test_agent_instance):
 
         # Use raw string for regex-like escaping or double escape
         assert get_message_text(response) == '{"result":"success"}'
+
+
+@pytest.mark.asyncio
+async def test_agent_run_reuses_contextvar_log_handler(test_agent_instance):
+    """When current_log_handler is set, run() uses it without creating a new handler."""
+    mock_handler = MagicMock(spec=AgentLogCaptureHandler)
+    mock_handler.get_logs.return_value = ""
+
+    mock_run_result = MagicMock()
+    mock_run_result.output = MockOutput(result="ok")
+    test_agent_instance.agent = AsyncMock()
+    test_agent_instance.agent.run.return_value = mock_run_result
+    test_agent_instance.agent.__aenter__.return_value = test_agent_instance.agent
+    test_agent_instance.agent.__aexit__.return_value = None
+
+    token = set_current_log_handler(mock_handler)
+    try:
+        with patch("common.agent_base.get_message_text", return_value="hello"):
+            mock_message = MagicMock(spec=Message)
+            mock_message.parts = []
+            with patch("common.agent_base.AgentLogCaptureHandler") as MockHandlerCls:
+                await test_agent_instance.run(mock_message)
+                MockHandlerCls.assert_not_called()
+    finally:
+        reset_current_log_handler(token)
+
+    mock_handler.get_logs.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_agent_run_creates_own_handler_when_no_contextvar(test_agent_instance):
+    """When current_log_handler is not set, run() creates and attaches its own handler."""
+    mock_run_result = MagicMock()
+    mock_run_result.output = MockOutput(result="ok")
+    test_agent_instance.agent = AsyncMock()
+    test_agent_instance.agent.run.return_value = mock_run_result
+    test_agent_instance.agent.__aenter__.return_value = test_agent_instance.agent
+    test_agent_instance.agent.__aexit__.return_value = None
+
+    with patch("common.agent_base.get_message_text", return_value="hello"):
+        mock_message = MagicMock(spec=Message)
+        mock_message.parts = []
+        with patch("common.agent_base.AgentLogCaptureHandler") as MockHandlerCls:
+            mock_own_handler = MockHandlerCls.return_value
+            mock_own_handler.get_logs.return_value = ""
+            mock_own_handler.level = logging.NOTSET  # must be int for logger comparison
+            mock_own_handler.setLevel = MagicMock()
+            await test_agent_instance.run(mock_message)
+            MockHandlerCls.assert_called_once()

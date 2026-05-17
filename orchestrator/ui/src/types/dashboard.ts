@@ -70,3 +70,39 @@ export interface LogEntry {
   task_id?: string | null;
   agent_id?: string | null;
 }
+
+// SSE live-state overlay (keyed by task_id in App.tsx)
+export interface TaskLiveState {
+  task_id: string;
+  agent_id: string;
+  current_activity: string | null;
+}
+
+// SSE event payload shapes
+export interface SnapshotPayload {
+  version: number;
+  running_tasks: Array<{
+    task_id: string;
+    agent_id: string;
+    description: string;
+    current_activity: string | null;
+  }>;
+}
+
+export interface AgentActivityPayload {
+  task_id: string;
+  agent_id: string;
+  text: string;
+}
+
+export interface TaskDonePayload {
+  task_id: string;
+  agent_id: string;
+  status: string;
+  error_message?: string | null;
+}
+
+export interface LogBatchPayload {
+  task_id: string;
+  lines: string[];
+}

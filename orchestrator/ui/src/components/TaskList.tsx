@@ -119,6 +119,8 @@ export function TaskList({ tasks, isLoading }: TaskListProps) {
           isOpen={true}
           onClose={() => setSelectedTask(null)}
           taskId={selectedTask}
+          agentId={tasks?.find((t) => t.task_id === selectedTask)?.agent_id}
+          isRunning={tasks?.find((t) => t.task_id === selectedTask)?.status === 'RUNNING'}
           title="Task Execution Logs"
         />
       )}

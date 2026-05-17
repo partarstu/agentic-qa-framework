@@ -536,6 +536,93 @@ The dashboard exposes REST API endpoints for programmatic access to monitoring d
 * `GET /api/dashboard/logs?limit=100&offset=0&level=ERROR&task_id=xxx&agent_id=yyy` - Get filtered application logs (supports pagination via `offset`).
 * `POST /api/dashboard/discovery` - Manually trigger agent discovery.
 
+## A2A Streaming Contract
+
+QuAIA™ uses the A2A artifact mechanism to push live updates from agents to the orchestrator
+dashboard while a task is running.
+
+### `report_activity` Tool
+
+Every agent created via `AgentBase` automatically receives a `report_activity` tool and a
+one-line instruction snippet appended to its system prompt. Developers writing agent prompt
+templates **do not** need to include these manually — they are injected by
+`AgentBase.__init__`.
+
+The LLM calls `report_activity(description)` with a short sentence (≤ 120 chars) describing
+the current reasoning phase or the tool it is about to invoke. Each call is forwarded to the
+dashboard as an `agent_activity` artifact.
+
+### Streaming Artifacts
+
+The two artifact types below are recognised by the orchestrator's chunk-handling loop.
+`agent_activity` is emitted by every `AgentBase` agent automatically. `agent_logs_stream`
+is **OPTIONAL** — missing it is not an error; the dashboard degrades gracefully.
+
+All payload schemas carry a `version` field so the wire format can evolve without breaking
+external consumers.
+
+#### `agent_activity`
+
+Emitted on every `report_activity` call. Only the latest text is shown — the dashboard
+overwrites the previous activity on each new event (no history is retained).
+
+```json
+{
+  "version": 1,
+  "type": "agent_activity",
+  "task_id": "<internal-task-id>",
+  "agent_id": "<agent-id>",
+  "text": "Fetching Jira issue PROJ-123"
+}
+```
+
+#### `agent_logs_stream` (OPTIONAL)
+
+Log batches flushed every 2 s by `DefaultAgentExecutor`. External agents that do not use
+this executor will not emit it; the dashboard falls back to polling for logs.
+
+```json
+{
+  "version": 1,
+  "type": "log_batch",
+  "task_id": "<internal-task-id>",
+  "lines": ["2025-05-17 12:00:01 INFO  fetching issue", "..."]
+}
+```
+
+### Dashboard SSE Streams
+
+The dashboard receives streaming updates via two Server-Sent Event (SSE) endpoints.
+
+#### Stream-Token Authentication
+
+SSE endpoints use a separate short-lived token instead of the long-lived JWT so that a
+captured URL (browser history, proxy logs) cannot be replayed once the stream expires.
+
+**Flow:**
+
+1. The UI POSTs to `POST /api/dashboard/stream-token` with the standard
+   `Authorization: Bearer <jwt>` header.
+2. The server mints an opaque token with a **5-minute TTL** and returns
+   `{"stream_token": "...", "expires_at": "..."}`.
+3. The UI opens `EventSource` with `?stream_token=<token>` as a query parameter.
+4. Every 15 s the server sends a `heartbeat` frame and re-validates the token expiry.
+   On expiry it emits a one-shot `event: auth-error` frame and closes the connection;
+   the UI's 401 handler routes to the login page.
+
+#### SSE Endpoints
+
+| Endpoint | Description |
+|---|---|
+| `POST /api/dashboard/stream-token` | Mint a 5-min stream token (requires Bearer JWT). |
+| `GET /api/dashboard/stream?stream_token=<token>` | Global stream: initial `snapshot` frame + live `agent_activity`, `task_done`, and `gap` events. |
+| `GET /api/dashboard/agents/{agent_id}/stream?stream_token=<token>` | Per-agent stream: live `log_batch` events used by the log modal. |
+
+The first frame on the global stream has `event: snapshot` and carries the current agent
+registry plus all running tasks with their latest activity text.
+
+---
+
 ## Running Tests
 
 The project includes a comprehensive test suite. To run the tests:

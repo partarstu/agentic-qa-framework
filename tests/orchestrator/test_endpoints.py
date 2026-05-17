@@ -1,3 +1,6 @@
+import asyncio
+import json
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -5,7 +8,16 @@ from a2a.types import Artifact, Part, Task, TaskState, TaskStatus
 from fastapi.testclient import TestClient
 
 import config
-from orchestrator.main import _validate_api_key, orchestrator_app
+from common.streaming import SnapshotEvent
+from orchestrator.auth import auth_service
+from orchestrator.main import (
+    _build_snapshot,
+    _mint_stream_token,
+    _sse_hub_events,
+    _validate_api_key,
+    _validate_stream_token,
+    orchestrator_app,
+)
 
 client = TestClient(orchestrator_app)
 
@@ -94,3 +106,128 @@ async def test_execute_tests_endpoint():
         assert response.status_code == 200
         mock_exec.assert_called_once()
         mock_report.assert_called_once()
+
+
+# =============================================================================
+# POST /api/dashboard/stream-token
+# =============================================================================
+
+
+def _valid_bearer_header() -> dict:
+    token = auth_service.create_token("test-user").access_token
+    return {"Authorization": f"Bearer {token}"}
+
+
+def test_stream_token_without_jwt_returns_401():
+    response = client.post("/api/dashboard/stream-token")
+    assert response.status_code == 401
+
+
+def test_stream_token_with_valid_jwt_returns_token_and_expiry():
+    response = client.post("/api/dashboard/stream-token", headers=_valid_bearer_header())
+    assert response.status_code == 200
+    body = response.json()
+    assert "stream_token" in body
+    assert "expires_at" in body
+    assert len(body["stream_token"]) > 10
+
+
+# =============================================================================
+# GET /api/dashboard/stream — auth guard
+# =============================================================================
+
+
+def test_global_sse_stream_without_token_returns_422():
+    # stream_token query param is required; missing → 422 Unprocessable Entity
+    response = client.get("/api/dashboard/stream")
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_global_sse_stream_with_invalid_token_returns_401():
+    response = client.get("/api/dashboard/stream", params={"stream_token": "bogus-token"})
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_global_sse_stream_with_expired_token_returns_401():
+    token, _ = await _mint_stream_token("test-user")
+    # Forcibly expire the token by backdating it in the store
+    from orchestrator.main import _stream_token_store
+    _stream_token_store[token] = ("test-user", datetime.now(UTC) - timedelta(seconds=1))
+
+    response = client.get("/api/dashboard/stream", params={"stream_token": token})
+    assert response.status_code == 401
+
+
+# =============================================================================
+# _build_snapshot — schema check
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_build_snapshot_returns_valid_snapshot_event():
+    with (
+        patch("orchestrator.main.agent_registry") as mock_registry,
+        patch("orchestrator.main.task_history") as mock_history,
+    ):
+        mock_registry.get_all_cards = AsyncMock(return_value={})
+        mock_history.get_all = AsyncMock(return_value=[])
+
+        snapshot = await _build_snapshot()
+
+    assert isinstance(snapshot, SnapshotEvent)
+    assert snapshot.version == 1
+    assert isinstance(snapshot.agents, list)
+    assert isinstance(snapshot.running_tasks, list)
+
+
+# =============================================================================
+# _sse_hub_events — live event forwarding and auth-error frame
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_sse_hub_events_forwards_live_event():
+    live = {"type": "agent_activity", "task_id": "t1", "agent_id": "a1", "text": "working", "version": 1}
+
+    async def one_event_gen():
+        yield live
+        await asyncio.sleep(100)  # block after first event
+
+    expires = datetime.now(UTC) + timedelta(minutes=5)
+    events = []
+
+    async for sse in _sse_hub_events(one_event_gen(), expires):
+        events.append(sse)
+        break  # close generator after first frame
+
+    assert len(events) == 1
+    assert events[0].event == "agent_activity"
+    data = json.loads(events[0].data)
+    assert data["task_id"] == "t1"
+    assert data["text"] == "working"
+
+
+@pytest.mark.asyncio
+async def test_sse_hub_events_emits_auth_error_when_token_expired_on_heartbeat():
+    async def empty_gen():
+        return
+        yield {}  # makes it an async generator
+
+    expired = datetime.now(UTC) - timedelta(seconds=1)
+    events = []
+
+    async def instant_timeout(coro, timeout):
+        try:
+            coro.close()
+        except Exception:
+            pass
+        raise asyncio.TimeoutError()
+
+    with patch("orchestrator.main.asyncio.wait_for", instant_timeout):
+        async for sse in _sse_hub_events(empty_gen(), expired):
+            events.append(sse)
+
+    assert len(events) == 1
+    assert events[0].event == "auth-error"

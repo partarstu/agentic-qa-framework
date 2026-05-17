@@ -17,7 +17,6 @@ def _make_emitter(on_activity=None) -> StreamEmitter:
     return StreamEmitter(
         on_activity=on_activity or MagicMock(),
         on_log_batch=MagicMock(),
-        on_step_result=MagicMock(),
     )
 
 

@@ -11,16 +11,12 @@ logic and the dashboard service, avoiding circular imports.
 
 import asyncio
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 from typing import Any
 
 from a2a.types import AgentCard
-
-from common.models import TestStepResult
-
-MAX_STEP_SUMMARIES = 500
 
 
 class AgentStatus(StrEnum):
@@ -62,8 +58,6 @@ class TaskRecord:
     error_message: str | None = None
     agent_logs: list[str] | None = None
     current_activity: str | None = None
-    step_summaries: list[str] = field(default_factory=list)
-    step_results: list[TestStepResult] = field(default_factory=list)
 
     @property
     def duration_ms(self) -> int | None:
@@ -86,8 +80,6 @@ class TaskRecord:
             "error_message": self.error_message,
             "agent_logs": self.agent_logs,
             "current_activity": self.current_activity,
-            "step_summaries": self.step_summaries,
-            "step_results": [r.model_dump() for r in self.step_results],
         }
 
 
@@ -171,21 +163,6 @@ class TaskHistory:
         async with self._lock:
             if task_id in self._tasks_by_id:
                 self._tasks_by_id[task_id].current_activity = None
-
-    async def append_step_summary(self, task_id: str, text: str) -> None:
-        """Append a step summary; older entries are dropped when the cap is exceeded."""
-        async with self._lock:
-            if task_id in self._tasks_by_id:
-                task = self._tasks_by_id[task_id]
-                task.step_summaries.append(text)
-                if len(task.step_summaries) > MAX_STEP_SUMMARIES:
-                    task.step_summaries = task.step_summaries[1:]
-
-    async def append_step_result(self, task_id: str, result: TestStepResult) -> None:
-        """Append a structured test-step result."""
-        async with self._lock:
-            if task_id in self._tasks_by_id:
-                self._tasks_by_id[task_id].step_results.append(result)
 
     async def append_log_batch(self, task_id: str, lines: list[str]) -> None:
         """Append a batch of streamed log lines to the task's running log buffer."""
