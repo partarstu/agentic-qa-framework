@@ -17,7 +17,6 @@ from uuid import uuid4
 
 import httpx
 import uvicorn
-from sse_starlette.sse import EventSourceResponse, ServerSentEvent
 from a2a.client import ClientConfig, create_client
 from a2a.client.card_resolver import parse_agent_card
 from a2a.helpers import get_message_text, new_text_message
@@ -27,6 +26,7 @@ from fastapi.security import APIKeyHeader
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 from pydantic_ai.exceptions import ModelHTTPError
+from sse_starlette.sse import EventSourceResponse, ServerSentEvent
 
 import config
 from common import utils
@@ -45,6 +45,8 @@ from common.models import (
     TestExecutionRequest,
     TestExecutionResult,
 )
+from common.services.test_management_system_client_provider import get_test_management_client
+from common.services.test_reporting_client_base_provider import get_test_reporting_client
 from common.streaming import (
     AgentActivityEvent,
     AgentSnapshot,
@@ -54,12 +56,9 @@ from common.streaming import (
     SnapshotEvent,
     TaskDoneEvent,
 )
-from common.services.test_management_system_client_provider import get_test_management_client
-from common.services.test_reporting_client_base_provider import get_test_reporting_client
 from orchestrator.auth import LoginRequest, TokenResponse, auth_service, dashboard_auth
 from orchestrator.dashboard_service import dashboard_service
 from orchestrator.memory_log_handler import setup_memory_logging
-from orchestrator.streaming_hub import streaming_hub
 from orchestrator.models import (
     AgentStatus,
     BrokenReason,
@@ -70,6 +69,7 @@ from orchestrator.models import (
     error_history,
     task_history,
 )
+from orchestrator.streaming_hub import streaming_hub
 
 logger = utils.get_logger("orchestrator")
 
@@ -323,7 +323,7 @@ async def _sse_hub_events(
             try:
                 event = await asyncio.wait_for(queue.get(), timeout=_HEARTBEAT_INTERVAL)
                 yield ServerSentEvent(data=json.dumps(event), event=event.get("type", "message"))
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 if datetime.now(UTC) >= token_expires_at:
                     yield ServerSentEvent(data=AuthErrorEvent().model_dump_json(), event="auth-error")
                     return

@@ -8,8 +8,8 @@ import json
 import time
 
 from a2a.client import create_client
-from a2a.types import Artifact, SendMessageRequest, TaskState
 from a2a.helpers import get_message_text, new_text_message
+from a2a.types import Artifact, SendMessageRequest, TaskState
 
 import config
 from common import utils
