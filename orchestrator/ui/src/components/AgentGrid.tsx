@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2025-2026 Taras Paruta (partarstu@gmail.com)
+//
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import { useState } from 'react';
 import { Server, Wifi, WifiOff, Loader2, RefreshCw } from 'lucide-react';
 import { useQueryClient } from '@tanstack/react-query';

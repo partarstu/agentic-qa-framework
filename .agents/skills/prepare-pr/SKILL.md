@@ -75,9 +75,9 @@ git diff --name-only --diff-filter=A origin/main -- "*.py"
 For each new `.py` file, verify it starts with:
 
 ```python
-# SPDX-FileCopyrightText: 2025 Taras Paruta (partarstu@gmail.com)
+# SPDX-FileCopyrightText: 2025-2026 Taras Paruta (partarstu@gmail.com)
 #
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0-only
 ```
 
 **Auto-add** the header (with trailing blank line) to files missing it. Log which files were updated.

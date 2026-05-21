@@ -1,6 +1,6 @@
-# SPDX-FileCopyrightText: 2025 Taras Paruta (partarstu@gmail.com)
+# SPDX-FileCopyrightText: 2025-2026 Taras Paruta (partarstu@gmail.com)
 #
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0-only
 
 import asyncio
 import logging
@@ -289,6 +289,17 @@ class AgentBase(ABC):
             *create_jsonrpc_routes(request_handler, "/"),
         ]
         return FastAPI(routes=routes, lifespan=self._lifespan)
+
+    @a2a_app.get("/source")
+    async def _source_offer():
+        # AGPL-3.0 §13: offer the Corresponding Source to users interacting remotely.
+        return {
+            "name": agent_name,
+            "copyright": "Copyright (C) 2025-2026 Taras Paruta",
+            "license": "AGPL-3.0-only",
+            "license_url": "https://www.gnu.org/licenses/agpl-3.0.html",
+            "source_url": "https://github.com/partarstu/agentic-qa-framework",
+        }
 
     def start_as_server(self):
         parsed_url = urlparse(self.base_url)

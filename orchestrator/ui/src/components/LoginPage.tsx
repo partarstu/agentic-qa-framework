@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2025-2026 Taras Paruta (partarstu@gmail.com)
+//
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import { useState, type FormEvent } from 'react';
 import { Lock, User, AlertCircle, Eye, EyeOff, WifiOff } from 'lucide-react';
 import axios from 'axios';
@@ -130,10 +134,30 @@ export function LoginPage() {
           </form>
         </div>
 
-        {/* Footer */}
-        <p className="text-center text-slate-500 text-sm mt-6">
-          QuAIA™ • Quality Assurance with Intelligent Agents
-        </p>
+        {/* Footer — AGPL-3.0 §5(d) Appropriate Legal Notices and §13 source offer */}
+        <div className="text-center text-slate-500 text-xs mt-6 space-y-1">
+          <p>QuAIA™ • Quality Assurance with Intelligent Agents</p>
+          <p>
+            Copyright © 2025-2026 Taras Paruta. Licensed under{' '}
+            <a
+              href="https://www.gnu.org/licenses/agpl-3.0.html"
+              target="_blank"
+              rel="noreferrer"
+              className="underline hover:text-slate-300"
+            >
+              AGPL-3.0
+            </a>
+            {' '}— provided without warranty.{' '}
+            <a
+              href="https://github.com/partarstu/agentic-qa-framework"
+              target="_blank"
+              rel="noreferrer"
+              className="underline hover:text-slate-300"
+            >
+              Source code
+            </a>
+          </p>
+        </div>
       </div>
     </div>
   );

@@ -16,5 +16,5 @@ Please add unit tests, if possible, for the implemented feature or bug fix, unle
 
 We follow the [Contributor Covenant Code of Conduct](https://www.contributor-covenant.org/version/2/1/code_of_conduct/code_of_conduct.md).
 
-The code in this repository is released under the Apache Software Foundation License, 2.0, and by contributing to this repository, you
-agree to release that contribution under that same license.
+The code in this repository is released under the GNU Affero General Public License v3.0 (AGPL-3.0-only), and by contributing to this
+repository, you agree to release that contribution under that same license.

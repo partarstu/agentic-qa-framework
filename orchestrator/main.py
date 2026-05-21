@@ -1,6 +1,6 @@
-# SPDX-FileCopyrightText: 2025 Taras Paruta (partarstu@gmail.com)
+# SPDX-FileCopyrightText: 2025-2026 Taras Paruta (partarstu@gmail.com)
 #
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0-only
 
 import asyncio
 import json
@@ -173,6 +173,18 @@ async def logout():
 async def verify_token(username: str = Depends(dashboard_auth)):
     """Verify if the current token is valid."""
     return {"valid": True, "username": username}
+
+
+@orchestrator_app.get("/api/source")
+async def get_source_offer():
+    # AGPL-3.0 §13: offer the Corresponding Source to users interacting remotely.
+    return {
+        "name": "QuAIA",
+        "copyright": "Copyright (C) 2025-2026 Taras Paruta",
+        "license": "AGPL-3.0-only",
+        "license_url": "https://www.gnu.org/licenses/agpl-3.0.html",
+        "source_url": "https://github.com/partarstu/agentic-qa-framework",
+    }
 
 
 # =============================================================================

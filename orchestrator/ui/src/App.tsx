@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2025-2026 Taras Paruta (partarstu@gmail.com)
+//
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import { useState, useEffect, useReducer } from 'react';
 import { useQuery, useInfiniteQuery, QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { LogOut, XCircle } from 'lucide-react';
@@ -87,7 +91,7 @@ interface CancelToast {
 
 function Dashboard() {
   const { logout, username } = useAuth();
-
+  
   const { data: summary, isLoading: summaryLoading } = useQuery({
     queryKey: ['summary'],
     queryFn: dashboardApi.getSummary,
@@ -254,6 +258,29 @@ function Dashboard() {
 
       <footer className="py-6 text-center text-slate-500 text-sm">
         QuAIA™ • Quality Assurance with Intelligent Agents
+      {/* Footer — AGPL-3.0 §5(d) Appropriate Legal Notices and §13 source offer */}
+      <footer className="py-6 text-center text-slate-500 text-xs space-y-1">
+        <p>QuAIA™ • Quality Assurance with Intelligent Agents</p>
+        <p>
+          Copyright © 2025-2026 Taras Paruta. Licensed under{' '}
+          <a
+            href="https://www.gnu.org/licenses/agpl-3.0.html"
+            target="_blank"
+            rel="noreferrer"
+            className="underline hover:text-slate-300"
+          >
+            AGPL-3.0
+          </a>
+          {' '}— provided without warranty.{' '}
+          <a
+            href="https://github.com/partarstu/agentic-qa-framework"
+            target="_blank"
+            rel="noreferrer"
+            className="underline hover:text-slate-300"
+          >
+            Source code
+          </a>
+        </p>
       </footer>
     </div>
   );
