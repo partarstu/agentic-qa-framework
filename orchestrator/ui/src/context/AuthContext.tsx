@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2025-2026 Taras Paruta (partarstu@gmail.com)
+//
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from 'react';
 import { authApi, type TokenResponse } from '../api/authApi';
 

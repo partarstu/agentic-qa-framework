@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2025-2026 Taras Paruta (partarstu@gmail.com)
+//
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import axios, { type AxiosError, type AxiosResponse, type InternalAxiosRequestConfig } from 'axios';
 
 const AUTH_TOKEN_KEY = 'dashboard_auth_token';

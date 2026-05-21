@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2025-2026 Taras Paruta (partarstu@gmail.com)
+//
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import { useEffect, useRef, useState } from 'react';
 import { Terminal, Filter } from 'lucide-react';
 import type { LogEntry } from '../types/dashboard';
