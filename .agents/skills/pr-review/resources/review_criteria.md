@@ -202,9 +202,9 @@ api_key = "sk-abc123xyz789"
 All new Python files must include:
 
 ```python
-# SPDX-FileCopyrightText: 2025 Taras Paruta (partarstu@gmail.com)
+# SPDX-FileCopyrightText: 2025-2026 Taras Paruta (partarstu@gmail.com)
 #
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0-only
 ```
 
 ### Virtual Environments
