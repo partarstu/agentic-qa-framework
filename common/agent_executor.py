@@ -11,10 +11,10 @@ import contextlib
 import logging
 from uuid import uuid4
 
+from a2a.helpers import new_task_from_user_message, new_text_message
 from a2a.server.agent_execution import AgentExecutor, RequestContext
 from a2a.server.events import EventQueue
 from a2a.server.tasks import TaskUpdater
-from a2a.helpers import new_text_message, new_task_from_user_message
 from a2a.types import Part, TaskState
 
 import config
@@ -50,7 +50,7 @@ class DefaultAgentExecutor(AgentExecutor):
         root_logger.addHandler(log_handler)
         handler_token = set_current_log_handler(log_handler)
 
-        logs_artifact_id = str(uuid4())   # stable id correlating every log chunk for this task
+        logs_artifact_id = str(uuid4())  # stable id correlating every log chunk for this task
         sent_any_logs = False
         handler_detached = False
 
@@ -64,9 +64,7 @@ class DefaultAgentExecutor(AgentExecutor):
             try:
                 while True:
                     description = await activity_queue.get()
-                    await updater.update_status(
-                        TaskState.TASK_STATE_WORKING, message=new_text_message(description)
-                    )
+                    await updater.update_status(TaskState.TASK_STATE_WORKING, message=new_text_message(description))
             except asyncio.CancelledError:
                 pass
 
@@ -94,7 +92,7 @@ class DefaultAgentExecutor(AgentExecutor):
                 raise ValueError("No message found in the request message.")
 
             task = context.current_task or new_task_from_user_message(context.message)
-            await event_queue.enqueue_event(task)      # TaskUpdater does not emit the Task object
+            await event_queue.enqueue_event(task)  # TaskUpdater does not emit the Task object
             await updater.start_work()
 
             activity_task = asyncio.create_task(flush_activity_loop())
@@ -117,8 +115,7 @@ class DefaultAgentExecutor(AgentExecutor):
                 remaining = log_handler.drain()
                 if remaining or sent_any_logs:
                     parts = (
-                        [Part(raw="\n".join(remaining).encode("utf-8"), media_type="text/plain")]
-                        if remaining else []
+                        [Part(raw="\n".join(remaining).encode("utf-8"), media_type="text/plain")] if remaining else []
                     )
                     await updater.add_artifact(
                         parts=parts,

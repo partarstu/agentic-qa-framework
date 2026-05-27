@@ -45,7 +45,9 @@ async def send_test_case_to_agent(agent_port: int, test_case: TestCase):
     try:
         a2a_client = await create_client(agent_base_url)
 
-        response_iterator = a2a_client.send_message(SendMessageRequest(message=new_text_message(test_case.model_dump_json())))
+        response_iterator = a2a_client.send_message(
+            SendMessageRequest(message=new_text_message(test_case.model_dump_json()))
+        )
         logger.info(f"Successfully sent task for test case {test_case.key} to agent on port {agent_port}.")
         logger.info("Waiting for agent's response.")
         start_time = time.time()
@@ -103,9 +105,7 @@ async def send_test_case_to_agent(agent_port: int, test_case: TestCase):
             return
 
         if final_state != TaskState.TASK_STATE_COMPLETED:
-            status_message = (
-                get_message_text(final_status_message) if final_status_message else "No details provided."
-            )
+            status_message = get_message_text(final_status_message) if final_status_message else "No details provided."
             logger.error(
                 f"Task for {task_description} has an unexpected status '{final_state!s}'. Root cause: {status_message}"
             )

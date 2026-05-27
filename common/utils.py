@@ -9,11 +9,11 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from common.models import FileArtifact
 from dateutil import parser
 from pydantic_ai import BinaryContent
 
 import config
+from common.models import FileArtifact
 
 logging_initialized = False
 

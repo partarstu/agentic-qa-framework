@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from a2a.server.agent_execution import RequestContext
-from a2a.types import Message, TaskState, TaskStatusUpdateEvent, TaskArtifactUpdateEvent
+from a2a.types import Message, TaskArtifactUpdateEvent, TaskState, TaskStatusUpdateEvent
 
 from common.agent_executor import DefaultAgentExecutor
 from common.agent_log_capture import AgentLogCaptureHandler
@@ -147,8 +147,7 @@ async def test_cancel_emits_canceled_on_original_queue(mock_agent, mock_context,
     canceled_on_original = [
         call[0][0]
         for call in mock_event_queue.enqueue_event.call_args_list
-        if isinstance(call[0][0], TaskStatusUpdateEvent)
-        and call[0][0].status.state == TaskState.TASK_STATE_CANCELED
+        if isinstance(call[0][0], TaskStatusUpdateEvent) and call[0][0].status.state == TaskState.TASK_STATE_CANCELED
     ]
     assert len(canceled_on_original) == 1
     cancel_queue.enqueue_event.assert_not_called()
@@ -226,8 +225,7 @@ async def test_final_drain_emits_remaining_log_batch(mock_agent, mock_context, m
     log_stream_calls = [
         call[0][0]
         for call in mock_event_queue.enqueue_event.call_args_list
-        if isinstance(call[0][0], TaskArtifactUpdateEvent)
-        and call[0][0].artifact.name == "logs"
+        if isinstance(call[0][0], TaskArtifactUpdateEvent) and call[0][0].artifact.name == "logs"
     ]
     assert len(log_stream_calls) == 1
     artifact_event = log_stream_calls[0]

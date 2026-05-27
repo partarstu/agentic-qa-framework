@@ -1,10 +1,13 @@
+# SPDX-FileCopyrightText: 2025-2026 Taras Paruta (partarstu@gmail.com)
+#
+# SPDX-License-Identifier: AGPL-3.0-only
+
 import asyncio
 
 import pytest
 
 from common.streaming import GapEvent
-from orchestrator.streaming_hub import StreamingHub, _QUEUE_MAXSIZE
-
+from orchestrator.streaming_hub import _QUEUE_MAXSIZE, StreamingHub
 
 # ---------------------------------------------------------------------------
 # Helpers

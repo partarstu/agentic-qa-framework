@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2025 Taras Paruta (partarstu@gmail.com)
+# SPDX-FileCopyrightText: 2025-2026 Taras Paruta (partarstu@gmail.com)
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -10,7 +10,8 @@ the chunk-handling loop in _send_task_to_agent_with_message.
 """
 
 import asyncio
-from typing import AsyncIterator
+import contextlib
+from collections.abc import AsyncIterator
 
 from common import utils
 from common.streaming import GapEvent
@@ -44,10 +45,8 @@ class StreamingHub:
                 yield await queue.get()
         finally:
             async with self._lock:
-                try:
+                with contextlib.suppress(ValueError):
                     self._global_queues.remove(queue)
-                except ValueError:
-                    pass
 
     async def subscribe_agent(self, agent_id: str) -> AsyncIterator[dict]:
         """Yield events published for a specific agent until the generator is cancelled."""
@@ -60,10 +59,8 @@ class StreamingHub:
         finally:
             async with self._lock:
                 queues = self._agent_queues.get(agent_id, [])
-                try:
+                with contextlib.suppress(ValueError):
                     queues.remove(queue)
-                except ValueError:
-                    pass
 
     async def publish_global(self, event: dict) -> None:
         """Publish an event to all global subscribers."""
@@ -102,10 +99,8 @@ class StreamingHub:
             queue.put_nowait(event)
         except asyncio.QueueFull:
             gap = GapEvent(reason="queue_overflow", since=seq, until=seq).model_dump()
-            try:
+            with contextlib.suppress(asyncio.QueueEmpty):
                 queue.get_nowait()
-            except asyncio.QueueEmpty:
-                pass
             try:
                 queue.put_nowait(gap)
             except asyncio.QueueFull:
@@ -114,9 +109,7 @@ class StreamingHub:
     async def shutdown(self) -> None:
         """Drain all subscriber queues on lifespan shutdown."""
         async with self._lock:
-            all_queues = list(self._global_queues) + [
-                q for qs in self._agent_queues.values() for q in qs
-            ]
+            all_queues = list(self._global_queues) + [q for qs in self._agent_queues.values() for q in qs]
         for queue in all_queues:
             while not queue.empty():
                 try:

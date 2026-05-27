@@ -11,6 +11,7 @@ import traceback
 from collections import defaultdict
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
@@ -20,7 +21,18 @@ import uvicorn
 from a2a.client import ClientConfig, create_client
 from a2a.client.card_resolver import parse_agent_card
 from a2a.helpers import get_message_text, new_text_message
-from a2a.types import AgentCard, Artifact, CancelTaskRequest, Message, Part, Role, SendMessageRequest, Task, TaskState, TaskStatusUpdateEvent, TaskArtifactUpdateEvent
+from a2a.types import (
+    AgentCard,
+    Artifact,
+    CancelTaskRequest,
+    Message,
+    Part,
+    Role,
+    SendMessageRequest,
+    Task,
+    TaskArtifactUpdateEvent,
+    TaskState,
+)
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Security
 from fastapi.security import APIKeyHeader
 from fastapi.staticfiles import StaticFiles
@@ -28,10 +40,9 @@ from pydantic import ValidationError
 from pydantic_ai.exceptions import ModelHTTPError
 from sse_starlette.sse import EventSourceResponse, ServerSentEvent
 
-from dataclasses import dataclass, field
-from common.a2a_contract import ArtifactName
 import config
 from common import utils
+from common.a2a_contract import ArtifactName
 from common.custom_llm_wrapper import CustomLlmWrapper
 from common.models import (
     AgentExecutionError,
@@ -286,9 +297,7 @@ async def _build_snapshot() -> SnapshotEvent:
     for agent_id, card in cards.items():
         status = await agent_registry.get_status(agent_id)
         current_task_id = await agent_registry.get_current_task(agent_id)
-        agents.append(
-            AgentSnapshot(id=agent_id, name=card.name, status=status.value, current_task_id=current_task_id)
-        )
+        agents.append(AgentSnapshot(id=agent_id, name=card.name, status=status.value, current_task_id=current_task_id))
 
     all_tasks = await task_history.get_all()
     running_tasks = [
@@ -1097,7 +1106,7 @@ def _get_text_content_from_artifacts(
     if artifacts:
         for artifact in artifacts:
             for part in artifact.parts:
-                if part.HasField('text') and part.text:
+                if part.HasField("text") and part.text:
                     text_parts.append(part.text)
     if any_content_expected and not text_parts:
         _handle_exception(f"Received no text results from the agent after it executed {task_description}.")
@@ -1154,7 +1163,7 @@ def _get_file_contents_from_artifacts(artifacts: list[Artifact] | None) -> list[
         return file_parts
     for artifact in artifacts:
         for part in artifact.parts:
-            if part.HasField('raw'):
+            if part.HasField("raw"):
                 file_parts.append(FileArtifact(name=part.filename or "", raw=part.raw, media_type=part.media_type))
     return file_parts
 
@@ -1186,6 +1195,7 @@ async def _finalize_task(
 @dataclass(slots=True)
 class _LogStreamState:
     """Per-task accumulator for the single streamed log artifact."""
+
     artifact_id: str | None = None
     lines: list[str] = field(default_factory=list)
 
@@ -1357,9 +1367,7 @@ async def _send_task_to_agent_with_message(message: Message, task_description: s
                     extra={"task_id": internal_task_id, "agent_id": agent_id},
                 )
                 await _finalize_task(internal_task_id, agent_id, TaskStatus.FAILED, "Task timed out")
-                await agent_registry.update_status(
-                    agent_id, AgentStatus.BROKEN, BrokenReason.TASK_STUCK, last_task_id
-                )
+                await agent_registry.update_status(agent_id, AgentStatus.BROKEN, BrokenReason.TASK_STUCK, last_task_id)
                 await agent_registry.set_current_task(agent_id, None)
                 await cancellation_queue.put((agent_id, time.time()))
                 _handle_exception(
@@ -1369,7 +1377,7 @@ async def _send_task_to_agent_with_message(message: Message, task_description: s
                     agent_id,
                 )
 
-            if chunk.HasField('status_update'):
+            if chunk.HasField("status_update"):
                 status_event = chunk.status_update
                 last_task_id = status_event.task_id
                 last_status = status_event.status
@@ -1409,20 +1417,18 @@ async def _send_task_to_agent_with_message(message: Message, task_description: s
                         )
                 else:
                     logger.debug(f"Task for {task_description} is in '{last_status.state}' state.")
-            elif chunk.HasField('artifact_update'):
+            elif chunk.HasField("artifact_update"):
                 await _handle_stream_chunk(
                     chunk.artifact_update, internal_task_id, agent_id, collected_artifacts, log_state
                 )
-            elif chunk.HasField('message'):
+            elif chunk.HasField("message"):
                 msg_text = get_message_text(chunk.message)
                 logger.info(
                     f"Received a message from agent in the scope of the task '{task_description}': {msg_text}",
                     extra={"task_id": internal_task_id, "agent_id": agent_id},
                 )
 
-        await _finalize_task(
-            internal_task_id, agent_id, TaskStatus.FAILED, "Timeout waiting for completion"
-        )
+        await _finalize_task(internal_task_id, agent_id, TaskStatus.FAILED, "Timeout waiting for completion")
         # Release agent as BROKEN since we hit overall timeout
         await agent_registry.update_status(agent_id, AgentStatus.BROKEN, BrokenReason.TASK_STUCK)
         await agent_registry.set_current_task(agent_id, None)
@@ -1722,7 +1728,9 @@ async def _process_url_discovery(url: str):
         if agent_card:
             existing_agent_id = await agent_registry.get_agent_id_by_url(agent_card.supported_interfaces[0].url)
             if existing_agent_id:
-                logger.debug(f"Agent with URL {agent_card.supported_interfaces[0].url} is already registered with ID {existing_agent_id}.")
+                logger.debug(
+                    f"Agent with URL {agent_card.supported_interfaces[0].url} is already registered with ID {existing_agent_id}."
+                )
             else:
                 new_agent_id = str(uuid4())
                 await agent_registry.register(new_agent_id, agent_card)

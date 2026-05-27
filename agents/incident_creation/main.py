@@ -2,7 +2,6 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
-import base64
 import json
 import os
 import time
@@ -191,9 +190,7 @@ class IncidentCreationAgent(AgentBase):
                     # Return the MCP container path (with forward slashes for Docker)
                     mcp_file_path = posixpath.join(mcp_folder, safe_filename)
                     saved_paths.append(mcp_file_path)
-                    logger.info(
-                        f"Saved artifact '{original_name}' to {local_file_path} (MCP path: {mcp_file_path})"
-                    )
+                    logger.info(f"Saved artifact '{original_name}' to {local_file_path} (MCP path: {mcp_file_path})")
                 except Exception:
                     logger.exception("Failed to save artifact.")
 

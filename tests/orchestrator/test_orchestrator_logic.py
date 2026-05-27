@@ -61,6 +61,7 @@ async def test_fetch_agent_card_success(mock_agent_card):
         mock_response = MagicMock()
         mock_response.status_code = 200
         from google.protobuf.json_format import MessageToDict
+
         mock_response.json.return_value = MessageToDict(mock_agent_card, preserving_proto_field_name=True)
         mock_client.get.return_value = mock_response
 

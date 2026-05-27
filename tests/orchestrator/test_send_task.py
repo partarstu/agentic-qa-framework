@@ -8,7 +8,8 @@ import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from a2a.types import Task, TaskState, TaskStatus as A2ATaskStatus
+from a2a.types import Task, TaskState
+from a2a.types import TaskStatus as A2ATaskStatus
 
 from orchestrator.main import (
     AgentStatus,

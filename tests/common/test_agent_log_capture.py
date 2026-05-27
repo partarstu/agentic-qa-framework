@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2025-2026 Taras Paruta (partarstu@gmail.com)
+#
+# SPDX-License-Identifier: AGPL-3.0-only
+
 import threading
 
 import pytest
@@ -16,8 +20,13 @@ def _emit(handler: AgentLogCaptureHandler, message: str) -> None:
     import logging
 
     record = logging.LogRecord(
-        name="test", level=logging.INFO, pathname="", lineno=0,
-        msg=message, args=(), exc_info=None,
+        name="test",
+        level=logging.INFO,
+        pathname="",
+        lineno=0,
+        msg=message,
+        args=(),
+        exc_info=None,
     )
     handler.emit(record)
 

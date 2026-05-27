@@ -2,11 +2,11 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
-from unittest.mock import AsyncMock, MagicMock, patch
-
-import json
 import asyncio
-from datetime import datetime, timedelta, UTC
+import contextlib
+import json
+from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from a2a.types import Artifact, Part, Task, TaskState, TaskStatus
@@ -159,6 +159,7 @@ async def test_global_sse_stream_with_expired_token_returns_401():
     token, _ = await _mint_stream_token("test-user")
     # Forcibly expire the token by backdating it in the store
     from orchestrator.main import _stream_token_store
+
     _stream_token_store[token] = ("test-user", datetime.now(UTC) - timedelta(seconds=1))
 
     response = client.get("/api/dashboard/stream", params={"stream_token": token})
@@ -224,11 +225,9 @@ async def test_sse_hub_events_emits_auth_error_when_token_expired_on_heartbeat()
     events = []
 
     async def instant_timeout(coro, timeout):
-        try:
+        with contextlib.suppress(Exception):
             coro.close()
-        except Exception:
-            pass
-        raise asyncio.TimeoutError()
+        raise TimeoutError()
 
     with patch("orchestrator.main.asyncio.wait_for", instant_timeout):
         async for sse in _sse_hub_events(empty_gen(), expired):

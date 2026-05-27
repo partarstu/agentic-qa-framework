@@ -2,13 +2,16 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
+import logging
+from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import logging
 import pytest
-from a2a.types import Message
 from a2a.helpers import get_message_text
-from pydantic_ai.usage import UsageLimits
+from a2a.types import Message
+
+if TYPE_CHECKING:
+    from pydantic_ai.usage import UsageLimits
 
 from common.agent_base import AgentBase
 from common.agent_log_capture import AgentLogCaptureHandler

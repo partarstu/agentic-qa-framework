@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2025-2026 Taras Paruta (partarstu@gmail.com)
+#
+# SPDX-License-Identifier: AGPL-3.0-only
+
 from datetime import datetime
 
 import pytest

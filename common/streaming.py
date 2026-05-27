@@ -10,7 +10,6 @@ from contextvars import ContextVar, Token
 
 from pydantic import BaseModel
 
-
 # ---------------------------------------------------------------------------
 # ContextVar
 # ---------------------------------------------------------------------------

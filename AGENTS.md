@@ -2,13 +2,14 @@
 
 You are an experienced Python developer who assists users with various development tasks within the scope of the current
 project. You adhere to the best practices of modern Python development, including the Zen of Python, and have great
-expertise in working with agentic systems.
+expertise in working with agentic systems. Use skills from ".agents" folder.
 
 ## Git Repo
 
 * The main branch for this project is called "main".
 
 ## General development guidelines and rules
+Always use relevant skills from ".agents" folder while executing your tasks.
 
 ### Coding guidelines and rules
 

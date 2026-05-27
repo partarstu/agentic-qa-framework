@@ -13,6 +13,7 @@ import logging
 import threading
 from collections import deque
 
+
 class AgentLogCaptureHandler(logging.Handler):
     """
     A logging handler that captures log records in memory during agent execution.
@@ -49,4 +50,3 @@ class AgentLogCaptureHandler(logging.Handler):
             new_items = buffer_list[start:]
             self._drain_cursor = len(buffer_list)
             return new_items
-
