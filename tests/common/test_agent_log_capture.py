@@ -54,15 +54,6 @@ def test_drain_second_call_empty_when_no_new_lines(handler):
     assert handler.drain() == []
 
 
-def test_get_logs_unaffected_by_drain(handler):
-    _emit(handler, "a")
-    _emit(handler, "b")
-    handler.drain()
-    # get_logs should still return full buffer
-    assert "a" in handler.get_logs()
-    assert "b" in handler.get_logs()
-
-
 # ---------------------------------------------------------------------------
 # Thread-safety: concurrent emit + drain
 # ---------------------------------------------------------------------------
@@ -102,6 +93,5 @@ def test_concurrent_emit_and_drain_is_race_free(handler):
         collected.extend(handler.drain())
 
     assert errors == [], f"Threads raised: {errors}"
-    # All emitted lines should appear in get_logs (full buffer), none duplicated in drain
-    all_logs = handler.get_logs_list()
-    assert len(all_logs) <= 500  # maxlen guards upper bound
+    # All emitted lines fit within maxlen; drain collects everything exactly once
+    assert len(collected) <= 500  # maxlen guards upper bound

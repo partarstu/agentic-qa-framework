@@ -5,14 +5,13 @@ import { notifyAuthHandlers } from './client';
 export type SseEventType =
   | 'snapshot'
   | 'agent_activity'
-  | 'step_result'
   | 'task_done'
   | 'log_batch'
   | 'gap'
   | 'heartbeat';
 
 const SSE_EVENT_TYPES: SseEventType[] = [
-  'snapshot', 'agent_activity', 'step_result', 'task_done', 'log_batch', 'gap', 'heartbeat',
+  'snapshot', 'agent_activity', 'task_done', 'log_batch', 'gap', 'heartbeat',
 ];
 
 const MAX_RETRY_DELAY_MS = 30_000;

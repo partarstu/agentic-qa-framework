@@ -82,17 +82,14 @@ class MemoryLogHandler(logging.Handler):
         limit: int = 100,
         offset: int = 0,
         level: str | None = None,
-        task_id: str | None = None,
-        agent_id: str | None = None,
     ) -> list[LogEntry]:
         """
         Get the most recent log entries.
 
         Args:
             limit: Maximum number of entries to return.
+            offset: Number of entries (from the newest) to skip.
             level: Filter by log level (e.g., 'INFO', 'ERROR').
-            task_id: Filter by task ID.
-            agent_id: Filter by agent ID.
 
         Returns:
             List of LogEntry objects, newest first.
@@ -100,24 +97,12 @@ class MemoryLogHandler(logging.Handler):
         with self._buffer_lock:
             logs = list(self._buffer)
 
-        # Filter by level if specified
         if level:
             level_upper = level.upper()
             logs = [log for log in logs if log.level == level_upper]
 
-        if task_id:
-            logs = [log for log in logs if log.task_id == task_id]
-
-        if agent_id:
-            logs = [log for log in logs if log.agent_id == agent_id]
-
         if not logs:
             return []
-
-        # Return newest first, limited with offset
-        # logs is [oldest, ..., newest]
-        # with offset=0, limit=100 -> we want logs[-100:] reversed
-        # with offset=100, limit=100 -> we want logs[-200:-100] reversed
 
         total_logs = len(logs)
         if offset >= total_logs:
@@ -126,13 +111,7 @@ class MemoryLogHandler(logging.Handler):
         end = total_logs - offset
         start = max(0, end - limit)
 
-        sliced_logs = logs[start:end]
-        return list(reversed(sliced_logs))
-
-    def clear(self) -> None:
-        """Clear all buffered logs."""
-        with self._buffer_lock:
-            self._buffer.clear()
+        return list(reversed(logs[start:end]))
 
 
 class _NoiseFilter(logging.Filter):
@@ -144,12 +123,9 @@ class _NoiseFilter(logging.Filter):
         return not any(record.name.startswith(p) for p in self._EXCLUDED_PREFIXES)
 
 
-def setup_memory_logging(logger_name: str = "orchestrator") -> MemoryLogHandler:
+def setup_memory_logging() -> MemoryLogHandler:
     """
     Set up the memory log handler on the root logger to capture all application logs.
-
-    Args:
-        logger_name: Unused; kept for backward compatibility.
 
     Returns:
         The MemoryLogHandler instance.

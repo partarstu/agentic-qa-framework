@@ -5,7 +5,7 @@
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from a2a.types import AgentCapabilities, AgentCard, AgentInterface, Artifact, Part
+from a2a.types import AgentCapabilities, AgentCard, AgentInterface, Artifact, Part, TaskArtifactUpdateEvent
 
 import config
 from common.streaming import AgentActivityEvent, LogBatchEvent, TaskDoneEvent
@@ -16,6 +16,7 @@ from orchestrator.main import (
     _fetch_agent_card,
     _finalize_task,
     _handle_stream_chunk,
+    _LogStreamState,
     _select_agent,
     agent_registry,
     discovery_agent,
@@ -59,7 +60,8 @@ async def test_fetch_agent_card_success(mock_agent_card):
 
         mock_response = MagicMock()
         mock_response.status_code = 200
-        mock_response.json.return_value = mock_agent_card.model_dump()
+        from google.protobuf.json_format import MessageToDict
+        mock_response.json.return_value = MessageToDict(mock_agent_card, preserving_proto_field_name=True)
         mock_client.get.return_value = mock_response
 
         card = await _fetch_agent_card("http://localhost:8001")
@@ -199,32 +201,21 @@ def _text_artifact(name: str, text: str) -> Artifact:
     return Artifact(name=name, parts=[Part(text=text)])
 
 
-@pytest.mark.asyncio
-async def test_handle_stream_chunk_activity_updates_history_and_publishes():
-    artifact = _text_artifact("agent_activity", "doing X")
-    collected: list[Artifact] = []
-
-    with (
-        patch("orchestrator.main.task_history") as mock_history,
-        patch("orchestrator.main.streaming_hub") as mock_hub,
-    ):
-        mock_history.set_current_activity = AsyncMock()
-        mock_hub.publish_global = AsyncMock()
-
-        await _handle_stream_chunk(artifact, "task-1", "agent-1", collected)
-
-    mock_history.set_current_activity.assert_called_once_with("task-1", "doing X")
-    mock_hub.publish_global.assert_called_once()
-    published = mock_hub.publish_global.call_args[0][0]
-    assert published["type"] == "agent_activity"
-    assert published["text"] == "doing X"
-    assert collected == []  # must NOT be appended to collected_artifacts
+def _raw_artifact(name: str, raw_data: bytes, artifact_id: str = "logs-123") -> Artifact:
+    return Artifact(name=name, artifact_id=artifact_id, parts=[Part(raw=raw_data, media_type="text/plain")])
 
 
 @pytest.mark.asyncio
 async def test_handle_stream_chunk_log_batch_updates_history_and_publishes_to_agent():
-    artifact = _text_artifact("agent_logs_stream", "line1\nline2")
+    artifact = _raw_artifact("logs", b"line1\nline2", "logs-123")
     collected: list[Artifact] = []
+    log_state = _LogStreamState()
+    event = TaskArtifactUpdateEvent(
+        context_id="ctx-1",
+        task_id="task-1",
+        artifact=artifact,
+        last_chunk=False,
+    )
 
     with (
         patch("orchestrator.main.task_history") as mock_history,
@@ -233,29 +224,84 @@ async def test_handle_stream_chunk_log_batch_updates_history_and_publishes_to_ag
         mock_history.append_log_batch = AsyncMock()
         mock_hub.publish_agent = AsyncMock()
 
-        await _handle_stream_chunk(artifact, "task-1", "agent-1", collected)
+        await _handle_stream_chunk(event, "task-1", "agent-1", collected, log_state)
 
     mock_history.append_log_batch.assert_called_once_with("task-1", ["line1", "line2"])
     mock_hub.publish_agent.assert_called_once()
     published = mock_hub.publish_agent.call_args[0][1]
     assert published["type"] == "log_batch"
     assert "line1" in published["lines"]
+    assert log_state.artifact_id == "logs-123"
+    assert log_state.lines == ["line1", "line2"]
     assert collected == []
+
+
+@pytest.mark.asyncio
+async def test_handle_stream_chunk_log_last_chunk_consolidates():
+    collected: list[Artifact] = []
+    log_state = _LogStreamState()
+
+    # Chunk 1
+    artifact_1 = _raw_artifact("logs", b"line1\n", "logs-123")
+    event_1 = TaskArtifactUpdateEvent(
+        context_id="ctx-1",
+        task_id="task-1",
+        artifact=artifact_1,
+        last_chunk=False,
+    )
+    with (
+        patch("orchestrator.main.task_history") as mock_history,
+        patch("orchestrator.main.streaming_hub") as mock_hub,
+    ):
+        mock_history.append_log_batch = AsyncMock()
+        mock_hub.publish_agent = AsyncMock()
+        await _handle_stream_chunk(event_1, "task-1", "agent-1", collected, log_state)
+
+    # Chunk 2 (last)
+    artifact_2 = _raw_artifact("logs", b"line2", "logs-123")
+    event_2 = TaskArtifactUpdateEvent(
+        context_id="ctx-1",
+        task_id="task-1",
+        artifact=artifact_2,
+        last_chunk=True,
+    )
+    with (
+        patch("orchestrator.main.task_history") as mock_history,
+        patch("orchestrator.main.streaming_hub") as mock_hub,
+    ):
+        mock_history.append_log_batch = AsyncMock()
+        mock_hub.publish_agent = AsyncMock()
+        await _handle_stream_chunk(event_2, "task-1", "agent-1", collected, log_state)
+
+    # Shoud have created a consolidated logs artifact
+    assert len(collected) == 1
+    consolidated = collected[0]
+    assert consolidated.name == "logs"
+    assert len(consolidated.parts) == 1
+    assert consolidated.parts[0].filename == "execution_logs.txt"
+    assert consolidated.parts[0].raw == b"line1\nline2"
 
 
 @pytest.mark.asyncio
 async def test_handle_stream_chunk_other_artifact_appended_to_collected():
     artifact = _text_artifact("agent_execution_result", '{"result": "ok"}')
     collected: list[Artifact] = []
+    log_state = _LogStreamState()
+    event = TaskArtifactUpdateEvent(
+        context_id="ctx-1",
+        task_id="task-1",
+        artifact=artifact,
+        last_chunk=False,
+    )
 
     with (
         patch("orchestrator.main.task_history"),
         patch("orchestrator.main.streaming_hub"),
     ):
-        await _handle_stream_chunk(artifact, "task-1", "agent-1", collected)
+        await _handle_stream_chunk(event, "task-1", "agent-1", collected, log_state)
 
     assert len(collected) == 1
-    assert collected[0] is artifact
+    assert collected[0] == artifact
 
 
 # =============================================================================

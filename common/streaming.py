@@ -1,55 +1,21 @@
-# SPDX-FileCopyrightText: 2025 Taras Paruta (partarstu@gmail.com)
+# SPDX-FileCopyrightText: 2025-2026 Taras Paruta (partarstu@gmail.com)
 #
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0-only
 
 """
-Streaming primitives for A2A activity reporting and SSE event payloads.
-
-StreamEmitter and its ContextVar binding are owned by DefaultAgentExecutor per task.
-AgentBase.report_activity resolves the emitter from the same context.
+Streaming primitives for SSE event payloads and log handler ContextVar.
 """
 
-import logging
 from contextvars import ContextVar, Token
-from dataclasses import dataclass
-from typing import Callable
 
 from pydantic import BaseModel
 
-from common import utils
-
-logger = utils.get_logger("streaming")
-
 
 # ---------------------------------------------------------------------------
-# StreamEmitter
+# ContextVar
 # ---------------------------------------------------------------------------
 
-
-@dataclass(slots=True)
-class StreamEmitter:
-    """Carries the streaming callbacks bound to a single task execution."""
-
-    on_activity: Callable[[str], None]
-    on_log_batch: Callable[[list[str]], None]
-
-
-# ---------------------------------------------------------------------------
-# ContextVars
-# ---------------------------------------------------------------------------
-
-current_emitter: ContextVar[StreamEmitter | None] = ContextVar("current_emitter", default=None)
 current_log_handler: ContextVar[object | None] = ContextVar("current_log_handler", default=None)
-
-
-def set_current_emitter(emitter: StreamEmitter) -> Token:
-    """Bind emitter to the current context; returns a reset token."""
-    return current_emitter.set(emitter)
-
-
-def reset_current_emitter(token: Token) -> None:
-    """Reset the emitter binding using the token returned by set_current_emitter."""
-    current_emitter.reset(token)
 
 
 def set_current_log_handler(handler: object) -> Token:
@@ -60,29 +26,6 @@ def set_current_log_handler(handler: object) -> Token:
 def reset_current_log_handler(token: Token) -> None:
     """Reset the log handler binding using the token returned by set_current_log_handler."""
     current_log_handler.reset(token)
-
-
-# ---------------------------------------------------------------------------
-# report_activity tool
-# ---------------------------------------------------------------------------
-
-
-async def report_activity(description: str) -> None:
-    """Report your current activity to the dashboard.
-
-    Call this with one short sentence (≤ 120 chars) describing what you are
-    about to do, whenever you start a new reasoning phase OR before invoking
-    any other tool. You may and should call it in parallel with other tool
-    calls in the same response. Examples: "Fetching Jira issue PROJ-123",
-    "Generating test steps for AC-2".
-    """
-    emitter = current_emitter.get()
-    if emitter is None:
-        return
-    try:
-        emitter.on_activity(description)
-    except Exception:
-        logger.exception("Failed to publish activity; continuing.")
 
 
 # ---------------------------------------------------------------------------

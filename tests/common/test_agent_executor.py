@@ -2,21 +2,25 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
+import asyncio
+import contextlib
+import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from a2a.server.agent_execution import RequestContext
-from a2a.types import Message, Task, TaskArtifactUpdateEvent, TaskState, TaskStatusUpdateEvent
+from a2a.types import Message, TaskState, TaskStatusUpdateEvent, TaskArtifactUpdateEvent
 
 from common.agent_executor import DefaultAgentExecutor
 from common.agent_log_capture import AgentLogCaptureHandler
-from common.streaming import StreamEmitter, current_emitter, current_log_handler
+from common.streaming import current_log_handler
 
 
 @pytest.fixture
 def mock_agent():
     agent = MagicMock()
     agent.run = AsyncMock()
+    agent._activity_queue = asyncio.Queue()
     return agent
 
 
@@ -34,6 +38,11 @@ def mock_event_queue():
     queue = MagicMock()
     queue.enqueue_event = AsyncMock()
     return queue
+
+
+# ---------------------------------------------------------------------------
+# execute() — success path
+# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -54,7 +63,7 @@ async def test_execute_success(mock_agent, mock_context, mock_event_queue):
     # Check agent run
     mock_agent.run.assert_called_once_with(mock_message)
 
-    # Event order: Task object, Working status, Artifact update, Completed status
+    # Event order: Task object, WORKING status, result artifact, COMPLETED status
     assert mock_event_queue.enqueue_event.call_count == 4
 
     calls = mock_event_queue.enqueue_event.call_args_list
@@ -77,7 +86,7 @@ async def test_execute_no_message(mock_agent, mock_context, mock_event_queue):
 
     mock_agent.run.assert_not_called()
 
-    # ValueError raised before Task is enqueued → only 1 event (Failed status)
+    # ValueError raised before Task is enqueued → only 1 event (FAILED status)
     assert mock_event_queue.enqueue_event.call_count == 1
     call = mock_event_queue.enqueue_event.call_args[0][0]
     assert isinstance(call, TaskStatusUpdateEvent)
@@ -94,7 +103,7 @@ async def test_execute_agent_failure(mock_agent, mock_context, mock_event_queue)
 
     await executor.execute(mock_context, mock_event_queue)
 
-    # Event order: Task object, Working status, Failed status
+    # Event order: Task object, WORKING status, FAILED status
     assert mock_event_queue.enqueue_event.call_count == 3
 
     calls = mock_event_queue.enqueue_event.call_args_list
@@ -104,7 +113,7 @@ async def test_execute_agent_failure(mock_agent, mock_context, mock_event_queue)
 
 
 # ---------------------------------------------------------------------------
-# cancel() — known task
+# cancel()
 # ---------------------------------------------------------------------------
 
 
@@ -146,11 +155,6 @@ async def test_cancel_emits_canceled_on_original_queue(mock_agent, mock_context,
     assert executor._active_runs == {}
 
 
-# ---------------------------------------------------------------------------
-# cancel() — unknown task id
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_cancel_unknown_task_id_emits_on_cancel_queue(mock_context, mock_event_queue):
     executor = DefaultAgentExecutor(MagicMock())
@@ -169,7 +173,7 @@ async def test_cancel_unknown_task_id_emits_on_cancel_queue(mock_context, mock_e
 
 
 # ---------------------------------------------------------------------------
-# ContextVars set during agent.run and reset after execute()
+# ContextVars
 # ---------------------------------------------------------------------------
 
 
@@ -178,12 +182,10 @@ async def test_contextvars_set_during_run_and_reset_after(mock_agent, mock_conte
     executor = DefaultAgentExecutor(mock_agent)
     mock_context.message = MagicMock()
 
-    emitter_during_run = None
     handler_during_run = None
 
     async def capture_context(_message):
-        nonlocal emitter_during_run, handler_during_run
-        emitter_during_run = current_emitter.get()
+        nonlocal handler_during_run
         handler_during_run = current_log_handler.get()
         result = MagicMock()
         result.parts = []
@@ -193,43 +195,18 @@ async def test_contextvars_set_during_run_and_reset_after(mock_agent, mock_conte
 
     await executor.execute(mock_context, mock_event_queue)
 
-    assert isinstance(emitter_during_run, StreamEmitter)
     assert isinstance(handler_during_run, AgentLogCaptureHandler)
-    assert current_emitter.get() is None
     assert current_log_handler.get() is None
 
 
 # ---------------------------------------------------------------------------
-# _flush_logs_loop drains and emits batches; skips empty drains
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_flush_logs_loop_emits_non_empty_batch_and_skips_empty():
-    handler = MagicMock(spec=AgentLogCaptureHandler)
-    handler.drain.side_effect = [["line-1", "line-2"], [], asyncio.CancelledError()]
-
-    on_log_batch = MagicMock()
-    emitter = StreamEmitter(
-        on_activity=MagicMock(),
-        on_log_batch=on_log_batch,
-    )
-
-    with patch("common.agent_executor.asyncio.sleep", new_callable=AsyncMock):
-        task = asyncio.create_task(DefaultAgentExecutor._flush_logs_loop(handler, emitter))
-        await task  # completes when drain() raises CancelledError (caught inside loop)
-
-    on_log_batch.assert_called_once_with(["line-1", "line-2"])
-
-
-# ---------------------------------------------------------------------------
-# Final drain in execute() fires on_log_batch before COMPLETED is enqueued
+# Final log drain and TaskUpdater events
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_final_drain_emits_remaining_log_batch(mock_agent, mock_context, mock_event_queue):
-    """Logs remaining after agent.run appear in an agent_logs_stream artifact."""
+    """Logs remaining after agent.run appear in a logs artifact chunk with last_chunk=True."""
     executor = DefaultAgentExecutor(mock_agent)
     mock_context.message = MagicMock()
 
@@ -237,9 +214,6 @@ async def test_final_drain_emits_remaining_log_batch(mock_agent, mock_context, m
     mock_result.parts = []
     mock_agent.run.return_value = mock_result
 
-    # Patch the handler class so drain() returns a line on the first (final) call.
-    # With _LOG_FLUSH_INTERVAL_SECONDS=100 the periodic flush loop never fires,
-    # so drain() is only called once — in the execute() finally block.
     with patch("common.agent_executor.AgentLogCaptureHandler") as MockHandlerCls:
         mock_handler = MockHandlerCls.return_value
         mock_handler.level = logging.NOTSET
@@ -249,13 +223,15 @@ async def test_final_drain_emits_remaining_log_batch(mock_agent, mock_context, m
         with patch("common.agent_executor._LOG_FLUSH_INTERVAL_SECONDS", 100):
             await executor.execute(mock_context, mock_event_queue)
 
-    # Yield so the async task created by on_log_batch can run.
-    await asyncio.sleep(0)
-
     log_stream_calls = [
         call[0][0]
         for call in mock_event_queue.enqueue_event.call_args_list
         if isinstance(call[0][0], TaskArtifactUpdateEvent)
-        and call[0][0].artifact.name == "agent_logs_stream"
+        and call[0][0].artifact.name == "logs"
     ]
-    assert len(log_stream_calls) >= 1
+    assert len(log_stream_calls) == 1
+    artifact_event = log_stream_calls[0]
+    assert artifact_event.last_chunk is True
+    assert artifact_event.append is False
+    assert len(artifact_event.artifact.parts) == 1
+    assert artifact_event.artifact.parts[0].raw == b"captured log line"

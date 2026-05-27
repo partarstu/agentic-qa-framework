@@ -8,7 +8,6 @@ import os
 import time
 import uuid
 
-from a2a.types import FilePart, FileWithBytes
 from pydantic_ai.mcp import MCPServerSSE
 from pydantic_ai.settings import ThinkingLevel
 from qdrant_client import models as qdrant_models
@@ -55,7 +54,7 @@ class IncidentCreationAgent(AgentBase):
         )
 
         self._saved_artifact_paths: list[str] = []
-        self._media_files: list[FileWithBytes] = []
+        self._media_files = []
 
         super().__init__(
             agent_name=config.IncidentCreationAgentConfig.OWN_NAME,
@@ -179,27 +178,24 @@ class IncidentCreationAgent(AgentBase):
         total_parts = len(self.latest_received_message.parts)
         logger.info(f"Saving artifacts: scanning {total_parts} message part(s).")
         for part in self.latest_received_message.parts:
-            if isinstance(part.root, FilePart):
-                file_part = part.root
-                if isinstance(file_part.file, FileWithBytes):
-                    try:
-                        file = file_part.file
-                        file_content = base64.b64decode(file.bytes)
-                        unique_id = str(uuid.uuid4())[:8]
-                        original_name = file.name or "attachment"
-                        safe_filename = f"{unique_id}_{original_name}"
-                        # Save to the local/host filesystem
-                        local_file_path = os.path.join(local_folder, safe_filename)
-                        with open(local_file_path, "wb") as f:
-                            f.write(file_content)
-                        # Return the MCP container path (with forward slashes for Docker)
-                        mcp_file_path = posixpath.join(mcp_folder, safe_filename)
-                        saved_paths.append(mcp_file_path)
-                        logger.info(
-                            f"Saved artifact '{original_name}' to {local_file_path} (MCP path: {mcp_file_path})"
-                        )
-                    except Exception:
-                        logger.exception("Failed to save artifact.")
+            if part.HasField("raw"):
+                try:
+                    file_content = part.raw
+                    unique_id = str(uuid.uuid4())[:8]
+                    original_name = part.filename or "attachment"
+                    safe_filename = f"{unique_id}_{original_name}"
+                    # Save to the local/host filesystem
+                    local_file_path = os.path.join(local_folder, safe_filename)
+                    with open(local_file_path, "wb") as f:
+                        f.write(file_content)
+                    # Return the MCP container path (with forward slashes for Docker)
+                    mcp_file_path = posixpath.join(mcp_folder, safe_filename)
+                    saved_paths.append(mcp_file_path)
+                    logger.info(
+                        f"Saved artifact '{original_name}' to {local_file_path} (MCP path: {mcp_file_path})"
+                    )
+                except Exception:
+                    logger.exception("Failed to save artifact.")
 
         if saved_paths:
             logger.info(f"Saved {len(saved_paths)} artifact(s) for MCP server.")

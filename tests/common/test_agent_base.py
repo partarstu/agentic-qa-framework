@@ -4,6 +4,7 @@
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import logging
 import pytest
 from a2a.types import Message
 from a2a.helpers import get_message_text
@@ -12,7 +13,7 @@ from pydantic_ai.usage import UsageLimits
 from common.agent_base import AgentBase
 from common.agent_log_capture import AgentLogCaptureHandler
 from common.models import JsonSerializableModel
-from common.streaming import report_activity, reset_current_log_handler, set_current_log_handler
+from common.streaming import reset_current_log_handler, set_current_log_handler
 
 
 class TestAgent(AgentBase):
@@ -54,7 +55,7 @@ def test_agent_initialization(test_agent_instance):
 
 def test_report_activity_auto_registered(test_agent_instance):
     """AgentBase with empty tools=() must expose report_activity in its tools list."""
-    assert report_activity in test_agent_instance.tools
+    assert test_agent_instance.report_activity in test_agent_instance.tools
 
 
 def test_no_extra_tools_added_beyond_report_activity():
@@ -72,13 +73,13 @@ def test_no_extra_tools_added_beyond_report_activity():
             mcp_servers=[],
             tools=(),
         )
-    assert agent.tools == [report_activity]
+    assert agent.tools == [agent.report_activity]
 
 
 def test_instruction_snippet_appended(test_agent_instance):
     """The report_activity instruction snippet must be present at the end of instructions."""
     assert test_agent_instance.instructions.endswith(
-        "\nA `report_activity` tool is available — use it as described in its tool description."
+        "\nA `report_activity` tool is available — call it before any other tool call or reasoning phase."
     )
 
 
@@ -133,7 +134,6 @@ async def test_agent_run_success(test_agent_instance):
 async def test_agent_run_reuses_contextvar_log_handler(test_agent_instance):
     """When current_log_handler is set, run() uses it without creating a new handler."""
     mock_handler = MagicMock(spec=AgentLogCaptureHandler)
-    mock_handler.get_logs.return_value = ""
 
     mock_run_result = MagicMock()
     mock_run_result.output = MockOutput(result="ok")
@@ -153,8 +153,6 @@ async def test_agent_run_reuses_contextvar_log_handler(test_agent_instance):
     finally:
         reset_current_log_handler(token)
 
-    mock_handler.get_logs.assert_called()
-
 
 @pytest.mark.asyncio
 async def test_agent_run_creates_own_handler_when_no_contextvar(test_agent_instance):
@@ -171,7 +169,6 @@ async def test_agent_run_creates_own_handler_when_no_contextvar(test_agent_insta
         mock_message.parts = []
         with patch("common.agent_base.AgentLogCaptureHandler") as MockHandlerCls:
             mock_own_handler = MockHandlerCls.return_value
-            mock_own_handler.get_logs.return_value = ""
             mock_own_handler.level = logging.NOTSET  # must be int for logger comparison
             mock_own_handler.setLevel = MagicMock()
             await test_agent_instance.run(mock_message)

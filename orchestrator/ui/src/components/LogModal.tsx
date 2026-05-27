@@ -21,8 +21,30 @@ interface LogModalProps {
   title: string;
 }
 
+function parseTs(ts: string): Date {
+  // Python isoformat() uses 6-digit microseconds; JS Date requires ≤3. Also normalize space separator.
+  return new Date(ts.replace(' ', 'T').replace(/(\.\d{3})\d+/, '$1'));
+}
+
+function parseLiveLine(line: string) {
+  const parts = line.split(' - ');
+  if (parts.length < 4) return null;
+  const rawTimestamp = parts[0];
+  const loggerName = parts[1];
+  const level = parts[2].trim().toUpperCase();
+  const message = parts.slice(3).join(' - ');
+  const date = parseTs(rawTimestamp.trim().replace(',', '.'));
+  return {
+    timestamp: isNaN(date.getTime()) ? rawTimestamp.trim() : date.toLocaleTimeString(),
+    level,
+    logger: loggerName.trim(),
+    message,
+  };
+}
+
 export function LogModal({ isOpen, onClose, taskId, agentId, isRunning, title }: LogModalProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const bottomRef = useRef<HTMLDivElement>(null);
   const [autoScroll, setAutoScroll] = useState(true);
   const [levelFilter, setLevelFilter] = useState<string>('');
 
@@ -46,8 +68,8 @@ export function LogModal({ isOpen, onClose, taskId, agentId, isRunning, title }:
 
   // Auto-scroll when either polled logs or streamed lines update
   useEffect(() => {
-    if (autoScroll && containerRef.current && (logs || streamedLines.length > 0)) {
-      containerRef.current.scrollTop = containerRef.current.scrollHeight;
+    if (autoScroll && bottomRef.current) {
+      bottomRef.current.scrollIntoView({ block: 'end' });
     }
   }, [logs, streamedLines, autoScroll]);
 
@@ -237,13 +259,13 @@ export function LogModal({ isOpen, onClose, taskId, agentId, isRunning, title }:
             </div>
           ) : (
             <div className="space-y-1">
-              {/* Polled structured logs */}
-              {filteredLogs && filteredLogs.length > 0 ? (
+              {/* Polled structured logs — hidden once SSE delivers live data to avoid duplicates */}
+              {filteredLogs && filteredLogs.length > 0 && (!sseActive || streamedLines.length === 0) ? (
                 filteredLogs.map((log, index) => (
                   <div key={index} className="flex gap-2 hover:bg-slate-800/50 px-1 rounded py-0.5">
                     <span className="text-slate-500 flex-shrink-0 w-24">
-                      {log.timestamp && !isNaN(new Date(log.timestamp).getTime())
-                        ? new Date(log.timestamp).toLocaleTimeString()
+                      {log.timestamp && !isNaN(parseTs(log.timestamp).getTime())
+                        ? parseTs(log.timestamp).toLocaleTimeString()
                         : '-'}
                     </span>
                     <span className={`flex-shrink-0 w-16 ${getLevelClass(log.level)}`}>
@@ -273,15 +295,22 @@ export function LogModal({ isOpen, onClose, taskId, agentId, isRunning, title }:
                     <Loader2 className="w-3 h-3 animate-spin" />
                     <span>Live stream</span>
                   </div>
-                  {streamedLines.map((line, i) => (
-                    <div
-                      key={`live-${i}`}
-                      className="flex gap-2 hover:bg-slate-800/50 px-1 rounded py-0.5"
-                    >
-                      <span className="text-indigo-400/60 flex-shrink-0">[live]</span>
-                      <span className="text-slate-300 break-all whitespace-pre-wrap">{line}</span>
-                    </div>
-                  ))}
+                  {streamedLines.map((line, i) => {
+                    const parsed = parseLiveLine(line);
+                    return parsed ? (
+                      <div key={`live-${i}`} className="flex gap-2 hover:bg-slate-800/50 px-1 rounded py-0.5">
+                        <span className="text-slate-500 flex-shrink-0 w-24">{parsed.timestamp}</span>
+                        <span className={`flex-shrink-0 w-16 ${getLevelClass(parsed.level)}`}>[{parsed.level}]</span>
+                        <span className="text-slate-400 flex-shrink-0 w-32 truncate" title={parsed.logger}>{parsed.logger}</span>
+                        <span className="text-slate-200 break-all whitespace-pre-wrap">{parsed.message}</span>
+                      </div>
+                    ) : (
+                      <div key={`live-${i}`} className="flex gap-2 hover:bg-slate-800/50 px-1 rounded py-0.5">
+                        <span className="text-indigo-400/60 flex-shrink-0">[live]</span>
+                        <span className="text-slate-300 break-all whitespace-pre-wrap">{line}</span>
+                      </div>
+                    );
+                  })}
                 </>
               )}
 
@@ -291,6 +320,7 @@ export function LogModal({ isOpen, onClose, taskId, agentId, isRunning, title }:
                   <p>Waiting for live logs...</p>
                 </div>
               )}
+              <div ref={bottomRef} />
             </div>
           )}
         </div>

@@ -16,7 +16,7 @@ from a2a.helpers import get_message_text, new_text_message
 from a2a.server.request_handlers import DefaultRequestHandler
 from a2a.server.routes import create_agent_card_routes, create_jsonrpc_routes
 from a2a.server.tasks import InMemoryTaskStore
-from a2a.types import AgentCapabilities, AgentCard, AgentInterface, Message, Part
+from a2a.types import AgentCapabilities, AgentCard, AgentInterface, Message
 from fastapi import FastAPI
 from jira import JIRA
 from pydantic import BaseModel
@@ -32,11 +32,11 @@ from pydantic_ai.usage import UsageLimits
 import config
 from common import utils
 from common.agent_executor import DefaultAgentExecutor
-from common.agent_log_capture import AgentLogCaptureHandler, create_log_file_part
+from common.agent_log_capture import AgentLogCaptureHandler
 from common.custom_llm_wrapper import CustomLlmWrapper
 from common.models import AgentExecutionError, AgentRuntimeError, JsonSerializableModel
 from common.services.vector_db_service import VectorDbService
-from common.streaming import compute_activity_budget, current_log_handler, report_activity
+from common.streaming import compute_activity_budget, current_log_handler
 
 REGISTRATION_PATH = f"{config.ORCHESTRATOR_URL}/register"
 MCP_SERVER_ATTACHMENTS_FOLDER_PATH = config.MCP_SERVER_ATTACHMENTS_FOLDER_PATH
@@ -80,10 +80,11 @@ class AgentBase(ABC):
         self.deps_type = deps_type
         self.description = description
         self.mcp_servers = mcp_servers or []
-        self.tools = [*tools, report_activity]
+        self._activity_queue: asyncio.Queue[str] = asyncio.Queue()
+        self.tools = [*tools, self.report_activity]
         self.instructions = (
             self.instructions
-            + "\nA `report_activity` tool is available — use it as described in its tool description."
+            + "\nA `report_activity` tool is available — call it before any other tool call or reasoning phase."
         )
         self.agent = self._create_agent()
         self.a2a_server = self._get_server()
@@ -100,6 +101,16 @@ class AgentBase(ABC):
     @abstractmethod
     def get_max_requests_per_task(self) -> int:
         pass
+
+    async def report_activity(self, description: str) -> None:
+        """Report your current activity to the dashboard.
+
+        Call this with one short sentence (≤ 120 chars) describing what you are
+        about to do, whenever you start a new reasoning phase OR before invoking
+        any other tool. You may call it in parallel with other tool calls.
+        Examples: "Fetching Jira issue PROJ-123", "Generating test steps for AC-2".
+        """
+        self._activity_queue.put_nowait(description)
 
     def _create_agent(self) -> Agent:
         logger.info(f"""Creating agent '{self.agent_name}' with the following configuration:
@@ -126,8 +137,17 @@ class AgentBase(ABC):
         for attempt in range(config.RetryConfig.MAX_RETRIES):
             try:
                 logger.info(f"Starting agent run (attempt {attempt + 1}/{config.RetryConfig.MAX_RETRIES})...")
-                async with self.agent:
-                    return await self.agent.run(received_request, usage_limits=usage_limits)
+                try:
+                    async with self.agent:
+                        return await self.agent.run(received_request, usage_limits=usage_limits)
+                except ExceptionGroup as eg:
+                    if any(isinstance(exc, httpx.ConnectError) for exc in eg.exceptions) and self.mcp_servers:
+                        mcp_urls = [server.url for server in self.mcp_servers]
+                        raise ConnectionError(
+                            f"MCP connection failed: could not connect to MCP server(s) {mcp_urls}. "
+                            "Ensure the MCP server(s) are running and accessible."
+                        ) from eg
+                    raise
             except (ModelHTTPError, httpx.TransportError) as e:
                 is_retryable = isinstance(e, httpx.TransportError) or (
                     isinstance(e, ModelHTTPError) and e.status_code in config.RetryConfig.RETRYABLE_STATUS_CODES
@@ -147,33 +167,33 @@ class AgentBase(ABC):
         self.latest_received_message = received_message
         received_request = self._get_all_received_contents(received_message)
 
-        # Prefer the executor-provided handler (set via contextvar); fall back to self-managed.
-        contextvar_handler = current_log_handler.get()
-        own_handler = contextvar_handler is None
-        if own_handler:
-            log_handler = AgentLogCaptureHandler()
-            log_handler.setLevel(config.LOG_LEVEL)
-            root_logger = logging.getLogger()
-            root_logger.addHandler(log_handler)
-        else:
-            log_handler = contextvar_handler
-
-        logger.info("Got a task to execute, starting execution.")
         try:
-            result = await self._get_agent_execution_result(received_request)
-            logger.info("Completed execution of the task.")
-            self._log_llm_comments_if_result_incomplete(result.output)
-            captured_logs = log_handler.get_logs()
-            if own_handler:
-                logging.getLogger().removeHandler(log_handler)
-            return self._get_message_with_logs(result, captured_logs)
+            # The executor attaches a handler and exposes it via current_log_handler.
+            # Only self-manage a handler when running standalone (no executor context).
+            if current_log_handler.get() is None:
+                log_handler = AgentLogCaptureHandler()
+                log_handler.setLevel(config.LOG_LEVEL)
+                root_logger = logging.getLogger()
+                root_logger.addHandler(log_handler)
+                try:
+                    result = await self._get_agent_execution_result(received_request)
+                    self._log_llm_comments_if_result_incomplete(result.output)
+                finally:
+                    root_logger.removeHandler(log_handler)
+            else:
+                result = await self._get_agent_execution_result(received_request)
+                self._log_llm_comments_if_result_incomplete(result.output)
+
+            return self._get_text_message_from_results(result)
         except Exception as e:
             logger.exception("Error during agent execution.")
-            captured_logs = log_handler.get_logs()
-            if own_handler:
-                logging.getLogger().removeHandler(log_handler)
-            error_message = self._get_error_message_with_logs(
-                e, captured_logs, received_message.context_id, received_message.task_id
+            error_model = AgentExecutionError(error_message=f"Agent execution failed with error: {e}")
+            context_id = getattr(received_message, "context_id", None)
+            task_id = getattr(received_message, "task_id", None)
+            error_message = new_text_message(
+                text=error_model.model_dump_json(),
+                context_id=context_id,
+                task_id=task_id,
             )
             error_text = (
                 "; ".join(f"{type(sub).__name__}: {sub}" for sub in e.exceptions)
@@ -251,7 +271,7 @@ class AgentBase(ABC):
 
     @staticmethod
     def _fetch_attachments(attachment_paths: list[str]) -> dict[str, BinaryContent]:
-        """Fetches and all attachments, returning them as binary content for multimodal processing.
+        """Fetches all attachments, returning them as binary content for multimodal processing.
 
         Args:
             attachment_paths: List of file paths to the downloaded attachments.
@@ -288,18 +308,21 @@ class AgentBase(ABC):
             *create_agent_card_routes(agent_card),
             *create_jsonrpc_routes(request_handler, "/"),
         ]
-        return FastAPI(routes=routes, lifespan=self._lifespan)
+        a2a_app = FastAPI(routes=routes, lifespan=self._lifespan)
+        agent_name = self.agent_name
 
-    @a2a_app.get("/source")
-    async def _source_offer():
-        # AGPL-3.0 §13: offer the Corresponding Source to users interacting remotely.
-        return {
-            "name": agent_name,
-            "copyright": "Copyright (C) 2025-2026 Taras Paruta",
-            "license": "AGPL-3.0-only",
-            "license_url": "https://www.gnu.org/licenses/agpl-3.0.html",
-            "source_url": "https://github.com/partarstu/agentic-qa-framework",
-        }
+        @a2a_app.get("/source")
+        async def _source_offer():
+            # AGPL-3.0 §13: offer the Corresponding Source to users interacting remotely.
+            return {
+                "name": agent_name,
+                "copyright": "Copyright (C) 2025-2026 Taras Paruta",
+                "license": "AGPL-3.0-only",
+                "license_url": "https://www.gnu.org/licenses/agpl-3.0.html",
+                "source_url": "https://github.com/partarstu/agentic-qa-framework",
+            }
+
+        return a2a_app
 
     def start_as_server(self):
         parsed_url = urlparse(self.base_url)
@@ -333,39 +356,6 @@ class AgentBase(ABC):
             return new_text_message(text="\n".join(text_parts), context_id=context_id, task_id=task_id)
         else:
             return new_text_message(text=str(output), context_id=context_id, task_id=task_id)
-
-    def _get_message_with_logs(
-        self, result: AgentRunResult, captured_logs: str, context_id: str | None = None, task_id: str | None = None
-    ) -> Message:
-        """Create a message with text result and log file artifact."""
-        base_message = self._get_text_message_from_results(result, context_id, task_id)
-        if not captured_logs or not captured_logs.strip():
-            return base_message
-        return self._get_final_message_with_logs(base_message, captured_logs)
-
-    def _get_error_message_with_logs(
-        self, exception: Exception, captured_logs: str, context_id: str | None = None, task_id: str | None = None
-    ) -> Message:
-        """Create a message with error details and log file artifact."""
-        error_model = AgentExecutionError(error_message=f"Agent execution failed with error: {exception}")
-        base_message = new_text_message(
-            text=error_model.model_dump_json(), context_id=context_id, task_id=task_id
-        )
-        if not captured_logs or not captured_logs.strip():
-            return base_message
-        return self._get_final_message_with_logs(base_message, captured_logs)
-
-    def _get_final_message_with_logs(self, base_message: Message, captured_logs: str) -> Message:
-        log_file = create_log_file_part(captured_logs, self.agent_name)
-        log_part = Part(raw=log_file.raw, media_type=log_file.media_type, filename=log_file.filename)
-        new_parts = [*list(base_message.parts), log_part]
-        return Message(
-            parts=new_parts,
-            message_id=base_message.message_id,
-            role=base_message.role,
-            context_id=base_message.context_id,
-            task_id=base_message.task_id,
-        )
 
     @staticmethod
     def add_jira_comment(issue_key: str, comment: str) -> str:

@@ -20,7 +20,7 @@ import uvicorn
 from a2a.client import ClientConfig, create_client
 from a2a.client.card_resolver import parse_agent_card
 from a2a.helpers import get_message_text, new_text_message
-from a2a.types import AgentCard, Artifact, CancelTaskRequest, Message, Part, Role, SendMessageRequest, Task, TaskState
+from a2a.types import AgentCard, Artifact, CancelTaskRequest, Message, Part, Role, SendMessageRequest, Task, TaskState, TaskStatusUpdateEvent, TaskArtifactUpdateEvent
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Security
 from fastapi.security import APIKeyHeader
 from fastapi.staticfiles import StaticFiles
@@ -28,6 +28,8 @@ from pydantic import ValidationError
 from pydantic_ai.exceptions import ModelHTTPError
 from sse_starlette.sse import EventSourceResponse, ServerSentEvent
 
+from dataclasses import dataclass, field
+from common.a2a_contract import ArtifactName
 import config
 from common import utils
 from common.custom_llm_wrapper import CustomLlmWrapper
@@ -74,7 +76,7 @@ from orchestrator.streaming_hub import streaming_hub
 logger = utils.get_logger("orchestrator")
 
 # Set up memory logging for dashboard
-setup_memory_logging("orchestrator")
+setup_memory_logging()
 
 execution_lock = asyncio.Lock()
 agent_selection_lock = asyncio.Lock()  # Ensures atomic agent selection and reservation
@@ -1181,40 +1183,76 @@ async def _finalize_task(
     await streaming_hub.publish_agent(agent_id, event)
 
 
+@dataclass(slots=True)
+class _LogStreamState:
+    """Per-task accumulator for the single streamed log artifact."""
+    artifact_id: str | None = None
+    lines: list[str] = field(default_factory=list)
+
+
+def _build_logs_artifact(log_lines: list[str]) -> Artifact:
+    """Collapse streamed log lines into ONE text/plain file part.
+
+    The filename contains "logs" and ends ".txt" so utils.get_execution_logs_from_artifacts
+    matches it and incident creation receives a single consolidated log file.
+    """
+    data = "\n".join(log_lines).encode("utf-8")
+    return Artifact(
+        name=ArtifactName.LOGS,
+        parts=[Part(raw=data, media_type="text/plain", filename="execution_logs.txt")],
+    )
+
+
+def _is_logs_chunk(artifact: Artifact, log_state: _LogStreamState) -> bool:
+    """Identify the log stream by contract name, then by its tracked artifact_id.
+
+    The text/plain fallback supports external agents that stream logs without our name;
+    because identification is anchored to a single artifact_id, it cannot pull parts out
+    of an unrelated artifact (the execution result uses text parts, not raw text/plain).
+    """
+    if artifact.name == ArtifactName.LOGS:
+        return True
+    if log_state.artifact_id is not None and artifact.artifact_id == log_state.artifact_id:
+        return True
+    return bool(artifact.parts) and all(
+        part.HasField("raw") and part.media_type == "text/plain" for part in artifact.parts
+    )
+
+
 async def _handle_stream_chunk(
-    artifact: Artifact,
+    artifact_event: TaskArtifactUpdateEvent,
     internal_task_id: str,
     agent_id: str,
     collected_artifacts: list[Artifact],
+    log_state: _LogStreamState,
 ) -> None:
-    """Discriminate an artifact_update chunk by name and dispatch to hub / task history.
+    """Dispatch an artifact_update chunk.
 
-    agent_activity and agent_logs_stream are NOT appended to collected_artifacts.
-    All other artifact names (including agent_execution_result) are appended to
-    collected_artifacts as before.
+    Log chunks are forwarded live and accumulated by artifact_id; on last_chunk the
+    accumulated lines are collapsed into one file artifact and collected. Every other
+    artifact (execution result, custom artifacts) is collected as-is.
     """
-    artifact_name = artifact.name or ""
-    text: str | None = next(
-        (part.text for part in artifact.parts if part.HasField("text") and part.text),
-        None,
-    )
+    artifact = artifact_event.artifact
 
-    if artifact_name == "agent_activity":
-        if text:
-            await task_history.set_current_activity(internal_task_id, text)
-            await streaming_hub.publish_global(
-                AgentActivityEvent(task_id=internal_task_id, agent_id=agent_id, text=text).model_dump()
-            )
-    elif artifact_name == "agent_logs_stream":
-        if text:
-            lines = text.splitlines()
-            await task_history.append_log_batch(internal_task_id, lines)
+    if _is_logs_chunk(artifact, log_state):
+        if log_state.artifact_id is None:
+            log_state.artifact_id = artifact.artifact_id
+        new_lines: list[str] = []
+        for part in artifact.parts:
+            if part.HasField("raw") and part.media_type == "text/plain":
+                new_lines.extend(part.raw.decode("utf-8", errors="replace").splitlines())
+        if new_lines:
+            log_state.lines.extend(new_lines)
+            await task_history.append_log_batch(internal_task_id, new_lines)
             await streaming_hub.publish_agent(
                 agent_id,
-                LogBatchEvent(task_id=internal_task_id, lines=lines).model_dump(),
+                LogBatchEvent(task_id=internal_task_id, lines=new_lines).model_dump(),
             )
-    else:
-        collected_artifacts.append(artifact)
+        if artifact_event.last_chunk and log_state.lines:
+            collected_artifacts.append(_build_logs_artifact(log_state.lines))
+        return
+
+    collected_artifacts.append(artifact)
 
 
 async def _save_agent_logs_from_task(task: Task, internal_task_id: str) -> None:
@@ -1280,6 +1318,7 @@ async def _send_task_to_agent_with_message(message: Message, task_description: s
         last_task_id = None
         last_status = None
         collected_artifacts: list[Artifact] = []
+        log_state = _LogStreamState()
         while (time_left := _get_time_left_for_task_completion_waiting(start_time)) > 0:
             try:
                 chunk = await asyncio.wait_for(response_iterator.__anext__(), timeout=time_left)
@@ -1330,18 +1369,6 @@ async def _send_task_to_agent_with_message(message: Message, task_description: s
                     agent_id,
                 )
 
-            if chunk.HasField('error'):
-                await _finalize_task(internal_task_id, agent_id, TaskStatus.FAILED, str(chunk.error))
-                # Release agent as AVAILABLE since this is a task-level error
-                await agent_registry.update_status(agent_id, AgentStatus.AVAILABLE)
-                await agent_registry.set_current_task(agent_id, None)
-                _handle_exception(
-                    f"Couldn't execute the task '{task_description}'. Root cause: {chunk.error}",
-                    500,
-                    internal_task_id,
-                    agent_id,
-                )
-
             if chunk.HasField('status_update'):
                 status_event = chunk.status_update
                 last_task_id = status_event.task_id
@@ -1371,15 +1398,20 @@ async def _send_task_to_agent_with_message(message: Message, task_description: s
                     await agent_registry.update_status(agent_id, AgentStatus.AVAILABLE)
                     await agent_registry.set_current_task(agent_id, None)
                     return completed_task
+                elif last_status.state == TaskState.TASK_STATE_WORKING:
+                    activity_text = get_message_text(last_status.message) if last_status.message else None
+                    if activity_text:
+                        await task_history.set_current_activity(internal_task_id, activity_text)
+                        await streaming_hub.publish_global(
+                            AgentActivityEvent(
+                                task_id=internal_task_id, agent_id=agent_id, text=activity_text
+                            ).model_dump()
+                        )
                 else:
-                    logger.debug(
-                        f"Task for {task_description} is still in '{last_status.state}' state. Waiting for its "
-                        f"completion. Agent: '{agent_card.name}' (ID: {agent_id})",
-                        extra={"task_id": internal_task_id, "agent_id": agent_id},
-                    )
+                    logger.debug(f"Task for {task_description} is in '{last_status.state}' state.")
             elif chunk.HasField('artifact_update'):
                 await _handle_stream_chunk(
-                    chunk.artifact_update.artifact, internal_task_id, agent_id, collected_artifacts
+                    chunk.artifact_update, internal_task_id, agent_id, collected_artifacts, log_state
                 )
             elif chunk.HasField('message'):
                 msg_text = get_message_text(chunk.message)
@@ -1533,10 +1565,6 @@ def _handle_exception(
     """
     _record_error(message, task_id, agent_id)
     raise HTTPException(status_code=status_code, detail=message)
-
-
-def _is_task_still_running(task_state: TaskState) -> bool:
-    return task_state in (TaskState.TASK_STATE_SUBMITTED, TaskState.TASK_STATE_WORKING)
 
 
 def _validate_task_status(task: Task, task_description: str):

@@ -4,7 +4,7 @@
 
 import { useState, useEffect, useReducer } from 'react';
 import { useQuery, useInfiniteQuery, QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { LogOut, XCircle } from 'lucide-react';
+import { LogOut } from 'lucide-react';
 import quaiaLogo from './assets/quaia_logo.png';
 import { dashboardApi } from './api/dashboardApi';
 import { onConnectionStatusChange, onAuthStatusChange } from './api/client';
@@ -27,8 +27,6 @@ import type {
 import './App.css';
 
 const POLLING_INTERVAL = 3000;
-const CANCEL_TOAST_TTL_MS = 5_000;
-
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
@@ -78,13 +76,6 @@ function liveReducer(
       return next;
     }
   }
-}
-
-// --- Cancellation toasts ---
-
-interface CancelToast {
-  id: string;
-  message: string;
 }
 
 // --- Dashboard ---
@@ -137,8 +128,6 @@ function Dashboard() {
 
   // Live state store
   const [liveStore, dispatch] = useReducer(liveReducer, {});
-  const [cancelToasts, setCancelToasts] = useState<CancelToast[]>([]);
-
   const handleSseEvent = (type: SseEventType, data: unknown) => {
     switch (type) {
       case 'snapshot': {
@@ -161,14 +150,6 @@ function Dashboard() {
       case 'task_done': {
         const ev = data as TaskDonePayload;
         dispatch({ type: 'TASK_DONE', task_id: ev.task_id });
-        if (ev.status === 'CANCELLED') {
-          const toast: CancelToast = { id: ev.task_id, message: `Task cancelled` };
-          setCancelToasts((prev) => [...prev, toast]);
-          setTimeout(
-            () => setCancelToasts((prev) => prev.filter((t) => t.id !== ev.task_id)),
-            CANCEL_TOAST_TTL_MS,
-          );
-        }
         break;
       }
     }
@@ -226,7 +207,7 @@ function Dashboard() {
         <SummaryCards summary={summary} isLoading={summaryLoading} />
         <TaskSummaryCards summary={summary} />
         <AgentGrid agents={agents} isLoading={agentsLoading} liveTaskStates={liveStore} />
-        <TaskList tasks={tasks} isLoading={tasksLoading} />
+        <TaskList tasks={tasks} isLoading={tasksLoading} liveTaskStates={liveStore} />
         <ErrorLog errors={errors} isLoading={errorsLoading} />
         <LogViewer
           logs={logs}
@@ -241,23 +222,6 @@ function Dashboard() {
         <Toast message="Connection to Orchestrator lost. Reconnecting..." />
       )}
 
-      {/* Cancellation toasts */}
-      {cancelToasts.length > 0 && (
-        <div className="fixed bottom-6 left-6 z-50 flex flex-col gap-2">
-          {cancelToasts.map((t) => (
-            <div
-              key={t.id}
-              className="flex items-center gap-3 px-4 py-3 bg-amber-950/90 border border-amber-500/50 backdrop-blur-md text-amber-200 rounded-lg shadow-xl"
-            >
-              <XCircle className="w-5 h-5 text-amber-500 flex-shrink-0" />
-              <span className="font-medium text-sm">{t.message}</span>
-            </div>
-          ))}
-        </div>
-      )}
-
-      <footer className="py-6 text-center text-slate-500 text-sm">
-        QuAIA™ • Quality Assurance with Intelligent Agents
       {/* Footer — AGPL-3.0 §5(d) Appropriate Legal Notices and §13 source offer */}
       <footer className="py-6 text-center text-slate-500 text-xs space-y-1">
         <p>QuAIA™ • Quality Assurance with Intelligent Agents</p>
