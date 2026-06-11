@@ -63,6 +63,23 @@ def test_drain_second_call_empty_when_no_new_lines(handler):
     assert handler.drain() == []
 
 
+def test_drain_keeps_working_after_buffer_overflows():
+    import logging
+
+    handler = AgentLogCaptureHandler(max_records=3)
+    handler.setFormatter(logging.Formatter("%(message)s"))
+
+    for i in range(5):  # fill and overflow the 3-slot buffer
+        _emit(handler, f"first {i}")
+    # Oldest two are unrecoverable; only the buffered tail is returned.
+    assert handler.drain() == ["first 2", "first 3", "first 4"]
+
+    # After overflow the cursor must not get stuck: new lines still drain.
+    for i in range(4):
+        _emit(handler, f"second {i}")
+    assert handler.drain() == ["second 1", "second 2", "second 3"]
+
+
 # ---------------------------------------------------------------------------
 # Thread-safety: concurrent emit + drain
 # ---------------------------------------------------------------------------

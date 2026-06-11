@@ -7,8 +7,7 @@ import { useRef, useEffect, useState } from 'react';
 import { X, Terminal, Filter, Loader2 } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { dashboardApi } from '../api/dashboardApi';
-import { getStreamToken, clearStreamToken } from '../api/streamToken';
-import { notifyAuthHandlers } from '../api/client';
+import { useSseEvents } from '../api/sse';
 import type { LogBatchPayload, TaskDonePayload } from '../types/dashboard';
 
 interface LogModalProps {
@@ -49,9 +48,10 @@ export function LogModal({ isOpen, onClose, taskId, agentId, isRunning, title }:
   const [levelFilter, setLevelFilter] = useState<string>('');
 
   // Live streaming state
-  const streamedSetRef = useRef<Set<string>>(new Set());
+  const seenBatchesRef = useRef<Set<string>>(new Set());
   const [streamedLines, setStreamedLines] = useState<string[]>([]);
   const [sseActive, setSseActive] = useState(false);
+  const [isSseEnabled, setIsSseEnabled] = useState(false);
 
   useEffect(() => {
     if (isOpen) {
@@ -81,84 +81,50 @@ export function LogModal({ isOpen, onClose, taskId, agentId, isRunning, title }:
     return () => window.removeEventListener('keydown', handleEsc);
   }, [onClose]);
 
-  // Per-agent SSE for live logs — only active when agentId is present and task is running
   useEffect(() => {
-    if (!agentId || !isRunning || !isOpen) {
-      setSseActive(false);
-      return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setIsSseEnabled(!!isOpen && !!agentId && !!isRunning);
+    if (isOpen) {
+      setStreamedLines([]);
+      seenBatchesRef.current.clear();
     }
+  }, [isOpen, agentId, isRunning]);
 
-    streamedSetRef.current = new Set();
-    setStreamedLines([]);
+  const sseUrl = isOpen && agentId && isRunning
+    ? `/api/dashboard/agents/${agentId}/stream`
+    : null;
 
-    let es: EventSource | null = null;
-    let cancelled = false;
-
-    async function connect(): Promise<void> {
-      if (cancelled) return;
-      try {
-        const token = await getStreamToken();
-        if (cancelled) return;
-
-        es = new EventSource(
-          `/api/dashboard/agents/${agentId}/stream?stream_token=${encodeURIComponent(token)}`,
-        );
-
-        if (!cancelled) setSseActive(true);
-
-        es.addEventListener('log_batch', (e: MessageEvent) => {
-          if (cancelled) return;
-          try {
-            const data = JSON.parse(e.data) as LogBatchPayload;
-            setStreamedLines((prev) => {
-              const seen = streamedSetRef.current;
-              const fresh = data.lines.filter((line) => !seen.has(line));
-              for (const line of fresh) seen.add(line);
-              return fresh.length > 0 ? [...prev, ...fresh] : prev;
-            });
-          } catch { /* ignore */ }
-        });
-
-        es.addEventListener('task_done', (e: MessageEvent) => {
-          if (cancelled) return;
-          try {
-            const data = JSON.parse(e.data) as TaskDonePayload;
-            if (!taskId || data.task_id === taskId) {
-              es?.close();
-              if (!cancelled) setSseActive(false);
-            }
-          } catch { /* ignore */ }
-        });
-
-        es.addEventListener('auth-error', () => {
-          clearStreamToken();
-          notifyAuthHandlers(false);
-          es?.close();
-          cancelled = true;
-          setSseActive(false);
-        });
-
-        es.onerror = () => {
-          es?.close();
-          if (!cancelled) {
-            setSseActive(false);
-            setTimeout(() => void connect(), 2_000);
+  useSseEvents(
+    sseUrl,
+    (type, data) => {
+      if (type === 'log_batch') {
+        const payload = data as LogBatchPayload;
+        const batchKey = `${payload.task_id}-${payload.lines.length}-${payload.lines[0] || ''}-${payload.lines[payload.lines.length - 1] || ''}`;
+        if (seenBatchesRef.current.has(batchKey)) return;
+        seenBatchesRef.current.add(batchKey);
+        if (seenBatchesRef.current.size > 100) {
+          const firstKey = seenBatchesRef.current.values().next().value;
+          if (firstKey !== undefined) {
+            seenBatchesRef.current.delete(firstKey);
           }
-        };
-      } catch {
-        if (!cancelled) {
-          setTimeout(() => void connect(), 2_000);
+        }
+        setStreamedLines((prev) => {
+          const combined = [...prev, ...payload.lines];
+          return combined.length > 5000 ? combined.slice(-5000) : combined;
+        });
+      } else if (type === 'task_done') {
+        const payload = data as TaskDonePayload;
+        if (!taskId || payload.task_id === taskId) {
+          setIsSseEnabled(false);
         }
       }
+    },
+    {
+      enabled: isSseEnabled,
+      onOpen: () => setSseActive(true),
+      onClose: () => setSseActive(false),
     }
-
-    void connect();
-    return () => {
-      cancelled = true;
-      es?.close();
-      setSseActive(false);
-    };
-  }, [agentId, isRunning, isOpen, taskId]);
+  );
 
   if (!isOpen) return null;
 

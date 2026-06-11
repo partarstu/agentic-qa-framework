@@ -24,16 +24,34 @@ const MAX_RETRY_DELAY_MS = 30_000;
  * HTTP/1.1 6-conn limit: keep at most one global stream + one per-agent log stream
  * open at any time; close the agent stream when the LogModal closes.
  */
+export interface SseOptions {
+  enabled?: boolean;
+  onOpen?: () => void;
+  onClose?: () => void;
+}
+
 export function useSseEvents(
-  url: string,
+  url: string | null,
   onEvent: (type: SseEventType, data: unknown) => void,
+  options?: SseOptions,
 ): void {
   const onEventRef = useRef(onEvent);
   useEffect(() => {
     onEventRef.current = onEvent;
   });
 
+  const enabled = options?.enabled ?? true;
+  const onOpenRef = useRef(options?.onOpen);
+  const onCloseRef = useRef(options?.onClose);
   useEffect(() => {
+    onOpenRef.current = options?.onOpen;
+    onCloseRef.current = options?.onClose;
+  });
+
+  useEffect(() => {
+    if (!url || !enabled) return;
+    const streamUrl = url;
+
     let es: EventSource | null = null;
     let retryDelay = 1_000;
     let cancelled = false;
@@ -44,14 +62,23 @@ export function useSseEvents(
         const token = await getStreamToken();
         if (cancelled) return;
 
-        const sep = url.includes('?') ? '&' : '?';
-        es = new EventSource(`${url}${sep}stream_token=${encodeURIComponent(token)}`);
+        const sep = streamUrl.includes('?') ? '&' : '?';
+        es = new EventSource(`${streamUrl}${sep}stream_token=${encodeURIComponent(token)}`);
 
-        es.addEventListener('auth-error', () => {
+        es.addEventListener('open', () => {
+          if (!cancelled && onOpenRef.current) {
+            onOpenRef.current();
+          }
+        });
+
+        es.addEventListener('auth_error', () => {
           clearStreamToken();
           notifyAuthHandlers(false);
           es?.close();
           cancelled = true;
+          if (onCloseRef.current) {
+            onCloseRef.current();
+          }
         });
 
         for (const kind of SSE_EVENT_TYPES) {
@@ -69,6 +96,9 @@ export function useSseEvents(
         es.onerror = () => {
           es?.close();
           es = null;
+          if (onCloseRef.current) {
+            onCloseRef.current();
+          }
           if (!cancelled) {
             setTimeout(() => void connect(), retryDelay);
             retryDelay = Math.min(retryDelay * 2, MAX_RETRY_DELAY_MS);
@@ -86,6 +116,9 @@ export function useSseEvents(
     return () => {
       cancelled = true;
       es?.close();
+      if (onCloseRef.current) {
+        onCloseRef.current();
+      }
     };
-  }, [url]);
+  }, [url, enabled]);
 }

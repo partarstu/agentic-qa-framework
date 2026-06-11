@@ -82,7 +82,7 @@ from orchestrator.models import (
     error_history,
     task_history,
 )
-from orchestrator.streaming_hub import streaming_hub
+from orchestrator.streaming_hub import _Subscriber, streaming_hub
 
 logger = utils.get_logger("orchestrator")
 
@@ -314,34 +314,26 @@ async def _build_snapshot() -> SnapshotEvent:
 
 
 async def _sse_hub_events(
-    hub_gen: AsyncIterator[dict],
+    subscriber: _Subscriber,
     token_expires_at: datetime,
 ) -> AsyncIterator[ServerSentEvent]:
-    """Iterate over hub events, inserting 15-second heartbeats and checking token expiry."""
+    """Forward events from a hub subscriber, inserting 15-second heartbeats.
+
+    Reads the hub's bounded subscriber buffer directly (no intermediate unbounded
+    queue), so the hub's coalescing and overflow protection stay effective. The
+    token-expiry check runs on every iteration, so a continuously active stream is
+    re-validated rather than only idle ones.
+    """
     _HEARTBEAT_INTERVAL = 15.0
-    queue: asyncio.Queue = asyncio.Queue()
-
-    async def _feed() -> None:
+    while True:
+        if datetime.now(UTC) >= token_expires_at:
+            yield ServerSentEvent(data=AuthErrorEvent().model_dump_json(), event="auth_error")
+            return
         try:
-            async for event in hub_gen:
-                await queue.put(event)
-        except asyncio.CancelledError:
-            pass
-
-    feed_task = asyncio.create_task(_feed())
-    try:
-        while True:
-            try:
-                event = await asyncio.wait_for(queue.get(), timeout=_HEARTBEAT_INTERVAL)
-                yield ServerSentEvent(data=json.dumps(event), event=event.get("type", "message"))
-            except TimeoutError:
-                if datetime.now(UTC) >= token_expires_at:
-                    yield ServerSentEvent(data=AuthErrorEvent().model_dump_json(), event="auth-error")
-                    return
-                yield ServerSentEvent(data="{}", event="heartbeat")
-    finally:
-        feed_task.cancel()
-        await asyncio.gather(feed_task, return_exceptions=True)
+            event = await asyncio.wait_for(subscriber.get(), timeout=_HEARTBEAT_INTERVAL)
+            yield ServerSentEvent(data=json.dumps(event), event=event.get("type", "message"))
+        except TimeoutError:
+            yield ServerSentEvent(data="{}", event="heartbeat")
 
 
 # =============================================================================
@@ -363,8 +355,9 @@ async def get_global_sse_stream(token_expires_at: datetime = Depends(dashboard_s
 
     async def _generate():
         yield ServerSentEvent(data=snapshot.model_dump_json(), event="snapshot")
-        async for sse_event in _sse_hub_events(streaming_hub.subscribe_global(), token_expires_at):
-            yield sse_event
+        async with streaming_hub.subscribe_global() as subscriber:
+            async for sse_event in _sse_hub_events(subscriber, token_expires_at):
+                yield sse_event
 
     return EventSourceResponse(_generate())
 
@@ -375,7 +368,13 @@ async def get_agent_sse_stream(
     token_expires_at: datetime = Depends(dashboard_stream_auth),
 ):
     """Per-agent SSE stream: forwards live log events for the given agent."""
-    return EventSourceResponse(_sse_hub_events(streaming_hub.subscribe_agent(agent_id), token_expires_at))
+
+    async def _generate():
+        async with streaming_hub.subscribe_agent(agent_id) as subscriber:
+            async for sse_event in _sse_hub_events(subscriber, token_expires_at):
+                yield sse_event
+
+    return EventSourceResponse(_generate())
 
 
 async def _retry_cancellation_task():
@@ -474,8 +473,13 @@ async def _cancel_agent_task(agent_card: AgentCard, task_id: str) -> bool:
     Returns:
         True if cancellation was successful or acknowledged, False otherwise.
     """
+    httpx_client: httpx.AsyncClient | None = None
     try:
-        a2a_client = await create_client(agent_card)
+        httpx_client = httpx.AsyncClient(timeout=config.OrchestratorConfig.TASK_EXECUTION_TIMEOUT)
+        a2a_client = await create_client(
+            agent_card,
+            client_config=ClientConfig(httpx_client=httpx_client),
+        )
         cancelled_task = await a2a_client.cancel_task(CancelTaskRequest(id=task_id))
 
         # Check if cancellation was accepted
@@ -495,6 +499,9 @@ async def _cancel_agent_task(agent_card: AgentCard, task_id: str) -> bool:
     except Exception as e:
         logger.warning(f"Failed to cancel task {task_id}: {e}")
         return False
+    finally:
+        if httpx_client is not None:
+            await httpx_client.aclose()
 
 
 # --- For selecting the single best for the task agent ---

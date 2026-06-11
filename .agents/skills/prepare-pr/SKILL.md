@@ -3,8 +3,6 @@ name: prepare-pr
 description: Prepares code for a pull request by running linting (ruff), tests, security scans (bandit), and dependency checks (pip-audit). Use when ready to create a PR or before committing changes.
 ---
 
-// turbo-all
-
 # Prepare Pull Request
 
 This skill provides a comprehensive workflow to prepare your code for a pull request. It runs all CI checks locally, fixes any issues, and

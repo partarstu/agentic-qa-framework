@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 
 import asyncio
-import logging
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from contextlib import asynccontextmanager
@@ -32,17 +31,20 @@ from pydantic_ai.usage import UsageLimits
 import config
 from common import utils
 from common.agent_executor import DefaultAgentExecutor
-from common.agent_log_capture import AgentLogCaptureHandler
 from common.custom_llm_wrapper import CustomLlmWrapper
 from common.models import AgentExecutionError, AgentRuntimeError, JsonSerializableModel
 from common.services.vector_db_service import VectorDbService
-from common.streaming import compute_activity_budget, current_log_handler
+from common.streaming import compute_activity_budget
 
 REGISTRATION_PATH = f"{config.ORCHESTRATOR_URL}/register"
 MCP_SERVER_ATTACHMENTS_FOLDER_PATH = config.MCP_SERVER_ATTACHMENTS_FOLDER_PATH
 ATTACHMENTS_LOCAL_DESTINATION_FOLDER_PATH = config.ATTACHMENTS_LOCAL_DESTINATION_FOLDER_PATH
 
 logger = utils.get_logger("agent_base")
+
+# Bound the activity queue so report_activity calls cannot accumulate without a
+# consumer (e.g. standalone runs, where no executor drains the queue).
+_ACTIVITY_QUEUE_MAXSIZE = 1000
 
 
 class AgentBase(ABC):
@@ -80,7 +82,7 @@ class AgentBase(ABC):
         self.deps_type = deps_type
         self.description = description
         self.mcp_servers = mcp_servers or []
-        self._activity_queue: asyncio.Queue[str] = asyncio.Queue()
+        self._activity_queue: asyncio.Queue[str] = asyncio.Queue(maxsize=_ACTIVITY_QUEUE_MAXSIZE)
         self.tools = [*tools, self.report_activity]
         self.instructions = (
             self.instructions
@@ -93,6 +95,15 @@ class AgentBase(ABC):
         if vector_db_collection_name:
             self.vector_db_service = VectorDbService(vector_db_collection_name)
         self.latest_received_message: Message | None = None
+
+    @property
+    def activity_queue(self) -> asyncio.Queue[str]:
+        """Queue of pending activity descriptions reported via report_activity.
+
+        Exposed so the executor can drain reported activities without reaching across
+        the privacy boundary into the internal queue.
+        """
+        return self._activity_queue
 
     @abstractmethod
     def get_thinking_level(self) -> ThinkingLevel:
@@ -110,7 +121,12 @@ class AgentBase(ABC):
         any other tool. You may call it in parallel with other tool calls.
         Examples: "Fetching Jira issue PROJ-123", "Generating test steps for AC-2".
         """
-        self._activity_queue.put_nowait(description)
+        try:
+            self._activity_queue.put_nowait(description)
+        except asyncio.QueueFull:
+            # No active consumer (e.g. standalone run) or the consumer fell behind:
+            # drop the update rather than letting the queue grow without bound.
+            logger.debug("Activity queue full; dropping activity update: %s", description)
 
     def _create_agent(self) -> Agent:
         logger.info(f"""Creating agent '{self.agent_name}' with the following configuration:
@@ -168,22 +184,8 @@ class AgentBase(ABC):
         received_request = self._get_all_received_contents(received_message)
 
         try:
-            # The executor attaches a handler and exposes it via current_log_handler.
-            # Only self-manage a handler when running standalone (no executor context).
-            if current_log_handler.get() is None:
-                log_handler = AgentLogCaptureHandler()
-                log_handler.setLevel(config.LOG_LEVEL)
-                root_logger = logging.getLogger()
-                root_logger.addHandler(log_handler)
-                try:
-                    result = await self._get_agent_execution_result(received_request)
-                    self._log_llm_comments_if_result_incomplete(result.output)
-                finally:
-                    root_logger.removeHandler(log_handler)
-            else:
-                result = await self._get_agent_execution_result(received_request)
-                self._log_llm_comments_if_result_incomplete(result.output)
-
+            result = await self._get_agent_execution_result(received_request)
+            self._log_llm_comments_if_result_incomplete(result.output)
             return self._get_text_message_from_results(result)
         except Exception as e:
             logger.exception("Error during agent execution.")

@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 
 import asyncio
-import contextlib
 import json
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -193,18 +192,26 @@ async def test_build_snapshot_returns_valid_snapshot_event():
 # =============================================================================
 
 
+class _FakeSubscriber:
+    """Minimal stand-in for streaming_hub._Subscriber exposing async get()."""
+
+    def __init__(self, events: list[dict]) -> None:
+        self._events = list(events)
+
+    async def get(self) -> dict:
+        if self._events:
+            return self._events.pop(0)
+        await asyncio.sleep(100)  # block once exhausted
+
+
 @pytest.mark.asyncio
 async def test_sse_hub_events_forwards_live_event():
     live = {"type": "agent_activity", "task_id": "t1", "agent_id": "a1", "text": "working", "version": 1}
 
-    async def one_event_gen():
-        yield live
-        await asyncio.sleep(100)  # block after first event
-
     expires = datetime.now(UTC) + timedelta(minutes=5)
     events = []
 
-    async for sse in _sse_hub_events(one_event_gen(), expires):
+    async for sse in _sse_hub_events(_FakeSubscriber([live]), expires):
         events.append(sse)
         break  # close generator after first frame
 
@@ -216,22 +223,25 @@ async def test_sse_hub_events_forwards_live_event():
 
 
 @pytest.mark.asyncio
-async def test_sse_hub_events_emits_auth_error_when_token_expired_on_heartbeat():
-    async def empty_gen():
-        return
-        yield {}  # makes it an async generator
-
+async def test_sse_hub_events_emits_auth_error_when_token_expired():
     expired = datetime.now(UTC) - timedelta(seconds=1)
     events = []
 
-    async def instant_timeout(coro, timeout):
-        with contextlib.suppress(Exception):
-            coro.close()
-        raise TimeoutError()
-
-    with patch("orchestrator.main.asyncio.wait_for", instant_timeout):
-        async for sse in _sse_hub_events(empty_gen(), expired):
-            events.append(sse)
+    async for sse in _sse_hub_events(_FakeSubscriber([]), expired):
+        events.append(sse)
 
     assert len(events) == 1
-    assert events[0].event == "auth-error"
+    assert events[0].event == "auth_error"
+
+
+@pytest.mark.asyncio
+async def test_sse_hub_events_emits_auth_error_even_with_incoming_events():
+    expired = datetime.now(UTC) - timedelta(seconds=1)
+    live = {"type": "agent_activity", "task_id": "t1", "agent_id": "a1", "text": "working", "version": 1}
+    events = []
+
+    async for sse in _sse_hub_events(_FakeSubscriber([live]), expired):
+        events.append(sse)
+
+    assert len(events) == 1
+    assert events[0].event == "auth_error"

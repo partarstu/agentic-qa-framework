@@ -134,45 +134,8 @@ async def test_agent_run_success(test_agent_instance):
 
 
 @pytest.mark.asyncio
-async def test_agent_run_reuses_contextvar_log_handler(test_agent_instance):
-    """When current_log_handler is set, run() uses it without creating a new handler."""
-    mock_handler = MagicMock(spec=AgentLogCaptureHandler)
-
-    mock_run_result = MagicMock()
-    mock_run_result.output = MockOutput(result="ok")
-    test_agent_instance.agent = AsyncMock()
-    test_agent_instance.agent.run.return_value = mock_run_result
-    test_agent_instance.agent.__aenter__.return_value = test_agent_instance.agent
-    test_agent_instance.agent.__aexit__.return_value = None
-
-    token = set_current_log_handler(mock_handler)
-    try:
-        with patch("common.agent_base.get_message_text", return_value="hello"):
-            mock_message = MagicMock(spec=Message)
-            mock_message.parts = []
-            with patch("common.agent_base.AgentLogCaptureHandler") as MockHandlerCls:
-                await test_agent_instance.run(mock_message)
-                MockHandlerCls.assert_not_called()
-    finally:
-        reset_current_log_handler(token)
-
-
-@pytest.mark.asyncio
-async def test_agent_run_creates_own_handler_when_no_contextvar(test_agent_instance):
-    """When current_log_handler is not set, run() creates and attaches its own handler."""
-    mock_run_result = MagicMock()
-    mock_run_result.output = MockOutput(result="ok")
-    test_agent_instance.agent = AsyncMock()
-    test_agent_instance.agent.run.return_value = mock_run_result
-    test_agent_instance.agent.__aenter__.return_value = test_agent_instance.agent
-    test_agent_instance.agent.__aexit__.return_value = None
-
-    with patch("common.agent_base.get_message_text", return_value="hello"):
-        mock_message = MagicMock(spec=Message)
-        mock_message.parts = []
-        with patch("common.agent_base.AgentLogCaptureHandler") as MockHandlerCls:
-            mock_own_handler = MockHandlerCls.return_value
-            mock_own_handler.level = logging.NOTSET  # must be int for logger comparison
-            mock_own_handler.setLevel = MagicMock()
-            await test_agent_instance.run(mock_message)
-            MockHandlerCls.assert_called_once()
+async def test_activity_queue_bounded_and_drops_items(test_agent_instance):
+    """When the queue hits its max limit, report_activity drops new items without raising."""
+    for i in range(1005):
+        await test_agent_instance.report_activity(f"activity-{i}")
+    assert test_agent_instance.activity_queue.qsize() == 1000

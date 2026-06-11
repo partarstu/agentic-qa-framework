@@ -7,17 +7,21 @@ Streaming primitives for SSE event payloads and log handler ContextVar.
 """
 
 from contextvars import ContextVar, Token
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel
+
+if TYPE_CHECKING:
+    from common.agent_log_capture import AgentLogCaptureHandler
 
 # ---------------------------------------------------------------------------
 # ContextVar
 # ---------------------------------------------------------------------------
 
-current_log_handler: ContextVar[object | None] = ContextVar("current_log_handler", default=None)
+current_log_handler: ContextVar["AgentLogCaptureHandler | None"] = ContextVar("current_log_handler", default=None)
 
 
-def set_current_log_handler(handler: object) -> Token:
+def set_current_log_handler(handler: "AgentLogCaptureHandler") -> Token:
     """Bind log handler to the current context; returns a reset token."""
     return current_log_handler.set(handler)
 
@@ -33,7 +37,13 @@ def reset_current_log_handler(token: Token) -> None:
 
 
 def compute_activity_budget(base_limit: int) -> int:
-    """Return the tool-calls limit that accounts for report_activity calls."""
+    """Return the tool-calls limit that accounts for report_activity calls.
+
+    UsageLimits offers no per-tool exclusion, so report_activity calls count against the
+    same tool_calls_limit as real tool calls. Doubling base_limit assumes a roughly 1:1
+    report_activity-to-real-tool pairing; for agents that rarely call report_activity this
+    weakens the effective cap (it approaches 2x the intended real-tool budget).
+    """
     return base_limit * 2
 
 
@@ -96,4 +106,4 @@ class SnapshotEvent(BaseModel):
 
 class AuthErrorEvent(BaseModel):
     version: int = 1
-    type: str = "auth-error"
+    type: str = "auth_error"

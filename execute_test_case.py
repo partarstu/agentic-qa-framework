@@ -7,7 +7,8 @@ import asyncio
 import json
 import time
 
-from a2a.client import create_client
+import httpx
+from a2a.client import ClientConfig, create_client
 from a2a.helpers import get_message_text, new_text_message
 from a2a.types import Artifact, SendMessageRequest, TaskState
 
@@ -42,8 +43,13 @@ async def send_test_case_to_agent(agent_port: int, test_case: TestCase):
     task_description = f"Execution of test case {test_case.key}"
     task_completion_timeout = 5000  # seconds
 
+    httpx_client: httpx.AsyncClient | None = None
     try:
-        a2a_client = await create_client(agent_base_url)
+        httpx_client = httpx.AsyncClient(timeout=task_completion_timeout)
+        a2a_client = await create_client(
+            agent_base_url,
+            client_config=ClientConfig(httpx_client=httpx_client),
+        )
 
         response_iterator = a2a_client.send_message(
             SendMessageRequest(message=new_text_message(test_case.model_dump_json()))
@@ -138,6 +144,9 @@ async def send_test_case_to_agent(agent_port: int, test_case: TestCase):
 
     except Exception as e:
         logger.exception(f"Failed to send test case to agent on port {agent_port}. Error: {e}")
+    finally:
+        if httpx_client is not None:
+            await httpx_client.aclose()
 
 
 async def main():

@@ -7,7 +7,6 @@ Agent executor for pydantic-ai agents over the A2A protocol.
 """
 
 import asyncio
-import contextlib
 import logging
 from uuid import uuid4
 
@@ -36,9 +35,16 @@ class DefaultAgentExecutor(AgentExecutor):
 
     def __init__(self, agent):
         self.agent = agent
-        self._active_runs: dict[str, tuple[asyncio.Task, EventQueue]] = {}
+        self._active_runs: dict[str, asyncio.Task] = {}
+        # Agents run one task at a time; execute() mutates shared per-agent state
+        # (activity queue, log handler), so concurrent calls must be serialized.
+        self._execute_lock = asyncio.Lock()
 
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
+        async with self._execute_lock:
+            await self._execute_task(context, event_queue)
+
+    async def _execute_task(self, context: RequestContext, event_queue: EventQueue) -> None:
         task_id = context.task_id
         logger.info(f"Executing task {task_id}")
 
@@ -55,23 +61,26 @@ class DefaultAgentExecutor(AgentExecutor):
         handler_detached = False
 
         # Clear any items a crashed prior task may have left (agents run one task at a time).
-        activity_queue = self.agent._activity_queue
+        activity_queue = self.agent.activity_queue
         while not activity_queue.empty():
             activity_queue.get_nowait()
 
         async def flush_activity_loop() -> None:
             # Forward each reported activity immediately as a WORKING status message.
-            try:
-                while True:
+            # A transient update_status failure is logged and the loop keeps streaming.
+            while True:
+                try:
                     description = await activity_queue.get()
                     await updater.update_status(TaskState.TASK_STATE_WORKING, message=new_text_message(description))
-            except asyncio.CancelledError:
-                pass
+                except asyncio.CancelledError:
+                    return
+                except Exception:
+                    logger.exception("Failed to forward reported activity; continuing to stream.")
 
         async def flush_logs_loop() -> None:
             nonlocal sent_any_logs
-            try:
-                while True:
+            while True:
+                try:
                     await asyncio.sleep(_LOG_FLUSH_INTERVAL_SECONDS)
                     batch = log_handler.drain()
                     if batch:
@@ -83,8 +92,10 @@ class DefaultAgentExecutor(AgentExecutor):
                             last_chunk=False,
                         )
                         sent_any_logs = True
-            except asyncio.CancelledError:
-                pass
+                except asyncio.CancelledError:
+                    return
+                except Exception:
+                    logger.exception("Failed to flush log batch; continuing to stream.")
 
         try:
             received_message = context.message
@@ -99,7 +110,7 @@ class DefaultAgentExecutor(AgentExecutor):
             logs_task = asyncio.create_task(flush_logs_loop())
 
             run_task = asyncio.create_task(self.agent.run(received_message))
-            self._active_runs[task_id] = (run_task, event_queue)
+            self._active_runs[task_id] = run_task
             try:
                 result = await run_task
             finally:
@@ -108,7 +119,10 @@ class DefaultAgentExecutor(AgentExecutor):
                 # 1. Stop loops BEFORE any terminal status (update_status latches terminal state).
                 activity_task.cancel()
                 logs_task.cancel()
-                await asyncio.gather(activity_task, logs_task, return_exceptions=True)
+                results = await asyncio.gather(activity_task, logs_task, return_exceptions=True)
+                for res in results:
+                    if isinstance(res, Exception) and not isinstance(res, asyncio.CancelledError):
+                        logger.error(f"Error in background task during shutdown: {res}", exc_info=res)
 
                 # 2. Final log chunk with last_chunk=True (must precede the terminal status).
                 #    Sent even when empty (if anything was streamed) so the consumer can finalize.
@@ -137,6 +151,14 @@ class DefaultAgentExecutor(AgentExecutor):
             await updater.complete()
             logger.info(f"Task {task_id} completed successfully.")
 
+        except asyncio.CancelledError:
+            # cancel() requested cancellation of run_task. The ordered shutdown (stop
+            # loops → final log chunk → detach handler) already ran in the finally above.
+            # Emit CANCELED here so the terminal status is always last, and swallow the
+            # error so it does not propagate out of execute().
+            logger.info(f"Task {task_id} was canceled.")
+            await updater.cancel()
+
         except AgentRuntimeError as e:
             logger.error(f"Agent execution failed for task {task_id}: {e}")
             await updater.add_artifact(parts=list(e.parts), name=ArtifactName.EXECUTION_RESULT)
@@ -152,13 +174,11 @@ class DefaultAgentExecutor(AgentExecutor):
 
     async def cancel(self, context: RequestContext, event_queue: EventQueue) -> None:
         task_id = context.task_id
-        entry = self._active_runs.get(task_id)
-        if entry is not None:
-            run_task, original_queue = entry
+        run_task = self._active_runs.get(task_id)
+        if run_task is not None:
+            # execute() owns the ordered shutdown and emits the CANCELED terminal status
+            # on its own queue; here we only request cancellation of the active run.
             run_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await run_task
-            await TaskUpdater(original_queue, task_id, context.context_id).cancel()
         else:
             logger.warning(f"No active run found for task {task_id}; emitting CANCELED on cancel-call's queue")
             await TaskUpdater(event_queue, task_id, context.context_id).cancel()

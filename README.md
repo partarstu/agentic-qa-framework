@@ -607,7 +607,7 @@ captured URL (browser history, proxy logs) cannot be replayed once the stream ex
    `{"stream_token": "...", "expires_at": "..."}`.
 3. The UI opens `EventSource` with `?stream_token=<token>` as a query parameter.
 4. Every 15 s the server sends a `heartbeat` frame and re-validates the token expiry.
-   On expiry it emits a one-shot `event: auth-error` frame and closes the connection;
+   On expiry it emits a one-shot `event: auth_error` frame and closes the connection;
    the UI's 401 handler routes to the login page.
 
 #### SSE Endpoints

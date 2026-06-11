@@ -20,7 +20,9 @@ from common.streaming import current_log_handler
 def mock_agent():
     agent = MagicMock()
     agent.run = AsyncMock()
-    agent._activity_queue = asyncio.Queue()
+    queue = asyncio.Queue()
+    agent._activity_queue = queue
+    agent.activity_queue = queue
     return agent
 
 
@@ -233,3 +235,89 @@ async def test_final_drain_emits_remaining_log_batch(mock_agent, mock_context, m
     assert artifact_event.append is False
     assert len(artifact_event.artifact.parts) == 1
     assert artifact_event.artifact.parts[0].raw == b"captured log line"
+
+
+@pytest.mark.asyncio
+async def test_concurrent_execute_lock(mock_agent, mock_event_queue):
+    executor = DefaultAgentExecutor(mock_agent)
+    execution_order = []
+
+    async def slow_run(_message):
+        execution_order.append("start")
+        await asyncio.sleep(0.05)
+        execution_order.append("end")
+        mock_result = MagicMock()
+        mock_result.parts = []
+        return mock_result
+
+    mock_agent.run.side_effect = slow_run
+
+    context1 = MagicMock(spec=RequestContext)
+    context1.task_id = "task-1"
+    context1.context_id = "context-1"
+    context1.current_task = MagicMock()
+    context1.message = MagicMock()
+
+    context2 = MagicMock(spec=RequestContext)
+    context2.task_id = "task-2"
+    context2.context_id = "context-2"
+    context2.current_task = MagicMock()
+    context2.message = MagicMock()
+
+    task1 = asyncio.create_task(executor.execute(context1, mock_event_queue))
+    task2 = asyncio.create_task(executor.execute(context2, mock_event_queue))
+
+    await asyncio.gather(task1, task2)
+
+    assert execution_order == ["start", "end", "start", "end"]
+
+
+@pytest.mark.asyncio
+async def test_flush_activity_loop_update_status_failure(mock_agent, mock_context, mock_event_queue):
+    executor = DefaultAgentExecutor(mock_agent)
+    mock_context.message = MagicMock()
+
+    mock_updater = MagicMock()
+    mock_updater.update_status = AsyncMock(side_effect=[Exception("Transient error"), None])
+    mock_updater.start_work = AsyncMock()
+    mock_updater.add_artifact = AsyncMock()
+    mock_updater.complete = AsyncMock()
+
+    async def run_agent(_message):
+        await mock_agent.activity_queue.put("activity 1")
+        await mock_agent.activity_queue.put("activity 2")
+        await asyncio.sleep(0.02)
+        mock_result = MagicMock()
+        mock_result.parts = []
+        return mock_result
+
+    mock_agent.run.side_effect = run_agent
+
+    with patch("common.agent_executor.TaskUpdater", return_value=mock_updater):
+        await executor.execute(mock_context, mock_event_queue)
+
+    assert mock_updater.update_status.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_execute_cancelled_swallowed_and_emits_canceled_event(mock_agent, mock_context, mock_event_queue):
+    executor = DefaultAgentExecutor(mock_agent)
+    mock_context.message = MagicMock()
+
+    async def running_run(_message):
+        await asyncio.sleep(100)
+
+    mock_agent.run.side_effect = running_run
+
+    execute_task = asyncio.create_task(executor.execute(mock_context, mock_event_queue))
+    await asyncio.sleep(0.01)
+
+    await executor.cancel(mock_context, mock_event_queue)
+    await execute_task
+
+    calls = mock_event_queue.enqueue_event.call_args_list
+    canceled_calls = [
+        call[0][0] for call in calls
+        if isinstance(call[0][0], TaskStatusUpdateEvent) and call[0][0].status.state == TaskState.TASK_STATE_CANCELED
+    ]
+    assert len(canceled_calls) == 1
