@@ -10,7 +10,7 @@ import pytest
 from a2a.types import TaskState
 
 from common.models import TestCase, TestExecutionResult
-from orchestrator.main import AgentStatus, _agent_worker, _execute_single_test
+from orchestrator.main import AgentStatus, BrokenReason, _agent_worker, _execute_single_test
 
 
 @pytest.fixture
@@ -74,6 +74,41 @@ async def test_agent_worker_broken(mock_registry, mock_queue):
     results = []
     await _agent_worker("agent-1", mock_queue, results, ["agent-1"])
     assert len(results) == 0
+
+
+@pytest.mark.asyncio
+async def test_agent_worker_enqueues_recovery_when_task_fails(mock_registry, mock_queue):
+    test_case = TestCase(
+        key="TC-1",
+        summary="Sum",
+        name="Name",
+        steps=[],
+        test_data=[],
+        expected_results=[],
+        labels=[],
+        comment="",
+        preconditions="",
+        parent_issue_key="STORY-1",
+    )
+    mock_queue.get.side_effect = [(test_case, "UI")]
+    mock_registry.update_status = AsyncMock()
+
+    with (
+        patch("orchestrator.main._execute_single_test", new_callable=AsyncMock) as mock_exec,
+        patch("orchestrator.main.cancellation_queue") as mock_cancellation_queue,
+    ):
+        mock_exec.side_effect = RuntimeError("iterator finished before completion")
+        mock_cancellation_queue.put = AsyncMock()
+
+        results = []
+        await _agent_worker("agent-1", mock_queue, results, ["agent-1"])
+
+        mock_registry.update_status.assert_awaited_with(
+            "agent-1", AgentStatus.BROKEN, BrokenReason.TASK_STUCK
+        )
+        mock_cancellation_queue.put.assert_awaited_once()
+        enqueued_agent_id, _ = mock_cancellation_queue.put.await_args.args[0]
+        assert enqueued_agent_id == "agent-1"
 
 
 @pytest.mark.asyncio

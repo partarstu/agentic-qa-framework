@@ -886,6 +886,8 @@ async def _agent_worker(
                 logger.exception(f"Error in worker for agent {agent_id}.")
                 # Mark agent as BROKEN - task execution failed
                 await agent_registry.update_status(agent_id, AgentStatus.BROKEN, BrokenReason.TASK_STUCK)
+                # Hand the agent to the recovery task (matches the other BROKEN sites).
+                await cancellation_queue.put((agent_id, time.time()))
 
                 # Check if any other agents in the pool are still alive (not BROKEN)
                 any_agents_alive = False
@@ -1721,9 +1723,9 @@ async def _process_url_discovery(url: str):
             status = await agent_registry.get_status(existing_agent_id)
             if status == AgentStatus.BROKEN:
                 broken_reason, _ = await agent_registry.get_broken_context(existing_agent_id)
-                if broken_reason == BrokenReason.OFFLINE:
+                if broken_reason in (BrokenReason.OFFLINE, BrokenReason.TASK_STUCK):
                     logger.info(
-                        f"Agent {existing_agent_id} (URL: {url}) was OFFLINE "
+                        f"Agent {existing_agent_id} (URL: {url}) was BROKEN ({broken_reason}) "
                         f"but is now responsive. Resetting to AVAILABLE."
                     )
                     await agent_registry.update_status(existing_agent_id, AgentStatus.AVAILABLE)
