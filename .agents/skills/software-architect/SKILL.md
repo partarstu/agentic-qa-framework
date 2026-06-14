@@ -521,7 +521,7 @@ When considering adding a new dependency:
 If adding dependency:
 
 1. Document justification in ADR
-2. Add to `requirements.txt`
+2. Add to `pyproject.toml` (and run `uv lock` to update `uv.lock`)
 3. Note in implementation plan
 
 If rejecting:

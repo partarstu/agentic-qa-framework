@@ -84,9 +84,13 @@ Always use relevant skills from ".agents" folder while executing your tasks.
   XSS).
 * Store secrets like API keys and passwords in environment variables or a secrets management tool, never hardcoded in
   the source code.
-* Always use a virtual environment for each project to isolate dependencies.
-* If using pip, manage dependencies with `requirements.in` (for abstract dependencies) and `requirements.txt` (for
-  pinned, concrete dependencies), generated with a tool like `pip-tools`.
+* Always use an isolated, project-local virtual environment to isolate dependencies. This project uses
+  [`uv`](https://docs.astral.sh/uv/); create and update the environment with `uv sync` and run commands inside it with
+  `uv run`.
+* Manage dependencies through `pyproject.toml` as the single source of truth: declare direct runtime dependencies under
+  `[project.dependencies]`, optional/feature-specific runtime dependencies (e.g. the machine-learning services) under
+  `[project.optional-dependencies]`, and development/CI tooling under `[dependency-groups]`. Never edit `uv.lock` by
+  hand; regenerate it with `uv lock` and commit it for reproducible, fully pinned installs.
 
 ## General style requirements
 

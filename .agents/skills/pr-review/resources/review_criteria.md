@@ -209,8 +209,9 @@ All new Python files must include:
 
 ### Virtual Environments
 
-- Always use a virtual environment for isolation
-- Manage dependencies with `requirements.in` (abstract) and `requirements.txt` (pinned)
+- Always use an isolated, project-local virtual environment (this project uses `uv`: `uv sync` / `uv run`)
+- Declare dependencies in `pyproject.toml` (`[project.dependencies]`, `[project.optional-dependencies]`,
+  `[dependency-groups]`) and commit the generated `uv.lock` for reproducible installs
 
 ### Git Branch
 

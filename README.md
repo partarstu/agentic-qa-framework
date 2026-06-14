@@ -104,8 +104,7 @@ For a visual representation of the system's architecture and data flow, please r
 
 * Python 3.14+
 * Docker
-* `pip` (Python package installer)
-* `virtualenv` (or `conda` for environment management)
+* [`uv`](https://docs.astral.sh/uv/) (Python package and project manager)
 
 ### Setup
 
@@ -115,16 +114,23 @@ For a visual representation of the system's architecture and data flow, please r
    cd agentic-qa-framework
    ```
 
-2. **Create and activate a virtual environment:**
+2. **Install `uv`** (if not already installed):
    ```bash
-   python -m venv .venv
-   .venv\Scripts\activate
+   # macOS / Linux
+   curl -LsSf https://astral.sh/uv/install.sh | sh
+   # Windows (PowerShell)
+   powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
    ```
 
-3. **Install dependencies:**
+3. **Create the virtual environment and install dependencies:**
    ```bash
-   pip install -r requirements.txt
+   uv sync
    ```
+   This creates a `.venv` and installs the locked runtime and development
+   dependencies. Run commands inside the environment with `uv run`, e.g.
+   `uv run pytest`. The optional, machine-learning dependencies of the
+   embedding and prompt-guard services are installed on demand via
+   `uv sync --extra embedding-service` or `uv sync --extra prompt-guard-service`.
 
 ### Docker Images
 
@@ -629,15 +635,15 @@ The project includes a comprehensive test suite. To run the tests:
 
 ```bash
 # Run all tests
-pytest
+uv run pytest
 
 # Run tests with verbose output
-pytest -v
+uv run pytest -v
 
 # Run tests for a specific module
-pytest tests/agents/
-pytest tests/orchestrator/
-pytest tests/common/
+uv run pytest tests/agents/
+uv run pytest tests/orchestrator/
+uv run pytest tests/common/
 ```
 
 ## Contributing

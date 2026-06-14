@@ -5,20 +5,28 @@
 # Use an official Python runtime as a parent image
 FROM python:3.14-slim
 
+# Install the uv package manager (pinned for reproducible builds)
+COPY --from=ghcr.io/astral-sh/uv:0.11.21 /uv /uvx /bin/
+
 # Set the working directory in the container
 WORKDIR /app
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y libmagic1 && rm -rf /var/lib/apt/lists/*
 
-# Copy the requirements file into the container
-COPY requirements.txt .
+# uv configuration: copy packages into the venv (safe for derived images),
+# don't keep a build cache in the image, and put the venv on PATH so derived
+# images (agents, orchestrator, services) can run `gunicorn`/`python` directly.
+ENV UV_LINK_MODE=copy \
+    UV_NO_CACHE=1 \
+    UV_PROJECT_ENVIRONMENT=/app/.venv \
+    PATH="/app/.venv/bin:$PATH"
 
-# Install any needed packages specified in requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt
+# Install the shared runtime dependencies from the lock file (no dev tools, no
+# optional service extras). Only the dependency manifests are copied, so this
+# layer stays cached as long as the locked dependencies don't change.
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-dev --no-install-project
 
 # Create local_models directory for pre-downloaded models
 RUN mkdir -p /app/local_models
-
-# Keep the image clean
-RUN rm -rf /var/lib/apt/lists/*
