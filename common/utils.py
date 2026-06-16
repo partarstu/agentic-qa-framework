@@ -26,8 +26,27 @@ def _initialize_logging():
         client = google.cloud.logging.Client()
         client.setup_logging()
     else:
-        logging.basicConfig(stream=sys.stdout, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+        handlers: list[logging.Handler] = [logging.StreamHandler(sys.stdout)]
+        if config.LOG_TO_FILE:
+            handlers.append(_build_file_log_handler())
+        logging.basicConfig(handlers=handlers, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
     logging_initialized = True
+
+
+def _build_file_log_handler() -> logging.Handler:
+    """Create a rotating file handler writing to ``<LOG_DIR>/<service>.log``.
+
+    The service name is derived from the entry script's package (e.g. ``orchestrator/main.py`` -> ``orchestrator``),
+    so each service gets its own file without per-service configuration.
+    """
+    from logging.handlers import RotatingFileHandler
+
+    service_name = Path(sys.argv[0]).resolve().parent.name or "app"
+    log_dir = Path(config.LOG_DIR)
+    log_dir.mkdir(parents=True, exist_ok=True)
+    return RotatingFileHandler(
+        log_dir / f"{service_name}.log", maxBytes=10 * 1024 * 1024, backupCount=5, encoding="utf-8"
+    )
 
 
 def get_logger(name):

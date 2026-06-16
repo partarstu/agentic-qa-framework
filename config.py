@@ -7,6 +7,7 @@ Centralized configuration for the application.
 """
 
 import os
+from pathlib import Path
 
 from dotenv import load_dotenv
 from pydantic_ai.settings import ThinkingLevel
@@ -16,6 +17,10 @@ load_dotenv()
 # Logging
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
 GOOGLE_CLOUD_LOGGING_ENABLED = os.environ.get("GOOGLE_CLOUD_LOGGING_ENABLED", "False").lower() in ("true", "1", "t")
+# When enabled, each service (orchestrator and the Python agents) additionally writes its logs to a rotating file
+# under LOG_DIR, named after the service's package (e.g. orchestrator.log, requirements_review.log).
+LOG_TO_FILE = os.environ.get("LOG_TO_FILE", "True").lower() in ("true", "1", "t")
+LOG_DIR = os.environ.get("LOG_DIR", str(Path(__file__).resolve().parent / "logs"))
 
 # URLs
 ORCHESTRATOR_HOST = os.environ.get("ORCHESTRATOR_HOST", "localhost")
