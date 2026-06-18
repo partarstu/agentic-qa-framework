@@ -117,7 +117,7 @@ async def test_non_coalesced_overflow_emits_gap_sentinel():
         while True:
             try:
                 items.append(await asyncio.wait_for(sub.get(), timeout=0.1))
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 break
 
         gap_items = [i for i in items if i.get("type") == "gap"]
