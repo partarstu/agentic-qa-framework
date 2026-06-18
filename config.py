@@ -40,6 +40,10 @@ UPDATE_RAG_DB_WEBHOOK_URL = f"{ORCHESTRATOR_URL}/update-rag-db"
 
 # Secrets
 JIRA_WEBHOOK_SECRET = os.environ.get("JIRA_WEBHOOK_SECRET")
+# Shared secret guarding the internal embedding and prompt-guard services. When set, those
+# services require a matching X-API-Key header and their clients send it. Left unset, the
+# services stay open (they are expected to be reachable only on a private network).
+INTERNAL_SERVICE_API_KEY = os.environ.get("INTERNAL_SERVICE_API_KEY")
 ZEPHYR_API_TOKEN = os.environ.get("ZEPHYR_API_TOKEN")
 XRAY_BASE_URL = os.environ.get("XRAY_BASE_URL")
 XRAY_CLIENT_ID = os.environ.get("XRAY_CLIENT_ID")

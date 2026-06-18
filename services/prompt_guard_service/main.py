@@ -2,12 +2,13 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
+import hmac
 import os
 import threading
 
 import torch
 import uvicorn
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException
 from pydantic import BaseModel
 from transformers import AutoModelForSequenceClassification, AutoTokenizer, pipeline
 
@@ -17,6 +18,18 @@ from common import utils
 logger = utils.get_logger("prompt_guard_service")
 
 app = FastAPI(title="Prompt Guard Service")
+
+
+def _require_service_auth(x_api_key: str | None = Header(default=None)) -> None:
+    """Enforce the shared internal-service secret when one is configured.
+
+    When INTERNAL_SERVICE_API_KEY is unset the service stays open (it is expected to be
+    reachable only on a private network); when set, a matching X-API-Key header is required.
+    """
+    expected = config.INTERNAL_SERVICE_API_KEY
+    if expected and (not x_api_key or not hmac.compare_digest(x_api_key, expected)):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
 
 SLIDING_WINDOW_SIZE = 128
 MAX_TOKEN_LENGTH = 512
@@ -97,14 +110,14 @@ def health_check():
 
 
 @app.post("/check", response_model=PromptGuardResponse)
-async def check_injection(request: PromptGuardRequest):
+async def check_injection(request: PromptGuardRequest, _: None = Depends(_require_service_auth)):
     try:
         guard = ProtectAiPromptGuard.get_instance()
         is_injection = guard.is_injection(request.prompt, request.prompt_description, request.threshold)
         return PromptGuardResponse(is_injection=is_injection)
-    except Exception as e:
+    except Exception:
         logger.exception("Error checking for prompt injection")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 if __name__ == "__main__":

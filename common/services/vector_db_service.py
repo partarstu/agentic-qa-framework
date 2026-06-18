@@ -45,7 +45,10 @@ class VectorDbService:
 
         for attempt in range(max_retries):
             try:
-                response = await self._http_client.post(f"{self.embedding_service_url}/embed", json={"text": text})
+                headers = {"X-API-Key": config.INTERNAL_SERVICE_API_KEY} if config.INTERNAL_SERVICE_API_KEY else None
+                response = await self._http_client.post(
+                    f"{self.embedding_service_url}/embed", json={"text": text}, headers=headers
+                )
                 response.raise_for_status()
                 logger.info(f"Embedding service call completed in {time.monotonic() - start:.3f}s")
                 return response.json()["embedding"]

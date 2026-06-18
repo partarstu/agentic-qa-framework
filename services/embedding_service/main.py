@@ -2,11 +2,12 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
+import hmac
 import os
 
 import torch
 import uvicorn
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException
 from pydantic import BaseModel
 from sentence_transformers import SentenceTransformer
 
@@ -18,6 +19,17 @@ os.environ["TOKENIZERS_PARALLELISM"] = "true"
 logger = utils.get_logger("embedding_service")
 
 app = FastAPI(title="Embedding Service")
+
+
+def _require_service_auth(x_api_key: str | None = Header(default=None)) -> None:
+    """Enforce the shared internal-service secret when one is configured.
+
+    When INTERNAL_SERVICE_API_KEY is unset the service stays open (it is expected to be
+    reachable only on a private network); when set, a matching X-API-Key header is required.
+    """
+    expected = config.INTERNAL_SERVICE_API_KEY
+    if expected and (not x_api_key or not hmac.compare_digest(x_api_key, expected)):
+        raise HTTPException(status_code=401, detail="Unauthorized")
 
 # Model configuration - model is loaded lazily to avoid memory issues during worker forking
 _model_name = getattr(config.QdrantConfig, "EMBEDDING_MODEL", "jinaai/jina-embeddings-v3")
@@ -62,14 +74,14 @@ def health_check():
 
 
 @app.post("/embed", response_model=EmbeddingResponse)
-async def get_embedding(request: EmbeddingRequest):
+async def get_embedding(request: EmbeddingRequest, _: None = Depends(_require_service_auth)):
     try:
         model = _get_embedding_model()
         embedding = model.encode(request.text)
         return EmbeddingResponse(embedding=embedding.tolist())
-    except Exception as e:
+    except Exception:
         logger.exception("Error generating embedding.")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 if __name__ == "__main__":

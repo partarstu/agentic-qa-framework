@@ -6,6 +6,7 @@
 Authentication utilities for the UI dashboard.
 """
 
+import hmac
 from datetime import UTC, datetime, timedelta
 
 import jwt
@@ -14,6 +15,9 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
 
 import config
+from common import utils
+
+logger = utils.get_logger("auth")
 
 
 class LoginRequest(BaseModel):
@@ -34,24 +38,44 @@ class TokenResponse(BaseModel):
 class AuthService:
     """Service for handling dashboard authentication."""
 
-    def __init__(self):
-        self._secret = config.DashboardAuthConfig.JWT_SECRET
-        self._algorithm = config.DashboardAuthConfig.JWT_ALGORITHM
-        self._expire_hours = config.DashboardAuthConfig.JWT_EXPIRE_HOURS
+    @staticmethod
+    def _is_configured() -> bool:
+        """Whether all required dashboard auth settings are present.
+
+        Read dynamically (not cached) so a misconfigured deployment fails closed and
+        tests can override the settings on config at runtime.
+        """
+        return bool(
+            config.DashboardAuthConfig.USERNAME
+            and config.DashboardAuthConfig.PASSWORD
+            and config.DashboardAuthConfig.JWT_SECRET
+        )
 
     def authenticate(self, username: str, password: str) -> bool:
-        """Validate username and password against configured credentials."""
-        return username == config.DashboardAuthConfig.USERNAME and password == config.DashboardAuthConfig.PASSWORD
+        """Validate username and password against configured credentials.
+
+        Fails closed: if credentials or the JWT secret are not configured, no login is
+        accepted (an empty configured value must never match an empty submitted value).
+        The comparison is constant-time to avoid leaking credentials via timing.
+        """
+        if not self._is_configured():
+            logger.error("Dashboard authentication is not configured; rejecting login attempt.")
+            return False
+        username_ok = hmac.compare_digest(username, config.DashboardAuthConfig.USERNAME)
+        password_ok = hmac.compare_digest(password, config.DashboardAuthConfig.PASSWORD)
+        return username_ok and password_ok
 
     def create_token(self, username: str) -> TokenResponse:
         """Create a JWT token for an authenticated user."""
-        expires_at = datetime.now(UTC) + timedelta(hours=self._expire_hours)
+        if not self._is_configured():
+            raise HTTPException(status_code=503, detail="Authentication is not configured.")
+        expires_at = datetime.now(UTC) + timedelta(hours=config.DashboardAuthConfig.JWT_EXPIRE_HOURS)
         payload = {
             "sub": username,
             "exp": expires_at,
             "iat": datetime.now(UTC),
         }
-        token = jwt.encode(payload, self._secret, algorithm=self._algorithm)
+        token = jwt.encode(payload, config.DashboardAuthConfig.JWT_SECRET, algorithm=config.DashboardAuthConfig.JWT_ALGORITHM)
         return TokenResponse(
             access_token=token,
             expires_at=expires_at.isoformat(),
@@ -64,8 +88,16 @@ class AuthService:
         Returns:
             The username if the token is valid, None otherwise.
         """
+        # Fail closed: without a configured secret, no token can be trusted.
+        if not config.DashboardAuthConfig.JWT_SECRET:
+            logger.error("DASHBOARD_JWT_SECRET is not configured; rejecting token verification.")
+            return None
         try:
-            payload = jwt.decode(token, self._secret, algorithms=[self._algorithm])
+            payload = jwt.decode(
+                token,
+                config.DashboardAuthConfig.JWT_SECRET,
+                algorithms=[config.DashboardAuthConfig.JWT_ALGORITHM],
+            )
             return payload.get("sub")
         except jwt.ExpiredSignatureError:
             return None

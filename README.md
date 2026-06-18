@@ -156,16 +156,19 @@ GOOGLE_CLOUD_LOGGING_ENABLED=False # Default: False. Set to "True" to enable Goo
 ORCHESTRATOR_HOST=localhost # Default: localhost. The host where the orchestrator runs.
 ORCHESTRATOR_PORT=8000 # Default: 8000. The port the orchestrator listens on.
 ORCHESTRATOR_URL=http://localhost:8000 # Default: http://localhost:8000. The full URL of the orchestrator.
-ORCHESTRATOR_API_KEY=YOUR_ORCHESTRATOR_API_KEY # Optional. Set this to activate API key authentication for the orchestrator.
-                                 # If set, requests to the orchestrator must include an 'X-API-Key' header with this value.
+ORCHESTRATOR_API_KEY=YOUR_ORCHESTRATOR_API_KEY # Required. Authenticates the orchestrator's control/webhook endpoints.
+                                 # Requests must include an 'X-API-Key' header with this value. If it is left unset, those
+                                 # endpoints fail closed and return HTTP 503 (authentication not configured).
                                  # This corresponds to OrchestratorConfig.API_KEY.
+JIRA_WEBHOOK_SECRET= # Optional but recommended. When set, Jira webhook requests must carry a valid
+                                 # 'X-Hub-Signature' HMAC-SHA256 of the raw body; invalid/missing signatures are rejected.
 JIRA_MCP_SERVER_URL=http://localhost:9000/sse # Default: http://localhost:9000/sse. The URL of the Jira MCP server.
 
 # Dashboard Authentication
 # These settings control access to the UI monitoring dashboard at /api/dashboard/*
-DASHBOARD_USERNAME=admin # Default: admin. Username for dashboard login.
-DASHBOARD_PASSWORD=admin # Default: admin. Password for dashboard login. CHANGE THIS IN PRODUCTION!
-DASHBOARD_JWT_SECRET=change-me-in-production-please # Default: change-me-in-production-please. Secret key for JWT token signing. CHANGE THIS IN PRODUCTION!
+DASHBOARD_USERNAME=admin # Required. Username for dashboard login. Dashboard auth fails closed if this is unset.
+DASHBOARD_PASSWORD=admin # Required. Password for dashboard login. CHANGE THIS IN PRODUCTION! Auth fails closed if unset.
+DASHBOARD_JWT_SECRET=change-me-in-production-please # Required. Secret key for JWT token signing. CHANGE THIS IN PRODUCTION! Tokens are rejected if this is unset.
 DASHBOARD_JWT_EXPIRE_HOURS=24 # Default: 24. Number of hours before JWT tokens expire.
 
 # Zephyr Test Management System
@@ -222,9 +225,10 @@ ISSUE_PRIORITY_FIELD_ID=priority # Default: priority. Jira field ID for issue pr
 ISSUE_SEVERITY_FIELD_NAME=customfield_10124 # Default: customfield_10124. Jira custom field name for severity.
 
 # Prompt Injection Detection
-PROMPT_INJECTION_CHECK_ENABLED=False # Default: False. Set to "True" to enable prompt injection detection.
+PROMPT_INJECTION_CHECK_ENABLED=True # Default: True (secure by default). Set to "False" to disable prompt injection detection. When enabled, PROMPT_GUARD_SERVICE_URL must point to a running prompt guard service.
 PROMPT_GUARD_PROVIDER=protect_ai # Default: protect_ai. The provider for prompt injection detection.
 PROMPT_GUARD_SERVICE_URL= # Required if PROMPT_INJECTION_CHECK_ENABLED is True. URL of the prompt guard service.
+INTERNAL_SERVICE_API_KEY= # Optional shared secret. When set, the embedding and prompt-guard services require a matching X-API-Key header (and their clients send it). Recommended whenever those services are not strictly network-isolated.
 PROMPT_INJECTION_MIN_SCORE=0.8 # Default: 0.8. The minimum score for a prompt to be considered an injection.
 PROMPT_INJECTION_MODEL_NAME=ProtectAI/deberta-v3-base-prompt-injection-v2 # Default: ProtectAI/deberta-v3-base-prompt-injection-v2. The name of the model used for prompt injection detection.
 

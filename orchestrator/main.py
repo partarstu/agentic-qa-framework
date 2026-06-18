@@ -3,6 +3,8 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 
 import asyncio
+import hashlib
+import hmac
 import json
 import logging
 import secrets
@@ -156,7 +158,12 @@ async def lifespan(app: FastAPI):
 
 
 def _validate_api_key(api_key: str = Security(api_key_header)):
-    if config.OrchestratorConfig.API_KEY and api_key != config.OrchestratorConfig.API_KEY:
+    configured_key = config.OrchestratorConfig.API_KEY
+    # Fail closed: an unconfigured API key must not silently disable authentication.
+    if not configured_key:
+        logger.error("ORCHESTRATOR_API_KEY is not configured; rejecting request to protected endpoint.")
+        raise HTTPException(status_code=503, detail="Server authentication is not configured.")
+    if not api_key or not hmac.compare_digest(api_key, configured_key):
         raise HTTPException(status_code=401, detail="Unauthorized: Invalid API Key")
 
 
@@ -598,6 +605,7 @@ async def review_jira_requirements(request: Request, api_key: str = Depends(_val
     Receives webhook from Jira and triggers the requirements review.
     """
     try:
+        await _verify_jira_webhook_signature(request)
         logger.info("Received an event from Jira, requesting requirements review from an agent.")
         user_story_id = await _get_jira_issue_key_from_request(request)
         task_description = "Review the Jira user story"
@@ -618,6 +626,7 @@ async def trigger_test_case_generation_workflow(request: Request, api_key: str =
     Receives webhook from Jira and triggers the test case generation.
     """
     try:
+        await _verify_jira_webhook_signature(request)
         logger.info("Received an event from Jira, requesting test case generation from an agent.")
         user_story_id = await _get_jira_issue_key_from_request(request)
         generated_test_cases = await _request_test_cases_generation(user_story_id)
@@ -1538,6 +1547,23 @@ async def reserve_agent_waiting_if_needed(
     return None
 
 
+async def _verify_jira_webhook_signature(request: Request) -> None:
+    """Verify the HMAC-SHA256 signature of an incoming Jira webhook.
+
+    Enforced only when JIRA_WEBHOOK_SECRET is configured (the endpoints are always
+    additionally protected by the orchestrator API key). Jira sends the signature in the
+    'X-Hub-Signature' header as 'sha256=<hex digest>' computed over the raw request body.
+    """
+    secret = config.JIRA_WEBHOOK_SECRET
+    if not secret:
+        return
+    signature_header = request.headers.get("X-Hub-Signature", "")
+    body = await request.body()
+    expected = "sha256=" + hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
+    if not signature_header or not hmac.compare_digest(signature_header, expected):
+        _handle_exception("Invalid or missing Jira webhook signature.", 401)
+
+
 async def _get_jira_issue_key_from_request(request):
     payload = await request.json()
     user_story_id = (payload or {}).get("issue_key", "")
@@ -1813,12 +1839,15 @@ if STATIC_FILES_DIR.exists():
         # Don't intercept API routes
         if full_path.startswith("api/"):
             raise HTTPException(status_code=404, detail="API endpoint not found")
-        # Check if file exists in static dir
-        file_path = STATIC_FILES_DIR / full_path
-        if file_path.exists() and file_path.is_file():
-            return FileResponse(file_path)
+        static_root = STATIC_FILES_DIR.resolve()
+        index_file = static_root / "index.html"
+        # Resolve the requested path and ensure it stays inside the static root.
+        # This blocks path traversal (e.g. "../../.env") from reading arbitrary files.
+        requested = (static_root / full_path).resolve()
+        if requested.is_relative_to(static_root) and requested.is_file():
+            return FileResponse(requested)
         # Return index.html for client-side routing
-        return FileResponse(STATIC_FILES_DIR / "index.html")
+        return FileResponse(index_file)
 else:
     logger.info("Dashboard UI static files not found. UI will not be available.")
 
