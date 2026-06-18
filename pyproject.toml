@@ -50,7 +50,6 @@ dev = [
     "pytest-asyncio==1.3.0",
     "ruff",
     "bandit",
-    "pip-audit",
     # The test suite builds agents with an `openai:` model string, so the
     # OpenAI provider is required for tests but not at runtime (production uses
     # the Google provider only). uv merges this with the base extras above.

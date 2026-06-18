@@ -1,6 +1,6 @@
 ---
 name: prepare-pr
-description: Prepares code for a pull request by running linting (ruff), tests, security scans (bandit), and dependency checks (pip-audit). Use when ready to create a PR or before committing changes.
+description: Prepares code for a pull request by running linting (ruff), tests, security scans (bandit), and dependency checks (uv audit). Use when ready to create a PR or before committing changes.
 ---
 
 # Prepare Pull Request
@@ -35,7 +35,7 @@ This skill is designed to run with minimal interruption.
 1. Run linting (ruff) and auto-fix issues
 2. Verify new files have SPDX license headers
 3. Run unit tests and fix failures
-4. Run security scan (bandit) and dependency check (pip-audit)
+4. Run security scan (bandit) and dependency check (uv audit)
 5. Analyze changes and update documentation (README, skills)
 6. Present changes for user review
 7. Commit and push changes
@@ -43,7 +43,7 @@ This skill is designed to run with minimal interruption.
 
 ## Prerequisites
 
-Ensure installed: `ruff`, `bandit`, `pip-audit`, `pytest`, `gh` (GitHub CLI)
+Ensure installed: `ruff`, `bandit`, `pytest`, `gh` (GitHub CLI). Dependency auditing uses `uv audit` (built into uv).
 
 ## Step-by-Step Instructions
 
@@ -111,10 +111,10 @@ bandit -r . -x "./tests,./orchestrator/ui,./.venv" -f txt
 
 Common fixes: Use env vars for secrets, parameterized queries for SQL, `secrets` module instead of `random`.
 
-#### 4.2: Dependency Vulnerability Check (pip-audit)
+#### 4.2: Dependency Vulnerability Check (uv audit)
 
 ```powershell
-pip-audit --desc
+uv audit --preview-features audit-command --no-dev
 ```
 
 If vulnerabilities found, follow the **Intervention Pattern** with options:
@@ -198,7 +198,7 @@ gh pr create --title "<short summary>" --body "<detailed description>"
 - [ ] All new Python files have SPDX license header
 - [ ] `pytest tests/ -v` passes
 - [ ] `bandit` has no unaddressed high/medium issues
-- [ ] `pip-audit` has no unaddressed critical vulnerabilities
+- [ ] `uv audit` has no unaddressed critical vulnerabilities
 - [ ] README.md reflects current code state
 - [ ] User has reviewed and approved changes
 - [ ] PR has descriptive title and comprehensive description

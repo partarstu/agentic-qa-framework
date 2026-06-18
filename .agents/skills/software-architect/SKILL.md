@@ -511,7 +511,7 @@ When considering adding a new dependency:
 |-----------------|---------------------------------------------------|
 | **Necessity**   | Can we achieve this with stdlib or existing deps? |
 | **Maintenance** | Last release < 6 months? Active maintainers?      |
-| **Security**    | Run `pip-audit` check, review CVE database        |
+| **Security**    | Run `uv audit` check, review CVE database         |
 | **License**     | Compatible with AGPL-3.0-only?                    |
 | **Size**        | Minimal additional dependencies?                  |
 | **Popularity**  | Established community? Good documentation?        |

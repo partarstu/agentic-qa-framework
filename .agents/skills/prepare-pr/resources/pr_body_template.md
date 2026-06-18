@@ -33,7 +33,7 @@
 - [x] All unit tests pass
 - [x] Linting passes (ruff)
 - [x] Security scan reviewed (bandit)
-- [x] Dependency vulnerabilities checked (pip-audit)
+- [x] Dependency vulnerabilities checked (uv audit)
 
 ## Notes
 

@@ -159,7 +159,7 @@ project_root/
 
 | Package   | Version   | Purpose      | License   | Security Check     |
 |-----------|-----------|--------------|-----------|--------------------|
-| [package] | [version] | [why needed] | [license] | ✅ pip-audit passed |
+| [package] | [version] | [why needed] | [license] | ✅ uv audit passed |
 
 ### 6.3 API / Interface Changes
 
@@ -305,7 +305,7 @@ pytest tests/[path] --cov=[module] --cov-report=term-missing -v
 - [ ] `ruff format . --check` passes
 - [ ] `pytest tests/ -v` passes
 - [ ] `bandit -r . -x ./tests,./.venv` has no high/medium issues
-- [ ] `pip-audit` has no critical vulnerabilities
+- [ ] `uv audit` has no critical vulnerabilities
 
 ### Documentation
 
