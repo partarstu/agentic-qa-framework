@@ -7,8 +7,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-# Mock MCPServerSSE
-with patch("pydantic_ai.mcp.MCPServerSSE"):
+# Mock MCPServerSSE and VectorDbService so importing the module (which instantiates the
+# agent at module level) does not open a real Qdrant client / network connection.
+with patch("common.agent_base.VectorDbService"), patch("pydantic_ai.mcp.MCPServerSSE"):
     from agents.incident_creation.main import IncidentCreationAgent
 
 from common.models import (
@@ -46,6 +47,7 @@ def agent(mock_config):
         patch("agents.incident_creation.prompt.DuplicateDetectionPrompt.get_prompt", return_value="Dup Prompt"),
         patch("common.custom_llm_wrapper.CustomLlmWrapper.create_agent") as mock_create_agent,
         patch("common.agent_base.AgentBase._get_server", return_value=MagicMock()),
+        patch("common.agent_base.VectorDbService"),
     ):
         mock_create_agent.side_effect = [MagicMock(), MagicMock()]
 

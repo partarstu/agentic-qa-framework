@@ -6,7 +6,11 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from agents.jira_rag.main import JiraRagAgent
+# Mock VectorDbService so importing the module (which instantiates the agent at module
+# level) does not open real Qdrant clients / network connections.
+with patch("common.services.vector_db_service.VectorDbService"):
+    from agents.jira_rag.main import JiraRagAgent
+
 from common.models import JiraIssue
 
 
