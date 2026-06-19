@@ -136,3 +136,25 @@ jobs:
       - name: Run uv audit
         run: uv audit --preview-features audit-command --frozen --no-dev || true
         continue-on-error: true
+
+  architecture:
+    name: Architecture (CALM)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Validate architecture against CALM pattern
+        working-directory: calm
+        run: >-
+          npx -y @finos/calm-cli@1.46.0 validate
+          -p patterns/quaia.pattern.json
+          -a architecture/quaia.arch.json
+          -u url-mapping.json
+          --strict
+          -f pretty
