@@ -60,6 +60,7 @@ from common.models import (
     TestExecutionRequest,
     TestExecutionResult,
 )
+from common.services.rag_sync_service import get_rag_sync_service
 from common.services.test_management_system_client_provider import get_test_management_client
 from common.services.test_reporting_client_base_provider import get_test_reporting_client
 from common.streaming import (
@@ -659,20 +660,9 @@ async def update_rag_db(request: ProjectExecutionRequest, api_key: str = Depends
     project_key = request.project_key
     logger.info(f"Starting RAG update for project {project_key}")
     try:
-        task_description = "Update RAG Vector DB with Jira issues"
-        completed_task = await _send_task_to_agent(
-            f"Sync all Jira issues for project '{project_key}'", task_description
-        )
-
-        _validate_task_status(completed_task, task_description)
-        received_artifacts = _get_artifacts_from_task(completed_task, task_description)
-        text_parts = _get_text_content_from_artifacts(received_artifacts, task_description)
-        if len(text_parts) != 1:
-            _handle_exception(f"Expected exactly one text artifact from RAG update, but received {len(text_parts)}.")
-        text_content = text_parts[0]
-
-        logger.info(f"RAG update completed: {text_content}")
-        return {"message": "RAG update completed.", "details": text_content}
+        result = await get_rag_sync_service().sync_project(project_key)
+        logger.info(f"RAG update completed: {result}")
+        return {"message": "RAG update completed.", "details": result.model_dump()}
     except HTTPException:
         raise
     except Exception as e:

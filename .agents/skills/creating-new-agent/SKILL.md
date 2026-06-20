@@ -115,7 +115,26 @@ If deploying to Google Cloud Run, add build and deploy steps to `cloudbuild.yaml
 2. Add a push step for the image
 3. Add a deploy step for Cloud Run
 
-### Step 9: Create Unit Tests
+### Step 9: Register the Agent in the CALM Architecture Model
+
+The architecture is maintained as code with [FINOS CALM](https://calm.finos.org/) under `calm/`, and a **blocking** CI
+job validates it. A new agent is a new architecture node, so the model must be updated in the same change or the
+`Architecture (CALM)` CI job will fail.
+
+1. Add the agent as a `node` (`node-type: "service"`) in `calm/architecture/quaia.arch.json`, mirroring the existing
+   agent nodes. Give it the same `prompt-injection-guard` control block (with a unique `control-id`), since every agent
+   screens its input through the prompt guard service.
+2. Add the agent's `unique-id` to the `deployed-in` Cloud Run relationship's `nodes` list, plus any new
+   `relationships` it introduces (e.g. a new call to the embedding service or Qdrant).
+3. Add the agent (and its required control) to the `nodes` assertions in `calm/patterns/quaia.pattern.json` so its
+   presence is enforced.
+4. Validate locally from the `calm/` directory:
+   ```bash
+   npx -y @finos/calm-cli@1.46.0 validate -p patterns/quaia.pattern.json -a architecture/quaia.arch.json -u url-mapping.json --strict -f pretty
+   ```
+   A clean run prints `No issues found.` See `calm/README.md` for details.
+
+### Step 10: Create Unit Tests
 
 Create `tests/agents/test_<agent_name>.py`:
 
@@ -132,6 +151,8 @@ After creating the agent, verify:
 - [ ] System prompt template exists and is well-structured
 - [ ] Agent class properly inherits from `AgentBase`
 - [ ] Dockerfile follows the standard pattern
+- [ ] Agent registered as a node (with its `prompt-injection-guard` control) in `calm/architecture/quaia.arch.json` and asserted in `calm/patterns/quaia.pattern.json`
+- [ ] CALM validation passes: `npx -y @finos/calm-cli@1.46.0 validate -p patterns/quaia.pattern.json -a architecture/quaia.arch.json -u url-mapping.json --strict` (from `calm/`)
 - [ ] Unit tests pass: `pytest tests/agents/test_<agent_name>.py -v`
 - [ ] Agent starts successfully: `python agents/<agent_name>/main.py`
 - [ ] Agent card is discoverable at `http://localhost:<port>/.well-known/agent.json`

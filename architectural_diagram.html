@@ -50,7 +50,6 @@ flowchart TD
         A5["5. UI Test"]
         A6["6. API Test"]
         A7["7. Incident<br/>Creation"]
-        A8["8. Jira RAG"]
     end
 
     subgraph Bottom[" "]
@@ -72,7 +71,8 @@ flowchart TD
     Agents --> TMS
     TMS <--> Jira
     A7 --> Qdrant
-    A8 --> Qdrant
+    Orchestrator --> Qdrant
+    Orchestrator --> Jira
     Orchestrator --> Allure
 
     %% Styling
@@ -83,7 +83,6 @@ flowchart TD
     style Qdrant fill:#fce7f3,stroke:#ec4899,stroke-width:2px
     style Allure fill:#dcfce7,stroke:#16a34a,stroke-width:2px
     style A7 fill:#fed7aa,stroke:#f97316,stroke-width:1px
-    style A8 fill:#fed7aa,stroke:#f97316,stroke-width:1px
     style Bottom fill:none,stroke:none
             </div>
         </div>
@@ -118,7 +117,7 @@ flowchart TD
             <h2 class="text-xl font-semibold mb-4">Component Summary</h2>
             <div class="grid md:grid-cols-2 gap-6 text-sm">
                 <div>
-                    <h3 class="font-semibold text-slate-800 mb-2">Agents (8 Total)</h3>
+                    <h3 class="font-semibold text-slate-800 mb-2">Agents (7 Total)</h3>
                     <ul class="list-disc list-inside text-slate-600 space-y-1">
                         <li><strong>Requirements Review:</strong> Reviews Jira user stories for completeness</li>
                         <li><strong>Test Case Generation:</strong> Creates test cases from acceptance criteria</li>
@@ -127,7 +126,6 @@ flowchart TD
                         <li><strong>UI Test Execution:</strong> Executes automated UI tests (Java-based remote service)</li>
                         <li><strong>API Test Execution:</strong> Executes automated API tests (Java-based remote service)</li>
                         <li><strong>Incident Creation:</strong> Creates bug reports with duplicate detection</li>
-                        <li><strong>Jira RAG:</strong> Synchronizes Jira issues to vector database</li>
                     </ul>
                 </div>
                 <div>

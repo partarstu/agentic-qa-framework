@@ -23,7 +23,7 @@ Watch a demo of QuAIA™ in action:
     * Test Case Review
     * UI & API Test Execution (separate project)    
     * Incident Report Creation
-    * Jira Ticket RAG
+* **Jira RAG Sync:** Keeps the Qdrant vector store in sync with a project's Jira issues programmatically (triggered via the orchestrator's `/update-rag-db` endpoint), without invoking an LLM agent.
 * **Dedicated Prompt Guard Service:** A dedicated microservice for detecting prompt injection attacks using the ProtectAI model.
 * **Web UI Monitoring Dashboard:** Real-time monitoring interface for:
     * Agent status visualization (AVAILABLE, BUSY, BROKEN states)
@@ -47,6 +47,7 @@ Watch a demo of QuAIA™ in action:
 * **Test Management System Integration:** Integrates with Zephyr and Xray for operations related to test case management.
 * **Test Reporting:** Generates detailed Allure reports for test execution results.
 * **Extensible:** Designed for easy addition of new agents, tools, and integrations.
+* **Architecture as Code (CALM):** The system architecture, including its security controls, is described with the [FINOS CALM](https://calm.finos.org/) standard and validated as a blocking CI gate, keeping the model and the running system in sync.
 
 ## Architecture
 
@@ -98,6 +99,29 @@ For a visual representation of the system's architecture and data flow, please r
 * [Architectural Diagram](architectural_diagram.html) ([German Version](architectural_diagram_DE.html))
 * [Flow Diagram](flow_diagram.html) ([German Version](flow_diagram_DE.html))
 
+### Architecture as Code (CALM)
+
+The architecture above is also maintained as machine-readable **architecture as code** using the
+[FINOS CALM](https://calm.finos.org/) (Common Architecture Language Model) standard, under the [`calm/`](calm/) directory.
+This makes the architecture a first-class, version-controlled artifact rather than a static diagram that drifts out of
+date.
+
+The model captures every service and external system as `nodes`, the integration edges between them (A2A, MCP, HTTPS) as
+`relationships`, and the framework's security mechanisms as `controls` attached to the relevant nodes and edges:
+
+| Control | Applies to | Mechanism |
+|---|---|---|
+| Orchestrator API key | Orchestrator | `X-API-Key` on control/webhook endpoints (`ORCHESTRATOR_API_KEY`) |
+| Dashboard JWT | Orchestrator | JWT on dashboard endpoints (`DASHBOARD_JWT_SECRET`) |
+| Jira webhook HMAC | Jira → Orchestrator | `X-Hub-Signature` HMAC-SHA256 (`JIRA_WEBHOOK_SECRET`) |
+| Prompt-injection guard | Every agent | Prompt-injection screening (`PROMPT_INJECTION_CHECK_ENABLED`) |
+| Internal service API key | Embedding & Prompt Guard services | Shared `X-API-Key` (`INTERNAL_SERVICE_API_KEY`) |
+
+A governance **pattern** (`calm/patterns/quaia.pattern.json`) asserts that every required node, relationship and control
+is present. The CI pipeline runs this validation as a **blocking** `Architecture (CALM)` job, so removing an agent or
+dropping a security control makes the build fail. See [`calm/README.md`](calm/README.md) for the full layout and for how
+to run the validation locally (requires Node.js 20+).
+
 ## Getting Started
 
 ### Prerequisites
@@ -105,6 +129,8 @@ For a visual representation of the system's architecture and data flow, please r
 * Python 3.14+
 * Docker
 * [`uv`](https://docs.astral.sh/uv/) (Python package and project manager)
+* [Node.js](https://nodejs.org/) 20+ (only needed to validate the CALM architecture model locally; see
+  [Architecture as Code (CALM)](#architecture-as-code-calm))
 
 ### Setup
 
@@ -235,7 +261,7 @@ PROMPT_INJECTION_MODEL_NAME=ProtectAI/deberta-v3-base-prompt-injection-v2 # Defa
 **Note on Local Models:**
 If you are running the orchestrator or agents locally (not in a Docker container deployed to the cloud), you must manually download the necessary models:
 1. **Prompt Injection Detection Model:** Required if `PROMPT_INJECTION_CHECK_ENABLED` is set to `True`. Run `scripts/download_prompt_guard_model.py`.
-2. **Embedding Model:** Required for agents using Vector DB (e.g. Incident Creation, Jira RAG Update) and Orchestrator. Run `scripts/download_embedding_model.py`.
+2. **Embedding Model:** Required for components using the Vector DB (the Incident Creation agent and the Orchestrator, which runs the Jira RAG sync). Run `scripts/download_embedding_model.py`.
 
 When deploying to cloud environments via Docker, the model downloads are handled automatically as part of the Docker image build process.
 # Specific Agent Model Names (example values, adjust as needed)
@@ -246,7 +272,6 @@ REQUIREMENTS_REVIEW_AGENT_MODEL_NAME=google-gla:gemini-2.5-pro
 TEST_CASE_CLASSIFICATION_AGENT_MODEL_NAME=google-gla:gemini-2.5-flash
 TEST_CASE_GENERATION_AGENT_MODEL_NAME=google-gla:gemini-2.5-flash
 INCIDENT_CREATION_AGENT_MODEL_NAME=google-gla:gemini-2.5-flash
-JIRA_RAG_UPDATE_AGENT_MODEL_NAME=google-gla:gemini-2.5-flash
 TEST_CASE_REVIEW_AGENT_MODEL_NAME=google-gla:gemini-2.5-pro
 ```
 
@@ -291,7 +316,7 @@ To run the Jira MCP server, you will need Docker installed.
 ### Starting agents locally
 
 1. **Start Qdrant Vector Database (required for RAG features):**
-   The Incident Creation and Jira RAG Update agents require a running Qdrant instance for vector database operations.
+   The Incident Creation agent and the Orchestrator's Jira RAG sync require a running Qdrant instance for vector database operations.
    ```bash
    scripts/start_qdrant.bat
    ```
@@ -331,10 +356,6 @@ To run the Jira MCP server, you will need Docker installed.
     * **Incident Creation Agent:**
       ```bash
       python agents/incident_creation/main.py
-      ```
-    * **Jira RAG Update Agent:**
-      ```bash
-      python agents/jira_rag/main.py
       ```
 
 5. **Start the Orchestrator:**
@@ -436,11 +457,11 @@ you run any of the commands below.
 After having all preconditions fulfilled, you can execute the following command:
 
 ```bash
-gcloud builds submit --config 'path/to/your/cloudbuild.yaml' --substitutions "^;^_BUCKET_NAME=YOUR_GCS_BUCKET_NAME;_ALLURE_REPORTS_BUCKET=YOUR_ALLURE_REPORTS_BUCKET_NAME;_REQUIREMENTS_REVIEW_AGENT_BASE_URL=YOUR_REQUIREMENTS_REVIEW_AGENT_URL;_TEST_CASE_GENERATION_AGENT_BASE_URL=YOUR_TEST_CASE_GENERATION_AGENT_URL;_TEST_CASE_CLASSIFICATION_AGENT_BASE_URL=YOUR_TEST_CASE_CLASSIFICATION_AGENT_URL;_TEST_CASE_REVIEW_AGENT_BASE_URL=YOUR_TEST_CASE_REVIEW_AGENT_URL;_INCIDENT_CREATION_AGENT_BASE_URL=YOUR_INCIDENT_CREATION_AGENT_URL;_JIRA_RAG_UPDATE_AGENT_BASE_URL=YOUR_JIRA_RAG_UPDATE_AGENT_URL;_REMOTE_EXECUTION_AGENT_HOSTS=YOUR_COMMA_SEPARATED_AGENT_HOSTS;_PROMPT_GUARD_SERVICE_URL=YOUR_PROMPT_GUARD_SERVICE_URL;_DEPLOY_ALL_SERVICES=true" .
+gcloud builds submit --config 'path/to/your/cloudbuild.yaml' --substitutions "^;^_BUCKET_NAME=YOUR_GCS_BUCKET_NAME;_ALLURE_REPORTS_BUCKET=YOUR_ALLURE_REPORTS_BUCKET_NAME;_REQUIREMENTS_REVIEW_AGENT_BASE_URL=YOUR_REQUIREMENTS_REVIEW_AGENT_URL;_TEST_CASE_GENERATION_AGENT_BASE_URL=YOUR_TEST_CASE_GENERATION_AGENT_URL;_TEST_CASE_CLASSIFICATION_AGENT_BASE_URL=YOUR_TEST_CASE_CLASSIFICATION_AGENT_URL;_TEST_CASE_REVIEW_AGENT_BASE_URL=YOUR_TEST_CASE_REVIEW_AGENT_URL;_INCIDENT_CREATION_AGENT_BASE_URL=YOUR_INCIDENT_CREATION_AGENT_URL;_REMOTE_EXECUTION_AGENT_HOSTS=YOUR_COMMA_SEPARATED_AGENT_HOSTS;_PROMPT_GUARD_SERVICE_URL=YOUR_PROMPT_GUARD_SERVICE_URL;_DEPLOY_ALL_SERVICES=true" .
 ```
 
 ```powershell
-gcloud builds submit --config 'path/to/your/cloudbuild.yaml' --substitutions "`^;`^_BUCKET_NAME=YOUR_GCS_BUCKET_NAME;_ALLURE_REPORTS_BUCKET=YOUR_ALLURE_REPORTS_BUCKET_NAME;_REQUIREMENTS_REVIEW_AGENT_BASE_URL=YOUR_REQUIREMENTS_REVIEW_AGENT_URL;_TEST_CASE_GENERATION_AGENT_BASE_URL=YOUR_TEST_CASE_GENERATION_AGENT_URL;_TEST_CASE_CLASSIFICATION_AGENT_BASE_URL=YOUR_TEST_CASE_CLASSIFICATION_AGENT_URL;_TEST_CASE_REVIEW_AGENT_BASE_URL=YOUR_TEST_CASE_REVIEW_AGENT_URL;_INCIDENT_CREATION_AGENT_BASE_URL=YOUR_INCIDENT_CREATION_AGENT_URL;_JIRA_RAG_UPDATE_AGENT_BASE_URL=YOUR_JIRA_RAG_UPDATE_AGENT_URL;_REMOTE_EXECUTION_AGENT_HOSTS=YOUR_COMMA_SEPARATED_AGENT_HOSTS;_PROMPT_GUARD_SERVICE_URL=YOUR_PROMPT_GUARD_SERVICE_URL;_DEPLOY_ALL_SERVICES=true" .
+gcloud builds submit --config 'path/to/your/cloudbuild.yaml' --substitutions "`^;`^_BUCKET_NAME=YOUR_GCS_BUCKET_NAME;_ALLURE_REPORTS_BUCKET=YOUR_ALLURE_REPORTS_BUCKET_NAME;_REQUIREMENTS_REVIEW_AGENT_BASE_URL=YOUR_REQUIREMENTS_REVIEW_AGENT_URL;_TEST_CASE_GENERATION_AGENT_BASE_URL=YOUR_TEST_CASE_GENERATION_AGENT_URL;_TEST_CASE_CLASSIFICATION_AGENT_BASE_URL=YOUR_TEST_CASE_CLASSIFICATION_AGENT_URL;_TEST_CASE_REVIEW_AGENT_BASE_URL=YOUR_TEST_CASE_REVIEW_AGENT_URL;_INCIDENT_CREATION_AGENT_BASE_URL=YOUR_INCIDENT_CREATION_AGENT_URL;_REMOTE_EXECUTION_AGENT_HOSTS=YOUR_COMMA_SEPARATED_AGENT_HOSTS;_PROMPT_GUARD_SERVICE_URL=YOUR_PROMPT_GUARD_SERVICE_URL;_DEPLOY_ALL_SERVICES=true" .
 ```
 
 **Substitution Variables:**
@@ -454,7 +475,6 @@ gcloud builds submit --config 'path/to/your/cloudbuild.yaml' --substitutions "`^
 * `_TEST_CASE_CLASSIFICATION_AGENT_BASE_URL`: The URL of the deployed Test Case Classification Agent.
 * `_TEST_CASE_REVIEW_AGENT_BASE_URL`: The URL of the deployed Test Case Review Agent.
 * `_INCIDENT_CREATION_AGENT_BASE_URL`: The URL of the deployed Incident Creation Agent.
-* `_JIRA_RAG_UPDATE_AGENT_BASE_URL`: The URL of the deployed Jira RAG Update Agent.
 * `_REMOTE_EXECUTION_AGENT_HOSTS`: A comma-separated list of URLs for all deployed agents that the orchestrator will
   interact with.
 * `_PROMPT_GUARD_SERVICE_URL`: The URL of the deployed Prompt Guard Service.
@@ -514,8 +534,9 @@ You can trigger the execution of automated tests for a specific project.
 To keep the vector database synchronized with Jira issues for duplicate detection:
 
 * **Update RAG DB:**
-  Send a POST request to `/update-rag-db` with a JSON payload containing the `project_key` of the Jira project. This
-  will sync all bug issues from Jira to the Qdrant vector database, enabling semantic search for duplicate detection.
+  Send a POST request to `/update-rag-db` with a JSON payload containing the `project_key` of the Jira project. The
+  orchestrator then syncs the project's issues from Jira (read directly via the Jira REST API) into the Qdrant vector
+  database, enabling semantic search for duplicate detection. The sync runs programmatically — no LLM agent is involved.
 
   Example payload:
   ```json

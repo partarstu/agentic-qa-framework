@@ -1,7 +1,7 @@
 # PR Review Criteria
 
 This document defines the comprehensive review criteria for Python code in the QuAIA™ project. These criteria are
-derived from the project's GEMINI.md guidelines, Python best practices (PEP 8, PEP 257), and industry standards for
+derived from the project's AGENTS.md guidelines, Python best practices (PEP 8, PEP 257), and industry standards for
 secure, maintainable code.
 
 ## 1. Code Style & Naming Conventions
@@ -217,6 +217,20 @@ All new Python files must include:
 
 - Main branch is `main`
 - Never commit directly to main without PR review
+
+### Architecture as Code (CALM)
+
+The architecture is modelled with [FINOS CALM](https://calm.finos.org/) under `calm/` and validated by a blocking CI
+job. When a PR changes the component topology, flag any missing model update:
+
+- A new/removed/renamed service or agent must be reflected in `calm/architecture/quaia.arch.json` and asserted in
+  `calm/patterns/quaia.pattern.json`.
+- A new integration edge (orchestrator↔agent, agent→service, outbound external call) must appear as a `relationship`.
+- A new or changed security control (authentication, prompt-injection protection) must appear as a `controls` block on
+  the relevant node/relationship.
+
+A PR that adds an agent or an integration but leaves the CALM model untouched is **incomplete** — treat it as a
+`[MAJOR]` finding (the `Architecture (CALM)` gate should catch it, but call it out in review).
 
 ---
 

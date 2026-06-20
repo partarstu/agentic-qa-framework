@@ -160,30 +160,6 @@
       }
     },
     {
-      "unique-id": "jira-rag-agent",
-      "node-type": "service",
-      "name": "Jira RAG Update Agent",
-      "description": "Syncs Jira issues into the vector database for semantic duplicate search.",
-      "controls": {
-        "prompt-injection-guard": {
-          "description": "Untrusted text is screened for prompt-injection before reaching the LLM (enabled by default).",
-          "requirements": [
-            {
-              "requirement-url": "https://quaia.finos.calm/controls/prompt-injection.requirement.json",
-              "config": {
-                "control-id": "quaia-prompt-injection-jira-rag-agent",
-                "name": "Prompt Injection Guard",
-                "description": "Agent input is checked by the prompt guard service before LLM processing.",
-                "provider": "protect_ai",
-                "min-score": 0.8,
-                "enabled-by-default": true
-              }
-            }
-          ]
-        }
-      }
-    },
-    {
       "unique-id": "prompt-guard-service",
       "node-type": "service",
       "name": "Prompt Guard Service",
@@ -279,8 +255,7 @@
             "test-case-generation-agent",
             "test-case-classification-agent",
             "test-case-review-agent",
-            "incident-creation-agent",
-            "jira-rag-agent"
+            "incident-creation-agent"
           ]
         }
       }
@@ -369,12 +344,12 @@
       }
     },
     {
-      "unique-id": "rel-jira-rag-embedding",
-      "description": "Jira RAG Update Agent requests embeddings from the embedding service.",
+      "unique-id": "rel-orchestrator-embedding",
+      "description": "Orchestrator requests embeddings from the embedding service while syncing Jira issues into the RAG store.",
       "protocol": "HTTPS",
       "relationship-type": {
         "connects": {
-          "source": { "node": "jira-rag-agent" },
+          "source": { "node": "orchestrator" },
           "destination": { "node": "embedding-service" }
         }
       }
@@ -391,13 +366,24 @@
       }
     },
     {
-      "unique-id": "rel-jira-rag-qdrant",
-      "description": "Jira RAG Update Agent writes embeddings to Qdrant.",
+      "unique-id": "rel-orchestrator-qdrant",
+      "description": "Orchestrator writes Jira issue embeddings to Qdrant during the RAG sync.",
       "protocol": "HTTPS",
       "relationship-type": {
         "connects": {
-          "source": { "node": "jira-rag-agent" },
+          "source": { "node": "orchestrator" },
           "destination": { "node": "qdrant" }
+        }
+      }
+    },
+    {
+      "unique-id": "rel-orchestrator-jira",
+      "description": "Orchestrator reads Jira issues over the Jira REST API to keep the RAG store in sync.",
+      "protocol": "HTTPS",
+      "relationship-type": {
+        "connects": {
+          "source": { "node": "orchestrator" },
+          "destination": { "node": "jira" }
         }
       }
     },
@@ -414,7 +400,6 @@
             "test-case-classification-agent",
             "test-case-review-agent",
             "incident-creation-agent",
-            "jira-rag-agent",
             "prompt-guard-service",
             "embedding-service",
             "qdrant",

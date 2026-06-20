@@ -36,14 +36,16 @@ This skill is designed to run with minimal interruption.
 2. Verify new files have SPDX license headers
 3. Run unit tests and fix failures
 4. Run security scan (bandit) and dependency check (uv audit)
-5. Analyze changes and update documentation (README, skills)
-6. Present changes for user review
-7. Commit and push changes
-8. Create pull request
+5. Validate the CALM architecture model
+6. Analyze changes and update documentation (README, skills)
+7. Present changes for user review
+8. Commit and push changes
+9. Create pull request
 
 ## Prerequisites
 
-Ensure installed: `ruff`, `bandit`, `pytest`, `gh` (GitHub CLI). Dependency auditing uses `uv audit` (built into uv).
+Ensure installed: `ruff`, `bandit`, `pytest`, `gh` (GitHub CLI), and `node`/`npx` (Node.js 20+, for CALM validation).
+Dependency auditing uses `uv audit` (built into uv).
 
 ## Step-by-Step Instructions
 
@@ -123,20 +125,33 @@ If vulnerabilities found, follow the **Intervention Pattern** with options:
 - Document in PR if no fix exists
 - Accept risk with justification
 
-### Step 5: Analyze Changes and Update Documentation
+### Step 5: Validate the CALM Architecture Model
 
-#### 5.1: Get Diff Against Main
+The `Architecture (CALM)` CI job is **blocking**, so run the same validation locally. From the `calm/` directory:
+
+```powershell
+npx -y "@finos/calm-cli@1.46.0" validate -p patterns/quaia.pattern.json -a architecture/quaia.arch.json -u url-mapping.json --strict -f pretty
+```
+
+A clean run prints `No issues found.` and exits `0`. If it fails because the change added or removed a service, an
+integration edge or a security control, update `calm/architecture/quaia.arch.json` (and `calm/patterns/quaia.pattern.json`
+when the element is part of the enforced contract), then re-run. For unfixable failures, follow the **Intervention
+Pattern**.
+
+### Step 6: Analyze Changes and Update Documentation
+
+#### 6.1: Get Diff Against Main
 
 ```powershell
 git diff origin/main
 ```
 
-#### 5.2: Categorize Changes
+#### 6.2: Categorize Changes
 
 Review and categorize into: **Features**, **Bug Fixes**, **Refactoring**, **Tests**, **Documentation**, **Dependencies**, **Configuration**.
 This analysis feeds both README updates and PR description.
 
-#### 5.3: Update README
+#### 6.3: Update README
 
 Update `README.md` to reflect current code state:
 
@@ -146,18 +161,18 @@ Update `README.md` to reflect current code state:
 
 Only follow the **Intervention Pattern** for complex documentation decisions.
 
-#### 5.4: Update Relevant Skills
+#### 6.4: Update Relevant Skills
 
-Check if changes affect skills in `.agent/skills/` based on their content:
+Check if changes affect skills in `.agents/skills/` based on their content:
 
 ```powershell
-Get-ChildItem -Path ".agent/skills" -Directory | Select-Object Name
+Get-ChildItem -Path ".agents/skills" -Directory | Select-Object Name
 ```
 
 For affected skills, update: **SKILL.md** (workflow steps), **resources/** (templates), **scripts/** (automation), **examples/** (code
 patterns).
 
-### Step 6: Review Changes with User
+### Step 7: Review Changes with User
 
 ```powershell
 git status
@@ -170,7 +185,7 @@ Present summary:
 
 If user requests modifications, apply them and re-run relevant checks.
 
-### Step 7: Commit and Push
+### Step 8: Commit and Push
 
 ```powershell
 git add -A
@@ -180,7 +195,7 @@ git push -u origin HEAD
 
 Use appropriate commit prefixes: `chore:`, `fix:`, `docs:` for different change types.
 
-### Step 8: Create Pull Request
+### Step 9: Create Pull Request
 
 ```powershell
 git branch --show-current
@@ -199,6 +214,7 @@ gh pr create --title "<short summary>" --body "<detailed description>"
 - [ ] `pytest tests/ -v` passes
 - [ ] `bandit` has no unaddressed high/medium issues
 - [ ] `uv audit` has no unaddressed critical vulnerabilities
+- [ ] CALM validation passes (`Architecture (CALM)` gate): `npx -y @finos/calm-cli@1.46.0 validate -p patterns/quaia.pattern.json -a architecture/quaia.arch.json -u url-mapping.json --strict` from `calm/`
 - [ ] README.md reflects current code state
 - [ ] User has reviewed and approved changes
 - [ ] PR has descriptive title and comprehensive description

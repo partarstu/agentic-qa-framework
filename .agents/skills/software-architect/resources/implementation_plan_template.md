@@ -47,9 +47,9 @@
 | Pydantic   | V2        | [Usage details] |
 | [Other]    | [version] | [Usage details] |
 
-### 2.4 GEMINI.md Compliance
+### 2.4 AGENTS.md Compliance
 
-[List specific rules from GEMINI.md that apply and how they will be followed]
+[List specific rules from AGENTS.md that apply and how they will be followed]
 
 - ✅ [Rule 1]: [How it's applied]
 - ✅ [Rule 2]: [How it's applied]
@@ -295,7 +295,7 @@ pytest tests/[path] --cov=[module] --cov-report=term-missing -v
 ### Code Complete
 
 - [ ] All implementation steps completed
-- [ ] Code follows GEMINI.md guidelines
+- [ ] Code follows AGENTS.md guidelines
 - [ ] Type hints added for all public interfaces
 - [ ] Docstrings added for all public modules/classes/functions
 

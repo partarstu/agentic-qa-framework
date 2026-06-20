@@ -211,17 +211,6 @@ class IncidentCreationAgentConfig:
     ).split(",")
 
 
-# RAG Update Agent
-class JiraRagUpdateAgentConfig:
-    THINKING_LEVEL: ThinkingLevel = "medium"
-    OWN_NAME = "Jira RAG Update Agent"
-    PORT = int(os.environ.get("PORT", "8006"))
-    EXTERNAL_PORT = int(os.environ.get("EXTERNAL_PORT", PORT))
-    PROTOCOL = "http"
-    MODEL_NAME = "google-gla:gemini-3.5-flash"
-    MAX_REQUESTS_PER_TASK = 30
-
-
 class RetryConfig:
     MAX_RETRIES = 3
     RETRYABLE_STATUS_CODES = {404, 429, 500, 502, 503, 504}

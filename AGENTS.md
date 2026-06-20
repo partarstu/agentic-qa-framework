@@ -92,6 +92,28 @@ Always use relevant skills from ".agents" folder while executing your tasks.
   `[project.optional-dependencies]`, and development/CI tooling under `[dependency-groups]`. Never edit `uv.lock` by
   hand; regenerate it with `uv lock` and commit it for reproducible, fully pinned installs.
 
+### Architecture as Code (CALM)
+
+The system architecture is described as code with the [FINOS CALM](https://calm.finos.org/) standard under the `calm/`
+directory, and it is enforced by a **blocking** CI job (`Architecture (CALM)` in `.github/workflows/ci.yml`). Treat the
+CALM model as a first-class part of the codebase, on par with the source and the tests.
+
+* `calm/architecture/quaia.arch.json` is the source of truth for the services/actors (`nodes`), their integration edges
+  (`relationships`) and the security `controls` attached to them.
+* `calm/patterns/quaia.pattern.json` is the governance pattern that asserts the required nodes, relationships and
+  controls are present; it is what makes the gate fail on drift.
+* Whenever a change adds, removes or renames a service, an integration edge, or a security control (e.g. a new agent, a
+  new orchestrator-to-service call, a new authentication mechanism), you **must** update the CALM model in the same
+  change, and extend the pattern if the new element is part of the contract you want enforced.
+* The CALM CLI is a Node tool, not a Python dependency — it is invoked via `npx @finos/calm-cli` and requires Node.js
+  20+. It does **not** belong in `pyproject.toml`.
+* Validate locally before committing (run from the `calm/` directory):
+  ```bash
+  npx -y @finos/calm-cli@1.46.0 validate -p patterns/quaia.pattern.json -a architecture/quaia.arch.json -u url-mapping.json --strict -f pretty
+  ```
+  A clean run prints `No issues found.` and exits `0`. See `calm/README.md` for the full layout and the list of enforced
+  controls.
+
 ## General style requirements
 
 * Use **snake_case** for configuration keys in files like `.toml`, `.ini`, or `.yaml` (e.g., `api_key` instead of

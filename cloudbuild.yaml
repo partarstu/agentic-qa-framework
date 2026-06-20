@@ -32,10 +32,6 @@ steps:
   - name: 'gcr.io/cloud-builders/docker'
     args: [ 'build', '-t', 'gcr.io/$PROJECT_ID/incident-creation-agent', '-f', 'agents/incident_creation/Dockerfile', '.' ]
 
-  # Build the jira-rag-agent image
-  - name: 'gcr.io/cloud-builders/docker'
-    args: [ 'build', '-t', 'gcr.io/$PROJECT_ID/jira-rag-agent', '-f', 'agents/jira_rag/Dockerfile', '.' ]
-
   # Push the orchestrator image to Container Registry
   - name: 'gcr.io/cloud-builders/docker'
     args: [ 'push', 'gcr.io/$PROJECT_ID/orchestrator' ]
@@ -60,10 +56,6 @@ steps:
   - name: 'gcr.io/cloud-builders/docker'
     args: [ 'push', 'gcr.io/$PROJECT_ID/incident-creation-agent' ]
 
-  # Push the jira-rag-agent image to Container Registry
-  - name: 'gcr.io/cloud-builders/docker'
-    args: [ 'push', 'gcr.io/$PROJECT_ID/jira-rag-agent' ]
-
   # Pull, tag, and push jira-mcp-server image (conditional)
   - name: 'gcr.io/cloud-builders/docker'
     entrypoint: 'bash'
@@ -72,9 +64,9 @@ steps:
       - |
         if [ "$_DEPLOY_ALL_SERVICES" = "true" ] || [ "$_DEPLOY_JIRA_MCP" = "true" ]; then
           echo "Pulling mcp-atlassian image from GitHub Container Registry..."
-          docker pull ghcr.io/sooperset/mcp-atlassian:0.11.12 && \
+          docker pull ghcr.io/sooperset/mcp-atlassian:0.21.1 && \
           echo "Tagging mcp-atlassian image for Google Container Registry..." && \
-          docker tag ghcr.io/sooperset/mcp-atlassian:0.11.12 gcr.io/$PROJECT_ID/mcp-atlassian:latest && \
+          docker tag ghcr.io/sooperset/mcp-atlassian:0.21.1 gcr.io/$PROJECT_ID/mcp-atlassian:latest && \
           echo "Pushing mcp-atlassian image to Container Registry..." && \
           docker push gcr.io/$PROJECT_ID/mcp-atlassian:latest
         else
@@ -244,7 +236,7 @@ steps:
       - '--max-instances=1'
       - '--concurrency=5'
       - '--set-env-vars=^;^REMOTE_EXECUTION_AGENT_HOSTS=$_REMOTE_EXECUTION_AGENT_HOSTS'
-      - '--set-env-vars=TZ=$_TIMEZONE,AGENT_DISCOVERY_PORTS=443-443,GOOGLE_CLOUD_LOGGING_ENABLED=true,QDRANT_URL=$_QDRANT_URL,ATTACHMENTS_LOCAL_DESTINATION_FOLDER_PATH=$_LOCAL_ATTACHMENTS_MOUNT_PATH,MCP_SERVER_ATTACHMENTS_FOLDER_PATH=$_JIRA_MCP_SERVER_ATTACHMENTS_MOUNT_PATH,DASHBOARD_JWT_EXPIRE_HOURS=24'
+      - '--set-env-vars=TZ=$_TIMEZONE,AGENT_DISCOVERY_PORTS=443-443,GOOGLE_CLOUD_LOGGING_ENABLED=true,QDRANT_URL=$_QDRANT_URL,QDRANT_PORT=443,EMBEDDING_SERVICE_URL=$_EMBEDDING_SERVICE_URL,ATTACHMENTS_LOCAL_DESTINATION_FOLDER_PATH=$_LOCAL_ATTACHMENTS_MOUNT_PATH,MCP_SERVER_ATTACHMENTS_FOLDER_PATH=$_JIRA_MCP_SERVER_ATTACHMENTS_MOUNT_PATH,DASHBOARD_JWT_EXPIRE_HOURS=24'
       - '--set-secrets=GOOGLE_API_KEY=GOOGLE_API_KEY:latest,JIRA_API_TOKEN=JIRA_API_TOKEN:latest,JIRA_USERNAME=JIRA_USERNAME:latest,ZEPHYR_API_TOKEN=ZEPHYR_API_TOKEN:latest,JIRA_URL=JIRA_URL:latest,ZEPHYR_BASE_URL=ZEPHYR_BASE_URL:latest,ORCHESTRATOR_API_KEY=ORCHESTRATOR_API_KEY:latest,QDRANT_API_KEY=QDRANT_API_KEY:latest,DASHBOARD_USERNAME=DASHBOARD_USERNAME:latest,DASHBOARD_PASSWORD=DASHBOARD_PASSWORD:latest,DASHBOARD_JWT_SECRET=DASHBOARD_JWT_SECRET:latest'
       - '--add-volume=type=cloud-storage,name=gcs-allure-reports,bucket=$_ALLURE_REPORTS_BUCKET'
       - '--add-volume-mount=volume=gcs-allure-reports,mount-path=$_ALLURE_REPORTS_CONTAINER_PATH'
@@ -373,30 +365,6 @@ steps:
       - '--add-volume-mount=volume=jira-volume,mount-path=$_LOCAL_ATTACHMENTS_MOUNT_PATH'
       - '--port=8001'
 
-  # Deploy to Cloud Run jira-rag-agent
-  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
-    entrypoint: gcloud
-    args:
-      - 'run'
-      - 'deploy'
-      - 'jira-rag-agent'
-      - '--image=gcr.io/$PROJECT_ID/jira-rag-agent'
-      - '--platform=managed'
-      - '--ingress=internal'
-      - '--network=agent-network'
-      - '--subnet=agent-network'
-      - '--vpc-egress=all-traffic'
-      - '--region=us-central1'
-      - '--allow-unauthenticated'
-      - '--memory=3Gi'
-      - '--max-instances=1'
-      - '--concurrency=2'
-      - '--set-secrets=GOOGLE_API_KEY=GOOGLE_API_KEY:latest,JIRA_API_TOKEN=JIRA_API_TOKEN:latest,JIRA_USERNAME=JIRA_USERNAME:latest,ZEPHYR_API_TOKEN=ZEPHYR_API_TOKEN:latest,JIRA_URL=JIRA_URL:latest,JIRA_MCP_SERVER_URL=JIRA_MCP_SERVER_URL:latest,ZEPHYR_BASE_URL=ZEPHYR_BASE_URL:latest,QDRANT_API_KEY=QDRANT_API_KEY:latest'
-      - '--set-env-vars=TZ=$_TIMEZONE,GOOGLE_CLOUD_LOGGING_ENABLED=true,AGENT_BASE_URL=$_JIRA_RAG_AGENT_BASE_URL,EXTERNAL_PORT=443,EMBEDDING_SERVICE_URL=$_EMBEDDING_SERVICE_URL,PROMPT_GUARD_SERVICE_URL=$_PROMPT_GUARD_SERVICE_URL,QDRANT_URL=$_QDRANT_URL,QDRANT_PORT=443,ATTACHMENTS_LOCAL_DESTINATION_FOLDER_PATH=$_LOCAL_ATTACHMENTS_MOUNT_PATH,MCP_SERVER_ATTACHMENTS_FOLDER_PATH=$_JIRA_MCP_SERVER_ATTACHMENTS_MOUNT_PATH'
-      - '--port=8001'
-      - '--add-volume=type=cloud-storage,name=jira-volume,bucket=$_BUCKET_NAME,mount-options=only-dir=$_JIRA_ATTACHMENTS_FOLDER'
-      - '--add-volume-mount=volume=jira-volume,mount-path=$_LOCAL_ATTACHMENTS_MOUNT_PATH'
-
 substitutions:
   _TIMEZONE: 'Europe/Vienna'
   _DEPLOY_ALL_SERVICES: 'false'
@@ -416,7 +384,6 @@ substitutions:
   _TEST_CASE_GENERATION_AGENT_BASE_URL: ''
   _TEST_CASE_REVIEW_AGENT_BASE_URL: ''
   _INCIDENT_CREATION_AGENT_BASE_URL: ''
-  _JIRA_RAG_AGENT_BASE_URL: ''
   _ORCHESTRATOR_REQUEST_TIMEOUT: '3500s'
   _EMBEDDING_SERVICE_URL: ''
   _PROMPT_GUARD_SERVICE_URL: ''
@@ -429,7 +396,6 @@ images:
   - 'gcr.io/$PROJECT_ID/test-case-classification-agent'
   - 'gcr.io/$PROJECT_ID/test-case-review-agent'
   - 'gcr.io/$PROJECT_ID/incident-creation-agent'
-  - 'gcr.io/$PROJECT_ID/jira-rag-agent'
   - 'gcr.io/$PROJECT_ID/orchestrator'
 
 options:
