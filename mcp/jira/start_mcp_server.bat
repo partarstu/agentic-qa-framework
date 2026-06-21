@@ -1,1 +1,1 @@
-docker run --name jira-mcp-server --rm -p 9000:9000 --env-file .env -v D:\temp:/tmp ghcr.io/sooperset/mcp-atlassian:0.11.12 --transport sse --port 9000 -v
+docker run --name jira-mcp-server --rm -p 9000:9000 --env-file .env -v D:\temp:/tmp ghcr.io/sooperset/mcp-atlassian:0.21.1 --transport sse --port 9000 -v

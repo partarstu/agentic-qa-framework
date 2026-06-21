@@ -57,6 +57,7 @@ class TaskRecord:
     end_time: datetime | None = None
     error_message: str | None = None
     agent_logs: list[str] | None = None
+    current_activity: str | None = None
 
     @property
     def duration_ms(self) -> int | None:
@@ -78,6 +79,7 @@ class TaskRecord:
             "duration_ms": self.duration_ms,
             "error_message": self.error_message,
             "agent_logs": self.agent_logs,
+            "current_activity": self.current_activity,
         }
 
 
@@ -149,6 +151,27 @@ class TaskHistory:
         """Get a specific task by ID."""
         async with self._lock:
             return self._tasks_by_id.get(task_id)
+
+    async def set_current_activity(self, task_id: str, text: str) -> None:
+        """Set the live activity text for a running task."""
+        async with self._lock:
+            if task_id in self._tasks_by_id:
+                self._tasks_by_id[task_id].current_activity = text
+
+    async def clear_current_activity(self, task_id: str) -> None:
+        """Clear the activity text when a task reaches a terminal state."""
+        async with self._lock:
+            if task_id in self._tasks_by_id:
+                self._tasks_by_id[task_id].current_activity = None
+
+    async def append_log_batch(self, task_id: str, lines: list[str]) -> None:
+        """Append a batch of streamed log lines to the task's running log buffer."""
+        async with self._lock:
+            if task_id in self._tasks_by_id:
+                task = self._tasks_by_id[task_id]
+                if task.agent_logs is None:
+                    task.agent_logs = []
+                task.agent_logs.extend(lines)
 
 
 class ErrorHistory:
@@ -280,7 +303,7 @@ class AgentRegistry:
     async def get_agent_id_by_url(self, url: str) -> str | None:
         async with self._lock:
             for agent_id, card in self._cards.items():
-                if card.url == url:
+                if card.supported_interfaces and card.supported_interfaces[0].url == url:
                     return agent_id
             return None
 

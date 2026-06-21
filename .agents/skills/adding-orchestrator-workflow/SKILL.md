@@ -169,7 +169,24 @@ Description of what this workflow does.
   ```
 ```
 
-### Step 10: Create Unit Tests
+### Step 10: Update the CALM Architecture Model (if the topology changes)
+
+The architecture is maintained as code with [FINOS CALM](https://calm.finos.org/) under `calm/`, and a **blocking** CI
+job validates it. Update the model in the same change whenever the workflow alters the architecture topology:
+
+- A new outbound call to a service or external system → add a `connects` relationship (or an `interacts` edge for a new
+  agent fan-out) in `calm/architecture/quaia.arch.json`.
+- A new authentication or protection mechanism on the endpoint → add a `controls` block on the relevant node/relationship,
+  and assert it in `calm/patterns/quaia.pattern.json`.
+
+Endpoints that only reuse existing agents and existing edges need no model change. When in doubt, validate from the
+`calm/` directory:
+
+```bash
+npx -y @finos/calm-cli@1.46.0 validate -p patterns/quaia.pattern.json -a architecture/quaia.arch.json -u url-mapping.json --strict -f pretty
+```
+
+### Step 11: Create Unit Tests
 
 Create test cases in `tests/orchestrator/test_endpoints.py` or a new file:
 
@@ -193,5 +210,6 @@ After adding the workflow, verify:
 - [ ] Logging at key points (start, completion, errors)
 - [ ] Unit tests cover success and failure cases
 - [ ] Documentation updated in README.md
+- [ ] CALM model updated if the workflow added an integration edge or a security control (and validation passes)
 - [ ] Tests pass: `pytest tests/orchestrator/ -v`
 - [ ] Endpoint accessible: `curl -X POST http://localhost:8000/<endpoint-path> -d '...'`

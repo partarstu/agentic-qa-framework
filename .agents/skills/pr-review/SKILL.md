@@ -8,7 +8,7 @@ description: Reviews open pull requests on GitHub by analyzing code changes agai
 # PR Review
 
 This skill provides a workflow for reviewing pull requests on GitHub. It finds the current branch's PR, analyzes code
-changes against project guidelines (GEMINI.md) and Python best practices, and adds inline review comments directly to
+changes against project guidelines (AGENTS.md) and Python best practices, and adds inline review comments directly to
 the PR.
 
 ## ⚠️ User Intervention Policy
@@ -206,7 +206,7 @@ gh pr comment --body "## 📝 Code Review Summary
 {summary of main issues}
 
 ---
-*Review based on project guidelines (GEMINI.md) and Python best practices.*"
+*Review based on project guidelines (AGENTS.md) and Python best practices.*"
 ```
 
 ### Step 8: Report to User

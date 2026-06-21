@@ -3,8 +3,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 
 import asyncio
-import base64
-import logging
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from contextlib import asynccontextmanager
@@ -13,11 +11,11 @@ from urllib.parse import urlparse
 
 import httpx
 import uvicorn
-from a2a.server.apps import A2AFastAPIApplication
+from a2a.helpers import get_message_text, new_text_message
 from a2a.server.request_handlers import DefaultRequestHandler
+from a2a.server.routes import create_agent_card_routes, create_jsonrpc_routes
 from a2a.server.tasks import InMemoryTaskStore
-from a2a.types import AgentCapabilities, AgentCard, FilePart, FileWithBytes, Message, Part
-from a2a.utils import get_message_text, new_agent_text_message
+from a2a.types import AgentCapabilities, AgentCard, AgentInterface, Message
 from fastapi import FastAPI
 from jira import JIRA
 from pydantic import BaseModel
@@ -33,16 +31,20 @@ from pydantic_ai.usage import UsageLimits
 import config
 from common import utils
 from common.agent_executor import DefaultAgentExecutor
-from common.agent_log_capture import AgentLogCaptureHandler, create_log_file_part
 from common.custom_llm_wrapper import CustomLlmWrapper
 from common.models import AgentExecutionError, AgentRuntimeError, JsonSerializableModel
 from common.services.vector_db_service import VectorDbService
+from common.streaming import compute_activity_budget
 
 REGISTRATION_PATH = f"{config.ORCHESTRATOR_URL}/register"
 MCP_SERVER_ATTACHMENTS_FOLDER_PATH = config.MCP_SERVER_ATTACHMENTS_FOLDER_PATH
 ATTACHMENTS_LOCAL_DESTINATION_FOLDER_PATH = config.ATTACHMENTS_LOCAL_DESTINATION_FOLDER_PATH
 
 logger = utils.get_logger("agent_base")
+
+# Bound the activity queue so report_activity calls cannot accumulate without a
+# consumer (e.g. standalone runs, where no executor drains the queue).
+_ACTIVITY_QUEUE_MAXSIZE = 1000
 
 
 class AgentBase(ABC):
@@ -62,6 +64,12 @@ class AgentBase(ABC):
         tools: Sequence[Tool[AgentDepsT] | ToolFuncEither[AgentDepsT, ...]] = (),
         vector_db_collection_name: str | None = None,
     ):
+        """Initialise the agent and its underlying A2A server.
+
+        Note for prompt-template authors: the ``report_activity`` tool and a one-line
+        instruction snippet are appended to *instructions* automatically here.
+        Do **not** include them in your system-prompt template files.
+        """
         self.agent_name = agent_name
         self.base_url = base_url
         self.port = port
@@ -74,7 +82,12 @@ class AgentBase(ABC):
         self.deps_type = deps_type
         self.description = description
         self.mcp_servers = mcp_servers or []
-        self.tools = tools
+        self._activity_queue: asyncio.Queue[str] = asyncio.Queue(maxsize=_ACTIVITY_QUEUE_MAXSIZE)
+        self.tools = [*tools, self.report_activity]
+        self.instructions = (
+            self.instructions
+            + "\nA `report_activity` tool is available — call it before any other tool call or reasoning phase."
+        )
         self.agent = self._create_agent()
         self.a2a_server = self._get_server()
 
@@ -83,6 +96,15 @@ class AgentBase(ABC):
             self.vector_db_service = VectorDbService(vector_db_collection_name)
         self.latest_received_message: Message | None = None
 
+    @property
+    def activity_queue(self) -> asyncio.Queue[str]:
+        """Queue of pending activity descriptions reported via report_activity.
+
+        Exposed so the executor can drain reported activities without reaching across
+        the privacy boundary into the internal queue.
+        """
+        return self._activity_queue
+
     @abstractmethod
     def get_thinking_level(self) -> ThinkingLevel:
         pass
@@ -90,6 +112,21 @@ class AgentBase(ABC):
     @abstractmethod
     def get_max_requests_per_task(self) -> int:
         pass
+
+    async def report_activity(self, description: str) -> None:
+        """Report your current activity to the dashboard.
+
+        Call this with one short sentence (≤ 120 chars) describing what you are
+        about to do, whenever you start a new reasoning phase OR before invoking
+        any other tool. You may call it in parallel with other tool calls.
+        Examples: "Fetching Jira issue PROJ-123", "Generating test steps for AC-2".
+        """
+        try:
+            self._activity_queue.put_nowait(description)
+        except asyncio.QueueFull:
+            # No active consumer (e.g. standalone run) or the consumer fell behind:
+            # drop the update rather than letting the queue grow without bound.
+            logger.debug("Activity queue full; dropping activity update: %s", description)
 
     def _create_agent(self) -> Agent:
         logger.info(f"""Creating agent '{self.agent_name}' with the following configuration:
@@ -112,12 +149,21 @@ class AgentBase(ABC):
         )
 
     async def _get_agent_execution_result(self, received_request: list[UserContent]) -> AgentRunResult[Any] | None:
-        usage_limits = UsageLimits(tool_calls_limit=self.get_max_requests_per_task())
+        usage_limits = UsageLimits(tool_calls_limit=compute_activity_budget(self.get_max_requests_per_task()))
         for attempt in range(config.RetryConfig.MAX_RETRIES):
             try:
                 logger.info(f"Starting agent run (attempt {attempt + 1}/{config.RetryConfig.MAX_RETRIES})...")
-                async with self.agent:
-                    return await self.agent.run(received_request, usage_limits=usage_limits)
+                try:
+                    async with self.agent:
+                        return await self.agent.run(received_request, usage_limits=usage_limits)
+                except ExceptionGroup as eg:
+                    if any(isinstance(exc, httpx.ConnectError) for exc in eg.exceptions) and self.mcp_servers:
+                        mcp_urls = [server.url for server in self.mcp_servers]
+                        raise ConnectionError(
+                            f"MCP connection failed: could not connect to MCP server(s) {mcp_urls}. "
+                            "Ensure the MCP server(s) are running and accessible."
+                        ) from eg
+                    raise
             except (ModelHTTPError, httpx.TransportError) as e:
                 is_retryable = isinstance(e, httpx.TransportError) or (
                     isinstance(e, ModelHTTPError) and e.status_code in config.RetryConfig.RETRYABLE_STATUS_CODES
@@ -137,26 +183,19 @@ class AgentBase(ABC):
         self.latest_received_message = received_message
         received_request = self._get_all_received_contents(received_message)
 
-        # Set up log capture for this execution
-        log_handler = AgentLogCaptureHandler()
-        log_handler.setLevel(config.LOG_LEVEL)
-        root_logger = logging.getLogger()
-        root_logger.addHandler(log_handler)
-
-        logger.info("Got a task to execute, starting execution.")
         try:
             result = await self._get_agent_execution_result(received_request)
-            logger.info("Completed execution of the task.")
             self._log_llm_comments_if_result_incomplete(result.output)
-            captured_logs = log_handler.get_logs()
-            root_logger.removeHandler(log_handler)
-            return self._get_message_with_logs(result, captured_logs)
+            return self._get_text_message_from_results(result)
         except Exception as e:
             logger.exception("Error during agent execution.")
-            captured_logs = log_handler.get_logs()
-            root_logger.removeHandler(log_handler)
-            error_message = self._get_error_message_with_logs(
-                e, captured_logs, received_message.context_id, received_message.task_id
+            error_model = AgentExecutionError(error_message=f"Agent execution failed with error: {e}")
+            context_id = getattr(received_message, "context_id", None)
+            task_id = getattr(received_message, "task_id", None)
+            error_message = new_text_message(
+                text=error_model.model_dump_json(),
+                context_id=context_id,
+                task_id=task_id,
             )
             error_text = (
                 "; ".join(f"{type(sub).__name__}: {sub}" for sub in e.exceptions)
@@ -234,7 +273,7 @@ class AgentBase(ABC):
 
     @staticmethod
     def _fetch_attachments(attachment_paths: list[str]) -> dict[str, BinaryContent]:
-        """Fetches and all attachments, returning them as binary content for multimodal processing.
+        """Fetches all attachments, returning them as binary content for multimodal processing.
 
         Args:
             attachment_paths: List of file paths to the downloaded attachments.
@@ -247,23 +286,31 @@ class AgentBase(ABC):
         return fetch_all_attachments(attachment_paths)
 
     def _get_server(self) -> FastAPI:
-        request_handler = DefaultRequestHandler(
-            agent_executor=DefaultAgentExecutor(self),
-            task_store=InMemoryTaskStore(),
-        )
         agent_card = AgentCard(
             name=self.agent_name,
             description=self.description,
-            url=self.url,
             version="1.0.0",
             default_input_modes=["text"],
             default_output_modes=["text", "image"],
-            capabilities=AgentCapabilities(streaming=False),
+            capabilities=AgentCapabilities(streaming=True),
             skills=[],
+            supported_interfaces=[
+                AgentInterface(
+                    protocol_binding="JSONRPC",
+                    url=self.url,
+                )
+            ],
         )
-        server = A2AFastAPIApplication(agent_card=agent_card, http_handler=request_handler)
-        a2a_app: FastAPI = server.build()
-
+        request_handler = DefaultRequestHandler(
+            agent_executor=DefaultAgentExecutor(self),
+            task_store=InMemoryTaskStore(),
+            agent_card=agent_card,
+        )
+        routes = [
+            *create_agent_card_routes(agent_card),
+            *create_jsonrpc_routes(request_handler, "/"),
+        ]
+        a2a_app = FastAPI(routes=routes, lifespan=self._lifespan)
         agent_name = self.agent_name
 
         @a2a_app.get("/source")
@@ -277,19 +324,6 @@ class AgentBase(ABC):
                 "source_url": "https://github.com/partarstu/agentic-qa-framework",
             }
 
-        original_lifespan = a2a_app.router.lifespan_context
-
-        @asynccontextmanager
-        async def combined_lifespan(app: FastAPI):
-            # `self` is captured from the outer scope
-            if original_lifespan:
-                async with original_lifespan(app), self._lifespan(app):
-                    yield
-            else:
-                async with self._lifespan(app):
-                    yield
-
-        a2a_app.router.lifespan_context = combined_lifespan
         return a2a_app
 
     def start_as_server(self):
@@ -302,12 +336,8 @@ class AgentBase(ABC):
         text_content: str = get_message_text(received_message)
         files_content: list[BinaryContent] = []
         for part in received_message.parts:
-            if isinstance(part.root, FilePart):
-                file = part.root.file
-                if isinstance(file, FileWithBytes):
-                    mime_type = file.mime_type
-                    content = base64.b64decode(file.bytes)
-                    files_content.append(BinaryContent(data=content, media_type=mime_type))
+            if part.HasField("raw"):
+                files_content.append(BinaryContent(data=part.raw, media_type=part.media_type))
         if files_content:
             logger.info(f"Passing {len(files_content)} file(s) to LLM context.")
         all_contents: list[UserContent] = [text_content, *files_content]
@@ -319,48 +349,15 @@ class AgentBase(ABC):
     ) -> Message:
         output = result.output
         if isinstance(output, JsonSerializableModel):
-            return new_agent_text_message(text=output.model_dump_json(), context_id=context_id, task_id=task_id)
+            return new_text_message(text=output.model_dump_json(), context_id=context_id, task_id=task_id)
         if isinstance(output, dict):
             text_parts = []
             for part in output.get("parts", []):
                 if part.get("type", "") == "text":
                     text_parts.append(part)
-            return new_agent_text_message(text="\n".join(text_parts), context_id=context_id, task_id=task_id)
+            return new_text_message(text="\n".join(text_parts), context_id=context_id, task_id=task_id)
         else:
-            return new_agent_text_message(text=str(output), context_id=context_id, task_id=task_id)
-
-    def _get_message_with_logs(
-        self, result: AgentRunResult, captured_logs: str, context_id: str | None = None, task_id: str | None = None
-    ) -> Message:
-        """Create a message with text result and log file artifact."""
-        base_message = self._get_text_message_from_results(result, context_id, task_id)
-        if not captured_logs or not captured_logs.strip():
-            return base_message
-        return self._get_final_message_with_logs(base_message, captured_logs)
-
-    def _get_error_message_with_logs(
-        self, exception: Exception, captured_logs: str, context_id: str | None = None, task_id: str | None = None
-    ) -> Message:
-        """Create a message with error details and log file artifact."""
-        error_model = AgentExecutionError(error_message=f"Agent execution failed with error: {exception}")
-        base_message = new_agent_text_message(
-            text=error_model.model_dump_json(), context_id=context_id, task_id=task_id
-        )
-        if not captured_logs or not captured_logs.strip():
-            return base_message
-        return self._get_final_message_with_logs(base_message, captured_logs)
-
-    def _get_final_message_with_logs(self, base_message: Message, captured_logs: str) -> Message:
-        log_file_with_bytes = create_log_file_part(captured_logs, self.agent_name)
-        log_part = Part(root=FilePart(file=log_file_with_bytes))
-        new_parts = [*list(base_message.parts), log_part]
-        return Message(
-            parts=new_parts,
-            message_id=base_message.message_id,
-            role=base_message.role,
-            context_id=base_message.context_id,
-            task_id=base_message.task_id,
-        )
+            return new_text_message(text=str(output), context_id=context_id, task_id=task_id)
 
     @staticmethod
     def add_jira_comment(issue_key: str, comment: str) -> str:

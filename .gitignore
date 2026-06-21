@@ -1,4 +1,5 @@
 /.idea
+/.venv/
 agents/orchestrator/test_main.py
 mcp/jira/.env
 *.env
@@ -17,3 +18,4 @@ bandit-report.json
 coverage.xml
 test-results.xml
 .editorconfig
+/logs

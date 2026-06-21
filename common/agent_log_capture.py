@@ -9,12 +9,9 @@ This module provides a log handler that captures log records during agent
 execution and can export them as a string for inclusion in task artifacts.
 """
 
-import base64
 import logging
 import threading
 from collections import deque
-
-from a2a.types import FileWithBytes
 
 
 class AgentLogCaptureHandler(logging.Handler):
@@ -29,6 +26,8 @@ class AgentLogCaptureHandler(logging.Handler):
         super().__init__()
         self._buffer: deque[str] = deque(maxlen=max_records)
         self._lock = threading.Lock()
+        self._drain_cursor: int = 0
+        self._emitted_total: int = 0
         self.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
 
     def emit(self, record: logging.LogRecord) -> None:
@@ -37,100 +36,23 @@ class AgentLogCaptureHandler(logging.Handler):
             log_entry = self.format(record)
             with self._lock:
                 self._buffer.append(log_entry)
+                self._emitted_total += 1
         except Exception:
             self.handleError(record)
 
-    def get_logs(self) -> str:
-        """
-        Get all captured logs as a single string.
+    def drain(self) -> list[str]:
+        """Return lines appended since the last drain() and advance the cursor.
 
-        Returns:
-            All captured log entries joined by newlines.
-        """
-        with self._lock:
-            return "\n".join(self._buffer)
-
-    def get_logs_list(self) -> list[str]:
-        """
-        Get all captured logs as a list of strings.
-
-        Returns:
-            List of log entry strings.
+        Thread-safe. Tracks emitted records by a monotonic total so draining keeps
+        working after the bounded buffer overflows: when more lines were emitted than
+        the buffer can hold, the oldest are unrecoverable and only the buffered tail
+        is returned.
         """
         with self._lock:
-            return list(self._buffer)
-
-    def clear(self) -> None:
-        """Clear all buffered logs."""
-        with self._lock:
-            self._buffer.clear()
-
-
-class AgentLogCapture:
-    """
-    Context manager for capturing logs during agent execution.
-
-    Usage:
-        with AgentLogCapture("my_agent") as capture:
-            # ... agent execution code ...
-            logs = capture.get_logs()
-    """
-
-    def __init__(self, logger_name: str):
-        """
-        Initialize the log capture context.
-
-        Args:
-            logger_name: Name of the logger to capture logs from.
-        """
-        self.logger_name = logger_name
-        self.handler = AgentLogCaptureHandler()
-        self._logger: logging.Logger | None = None
-
-    def __enter__(self) -> "AgentLogCapture":
-        """Start capturing logs."""
-        import config
-
-        self._logger = logging.getLogger(self.logger_name)
-        self._logger.addHandler(self.handler)
-        # Use configured log level
-        self.handler.setLevel(config.LOG_LEVEL)
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
-        """Stop capturing logs."""
-        if self._logger:
-            self._logger.removeHandler(self.handler)
-
-    def get_logs(self) -> str:
-        """Get captured logs as a string."""
-        return self.handler.get_logs()
-
-    def get_logs_list(self) -> list[str]:
-        """Get captured logs as a list."""
-        return self.handler.get_logs_list()
-
-    def clear(self) -> None:
-        """Clear captured logs."""
-        self.handler.clear()
-
-
-def create_log_file_part(logs: str, agent_name: str) -> "FileWithBytes":
-    """
-    Create a FilePart containing agent execution logs.
-
-    Args:
-        logs: The log content as a string.
-        agent_name: Name of the agent (used in filename).
-
-    Returns:
-        A FileWithBytes object containing the logs.
-    """
-
-    # Replace spaces with underscores in agent name for filename
-    safe_name = agent_name.replace(" ", "_").lower()
-    filename = f"{safe_name}_execution_logs.txt"
-
-    encoded_logs = base64.b64encode(logs.encode("utf-8")).decode("utf-8")
-
-    return FileWithBytes(name=filename, bytes=encoded_logs, mime_type="text/plain")
+            new_count = self._emitted_total - self._drain_cursor
+            self._drain_cursor = self._emitted_total
+            if new_count <= 0:
+                return []
+            buf_len = len(self._buffer)
+            k = min(new_count, buf_len)
+            return [self._buffer[buf_len - i] for i in range(k, 0, -1)]

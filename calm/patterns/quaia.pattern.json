@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://quaia.finos.calm/patterns/quaia.pattern.json",
+  "title": "QuAIA Architecture Pattern",
+  "description": "Governance pattern for the QuAIA framework. Asserts that every required service/actor is present, the core integration edges exist, and the mandated security controls are attached to the orchestrator, the agents, the internal services and the inbound webhook.",
+  "type": "object",
+  "properties": {
+    "nodes": {
+      "type": "array",
+      "allOf": [
+        { "contains": { "properties": { "unique-id": { "const": "orchestrator" } }, "required": ["unique-id"] } },
+        { "contains": { "properties": { "unique-id": { "const": "requirements-review-agent" } }, "required": ["unique-id"] } },
+        { "contains": { "properties": { "unique-id": { "const": "test-case-generation-agent" } }, "required": ["unique-id"] } },
+        { "contains": { "properties": { "unique-id": { "const": "test-case-classification-agent" } }, "required": ["unique-id"] } },
+        { "contains": { "properties": { "unique-id": { "const": "test-case-review-agent" } }, "required": ["unique-id"] } },
+        { "contains": { "properties": { "unique-id": { "const": "incident-creation-agent" } }, "required": ["unique-id"] } },
+        { "contains": { "properties": { "unique-id": { "const": "prompt-guard-service" } }, "required": ["unique-id"] } },
+        { "contains": { "properties": { "unique-id": { "const": "embedding-service" } }, "required": ["unique-id"] } },
+        { "contains": { "properties": { "unique-id": { "const": "qdrant" } }, "required": ["unique-id"] } },
+        { "contains": { "properties": { "unique-id": { "const": "jira-mcp-server" } }, "required": ["unique-id"] } },
+
+        { "contains": { "properties": { "unique-id": { "const": "orchestrator" }, "controls": { "required": ["orchestrator-api-key", "dashboard-jwt"] } }, "required": ["controls"] } },
+        { "contains": { "properties": { "unique-id": { "const": "requirements-review-agent" }, "controls": { "required": ["prompt-injection-guard"] } }, "required": ["controls"] } },
+        { "contains": { "properties": { "unique-id": { "const": "test-case-generation-agent" }, "controls": { "required": ["prompt-injection-guard"] } }, "required": ["controls"] } },
+        { "contains": { "properties": { "unique-id": { "const": "test-case-classification-agent" }, "controls": { "required": ["prompt-injection-guard"] } }, "required": ["controls"] } },
+        { "contains": { "properties": { "unique-id": { "const": "test-case-review-agent" }, "controls": { "required": ["prompt-injection-guard"] } }, "required": ["controls"] } },
+        { "contains": { "properties": { "unique-id": { "const": "incident-creation-agent" }, "controls": { "required": ["prompt-injection-guard"] } }, "required": ["controls"] } },
+        { "contains": { "properties": { "unique-id": { "const": "embedding-service" }, "controls": { "required": ["internal-service-api-key"] } }, "required": ["controls"] } },
+        { "contains": { "properties": { "unique-id": { "const": "prompt-guard-service" }, "controls": { "required": ["internal-service-api-key"] } }, "required": ["controls"] } }
+      ]
+    },
+    "relationships": {
+      "type": "array",
+      "allOf": [
+        { "contains": { "properties": { "unique-id": { "const": "rel-orchestrator-routes-tasks" } }, "required": ["unique-id"] } },
+        { "contains": { "properties": { "unique-id": { "const": "rel-jira-webhook-orchestrator" }, "controls": { "required": ["jira-webhook-hmac"] } }, "required": ["controls"] } },
+        { "contains": { "properties": { "unique-id": { "const": "rel-deployed-in-cloud-run" } }, "required": ["unique-id"] } }
+      ]
+    }
+  },
+  "required": ["nodes", "relationships"]
+}

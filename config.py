@@ -7,6 +7,7 @@ Centralized configuration for the application.
 """
 
 import os
+from pathlib import Path
 
 from dotenv import load_dotenv
 from pydantic_ai.settings import ThinkingLevel
@@ -16,6 +17,10 @@ load_dotenv()
 # Logging
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
 GOOGLE_CLOUD_LOGGING_ENABLED = os.environ.get("GOOGLE_CLOUD_LOGGING_ENABLED", "False").lower() in ("true", "1", "t")
+# When enabled, each service (orchestrator and the Python agents) additionally writes its logs to a rotating file
+# under LOG_DIR, named after the service's package (e.g. orchestrator.log, requirements_review.log).
+LOG_TO_FILE = os.environ.get("LOG_TO_FILE", "True").lower() in ("true", "1", "t")
+LOG_DIR = os.environ.get("LOG_DIR", str(Path(__file__).resolve().parent / "logs"))
 
 # URLs
 ORCHESTRATOR_HOST = os.environ.get("ORCHESTRATOR_HOST", "localhost")
@@ -35,6 +40,10 @@ UPDATE_RAG_DB_WEBHOOK_URL = f"{ORCHESTRATOR_URL}/update-rag-db"
 
 # Secrets
 JIRA_WEBHOOK_SECRET = os.environ.get("JIRA_WEBHOOK_SECRET")
+# Shared secret guarding the internal embedding and prompt-guard services. When set, those
+# services require a matching X-API-Key header and their clients send it. Left unset, the
+# services stay open (they are expected to be reachable only on a private network).
+INTERNAL_SERVICE_API_KEY = os.environ.get("INTERNAL_SERVICE_API_KEY")
 ZEPHYR_API_TOKEN = os.environ.get("ZEPHYR_API_TOKEN")
 XRAY_BASE_URL = os.environ.get("XRAY_BASE_URL")
 XRAY_CLIENT_ID = os.environ.get("XRAY_CLIENT_ID")
@@ -113,9 +122,9 @@ class OrchestratorConfig:
     TASK_EXECUTION_TIMEOUT = 500.0
     AGENT_DISCOVERY_TIMEOUT_SECONDS = 120
     INCOMING_REQUEST_WAIT_TIMEOUT = AGENT_DISCOVERY_TIMEOUT_SECONDS + 5
-    MODEL_NAME = "google-gla:gemini-3-flash-preview"
+    MODEL_NAME = "google-gla:gemini-3.5-flash"
     API_KEY = os.environ.get("ORCHESTRATOR_API_KEY")
-    AGENT_DISCOVERY_PORTS = os.environ.get("AGENT_DISCOVERY_PORTS", "8001-8007")
+    AGENT_DISCOVERY_PORTS = os.environ.get("AGENT_DISCOVERY_PORTS", "8001-8006")
     REMOTE_EXECUTION_AGENT_HOSTS = os.environ.get("REMOTE_EXECUTION_AGENT_HOSTS", AGENT_BASE_URL)
 
 
@@ -137,7 +146,7 @@ class RequirementsReviewAgentConfig:
     PORT = int(os.environ.get("PORT", "8001"))
     EXTERNAL_PORT = int(os.environ.get("EXTERNAL_PORT", PORT))
     PROTOCOL = "http"
-    MODEL_NAME = "google-gla:gemini-3-flash-preview"
+    MODEL_NAME = "google-gla:gemini-3.5-flash"
     MAX_REQUESTS_PER_TASK = 30
 
 
@@ -148,7 +157,7 @@ class TestCaseClassificationAgentConfig:
     PORT = int(os.environ.get("PORT", "8003"))
     EXTERNAL_PORT = int(os.environ.get("EXTERNAL_PORT", PORT))
     PROTOCOL = "http"
-    MODEL_NAME = "google-gla:gemini-3-flash-preview"
+    MODEL_NAME = "google-gla:gemini-3.5-flash"
     MAX_REQUESTS_PER_TASK = 30
 
 
@@ -159,7 +168,7 @@ class TestCaseGenerationAgentConfig:
     PORT = int(os.environ.get("PORT", "8002"))
     EXTERNAL_PORT = int(os.environ.get("EXTERNAL_PORT", PORT))
     PROTOCOL = "http"
-    MODEL_NAME = "google-gla:gemini-3-flash-preview"
+    MODEL_NAME = "google-gla:gemini-3.5-flash"
     MAX_REQUESTS_PER_TASK = 30
 
 
@@ -171,7 +180,7 @@ class TestCaseReviewAgentConfig:
     PORT = int(os.environ.get("PORT", "8004"))
     EXTERNAL_PORT = int(os.environ.get("EXTERNAL_PORT", PORT))
     PROTOCOL = "http"
-    MODEL_NAME = "google-gla:gemini-3-flash-preview"
+    MODEL_NAME = "google-gla:gemini-3.5-flash"
     MAX_REQUESTS_PER_TASK = 30
 
 
@@ -179,10 +188,10 @@ class TestCaseReviewAgentConfig:
 class IncidentCreationAgentConfig:
     THINKING_LEVEL: ThinkingLevel = "medium"
     OWN_NAME = "Incident Creation Agent"
-    PORT = int(os.environ.get("PORT", "8007"))
+    PORT = int(os.environ.get("PORT", "8006"))
     EXTERNAL_PORT = int(os.environ.get("EXTERNAL_PORT", PORT))
     PROTOCOL = "http"
-    MODEL_NAME = "google-gla:gemini-3-flash-preview"
+    MODEL_NAME = "google-gla:gemini-3.5-flash"
     MAX_REQUESTS_PER_TASK = 30
     MIN_SIMILARITY_SCORE = float(os.environ.get("INCIDENT_AGENT_MIN_SIMILARITY_SCORE", "0.7"))
     ISSUE_PRIORITY_FIELD_ID = os.environ.get("ISSUE_PRIORITY_FIELD_ID", "priority")
@@ -200,17 +209,6 @@ class IncidentCreationAgentConfig:
     TERMINAL_STATUSES = os.environ.get(
         "INCIDENT_AGENT_TERMINAL_STATUSES", "Closed,Done,Duplicate,Rejected,Won't Fix,Cannot Reproduce,Resolved"
     ).split(",")
-
-
-# RAG Update Agent
-class JiraRagUpdateAgentConfig:
-    THINKING_LEVEL: ThinkingLevel = "medium"
-    OWN_NAME = "Jira RAG Update Agent"
-    PORT = int(os.environ.get("PORT", "8006"))
-    EXTERNAL_PORT = int(os.environ.get("EXTERNAL_PORT", PORT))
-    PROTOCOL = "http"
-    MODEL_NAME = "google-gla:gemini-3-flash-preview"
-    MAX_REQUESTS_PER_TASK = 30
 
 
 class RetryConfig:
@@ -234,6 +232,10 @@ class QdrantConfig:
     EMBEDDING_MODEL_PATH = os.path.join(LOCAL_MODELS_PATH, "embedding_model")
     EMBEDDING_SERVICE_URL = os.environ.get("EMBEDDING_SERVICE_URL")
     EMBEDDING_SERVICE_TIMEOUT_SECONDS = float(os.environ.get("EMBEDDING_SERVICE_TIMEOUT_SECONDS", "120.0"))
+    EMBEDDING_SERVICE_MAX_RETRIES = int(os.environ.get("EMBEDDING_SERVICE_MAX_RETRIES", "6"))
+    EMBEDDING_SERVICE_RETRY_BACKOFF_CAP_SECONDS = float(
+        os.environ.get("EMBEDDING_SERVICE_RETRY_BACKOFF_CAP_SECONDS", "32.0")
+    )
     VALID_STATUSES = os.environ.get(
         "JIRA_VALID_STATUSES", "To Do,In Review,Ready for Development,In Progress,Done"
     ).split(",")

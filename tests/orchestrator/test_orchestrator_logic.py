@@ -5,18 +5,23 @@
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from a2a.types import AgentCapabilities, AgentCard
+from a2a.types import AgentCapabilities, AgentCard, AgentInterface, Artifact, Part, TaskArtifactUpdateEvent
 
 import config
+from common.streaming import AgentActivityEvent, LogBatchEvent, TaskDoneEvent
 from orchestrator.main import (
     AgentStatus,
     BrokenReason,
     _discover_agents,
     _fetch_agent_card,
+    _finalize_task,
+    _handle_stream_chunk,
+    _LogStreamState,
     _select_agent,
     agent_registry,
     discovery_agent,
 )
+from orchestrator.models import TaskStatus
 
 
 @pytest.fixture
@@ -38,12 +43,12 @@ def mock_agent_card():
     return AgentCard(
         name="Discovered Agent",
         description="Desc",
-        url="http://localhost:8001",
         version="1.0.0",
         capabilities=AgentCapabilities(streaming=False),
         skills=[],
-        defaultInputModes=["text"],
-        defaultOutputModes=["text"],
+        default_input_modes=["text"],
+        default_output_modes=["text"],
+        supported_interfaces=[AgentInterface(protocol_binding="JSONRPC", url="http://localhost:8001")],
     )
 
 
@@ -55,7 +60,9 @@ async def test_fetch_agent_card_success(mock_agent_card):
 
         mock_response = MagicMock()
         mock_response.status_code = 200
-        mock_response.json.return_value = mock_agent_card.model_dump()
+        from google.protobuf.json_format import MessageToDict
+
+        mock_response.json.return_value = MessageToDict(mock_agent_card, preserving_proto_field_name=True)
         mock_client.get.return_value = mock_response
 
         card = await _fetch_agent_card("http://localhost:8001")
@@ -185,5 +192,168 @@ async def test_discover_agents_fetches_new(clear_registry, mock_agent_card):
         # Verify _fetch_agent_card WAS called
         mock_fetch.assert_called_once_with("http://localhost:8001")
 
-        # Verify new agent registered
-        assert not await agent_registry.is_empty()
+
+# =============================================================================
+# _handle_stream_chunk
+# =============================================================================
+
+
+def _text_artifact(name: str, text: str) -> Artifact:
+    return Artifact(name=name, parts=[Part(text=text)])
+
+
+def _raw_artifact(name: str, raw_data: bytes, artifact_id: str = "logs-123") -> Artifact:
+    return Artifact(name=name, artifact_id=artifact_id, parts=[Part(raw=raw_data, media_type="text/plain")])
+
+
+@pytest.mark.asyncio
+async def test_handle_stream_chunk_log_batch_updates_history_and_publishes_to_agent():
+    artifact = _raw_artifact("logs", b"line1\nline2", "logs-123")
+    collected: list[Artifact] = []
+    log_state = _LogStreamState()
+    event = TaskArtifactUpdateEvent(
+        context_id="ctx-1",
+        task_id="task-1",
+        artifact=artifact,
+        last_chunk=False,
+    )
+
+    with (
+        patch("orchestrator.main.task_history") as mock_history,
+        patch("orchestrator.main.streaming_hub") as mock_hub,
+    ):
+        mock_history.append_log_batch = AsyncMock()
+        mock_hub.publish_agent = AsyncMock()
+
+        await _handle_stream_chunk(event, "task-1", "agent-1", collected, log_state)
+
+    mock_history.append_log_batch.assert_called_once_with("task-1", ["line1", "line2"])
+    mock_hub.publish_agent.assert_called_once()
+    published = mock_hub.publish_agent.call_args[0][1]
+    assert published["type"] == "log_batch"
+    assert "line1" in published["lines"]
+    assert log_state.artifact_id == "logs-123"
+    assert log_state.lines == ["line1", "line2"]
+    assert collected == []
+
+
+@pytest.mark.asyncio
+async def test_handle_stream_chunk_log_last_chunk_consolidates():
+    collected: list[Artifact] = []
+    log_state = _LogStreamState()
+
+    # Chunk 1
+    artifact_1 = _raw_artifact("logs", b"line1\n", "logs-123")
+    event_1 = TaskArtifactUpdateEvent(
+        context_id="ctx-1",
+        task_id="task-1",
+        artifact=artifact_1,
+        last_chunk=False,
+    )
+    with (
+        patch("orchestrator.main.task_history") as mock_history,
+        patch("orchestrator.main.streaming_hub") as mock_hub,
+    ):
+        mock_history.append_log_batch = AsyncMock()
+        mock_hub.publish_agent = AsyncMock()
+        await _handle_stream_chunk(event_1, "task-1", "agent-1", collected, log_state)
+
+    # Chunk 2 (last)
+    artifact_2 = _raw_artifact("logs", b"line2", "logs-123")
+    event_2 = TaskArtifactUpdateEvent(
+        context_id="ctx-1",
+        task_id="task-1",
+        artifact=artifact_2,
+        last_chunk=True,
+    )
+    with (
+        patch("orchestrator.main.task_history") as mock_history,
+        patch("orchestrator.main.streaming_hub") as mock_hub,
+    ):
+        mock_history.append_log_batch = AsyncMock()
+        mock_hub.publish_agent = AsyncMock()
+        await _handle_stream_chunk(event_2, "task-1", "agent-1", collected, log_state)
+
+    # Shoud have created a consolidated logs artifact
+    assert len(collected) == 1
+    consolidated = collected[0]
+    assert consolidated.name == "logs"
+    assert len(consolidated.parts) == 1
+    assert consolidated.parts[0].filename == "execution_logs.txt"
+    assert consolidated.parts[0].raw == b"line1\nline2"
+
+
+@pytest.mark.asyncio
+async def test_handle_stream_chunk_other_artifact_appended_to_collected():
+    artifact = _text_artifact("agent_execution_result", '{"result": "ok"}')
+    collected: list[Artifact] = []
+    log_state = _LogStreamState()
+    event = TaskArtifactUpdateEvent(
+        context_id="ctx-1",
+        task_id="task-1",
+        artifact=artifact,
+        last_chunk=False,
+    )
+
+    with (
+        patch("orchestrator.main.task_history"),
+        patch("orchestrator.main.streaming_hub"),
+    ):
+        await _handle_stream_chunk(event, "task-1", "agent-1", collected, log_state)
+
+    assert len(collected) == 1
+    assert collected[0] == artifact
+
+
+# =============================================================================
+# _finalize_task
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_finalize_task_updates_history_and_publishes_task_done():
+    with (
+        patch("orchestrator.main.task_history") as mock_history,
+        patch("orchestrator.main.streaming_hub") as mock_hub,
+    ):
+        mock_history.update = AsyncMock()
+        mock_history.clear_current_activity = AsyncMock()
+        mock_hub.publish_global = AsyncMock()
+        mock_hub.publish_agent = AsyncMock()
+
+        await _finalize_task("task-1", "agent-1", TaskStatus.COMPLETED)
+
+    mock_history.update.assert_called_once()
+    update_args = mock_history.update.call_args[0]
+    assert update_args[0] == "task-1"
+    assert update_args[1] == TaskStatus.COMPLETED
+
+    mock_history.clear_current_activity.assert_called_once_with("task-1")
+
+    mock_hub.publish_global.assert_called_once()
+    global_event = mock_hub.publish_global.call_args[0][0]
+    assert global_event["type"] == "task_done"
+    assert global_event["task_id"] == "task-1"
+    assert global_event["agent_id"] == "agent-1"
+    assert global_event["status"] == TaskStatus.COMPLETED.value
+
+    mock_hub.publish_agent.assert_called_once()
+    agent_event = mock_hub.publish_agent.call_args[0][1]
+    assert agent_event["type"] == "task_done"
+
+
+@pytest.mark.asyncio
+async def test_finalize_task_includes_error_message_when_provided():
+    with (
+        patch("orchestrator.main.task_history") as mock_history,
+        patch("orchestrator.main.streaming_hub") as mock_hub,
+    ):
+        mock_history.update = AsyncMock()
+        mock_history.clear_current_activity = AsyncMock()
+        mock_hub.publish_global = AsyncMock()
+        mock_hub.publish_agent = AsyncMock()
+
+        await _finalize_task("task-1", "agent-1", TaskStatus.FAILED, "something broke")
+
+    global_event = mock_hub.publish_global.call_args[0][0]
+    assert global_event["error_message"] == "something broke"

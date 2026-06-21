@@ -4,10 +4,20 @@
 
 import hashlib
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from typing import Literal, Optional
 
-from a2a.types import FileWithBytes, Part
+from a2a.types import Part
 from pydantic import BaseModel, Field
+
+
+@dataclass(slots=True)
+class FileArtifact:
+    """File artifact produced during test execution (replaces removed FileWithBytes)."""
+
+    name: str
+    raw: bytes
+    media_type: str
 
 
 class JsonSerializableModel(BaseModel):
@@ -224,7 +234,7 @@ class TestExecutionResult(JsonSerializableModel):
     generalErrorMessage: str = Field(
         description="General error message if the test execution failed (e.g. preconditions failed)"
     )
-    artifacts: list[FileWithBytes] | None = Field(
+    artifacts: list[FileArtifact] | None = Field(
         default=None,
         description="Optional dictionary of artifacts generated during "
         "execution (e.g., screenshots, reports, stack traces etc.)",

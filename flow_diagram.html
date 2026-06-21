@@ -63,11 +63,10 @@ SPDX-License-Identifier: AGPL-3.0-only
             <div class="mermaid">
 graph TD
     subgraph "Workflow 4: RAG Database Update"
-        RAG1[API call<br>/update-rag-db] --> RAG2[Select agent for<br>'Update RAG Vector DB'];
-        RAG2 --> RAG3[Send sync task<br>for project tickets];
-        RAG3 --> RAG4[Agent syncs tickets<br>to Vector DB];
-        RAG4 --> RAG5[Return update summary];
-        RAG5 --> RAG6((End));
+        RAG1[API call<br>/update-rag-db] --> RAG2[Orchestrator reads project<br>issues via Jira REST API];
+        RAG2 --> RAG3[Sync issues<br>to Vector DB];
+        RAG3 --> RAG4[Return update summary];
+        RAG4 --> RAG5((End));
     end
 
     subgraph "Workflow 3: Test Execution and Reporting"

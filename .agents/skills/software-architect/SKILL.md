@@ -81,13 +81,14 @@ All implementations must fit within the existing `agentic_qa_framework`:
 | **Testing**  | Pytest, pytest-asyncio         | Async test support, comprehensive mocking |
 | **Logging**  | `logging` module               | Structured logging with context           |
 | **Agentic**  | ReAct, Reflection, Tool Use    | See Agentic Patterns section              |
+| **Arch-as-Code** | [FINOS CALM](https://calm.finos.org/) | Architecture, edges and security controls modelled under `calm/`; enforced by a blocking CI gate |
 
 ### 3. Project Rules Integration 📚
 
-You **MUST** read and apply rules from `GEMINI.md`:
+You **MUST** read and apply rules from `AGENTS.md`:
 
 ```
-Read the file: GEMINI.md
+Read the file: AGENTS.md
 ```
 
 Key rules to enforce:
@@ -309,7 +310,7 @@ async def call_external_service():
 #### 1.2 Read Project Rules
 
 ```
-Read the file: GEMINI.md
+Read the file: AGENTS.md
 ```
 
 Note any rules that specifically apply to this task.
@@ -378,12 +379,21 @@ For significant architectural decisions, create an ADR:
 
 **Store ADRs in:** Project documentation or include in implementation plan.
 
+#### 2.4 Reflect the Design in the CALM Model
+
+The architecture is maintained as code with [FINOS CALM](https://calm.finos.org/) under `calm/`, and a **blocking** CI
+job validates it against `calm/patterns/quaia.pattern.json`. If your design introduces, removes or renames a service, an
+integration edge between components, or a security control, the implementation plan **must** include the corresponding
+update to `calm/architecture/quaia.arch.json` (and the pattern, if the new element is part of the enforced contract). The
+CALM model is the canonical structural view — keep the Mermaid diagrams above and the CALM model consistent with each
+other. Pure in-process logic changes that do not alter the component topology need no CALM change.
+
 ### Step 3: Create Implementation Plan 📋
 
 #### 3.1 Read Template
 
 ```
-Read the file: .agent/skills/software-architect/resources/implementation_plan_template.md
+Read the file: .agents/skills/software-architect/resources/implementation_plan_template.md
 ```
 
 #### 3.2 Draft Plan
@@ -462,13 +472,14 @@ Before finalizing the implementation plan, verify:
 ### Design
 
 - [ ] Architecture diagrams created (component, sequence, data flow)
+- [ ] CALM model impact assessed; updates to `calm/` included in the plan when the component topology or controls change
 - [ ] ADR created for significant decisions
 - [ ] Trade-offs documented and justified
 - [ ] Existing code patterns followed or deviation justified
 
 ### Compliance
 
-- [ ] `GEMINI.md` rules verified and applied
+- [ ] `AGENTS.md` rules verified and applied
 - [ ] Type hints specified for all interfaces
 - [ ] Error handling strategy defined
 - [ ] Security considerations documented
@@ -511,7 +522,7 @@ When considering adding a new dependency:
 |-----------------|---------------------------------------------------|
 | **Necessity**   | Can we achieve this with stdlib or existing deps? |
 | **Maintenance** | Last release < 6 months? Active maintainers?      |
-| **Security**    | Run `pip-audit` check, review CVE database        |
+| **Security**    | Run `uv audit` check, review CVE database         |
 | **License**     | Compatible with AGPL-3.0-only?                    |
 | **Size**        | Minimal additional dependencies?                  |
 | **Popularity**  | Established community? Good documentation?        |
@@ -521,7 +532,7 @@ When considering adding a new dependency:
 If adding dependency:
 
 1. Document justification in ADR
-2. Add to `requirements.txt`
+2. Add to `pyproject.toml` (and run `uv lock` to update `uv.lock`)
 3. Note in implementation plan
 
 If rejecting:

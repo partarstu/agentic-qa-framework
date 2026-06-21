@@ -1,0 +1,61 @@
+# SPDX-FileCopyrightText: 2025-2026 Taras Paruta (partarstu@gmail.com)
+#
+# SPDX-License-Identifier: AGPL-3.0-only
+
+[project]
+name = "agentic-qa-framework"
+version = "0.1.0"
+description = "QuAIA - an open-source framework for intelligent automation of the software testing life cycle."
+readme = "README.md"
+requires-python = ">=3.14"
+license = "AGPL-3.0-only"
+
+# Shared runtime dependencies for the orchestrator and all agents.
+dependencies = [
+    "pydantic-ai-slim[google,mcp]==1.89.0",
+    "a2a-sdk==1.0.3",
+    "allure-python-commons==2.15.2",
+    "python-dotenv==1.2.2",
+    "gunicorn==23.0.0",
+    "google-cloud-logging==3.13.0",
+    "fastapi==0.128.0",
+    "httpx==0.28.1",
+    "python-dateutil==2.9.0.post0",
+    "requests==2.33.0",
+    "qdrant-client==1.16.2",
+    "python-magic==0.4.27",
+    "python-magic-bin==0.4.14; sys_platform == 'win32'",
+    "PyJWT==2.12.0",
+    "jira==3.10.5",
+    "sse-starlette==3.4.1",
+]
+
+# Optional, service-specific dependencies installed only in the respective
+# service images on top of the shared base (see services/*/Dockerfile).
+[project.optional-dependencies]
+embedding-service = [
+    "sentence-transformers==5.2.2",
+    "einops==0.8.2",
+]
+prompt-guard-service = [
+    "transformers==4.57.3",
+    "torch==2.9.1",
+]
+
+# Local development and CI tooling. Not installed into production images.
+[dependency-groups]
+dev = [
+    "pytest==9.0.3",
+    "pytest-cov==7.0.0",
+    "pytest-asyncio==1.3.0",
+    "ruff",
+    "bandit",
+    # The test suite builds agents with an `openai:` model string, so the
+    # OpenAI provider is required for tests but not at runtime (production uses
+    # the Google provider only). uv merges this with the base extras above.
+    "pydantic-ai-slim[openai]==1.89.0",
+]
+
+[tool.uv]
+# This is a deployable application, not a distributable package.
+package = false

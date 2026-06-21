@@ -5,14 +5,15 @@
 import { useState } from 'react';
 import { ClipboardList, CheckCircle, XCircle, Clock, Loader2 } from 'lucide-react';
 import { LogModal } from './LogModal';
-import type { TaskInfo } from '../types/dashboard';
+import type { TaskInfo, TaskLiveState } from '../types/dashboard';
 
 interface TaskListProps {
   tasks: TaskInfo[] | undefined;
   isLoading: boolean;
+  liveTaskStates?: Record<string, TaskLiveState>;
 }
 
-export function TaskList({ tasks, isLoading }: TaskListProps) {
+export function TaskList({ tasks, isLoading, liveTaskStates }: TaskListProps) {
   const [selectedTask, setSelectedTask] = useState<string | null>(null);
 
   const formatDuration = (ms: number | null) => {
@@ -105,8 +106,14 @@ export function TaskList({ tasks, isLoading }: TaskListProps) {
                         </span>
                       </div>
                     </td>
-                    <td className="py-3 max-w-xs truncate text-slate-200" title={task.description}>
-                      {task.description}
+                    <td className="py-3 max-w-xs text-slate-200" title={task.description}>
+                      <div className="truncate">{task.description}</div>
+                      {task.status === 'RUNNING' && liveTaskStates?.[task.task_id]?.current_activity && (
+                        <div className="text-xs text-indigo-300 flex items-center gap-1 mt-0.5">
+                          <Loader2 className="w-3 h-3 animate-spin flex-shrink-0" />
+                          <span className="truncate">{liveTaskStates[task.task_id].current_activity}</span>
+                        </div>
+                      )}
                     </td>
                     <td className="py-3 text-slate-300">{task.agent_name}</td>
                     <td className="py-3 text-slate-400">{formatTime(task.start_time)}</td>
@@ -123,6 +130,8 @@ export function TaskList({ tasks, isLoading }: TaskListProps) {
           isOpen={true}
           onClose={() => setSelectedTask(null)}
           taskId={selectedTask}
+          agentId={tasks?.find((t) => t.task_id === selectedTask)?.agent_id}
+          isRunning={tasks?.find((t) => t.task_id === selectedTask)?.status === 'RUNNING'}
           title="Task Execution Logs"
         />
       )}

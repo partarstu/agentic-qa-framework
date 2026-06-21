@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://quaia.finos.calm/controls/prompt-injection.requirement.json",
+  "title": "Prompt Injection Protection Requirement",
+  "description": "Requires that untrusted text passed to an LLM is screened for prompt-injection attacks.",
+  "allOf": [
+    { "$ref": "https://calm.finos.org/release/1.2/meta/control-requirement.json" }
+  ],
+  "properties": {
+    "provider": {
+      "type": "string",
+      "description": "The prompt-injection detection provider (e.g. protect_ai)."
+    },
+    "min-score": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Minimum score at which input is treated as an injection."
+    },
+    "enabled-by-default": {
+      "type": "boolean",
+      "description": "Whether the check is enabled by default (secure by default)."
+    }
+  },
+  "required": ["provider", "min-score", "enabled-by-default"]
+}

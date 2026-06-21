@@ -1,0 +1,412 @@
+{
+  "$schema": "https://calm.finos.org/release/1.2/meta/calm.json",
+  "nodes": [
+    {
+      "unique-id": "orchestrator",
+      "node-type": "service",
+      "name": "Orchestrator",
+      "description": "Central hub that registers agents, routes A2A tasks, runs workflows and serves the monitoring dashboard.",
+      "controls": {
+        "orchestrator-api-key": {
+          "description": "Control/webhook endpoints require an X-API-Key header and fail closed (HTTP 503) when unset.",
+          "requirements": [
+            {
+              "requirement-url": "https://quaia.finos.calm/controls/authentication.requirement.json",
+              "config": {
+                "control-id": "quaia-orchestrator-api-key",
+                "name": "Orchestrator API Key",
+                "description": "Requests to control/webhook endpoints must carry a valid X-API-Key header.",
+                "auth-method": "api-key",
+                "enforced": true
+              }
+            }
+          ]
+        },
+        "dashboard-jwt": {
+          "description": "Monitoring dashboard endpoints require a signed JWT; tokens are rejected when the signing secret is unset.",
+          "requirements": [
+            {
+              "requirement-url": "https://quaia.finos.calm/controls/authentication.requirement.json",
+              "config": {
+                "control-id": "quaia-dashboard-jwt",
+                "name": "Dashboard JWT",
+                "description": "Dashboard API access requires a valid JWT signed with DASHBOARD_JWT_SECRET.",
+                "auth-method": "jwt",
+                "enforced": true
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "requirements-review-agent",
+      "node-type": "service",
+      "name": "Requirements Review Agent",
+      "description": "Reviews Jira user-story requirements and reports issues back to the orchestrator.",
+      "controls": {
+        "prompt-injection-guard": {
+          "description": "Untrusted text is screened for prompt-injection before reaching the LLM (enabled by default).",
+          "requirements": [
+            {
+              "requirement-url": "https://quaia.finos.calm/controls/prompt-injection.requirement.json",
+              "config": {
+                "control-id": "quaia-prompt-injection-requirements-review-agent",
+                "name": "Prompt Injection Guard",
+                "description": "Agent input is checked by the prompt guard service before LLM processing.",
+                "provider": "protect_ai",
+                "min-score": 0.8,
+                "enabled-by-default": true
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "test-case-generation-agent",
+      "node-type": "service",
+      "name": "Test Case Generation Agent",
+      "description": "Generates test cases from a user story.",
+      "controls": {
+        "prompt-injection-guard": {
+          "description": "Untrusted text is screened for prompt-injection before reaching the LLM (enabled by default).",
+          "requirements": [
+            {
+              "requirement-url": "https://quaia.finos.calm/controls/prompt-injection.requirement.json",
+              "config": {
+                "control-id": "quaia-prompt-injection-test-case-generation-agent",
+                "name": "Prompt Injection Guard",
+                "description": "Agent input is checked by the prompt guard service before LLM processing.",
+                "provider": "protect_ai",
+                "min-score": 0.8,
+                "enabled-by-default": true
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "test-case-classification-agent",
+      "node-type": "service",
+      "name": "Test Case Classification Agent",
+      "description": "Classifies generated test cases (e.g. manual vs automated).",
+      "controls": {
+        "prompt-injection-guard": {
+          "description": "Untrusted text is screened for prompt-injection before reaching the LLM (enabled by default).",
+          "requirements": [
+            {
+              "requirement-url": "https://quaia.finos.calm/controls/prompt-injection.requirement.json",
+              "config": {
+                "control-id": "quaia-prompt-injection-test-case-classification-agent",
+                "name": "Prompt Injection Guard",
+                "description": "Agent input is checked by the prompt guard service before LLM processing.",
+                "provider": "protect_ai",
+                "min-score": 0.8,
+                "enabled-by-default": true
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "test-case-review-agent",
+      "node-type": "service",
+      "name": "Test Case Review Agent",
+      "description": "Reviews generated test cases for quality and completeness.",
+      "controls": {
+        "prompt-injection-guard": {
+          "description": "Untrusted text is screened for prompt-injection before reaching the LLM (enabled by default).",
+          "requirements": [
+            {
+              "requirement-url": "https://quaia.finos.calm/controls/prompt-injection.requirement.json",
+              "config": {
+                "control-id": "quaia-prompt-injection-test-case-review-agent",
+                "name": "Prompt Injection Guard",
+                "description": "Agent input is checked by the prompt guard service before LLM processing.",
+                "provider": "protect_ai",
+                "min-score": 0.8,
+                "enabled-by-default": true
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "incident-creation-agent",
+      "node-type": "service",
+      "name": "Incident Creation Agent",
+      "description": "Creates Jira incidents for failed tests with vector-based duplicate detection.",
+      "controls": {
+        "prompt-injection-guard": {
+          "description": "Untrusted text is screened for prompt-injection before reaching the LLM (enabled by default).",
+          "requirements": [
+            {
+              "requirement-url": "https://quaia.finos.calm/controls/prompt-injection.requirement.json",
+              "config": {
+                "control-id": "quaia-prompt-injection-incident-creation-agent",
+                "name": "Prompt Injection Guard",
+                "description": "Agent input is checked by the prompt guard service before LLM processing.",
+                "provider": "protect_ai",
+                "min-score": 0.8,
+                "enabled-by-default": true
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "prompt-guard-service",
+      "node-type": "service",
+      "name": "Prompt Guard Service",
+      "description": "Detects prompt-injection attacks using the ProtectAI model.",
+      "controls": {
+        "internal-service-api-key": {
+          "description": "Callers must present a matching X-API-Key (INTERNAL_SERVICE_API_KEY) when the service is not network-isolated.",
+          "requirements": [
+            {
+              "requirement-url": "https://quaia.finos.calm/controls/authentication.requirement.json",
+              "config": {
+                "control-id": "quaia-internal-api-key-prompt-guard",
+                "name": "Internal Service API Key",
+                "description": "Prompt guard service requires a shared X-API-Key from internal callers.",
+                "auth-method": "api-key",
+                "enforced": true
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "embedding-service",
+      "node-type": "service",
+      "name": "Embedding Service",
+      "description": "Generates text embeddings using a SentenceTransformer model.",
+      "controls": {
+        "internal-service-api-key": {
+          "description": "Callers must present a matching X-API-Key (INTERNAL_SERVICE_API_KEY) when the service is not network-isolated.",
+          "requirements": [
+            {
+              "requirement-url": "https://quaia.finos.calm/controls/authentication.requirement.json",
+              "config": {
+                "control-id": "quaia-internal-api-key-embedding",
+                "name": "Internal Service API Key",
+                "description": "Embedding service requires a shared X-API-Key from internal callers.",
+                "auth-method": "api-key",
+                "enforced": true
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "qdrant",
+      "node-type": "database",
+      "name": "Qdrant Vector Database",
+      "description": "Stores embeddings for semantic search and duplicate detection."
+    },
+    {
+      "unique-id": "jira-mcp-server",
+      "node-type": "service",
+      "name": "Jira MCP Server",
+      "description": "Model Context Protocol server bridging agents and Jira."
+    },
+    {
+      "unique-id": "cloud-run",
+      "node-type": "system",
+      "name": "Google Cloud Run",
+      "description": "Managed runtime hosting the orchestrator, agents and supporting services."
+    },
+    {
+      "unique-id": "jira",
+      "node-type": "system",
+      "name": "Jira",
+      "description": "External issue tracker; source of requirements and webhooks, target for incidents."
+    },
+    {
+      "unique-id": "zephyr",
+      "node-type": "system",
+      "name": "Zephyr",
+      "description": "External test management system receiving test results."
+    },
+    {
+      "unique-id": "llm-provider",
+      "node-type": "system",
+      "name": "LLM Provider",
+      "description": "External large-language-model provider (Google Gemini) used by the orchestrator and agents."
+    }
+  ],
+  "relationships": [
+    {
+      "unique-id": "rel-orchestrator-routes-tasks",
+      "description": "Orchestrator routes tasks to specialised agents over the A2A protocol.",
+      "protocol": "HTTPS",
+      "relationship-type": {
+        "interacts": {
+          "actor": "orchestrator",
+          "nodes": [
+            "requirements-review-agent",
+            "test-case-generation-agent",
+            "test-case-classification-agent",
+            "test-case-review-agent",
+            "incident-creation-agent"
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "rel-jira-webhook-orchestrator",
+      "description": "Jira (or a CI/CD system) calls the orchestrator webhook endpoints to start workflows.",
+      "protocol": "HTTPS",
+      "relationship-type": {
+        "connects": {
+          "source": { "node": "jira" },
+          "destination": { "node": "orchestrator" }
+        }
+      },
+      "controls": {
+        "jira-webhook-hmac": {
+          "description": "Webhook requests must carry a valid X-Hub-Signature HMAC-SHA256 of the raw body; invalid or missing signatures are rejected.",
+          "requirements": [
+            {
+              "requirement-url": "https://quaia.finos.calm/controls/authentication.requirement.json",
+              "config": {
+                "control-id": "quaia-jira-webhook-hmac",
+                "name": "Jira Webhook HMAC Signature",
+                "description": "Inbound Jira webhook payloads are authenticated with an HMAC-SHA256 signature.",
+                "auth-method": "hmac-signature",
+                "enforced": true
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "rel-orchestrator-llm",
+      "description": "Orchestrator calls the external LLM provider for agent selection.",
+      "protocol": "HTTPS",
+      "relationship-type": {
+        "connects": {
+          "source": { "node": "orchestrator" },
+          "destination": { "node": "llm-provider" }
+        }
+      }
+    },
+    {
+      "unique-id": "rel-orchestrator-zephyr",
+      "description": "Orchestrator reports test execution results to Zephyr.",
+      "protocol": "HTTPS",
+      "relationship-type": {
+        "connects": {
+          "source": { "node": "orchestrator" },
+          "destination": { "node": "zephyr" }
+        }
+      }
+    },
+    {
+      "unique-id": "rel-requirements-review-jira-mcp",
+      "description": "Requirements Review Agent reads Jira data through the Jira MCP server.",
+      "protocol": "HTTPS",
+      "relationship-type": {
+        "connects": {
+          "source": { "node": "requirements-review-agent" },
+          "destination": { "node": "jira-mcp-server" }
+        }
+      }
+    },
+    {
+      "unique-id": "rel-jira-mcp-jira",
+      "description": "Jira MCP server communicates with the external Jira instance.",
+      "protocol": "HTTPS",
+      "relationship-type": {
+        "connects": {
+          "source": { "node": "jira-mcp-server" },
+          "destination": { "node": "jira" }
+        }
+      }
+    },
+    {
+      "unique-id": "rel-incident-agent-embedding",
+      "description": "Incident Creation Agent requests embeddings from the embedding service.",
+      "protocol": "HTTPS",
+      "relationship-type": {
+        "connects": {
+          "source": { "node": "incident-creation-agent" },
+          "destination": { "node": "embedding-service" }
+        }
+      }
+    },
+    {
+      "unique-id": "rel-orchestrator-embedding",
+      "description": "Orchestrator requests embeddings from the embedding service while syncing Jira issues into the RAG store.",
+      "protocol": "HTTPS",
+      "relationship-type": {
+        "connects": {
+          "source": { "node": "orchestrator" },
+          "destination": { "node": "embedding-service" }
+        }
+      }
+    },
+    {
+      "unique-id": "rel-incident-agent-qdrant",
+      "description": "Incident Creation Agent queries Qdrant for duplicate detection.",
+      "protocol": "HTTPS",
+      "relationship-type": {
+        "connects": {
+          "source": { "node": "incident-creation-agent" },
+          "destination": { "node": "qdrant" }
+        }
+      }
+    },
+    {
+      "unique-id": "rel-orchestrator-qdrant",
+      "description": "Orchestrator writes Jira issue embeddings to Qdrant during the RAG sync.",
+      "protocol": "HTTPS",
+      "relationship-type": {
+        "connects": {
+          "source": { "node": "orchestrator" },
+          "destination": { "node": "qdrant" }
+        }
+      }
+    },
+    {
+      "unique-id": "rel-orchestrator-jira",
+      "description": "Orchestrator reads Jira issues over the Jira REST API to keep the RAG store in sync.",
+      "protocol": "HTTPS",
+      "relationship-type": {
+        "connects": {
+          "source": { "node": "orchestrator" },
+          "destination": { "node": "jira" }
+        }
+      }
+    },
+    {
+      "unique-id": "rel-deployed-in-cloud-run",
+      "description": "Internal services are deployed as Cloud Run services.",
+      "relationship-type": {
+        "deployed-in": {
+          "container": "cloud-run",
+          "nodes": [
+            "orchestrator",
+            "requirements-review-agent",
+            "test-case-generation-agent",
+            "test-case-classification-agent",
+            "test-case-review-agent",
+            "incident-creation-agent",
+            "prompt-guard-service",
+            "embedding-service",
+            "qdrant",
+            "jira-mcp-server"
+          ]
+        }
+      }
+    }
+  ]
+}

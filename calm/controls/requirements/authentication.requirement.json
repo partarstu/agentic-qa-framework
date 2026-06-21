@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://quaia.finos.calm/controls/authentication.requirement.json",
+  "title": "Authentication Requirement",
+  "description": "Requires that an endpoint or service-to-service call is authenticated.",
+  "allOf": [
+    { "$ref": "https://calm.finos.org/release/1.2/meta/control-requirement.json" }
+  ],
+  "properties": {
+    "auth-method": {
+      "enum": ["api-key", "jwt", "hmac-signature", "mtls"],
+      "description": "The mechanism used to authenticate the caller."
+    },
+    "enforced": {
+      "type": "boolean",
+      "description": "Whether the control fails closed when the secret/config is missing."
+    }
+  },
+  "required": ["auth-method", "enforced"]
+}

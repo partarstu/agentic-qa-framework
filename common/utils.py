@@ -2,7 +2,6 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
-import base64
 import logging
 import mimetypes
 import os
@@ -10,11 +9,11 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from a2a.types import FileWithBytes
 from dateutil import parser
 from pydantic_ai import BinaryContent
 
 import config
+from common.models import FileArtifact
 
 logging_initialized = False
 
@@ -27,8 +26,27 @@ def _initialize_logging():
         client = google.cloud.logging.Client()
         client.setup_logging()
     else:
-        logging.basicConfig(stream=sys.stdout, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+        handlers: list[logging.Handler] = [logging.StreamHandler(sys.stdout)]
+        if config.LOG_TO_FILE:
+            handlers.append(_build_file_log_handler())
+        logging.basicConfig(handlers=handlers, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
     logging_initialized = True
+
+
+def _build_file_log_handler() -> logging.Handler:
+    """Create a rotating file handler writing to ``<LOG_DIR>/<service>.log``.
+
+    The service name is derived from the entry script's package (e.g. ``orchestrator/main.py`` -> ``orchestrator``),
+    so each service gets its own file without per-service configuration.
+    """
+    from logging.handlers import RotatingFileHandler
+
+    service_name = Path(sys.argv[0]).resolve().parent.name or "app"
+    log_dir = Path(config.LOG_DIR)
+    log_dir.mkdir(parents=True, exist_ok=True)
+    return RotatingFileHandler(
+        log_dir / f"{service_name}.log", maxBytes=10 * 1024 * 1024, backupCount=5, encoding="utf-8"
+    )
 
 
 def get_logger(name):
@@ -55,7 +73,7 @@ def fetch_media_file_content_from_local(remote_file_path: str, attachments_folde
         raise RuntimeError(f"File {local_file_path} is not a media file or mime type could not be determined.")
 
 
-def get_execution_logs_from_artifacts(artifacts: list[FileWithBytes], log_filename_pattern: str = "logs") -> list[str]:
+def get_execution_logs_from_artifacts(artifacts: list[FileArtifact], log_filename_pattern: str = "logs") -> list[str]:
     if not artifacts:
         return []
 
@@ -65,10 +83,10 @@ def get_execution_logs_from_artifacts(artifacts: list[FileWithBytes], log_filena
             artifact.name
             and (log_filename_pattern.lower() in artifact.name.lower())
             and (artifact.name.endswith(".txt") or artifact.name.endswith(".log"))
-            and artifact.bytes
+            and artifact.raw
         ):
             try:
-                logs.append(base64.b64decode(artifact.bytes).decode("utf-8"))
+                logs.append(artifact.raw.decode("utf-8"))
             except (UnicodeDecodeError, ValueError) as e:
                 get_logger(__name__).warning(f"Failed to decode logs from artifact '{artifact.name}': {e}")
                 continue

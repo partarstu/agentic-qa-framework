@@ -9,6 +9,8 @@ Dashboard service for aggregating orchestrator state for the Web UI.
 from datetime import datetime
 from typing import Any
 
+from google.protobuf.json_format import MessageToDict
+
 from common import utils
 from orchestrator.memory_log_handler import LogEntry, memory_log_handler
 from orchestrator.models import (
@@ -102,9 +104,9 @@ class OrchestratorDashboardService:
                 {
                     "id": agent_id,
                     "name": card.name,
-                    "url": card.url,
+                    "url": card.supported_interfaces[0].url if card.supported_interfaces else None,
                     "status": status.value,
-                    "capabilities": card.capabilities.model_dump() if card.capabilities else None,
+                    "capabilities": MessageToDict(card.capabilities) if card.HasField("capabilities") else None,
                     "current_task": current_task_info,
                     "broken_reason": broken_reason.value if broken_reason else None,
                     "stuck_task_id": stuck_task_id,
@@ -224,49 +226,6 @@ class OrchestratorDashboardService:
                     logger_name = parsed_logger.strip()
                     level = parsed_level.strip().upper()
                     message = parsed_message
-
-                elif len(parts) == 3:
-                    # Possible format: timestamp - level - message (missing logger)
-                    raw_timestamp, part2, part3 = parts
-
-                    # Check if part2 is a log level
-                    if part2.strip().upper() in ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"):
-                        # Try to parse the timestamp
-                        try:
-                            parsed_dt = datetime.strptime(raw_timestamp.strip(), "%Y-%m-%d %H:%M:%S,%f")
-                            timestamp = parsed_dt.isoformat()
-                        except ValueError:
-                            try:
-                                parsed_dt = datetime.strptime(raw_timestamp.strip(), "%Y-%m-%d %H:%M:%S")
-                                timestamp = parsed_dt.isoformat()
-                            except ValueError:
-                                timestamp = raw_timestamp.strip()
-
-                        level = part2.strip().upper()
-                        message = part3
-                    else:
-                        # part2 is likely the logger name, part3 might be "level - message"
-                        # Try extracting level from part3
-                        for lvl in ("ERROR", "WARNING", "DEBUG", "INFO", "CRITICAL"):
-                            if part3.startswith(lvl):
-                                level = lvl
-                                message = part3[len(lvl) :].lstrip(" -:")
-                                break
-                        else:
-                            message = part3
-
-                        # Still try to parse timestamp
-                        try:
-                            parsed_dt = datetime.strptime(raw_timestamp.strip(), "%Y-%m-%d %H:%M:%S,%f")
-                            timestamp = parsed_dt.isoformat()
-                        except ValueError:
-                            try:
-                                parsed_dt = datetime.strptime(raw_timestamp.strip(), "%Y-%m-%d %H:%M:%S")
-                                timestamp = parsed_dt.isoformat()
-                            except ValueError:
-                                pass
-
-                        logger_name = part2.strip()
 
                 # If timestamp parsing failed completely, use empty string as fallback
                 if timestamp is None:

@@ -6,12 +6,15 @@ FROM agentic-qa-base:latest
 ARG WORK_DIR=/app
 WORKDIR ${WORK_DIR}
 
-# Install dependencies
+# Install service-specific (ML) dependencies on top of the shared base. The
+# pyproject.toml and uv.lock are already present from the base image, so this
+# heavy layer is cached independently of the service source code below.
+RUN uv sync --frozen --no-dev --extra embedding-service
+
 COPY services/embedding_service/ ${WORK_DIR}/embedding_service
 COPY common/ ${WORK_DIR}/common
 COPY config.py ${WORK_DIR}/config.py
 COPY scripts/download_embedding_model.py ${WORK_DIR}/scripts/download_embedding_model.py
-RUN pip install --no-cache-dir -r ${WORK_DIR}/embedding_service/requirements.txt
 
 # Download model
 RUN python ${WORK_DIR}/scripts/download_embedding_model.py

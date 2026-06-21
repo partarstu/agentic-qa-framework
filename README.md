@@ -23,7 +23,7 @@ Watch a demo of QuAIA™ in action:
     * Test Case Review
     * UI & API Test Execution (separate project)    
     * Incident Report Creation
-    * Jira Ticket RAG
+* **Jira RAG Sync:** Keeps the Qdrant vector store in sync with a project's Jira issues programmatically (triggered via the orchestrator's `/update-rag-db` endpoint), without invoking an LLM agent.
 * **Dedicated Prompt Guard Service:** A dedicated microservice for detecting prompt injection attacks using the ProtectAI model.
 * **Web UI Monitoring Dashboard:** Real-time monitoring interface for:
     * Agent status visualization (AVAILABLE, BUSY, BROKEN states)
@@ -47,6 +47,7 @@ Watch a demo of QuAIA™ in action:
 * **Test Management System Integration:** Integrates with Zephyr and Xray for operations related to test case management.
 * **Test Reporting:** Generates detailed Allure reports for test execution results.
 * **Extensible:** Designed for easy addition of new agents, tools, and integrations.
+* **Architecture as Code (CALM):** The system architecture, including its security controls, is described with the [FINOS CALM](https://calm.finos.org/) standard and validated as a blocking CI gate, keeping the model and the running system in sync.
 
 ## Architecture
 
@@ -98,14 +99,38 @@ For a visual representation of the system's architecture and data flow, please r
 * [Architectural Diagram](architectural_diagram.html) ([German Version](architectural_diagram_DE.html))
 * [Flow Diagram](flow_diagram.html) ([German Version](flow_diagram_DE.html))
 
+### Architecture as Code (CALM)
+
+The architecture above is also maintained as machine-readable **architecture as code** using the
+[FINOS CALM](https://calm.finos.org/) (Common Architecture Language Model) standard, under the [`calm/`](calm/) directory.
+This makes the architecture a first-class, version-controlled artifact rather than a static diagram that drifts out of
+date.
+
+The model captures every service and external system as `nodes`, the integration edges between them (A2A, MCP, HTTPS) as
+`relationships`, and the framework's security mechanisms as `controls` attached to the relevant nodes and edges:
+
+| Control | Applies to | Mechanism |
+|---|---|---|
+| Orchestrator API key | Orchestrator | `X-API-Key` on control/webhook endpoints (`ORCHESTRATOR_API_KEY`) |
+| Dashboard JWT | Orchestrator | JWT on dashboard endpoints (`DASHBOARD_JWT_SECRET`) |
+| Jira webhook HMAC | Jira → Orchestrator | `X-Hub-Signature` HMAC-SHA256 (`JIRA_WEBHOOK_SECRET`) |
+| Prompt-injection guard | Every agent | Prompt-injection screening (`PROMPT_INJECTION_CHECK_ENABLED`) |
+| Internal service API key | Embedding & Prompt Guard services | Shared `X-API-Key` (`INTERNAL_SERVICE_API_KEY`) |
+
+A governance **pattern** (`calm/patterns/quaia.pattern.json`) asserts that every required node, relationship and control
+is present. The CI pipeline runs this validation as a **blocking** `Architecture (CALM)` job, so removing an agent or
+dropping a security control makes the build fail. See [`calm/README.md`](calm/README.md) for the full layout and for how
+to run the validation locally (requires Node.js 20+).
+
 ## Getting Started
 
 ### Prerequisites
 
 * Python 3.14+
 * Docker
-* `pip` (Python package installer)
-* `virtualenv` (or `conda` for environment management)
+* [`uv`](https://docs.astral.sh/uv/) (Python package and project manager)
+* [Node.js](https://nodejs.org/) 20+ (only needed to validate the CALM architecture model locally; see
+  [Architecture as Code (CALM)](#architecture-as-code-calm))
 
 ### Setup
 
@@ -115,16 +140,23 @@ For a visual representation of the system's architecture and data flow, please r
    cd agentic-qa-framework
    ```
 
-2. **Create and activate a virtual environment:**
+2. **Install `uv`** (if not already installed):
    ```bash
-   python -m venv .venv
-   .venv\Scripts\activate
+   # macOS / Linux
+   curl -LsSf https://astral.sh/uv/install.sh | sh
+   # Windows (PowerShell)
+   powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
    ```
 
-3. **Install dependencies:**
+3. **Create the virtual environment and install dependencies:**
    ```bash
-   pip install -r requirements.txt
+   uv sync
    ```
+   This creates a `.venv` and installs the locked runtime and development
+   dependencies. Run commands inside the environment with `uv run`, e.g.
+   `uv run pytest`. The optional, machine-learning dependencies of the
+   embedding and prompt-guard services are installed on demand via
+   `uv sync --extra embedding-service` or `uv sync --extra prompt-guard-service`.
 
 ### Docker Images
 
@@ -150,16 +182,19 @@ GOOGLE_CLOUD_LOGGING_ENABLED=False # Default: False. Set to "True" to enable Goo
 ORCHESTRATOR_HOST=localhost # Default: localhost. The host where the orchestrator runs.
 ORCHESTRATOR_PORT=8000 # Default: 8000. The port the orchestrator listens on.
 ORCHESTRATOR_URL=http://localhost:8000 # Default: http://localhost:8000. The full URL of the orchestrator.
-ORCHESTRATOR_API_KEY=YOUR_ORCHESTRATOR_API_KEY # Optional. Set this to activate API key authentication for the orchestrator.
-                                 # If set, requests to the orchestrator must include an 'X-API-Key' header with this value.
+ORCHESTRATOR_API_KEY=YOUR_ORCHESTRATOR_API_KEY # Required. Authenticates the orchestrator's control/webhook endpoints.
+                                 # Requests must include an 'X-API-Key' header with this value. If it is left unset, those
+                                 # endpoints fail closed and return HTTP 503 (authentication not configured).
                                  # This corresponds to OrchestratorConfig.API_KEY.
+JIRA_WEBHOOK_SECRET= # Optional but recommended. When set, Jira webhook requests must carry a valid
+                                 # 'X-Hub-Signature' HMAC-SHA256 of the raw body; invalid/missing signatures are rejected.
 JIRA_MCP_SERVER_URL=http://localhost:9000/sse # Default: http://localhost:9000/sse. The URL of the Jira MCP server.
 
 # Dashboard Authentication
 # These settings control access to the UI monitoring dashboard at /api/dashboard/*
-DASHBOARD_USERNAME=admin # Default: admin. Username for dashboard login.
-DASHBOARD_PASSWORD=admin # Default: admin. Password for dashboard login. CHANGE THIS IN PRODUCTION!
-DASHBOARD_JWT_SECRET=change-me-in-production-please # Default: change-me-in-production-please. Secret key for JWT token signing. CHANGE THIS IN PRODUCTION!
+DASHBOARD_USERNAME=admin # Required. Username for dashboard login. Dashboard auth fails closed if this is unset.
+DASHBOARD_PASSWORD=admin # Required. Password for dashboard login. CHANGE THIS IN PRODUCTION! Auth fails closed if unset.
+DASHBOARD_JWT_SECRET=change-me-in-production-please # Required. Secret key for JWT token signing. CHANGE THIS IN PRODUCTION! Tokens are rejected if this is unset.
 DASHBOARD_JWT_EXPIRE_HOURS=24 # Default: 24. Number of hours before JWT tokens expire.
 
 # Zephyr Test Management System
@@ -209,6 +244,8 @@ RAG_MAX_RESULTS=5 # Default: 5. Maximum number of results to return from vector 
 RAG_EMBEDDING_MODEL=Qwen/Qwen3-Embedding-0.6B # Default: Qwen/Qwen3-Embedding-0.6B. SentenceTransformer model for embeddings.
 EMBEDDING_SERVICE_URL= # Required for agents using Vector DB. URL of the embedding service for remote embedding generation.
 EMBEDDING_SERVICE_TIMEOUT_SECONDS=60.0 # Default: 60.0. Timeout for embedding service requests.
+EMBEDDING_SERVICE_MAX_RETRIES=6 # Default: 6. Connect/timeout retry attempts (with backoff) while the embedding service starts (e.g. Cloud Run cold start).
+EMBEDDING_SERVICE_RETRY_BACKOFF_CAP_SECONDS=32.0 # Default: 32.0. Upper bound for the exponential backoff between embedding service retries.
 
 # Incident Creation Agent Configuration
 INCIDENT_AGENT_MIN_SIMILARITY_SCORE=0.7 # Default: 0.7. Minimum score for duplicate detection.
@@ -216,16 +253,17 @@ ISSUE_PRIORITY_FIELD_ID=priority # Default: priority. Jira field ID for issue pr
 ISSUE_SEVERITY_FIELD_NAME=customfield_10124 # Default: customfield_10124. Jira custom field name for severity.
 
 # Prompt Injection Detection
-PROMPT_INJECTION_CHECK_ENABLED=False # Default: False. Set to "True" to enable prompt injection detection.
+PROMPT_INJECTION_CHECK_ENABLED=True # Default: True (secure by default). Set to "False" to disable prompt injection detection. When enabled, PROMPT_GUARD_SERVICE_URL must point to a running prompt guard service.
 PROMPT_GUARD_PROVIDER=protect_ai # Default: protect_ai. The provider for prompt injection detection.
 PROMPT_GUARD_SERVICE_URL= # Required if PROMPT_INJECTION_CHECK_ENABLED is True. URL of the prompt guard service.
+INTERNAL_SERVICE_API_KEY= # Optional shared secret. When set, the embedding and prompt-guard services require a matching X-API-Key header (and their clients send it). Recommended whenever those services are not strictly network-isolated.
 PROMPT_INJECTION_MIN_SCORE=0.8 # Default: 0.8. The minimum score for a prompt to be considered an injection.
 PROMPT_INJECTION_MODEL_NAME=ProtectAI/deberta-v3-base-prompt-injection-v2 # Default: ProtectAI/deberta-v3-base-prompt-injection-v2. The name of the model used for prompt injection detection.
 
 **Note on Local Models:**
 If you are running the orchestrator or agents locally (not in a Docker container deployed to the cloud), you must manually download the necessary models:
 1. **Prompt Injection Detection Model:** Required if `PROMPT_INJECTION_CHECK_ENABLED` is set to `True`. Run `scripts/download_prompt_guard_model.py`.
-2. **Embedding Model:** Required for agents using Vector DB (e.g. Incident Creation, Jira RAG Update) and Orchestrator. Run `scripts/download_embedding_model.py`.
+2. **Embedding Model:** Required for components using the Vector DB (the Incident Creation agent and the Orchestrator, which runs the Jira RAG sync). Run `scripts/download_embedding_model.py`.
 
 When deploying to cloud environments via Docker, the model downloads are handled automatically as part of the Docker image build process.
 # Specific Agent Model Names (example values, adjust as needed)
@@ -236,7 +274,6 @@ REQUIREMENTS_REVIEW_AGENT_MODEL_NAME=google-gla:gemini-2.5-pro
 TEST_CASE_CLASSIFICATION_AGENT_MODEL_NAME=google-gla:gemini-2.5-flash
 TEST_CASE_GENERATION_AGENT_MODEL_NAME=google-gla:gemini-2.5-flash
 INCIDENT_CREATION_AGENT_MODEL_NAME=google-gla:gemini-2.5-flash
-JIRA_RAG_UPDATE_AGENT_MODEL_NAME=google-gla:gemini-2.5-flash
 TEST_CASE_REVIEW_AGENT_MODEL_NAME=google-gla:gemini-2.5-pro
 ```
 
@@ -281,7 +318,7 @@ To run the Jira MCP server, you will need Docker installed.
 ### Starting agents locally
 
 1. **Start Qdrant Vector Database (required for RAG features):**
-   The Incident Creation and Jira RAG Update agents require a running Qdrant instance for vector database operations.
+   The Incident Creation agent and the Orchestrator's Jira RAG sync require a running Qdrant instance for vector database operations.
    ```bash
    scripts/start_qdrant.bat
    ```
@@ -321,10 +358,6 @@ To run the Jira MCP server, you will need Docker installed.
     * **Incident Creation Agent:**
       ```bash
       python agents/incident_creation/main.py
-      ```
-    * **Jira RAG Update Agent:**
-      ```bash
-      python agents/jira_rag/main.py
       ```
 
 5. **Start the Orchestrator:**
@@ -426,11 +459,11 @@ you run any of the commands below.
 After having all preconditions fulfilled, you can execute the following command:
 
 ```bash
-gcloud builds submit --config 'path/to/your/cloudbuild.yaml' --substitutions "^;^_BUCKET_NAME=YOUR_GCS_BUCKET_NAME;_ALLURE_REPORTS_BUCKET=YOUR_ALLURE_REPORTS_BUCKET_NAME;_REQUIREMENTS_REVIEW_AGENT_BASE_URL=YOUR_REQUIREMENTS_REVIEW_AGENT_URL;_TEST_CASE_GENERATION_AGENT_BASE_URL=YOUR_TEST_CASE_GENERATION_AGENT_URL;_TEST_CASE_CLASSIFICATION_AGENT_BASE_URL=YOUR_TEST_CASE_CLASSIFICATION_AGENT_URL;_TEST_CASE_REVIEW_AGENT_BASE_URL=YOUR_TEST_CASE_REVIEW_AGENT_URL;_INCIDENT_CREATION_AGENT_BASE_URL=YOUR_INCIDENT_CREATION_AGENT_URL;_JIRA_RAG_UPDATE_AGENT_BASE_URL=YOUR_JIRA_RAG_UPDATE_AGENT_URL;_REMOTE_EXECUTION_AGENT_HOSTS=YOUR_COMMA_SEPARATED_AGENT_HOSTS;_PROMPT_GUARD_SERVICE_URL=YOUR_PROMPT_GUARD_SERVICE_URL;_DEPLOY_ALL_SERVICES=true" .
+gcloud builds submit --config 'path/to/your/cloudbuild.yaml' --substitutions "^;^_BUCKET_NAME=YOUR_GCS_BUCKET_NAME;_ALLURE_REPORTS_BUCKET=YOUR_ALLURE_REPORTS_BUCKET_NAME;_REQUIREMENTS_REVIEW_AGENT_BASE_URL=YOUR_REQUIREMENTS_REVIEW_AGENT_URL;_TEST_CASE_GENERATION_AGENT_BASE_URL=YOUR_TEST_CASE_GENERATION_AGENT_URL;_TEST_CASE_CLASSIFICATION_AGENT_BASE_URL=YOUR_TEST_CASE_CLASSIFICATION_AGENT_URL;_TEST_CASE_REVIEW_AGENT_BASE_URL=YOUR_TEST_CASE_REVIEW_AGENT_URL;_INCIDENT_CREATION_AGENT_BASE_URL=YOUR_INCIDENT_CREATION_AGENT_URL;_REMOTE_EXECUTION_AGENT_HOSTS=YOUR_COMMA_SEPARATED_AGENT_HOSTS;_PROMPT_GUARD_SERVICE_URL=YOUR_PROMPT_GUARD_SERVICE_URL;_DEPLOY_ALL_SERVICES=true" .
 ```
 
 ```powershell
-gcloud builds submit --config 'path/to/your/cloudbuild.yaml' --substitutions "`^;`^_BUCKET_NAME=YOUR_GCS_BUCKET_NAME;_ALLURE_REPORTS_BUCKET=YOUR_ALLURE_REPORTS_BUCKET_NAME;_REQUIREMENTS_REVIEW_AGENT_BASE_URL=YOUR_REQUIREMENTS_REVIEW_AGENT_URL;_TEST_CASE_GENERATION_AGENT_BASE_URL=YOUR_TEST_CASE_GENERATION_AGENT_URL;_TEST_CASE_CLASSIFICATION_AGENT_BASE_URL=YOUR_TEST_CASE_CLASSIFICATION_AGENT_URL;_TEST_CASE_REVIEW_AGENT_BASE_URL=YOUR_TEST_CASE_REVIEW_AGENT_URL;_INCIDENT_CREATION_AGENT_BASE_URL=YOUR_INCIDENT_CREATION_AGENT_URL;_JIRA_RAG_UPDATE_AGENT_BASE_URL=YOUR_JIRA_RAG_UPDATE_AGENT_URL;_REMOTE_EXECUTION_AGENT_HOSTS=YOUR_COMMA_SEPARATED_AGENT_HOSTS;_PROMPT_GUARD_SERVICE_URL=YOUR_PROMPT_GUARD_SERVICE_URL;_DEPLOY_ALL_SERVICES=true" .
+gcloud builds submit --config 'path/to/your/cloudbuild.yaml' --substitutions "`^;`^_BUCKET_NAME=YOUR_GCS_BUCKET_NAME;_ALLURE_REPORTS_BUCKET=YOUR_ALLURE_REPORTS_BUCKET_NAME;_REQUIREMENTS_REVIEW_AGENT_BASE_URL=YOUR_REQUIREMENTS_REVIEW_AGENT_URL;_TEST_CASE_GENERATION_AGENT_BASE_URL=YOUR_TEST_CASE_GENERATION_AGENT_URL;_TEST_CASE_CLASSIFICATION_AGENT_BASE_URL=YOUR_TEST_CASE_CLASSIFICATION_AGENT_URL;_TEST_CASE_REVIEW_AGENT_BASE_URL=YOUR_TEST_CASE_REVIEW_AGENT_URL;_INCIDENT_CREATION_AGENT_BASE_URL=YOUR_INCIDENT_CREATION_AGENT_URL;_REMOTE_EXECUTION_AGENT_HOSTS=YOUR_COMMA_SEPARATED_AGENT_HOSTS;_PROMPT_GUARD_SERVICE_URL=YOUR_PROMPT_GUARD_SERVICE_URL;_DEPLOY_ALL_SERVICES=true" .
 ```
 
 **Substitution Variables:**
@@ -444,7 +477,6 @@ gcloud builds submit --config 'path/to/your/cloudbuild.yaml' --substitutions "`^
 * `_TEST_CASE_CLASSIFICATION_AGENT_BASE_URL`: The URL of the deployed Test Case Classification Agent.
 * `_TEST_CASE_REVIEW_AGENT_BASE_URL`: The URL of the deployed Test Case Review Agent.
 * `_INCIDENT_CREATION_AGENT_BASE_URL`: The URL of the deployed Incident Creation Agent.
-* `_JIRA_RAG_UPDATE_AGENT_BASE_URL`: The URL of the deployed Jira RAG Update Agent.
 * `_REMOTE_EXECUTION_AGENT_HOSTS`: A comma-separated list of URLs for all deployed agents that the orchestrator will
   interact with.
 * `_PROMPT_GUARD_SERVICE_URL`: The URL of the deployed Prompt Guard Service.
@@ -504,8 +536,9 @@ You can trigger the execution of automated tests for a specific project.
 To keep the vector database synchronized with Jira issues for duplicate detection:
 
 * **Update RAG DB:**
-  Send a POST request to `/update-rag-db` with a JSON payload containing the `project_key` of the Jira project. This
-  will sync all bug issues from Jira to the Qdrant vector database, enabling semantic search for duplicate detection.
+  Send a POST request to `/update-rag-db` with a JSON payload containing the `project_key` of the Jira project. The
+  orchestrator then syncs the project's issues from Jira (read directly via the Jira REST API) into the Qdrant vector
+  database, enabling semantic search for duplicate detection. The sync runs programmatically — no LLM agent is involved.
 
   Example payload:
   ```json
@@ -536,21 +569,108 @@ The dashboard exposes REST API endpoints for programmatic access to monitoring d
 * `GET /api/dashboard/logs?limit=100&offset=0&level=ERROR&task_id=xxx&agent_id=yyy` - Get filtered application logs (supports pagination via `offset`).
 * `POST /api/dashboard/discovery` - Manually trigger agent discovery.
 
+## A2A Streaming Contract
+
+QuAIA™ uses the A2A artifact mechanism to push live updates from agents to the orchestrator
+dashboard while a task is running.
+
+### `report_activity` Tool
+
+Every agent created via `AgentBase` automatically receives a `report_activity` tool and a
+one-line instruction snippet appended to its system prompt. Developers writing agent prompt
+templates **do not** need to include these manually — they are injected by
+`AgentBase.__init__`.
+
+The LLM calls `report_activity(description)` with a short sentence (≤ 120 chars) describing
+the current reasoning phase or the tool it is about to invoke. Each call is forwarded to the
+dashboard as an `agent_activity` artifact.
+
+### Streaming Artifacts
+
+The two artifact types below are recognised by the orchestrator's chunk-handling loop.
+`agent_activity` is emitted by every `AgentBase` agent automatically. `agent_logs_stream`
+is **OPTIONAL** — missing it is not an error; the dashboard degrades gracefully.
+
+All payload schemas carry a `version` field so the wire format can evolve without breaking
+external consumers.
+
+#### `agent_activity`
+
+Emitted on every `report_activity` call. Only the latest text is shown — the dashboard
+overwrites the previous activity on each new event (no history is retained).
+
+```json
+{
+  "version": 1,
+  "type": "agent_activity",
+  "task_id": "<internal-task-id>",
+  "agent_id": "<agent-id>",
+  "text": "Fetching Jira issue PROJ-123"
+}
+```
+
+#### `agent_logs_stream` (OPTIONAL)
+
+Log batches flushed every 2 s by `DefaultAgentExecutor`. External agents that do not use
+this executor will not emit it; the dashboard falls back to polling for logs.
+
+```json
+{
+  "version": 1,
+  "type": "log_batch",
+  "task_id": "<internal-task-id>",
+  "lines": ["2025-05-17 12:00:01 INFO  fetching issue", "..."]
+}
+```
+
+### Dashboard SSE Streams
+
+The dashboard receives streaming updates via two Server-Sent Event (SSE) endpoints.
+
+#### Stream-Token Authentication
+
+SSE endpoints use a separate short-lived token instead of the long-lived JWT so that a
+captured URL (browser history, proxy logs) cannot be replayed once the stream expires.
+
+**Flow:**
+
+1. The UI POSTs to `POST /api/dashboard/stream-token` with the standard
+   `Authorization: Bearer <jwt>` header.
+2. The server mints an opaque token with a **5-minute TTL** and returns
+   `{"stream_token": "...", "expires_at": "..."}`.
+3. The UI opens `EventSource` with `?stream_token=<token>` as a query parameter.
+4. Every 15 s the server sends a `heartbeat` frame and re-validates the token expiry.
+   On expiry it emits a one-shot `event: auth_error` frame and closes the connection;
+   the UI's 401 handler routes to the login page.
+
+#### SSE Endpoints
+
+| Endpoint | Description |
+|---|---|
+| `POST /api/dashboard/stream-token` | Mint a 5-min stream token (requires Bearer JWT). |
+| `GET /api/dashboard/stream?stream_token=<token>` | Global stream: initial `snapshot` frame + live `agent_activity`, `task_done`, and `gap` events. |
+| `GET /api/dashboard/agents/{agent_id}/stream?stream_token=<token>` | Per-agent stream: live `log_batch` events used by the log modal. |
+
+The first frame on the global stream has `event: snapshot` and carries the current agent
+registry plus all running tasks with their latest activity text.
+
+---
+
 ## Running Tests
 
 The project includes a comprehensive test suite. To run the tests:
 
 ```bash
 # Run all tests
-pytest
+uv run pytest
 
 # Run tests with verbose output
-pytest -v
+uv run pytest -v
 
 # Run tests for a specific module
-pytest tests/agents/
-pytest tests/orchestrator/
-pytest tests/common/
+uv run pytest tests/agents/
+uv run pytest tests/orchestrator/
+uv run pytest tests/common/
 ```
 
 ## Contributing

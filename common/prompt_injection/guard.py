@@ -9,7 +9,7 @@ from dataclasses import dataclass
 import requests
 
 from common import utils
-from config import PROMPT_GUARD_SERVICE_URL
+from config import INTERNAL_SERVICE_API_KEY, PROMPT_GUARD_SERVICE_URL
 
 logger = utils.get_logger("prompt_guard")
 
@@ -81,7 +81,8 @@ class ProtectAiPromptGuard(PromptGuard):
 
         try:
             payload = {"prompt": prompt.prompt, "prompt_description": prompt.prompt_description, "threshold": threshold}
-            response = requests.post(f"{PROMPT_GUARD_SERVICE_URL}/check", json=payload, timeout=30)
+            headers = {"X-API-Key": INTERNAL_SERVICE_API_KEY} if INTERNAL_SERVICE_API_KEY else None
+            response = requests.post(f"{PROMPT_GUARD_SERVICE_URL}/check", json=payload, headers=headers, timeout=30)
             response.raise_for_status()
             result = response.json()
 

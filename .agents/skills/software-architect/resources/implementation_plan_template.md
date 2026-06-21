@@ -47,9 +47,9 @@
 | Pydantic   | V2        | [Usage details] |
 | [Other]    | [version] | [Usage details] |
 
-### 2.4 GEMINI.md Compliance
+### 2.4 AGENTS.md Compliance
 
-[List specific rules from GEMINI.md that apply and how they will be followed]
+[List specific rules from AGENTS.md that apply and how they will be followed]
 
 - ✅ [Rule 1]: [How it's applied]
 - ✅ [Rule 2]: [How it's applied]
@@ -159,7 +159,7 @@ project_root/
 
 | Package   | Version   | Purpose      | License   | Security Check     |
 |-----------|-----------|--------------|-----------|--------------------|
-| [package] | [version] | [why needed] | [license] | ✅ pip-audit passed |
+| [package] | [version] | [why needed] | [license] | ✅ uv audit passed |
 
 ### 6.3 API / Interface Changes
 
@@ -295,7 +295,7 @@ pytest tests/[path] --cov=[module] --cov-report=term-missing -v
 ### Code Complete
 
 - [ ] All implementation steps completed
-- [ ] Code follows GEMINI.md guidelines
+- [ ] Code follows AGENTS.md guidelines
 - [ ] Type hints added for all public interfaces
 - [ ] Docstrings added for all public modules/classes/functions
 
@@ -305,7 +305,7 @@ pytest tests/[path] --cov=[module] --cov-report=term-missing -v
 - [ ] `ruff format . --check` passes
 - [ ] `pytest tests/ -v` passes
 - [ ] `bandit -r . -x ./tests,./.venv` has no high/medium issues
-- [ ] `pip-audit` has no critical vulnerabilities
+- [ ] `uv audit` has no critical vulnerabilities
 
 ### Documentation
 
