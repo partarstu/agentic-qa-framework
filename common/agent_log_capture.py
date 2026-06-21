@@ -53,4 +53,6 @@ class AgentLogCaptureHandler(logging.Handler):
             self._drain_cursor = self._emitted_total
             if new_count <= 0:
                 return []
-            return list(self._buffer)[-min(new_count, len(self._buffer)) :]
+            buf_len = len(self._buffer)
+            k = min(new_count, buf_len)
+            return [self._buffer[buf_len - i] for i in range(k, 0, -1)]
