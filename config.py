@@ -124,7 +124,7 @@ class OrchestratorConfig:
     INCOMING_REQUEST_WAIT_TIMEOUT = AGENT_DISCOVERY_TIMEOUT_SECONDS + 5
     MODEL_NAME = "google-gla:gemini-3.5-flash"
     API_KEY = os.environ.get("ORCHESTRATOR_API_KEY")
-    AGENT_DISCOVERY_PORTS = os.environ.get("AGENT_DISCOVERY_PORTS", "8001-8007")
+    AGENT_DISCOVERY_PORTS = os.environ.get("AGENT_DISCOVERY_PORTS", "8001-8006")
     REMOTE_EXECUTION_AGENT_HOSTS = os.environ.get("REMOTE_EXECUTION_AGENT_HOSTS", AGENT_BASE_URL)
 
 
@@ -188,7 +188,7 @@ class TestCaseReviewAgentConfig:
 class IncidentCreationAgentConfig:
     THINKING_LEVEL: ThinkingLevel = "medium"
     OWN_NAME = "Incident Creation Agent"
-    PORT = int(os.environ.get("PORT", "8007"))
+    PORT = int(os.environ.get("PORT", "8006"))
     EXTERNAL_PORT = int(os.environ.get("EXTERNAL_PORT", PORT))
     PROTOCOL = "http"
     MODEL_NAME = "google-gla:gemini-3.5-flash"
@@ -232,6 +232,10 @@ class QdrantConfig:
     EMBEDDING_MODEL_PATH = os.path.join(LOCAL_MODELS_PATH, "embedding_model")
     EMBEDDING_SERVICE_URL = os.environ.get("EMBEDDING_SERVICE_URL")
     EMBEDDING_SERVICE_TIMEOUT_SECONDS = float(os.environ.get("EMBEDDING_SERVICE_TIMEOUT_SECONDS", "120.0"))
+    EMBEDDING_SERVICE_MAX_RETRIES = int(os.environ.get("EMBEDDING_SERVICE_MAX_RETRIES", "6"))
+    EMBEDDING_SERVICE_RETRY_BACKOFF_CAP_SECONDS = float(
+        os.environ.get("EMBEDDING_SERVICE_RETRY_BACKOFF_CAP_SECONDS", "32.0")
+    )
     VALID_STATUSES = os.environ.get(
         "JIRA_VALID_STATUSES", "To Do,In Review,Ready for Development,In Progress,Done"
     ).split(",")

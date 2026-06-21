@@ -244,6 +244,8 @@ RAG_MAX_RESULTS=5 # Default: 5. Maximum number of results to return from vector 
 RAG_EMBEDDING_MODEL=Qwen/Qwen3-Embedding-0.6B # Default: Qwen/Qwen3-Embedding-0.6B. SentenceTransformer model for embeddings.
 EMBEDDING_SERVICE_URL= # Required for agents using Vector DB. URL of the embedding service for remote embedding generation.
 EMBEDDING_SERVICE_TIMEOUT_SECONDS=60.0 # Default: 60.0. Timeout for embedding service requests.
+EMBEDDING_SERVICE_MAX_RETRIES=6 # Default: 6. Connect/timeout retry attempts (with backoff) while the embedding service starts (e.g. Cloud Run cold start).
+EMBEDDING_SERVICE_RETRY_BACKOFF_CAP_SECONDS=32.0 # Default: 32.0. Upper bound for the exponential backoff between embedding service retries.
 
 # Incident Creation Agent Configuration
 INCIDENT_AGENT_MIN_SIMILARITY_SCORE=0.7 # Default: 0.7. Minimum score for duplicate detection.

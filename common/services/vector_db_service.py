@@ -30,6 +30,10 @@ class VectorDbService:
             logger.warning("EMBEDDING_SERVICE_URL is not configured. Vector operations requiring embeddings will fail.")
         timeout_seconds = getattr(config.QdrantConfig, "EMBEDDING_SERVICE_TIMEOUT_SECONDS", 120.0)
         self._http_client = httpx.AsyncClient(timeout=httpx.Timeout(timeout_seconds))
+        self._embedding_max_retries = getattr(config.QdrantConfig, "EMBEDDING_SERVICE_MAX_RETRIES", 6)
+        self._embedding_retry_backoff_cap = getattr(
+            config.QdrantConfig, "EMBEDDING_SERVICE_RETRY_BACKOFF_CAP_SECONDS", 32.0
+        )
 
     async def close(self):
         """Closes the shared HTTP client. Call this during application shutdown."""
@@ -39,7 +43,7 @@ class VectorDbService:
         if not self.embedding_service_url:
             raise ValueError("EMBEDDING_SERVICE_URL is not configured.")
 
-        max_retries = 3
+        max_retries = self._embedding_max_retries
         logger.info(f"Calling embedding service (text length: {len(text)} chars)...")
         start = time.monotonic()
 
@@ -58,7 +62,7 @@ class VectorDbService:
                         f"Failed to call embedding service at {self.embedding_service_url} after {max_retries} attempts."
                     )
                     raise
-                wait_time = 2**attempt
+                wait_time = min(2**attempt, self._embedding_retry_backoff_cap)
                 logger.warning(
                     f"Attempt {attempt + 1}/{max_retries} failed calling embedding service: {e}. Retrying in {wait_time}s..."
                 )

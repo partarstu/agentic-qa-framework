@@ -22,7 +22,7 @@ import httpx
 import uvicorn
 from a2a.client import ClientConfig, create_client
 from a2a.client.card_resolver import parse_agent_card
-from a2a.helpers import get_message_text, new_text_message
+from a2a.helpers import get_message_text, new_message, new_text_message
 from a2a.types import (
     AgentCard,
     Artifact,
@@ -1011,7 +1011,7 @@ async def _request_incident_creation(
         logger.info(f"Adding artifact '{artifact.name}' as file part to incident creation message")
 
     # Create the message
-    message = Message(parts=message_parts, role=Role.ROLE_USER)
+    message = new_message(parts=message_parts, role=Role.ROLE_USER)
 
     completed_task = await _send_task_to_agent_with_message(message, task_description)
 
