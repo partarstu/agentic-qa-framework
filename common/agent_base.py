@@ -133,7 +133,7 @@ class AgentBase(ABC):
         - Model: {self.model_name}
         - Output Type: {self.output_type.__name__}
         - MCP Servers: {[server.url for server in self.mcp_servers]}
-        - Tools: {[tool.__name__ for tool in self.tools]}""")
+        - Tools: {[getattr(tool, "__name__", None) or tool.name for tool in self.tools]}""")
 
         return CustomLlmWrapper.create_agent(
             model_name=self.model_name,
