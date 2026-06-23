@@ -126,6 +126,9 @@ class OrchestratorConfig:
     API_KEY = os.environ.get("ORCHESTRATOR_API_KEY")
     AGENT_DISCOVERY_PORTS = os.environ.get("AGENT_DISCOVERY_PORTS", "8001-8006")
     REMOTE_EXECUTION_AGENT_HOSTS = os.environ.get("REMOTE_EXECUTION_AGENT_HOSTS", AGENT_BASE_URL)
+    # Shared bearer token expected by the execution agents' main A2A endpoint. Empty means the agents run without
+    # auth (e.g. local dev), so no Authorization header is attached.
+    REMOTE_EXECUTION_AGENT_AUTH_TOKEN = os.environ.get("REMOTE_EXECUTION_AGENT_AUTH_TOKEN", "")
 
 
 # Dashboard Authentication

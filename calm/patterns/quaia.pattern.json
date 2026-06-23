@@ -18,6 +18,7 @@
         { "contains": { "properties": { "unique-id": { "const": "embedding-service" } }, "required": ["unique-id"] } },
         { "contains": { "properties": { "unique-id": { "const": "qdrant" } }, "required": ["unique-id"] } },
         { "contains": { "properties": { "unique-id": { "const": "jira-mcp-server" } }, "required": ["unique-id"] } },
+        { "contains": { "properties": { "unique-id": { "const": "execution-agents" } }, "required": ["unique-id"] } },
 
         { "contains": { "properties": { "unique-id": { "const": "orchestrator" }, "controls": { "required": ["orchestrator-api-key", "dashboard-jwt"] } }, "required": ["controls"] } },
         { "contains": { "properties": { "unique-id": { "const": "requirements-review-agent" }, "controls": { "required": ["prompt-injection-guard"] } }, "required": ["controls"] } },
@@ -33,6 +34,7 @@
       "type": "array",
       "allOf": [
         { "contains": { "properties": { "unique-id": { "const": "rel-orchestrator-routes-tasks" } }, "required": ["unique-id"] } },
+        { "contains": { "properties": { "unique-id": { "const": "rel-orchestrator-routes-execution-tasks" }, "controls": { "required": ["execution-agent-bearer-token"] } }, "required": ["controls"] } },
         { "contains": { "properties": { "unique-id": { "const": "rel-jira-webhook-orchestrator" }, "controls": { "required": ["jira-webhook-hmac"] } }, "required": ["controls"] } },
         { "contains": { "properties": { "unique-id": { "const": "rel-deployed-in-cloud-run" } }, "required": ["unique-id"] } }
       ]

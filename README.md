@@ -209,6 +209,7 @@ EXTERNAL_PORT=8001 # Default: 8001. The externally accessible port for the agent
 # Agent Discovery (for remote agents)
 REMOTE_EXECUTION_AGENT_HOSTS=http://localhost # Default: http://localhost. Comma-separated URLs of remote agent hosts.
 AGENT_DISCOVERY_PORTS=8001-8007 # Default: 8001-8007. Port range for agent discovery.
+REMOTE_EXECUTION_AGENT_AUTH_TOKEN= # Optional. Shared bearer token sent to the execution agents' main A2A endpoint. Leave empty for local agents started without auth.
 
 # Google Cloud Storage (via Volume Mounts)
 # In cloud deployments, GCS buckets are mounted as local folders via Cloud Run volume mounts.

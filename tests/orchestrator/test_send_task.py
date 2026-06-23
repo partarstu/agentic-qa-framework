@@ -14,10 +14,23 @@ from a2a.types import TaskStatus as A2ATaskStatus
 from orchestrator.main import (
     AgentStatus,
     BrokenReason,
+    _build_agent_auth_headers,
     _retry_cancellation_task,
     _send_task_to_agent,
     cancellation_queue,
 )
+
+
+def test_build_agent_auth_headers_with_token():
+    """A configured token is attached as a Bearer Authorization header."""
+    with patch("orchestrator.main.config.OrchestratorConfig.REMOTE_EXECUTION_AGENT_AUTH_TOKEN", "secret-token"):
+        assert _build_agent_auth_headers() == {"Authorization": "Bearer secret-token"}
+
+
+def test_build_agent_auth_headers_without_token():
+    """No header is attached when no token is configured (local no-auth agents)."""
+    with patch("orchestrator.main.config.OrchestratorConfig.REMOTE_EXECUTION_AGENT_AUTH_TOKEN", ""):
+        assert _build_agent_auth_headers() == {}
 
 
 @pytest.fixture

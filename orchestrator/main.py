@@ -471,6 +471,15 @@ async def _retry_cancellation_task():
             await asyncio.sleep(5)
 
 
+def _build_agent_auth_headers() -> dict[str, str]:
+    """Build the Authorization header for calls to the execution agents' guarded main endpoint.
+
+    Returns an empty mapping when no token is configured, so requests to local no-auth agents are unaffected.
+    """
+    token = config.OrchestratorConfig.REMOTE_EXECUTION_AGENT_AUTH_TOKEN
+    return {"Authorization": f"Bearer {token}"} if token else {}
+
+
 async def _cancel_agent_task(agent_card: AgentCard, task_id: str) -> bool:
     """Attempt to cancel a task on an agent using the A2A protocol.
 
@@ -483,7 +492,9 @@ async def _cancel_agent_task(agent_card: AgentCard, task_id: str) -> bool:
     """
     httpx_client: httpx.AsyncClient | None = None
     try:
-        httpx_client = httpx.AsyncClient(timeout=config.OrchestratorConfig.TASK_EXECUTION_TIMEOUT)
+        httpx_client = httpx.AsyncClient(
+            timeout=config.OrchestratorConfig.TASK_EXECUTION_TIMEOUT, headers=_build_agent_auth_headers()
+        )
         a2a_client = await create_client(
             agent_card,
             client_config=ClientConfig(httpx_client=httpx_client),
@@ -1326,7 +1337,9 @@ async def _send_task_to_agent_with_message(message: Message, task_description: s
         await task_history.add(task_record)
         await agent_registry.set_current_task(agent_id, internal_task_id)
 
-        httpx_client = httpx.AsyncClient(timeout=config.OrchestratorConfig.TASK_EXECUTION_TIMEOUT)
+        httpx_client = httpx.AsyncClient(
+            timeout=config.OrchestratorConfig.TASK_EXECUTION_TIMEOUT, headers=_build_agent_auth_headers()
+        )
         a2a_client = await create_client(
             agent_card,
             client_config=ClientConfig(httpx_client=httpx_client),
