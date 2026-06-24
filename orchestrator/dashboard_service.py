@@ -6,6 +6,7 @@
 Dashboard service for aggregating orchestrator state for the Web UI.
 """
 
+import re
 from datetime import datetime
 from typing import Any
 
@@ -25,6 +26,22 @@ from orchestrator.models import (
 )
 
 logger = utils.get_logger("orchestrator_dashboard")
+
+# Uppercase log-level tokens used as a fallback for agent log formats that don't match the
+# Python logging layout (e.g. the logback/SLF4J format "HH:mm:ss.SSS LEVEL Logger - message"
+# emitted by the UI agent). Matching is case-sensitive on purpose so a lowercase "error"
+# inside a JSON payload is not mistaken for an ERROR-level line.
+_LEVEL_TOKEN_PATTERN = re.compile(r"\b(CRITICAL|FATAL|ERROR|WARNING|WARN|INFO|DEBUG|TRACE)\b")
+_LEVEL_ALIASES = {"WARN": "WARNING", "FATAL": "CRITICAL"}
+
+
+def _detect_log_level(line: str) -> str | None:
+    """Return the first recognised uppercase log-level token in a line, normalising aliases."""
+    match = _LEVEL_TOKEN_PATTERN.search(line)
+    if match is None:
+        return None
+    token = match.group(1)
+    return _LEVEL_ALIASES.get(token, token)
 
 
 class OrchestratorDashboardService:
@@ -226,6 +243,12 @@ class OrchestratorDashboardService:
                     logger_name = parsed_logger.strip()
                     level = parsed_level.strip().upper()
                     message = parsed_message
+                else:
+                    # Formats that don't match the Python logging layout (e.g. the UI agent's
+                    # logback format): fall back to scanning the line for a level token.
+                    detected_level = _detect_log_level(line)
+                    if detected_level is not None:
+                        level = detected_level
 
                 # If timestamp parsing failed completely, use empty string as fallback
                 if timestamp is None:
