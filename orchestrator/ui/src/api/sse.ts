@@ -1,6 +1,5 @@
 import { useEffect, useRef } from 'react';
 import { getStreamToken, clearStreamToken } from './streamToken';
-import { notifyAuthHandlers } from './client';
 
 export type SseEventType =
   | 'snapshot'
@@ -72,12 +71,19 @@ export function useSseEvents(
         });
 
         es.addEventListener('auth_error', () => {
+          // The short-lived stream token expired (not the login session). Clear it and
+          // reconnect; the reconnect mints a fresh token from the still-valid JWT. A
+          // genuinely expired JWT makes that mint return 401, which the axios response
+          // interceptor handles as a real logout — so this must not log the user out.
           clearStreamToken();
-          notifyAuthHandlers(false);
           es?.close();
-          cancelled = true;
+          es = null;
           if (onCloseRef.current) {
             onCloseRef.current();
+          }
+          if (!cancelled) {
+            setTimeout(() => void connect(), retryDelay);
+            retryDelay = Math.min(retryDelay * 2, MAX_RETRY_DELAY_MS);
           }
         });
 
