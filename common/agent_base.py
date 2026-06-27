@@ -294,7 +294,7 @@ class AgentBase(ABC):
         )
         agent_card = AgentCard(
             name=self.agent_name,
-            description=f"{self.agent_name}\nModel: {self.model_name}",
+            description=f"Model: {self.model_name}",
             version="1.0.0",
             default_input_modes=["text"],
             default_output_modes=["text", "image"],

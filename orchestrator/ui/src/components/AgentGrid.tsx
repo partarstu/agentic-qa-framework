@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import { useState, useRef, useLayoutEffect } from 'react';
+import DOMPurify from 'dompurify';
 import { Server, Wifi, WifiOff, Loader2, RefreshCw } from 'lucide-react';
 import { useQueryClient } from '@tanstack/react-query';
 import { dashboardApi } from '../api/dashboardApi';
@@ -16,12 +17,13 @@ interface AgentGridProps {
   liveTaskStates: Record<string, TaskLiveState>;
 }
 
-// Shows the agent description (name and model), clamped to two lines, with a toggle that
-// expands the full text only when it actually overflows the card thumbnail.
+// Shows the agent description (which may contain HTML), clamped to two lines, with a toggle
+// that expands the full text only when it actually overflows the card thumbnail. The HTML is
+// sanitized before rendering to guard against malicious agent card content.
 function AgentDescription({ text }: { text: string }) {
   const [expanded, setExpanded] = useState(false);
   const [isOverflowing, setIsOverflowing] = useState(false);
-  const ref = useRef<HTMLParagraphElement>(null);
+  const ref = useRef<HTMLDivElement>(null);
 
   useLayoutEffect(() => {
     const el = ref.current;
@@ -41,9 +43,12 @@ function AgentDescription({ text }: { text: string }) {
 
   return (
     <div className="mb-2">
-      <p ref={ref} className="text-xs text-slate-300 break-words whitespace-pre-line" style={clampStyle}>
-        {text}
-      </p>
+      <div
+        ref={ref}
+        className="text-xs text-slate-300 break-words [&_ol]:list-decimal [&_ol]:pl-5 [&_ul]:list-disc [&_ul]:pl-5"
+        style={clampStyle}
+        dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(text) }}
+      />
       {(isOverflowing || expanded) && (
         <button
           onClick={(e) => {

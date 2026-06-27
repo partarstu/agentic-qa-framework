@@ -124,7 +124,7 @@ class OrchestratorConfig:
     INCOMING_REQUEST_WAIT_TIMEOUT = AGENT_DISCOVERY_TIMEOUT_SECONDS + 5
     MODEL_NAME = "google-gla:gemini-3.5-flash"
     API_KEY = os.environ.get("ORCHESTRATOR_API_KEY")
-    AGENT_DISCOVERY_PORTS = os.environ.get("AGENT_DISCOVERY_PORTS", "8001-8006")
+    AGENT_DISCOVERY_PORTS = os.environ.get("AGENT_DISCOVERY_PORTS", "8001-8007")
     REMOTE_EXECUTION_AGENT_HOSTS = os.environ.get("REMOTE_EXECUTION_AGENT_HOSTS", AGENT_BASE_URL)
     # Shared bearer token expected by the execution agents' main A2A endpoint. Empty means the agents run without
     # auth (e.g. local dev), so no Authorization header is attached.
@@ -191,7 +191,7 @@ class TestCaseReviewAgentConfig:
 class IncidentCreationAgentConfig:
     THINKING_LEVEL: ThinkingLevel = "medium"
     OWN_NAME = "Incident Creation Agent"
-    PORT = int(os.environ.get("PORT", "8006"))
+    PORT = int(os.environ.get("PORT", "8007"))
     EXTERNAL_PORT = int(os.environ.get("EXTERNAL_PORT", PORT))
     PROTOCOL = "http"
     MODEL_NAME = "google-gla:gemini-3.5-flash"
