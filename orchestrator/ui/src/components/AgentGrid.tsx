@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-only
 
-import { useState } from 'react';
+import { useState, useRef, useLayoutEffect } from 'react';
 import { Server, Wifi, WifiOff, Loader2, RefreshCw } from 'lucide-react';
 import { useQueryClient } from '@tanstack/react-query';
 import { dashboardApi } from '../api/dashboardApi';
@@ -14,6 +14,49 @@ interface AgentGridProps {
   agents: AgentInfo[] | undefined;
   isLoading: boolean;
   liveTaskStates: Record<string, TaskLiveState>;
+}
+
+// Shows the agent description (name and model), clamped to two lines, with a toggle that
+// expands the full text only when it actually overflows the card thumbnail.
+function AgentDescription({ text }: { text: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const [isOverflowing, setIsOverflowing] = useState(false);
+  const ref = useRef<HTMLParagraphElement>(null);
+
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (el && !expanded) {
+      setIsOverflowing(el.scrollHeight > el.clientHeight + 1);
+    }
+  }, [text, expanded]);
+
+  const clampStyle = expanded
+    ? undefined
+    : ({
+        display: '-webkit-box',
+        WebkitLineClamp: 2,
+        WebkitBoxOrient: 'vertical',
+        overflow: 'hidden',
+      } as const);
+
+  return (
+    <div className="mb-2">
+      <p ref={ref} className="text-xs text-slate-300 break-words" style={clampStyle}>
+        {text}
+      </p>
+      {(isOverflowing || expanded) && (
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            setExpanded((value) => !value);
+          }}
+          className="mt-1 text-xs font-medium text-indigo-400 hover:text-indigo-300"
+        >
+          {expanded ? 'Show less' : 'Show more'}
+        </button>
+      )}
+    </div>
+  );
 }
 
 export function AgentGrid({ agents, isLoading, liveTaskStates }: AgentGridProps) {
@@ -128,6 +171,8 @@ export function AgentGrid({ agents, isLoading, liveTaskStates }: AgentGridProps)
                 <p className="text-xs text-slate-400 truncate mb-2" title={agent.url}>
                   {agent.url}
                 </p>
+
+                {agent.description && <AgentDescription text={agent.description} />}
 
                 {agent.current_task && (
                   <div className="mt-3 p-2 bg-amber-500/10 rounded border border-amber-500/20">

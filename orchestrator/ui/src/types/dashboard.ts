@@ -19,6 +19,7 @@ export interface DashboardSummary {
   orchestrator_start_time: string;
   uptime_seconds: number;
   current_time: string;
+  orchestrator_model: string;
 }
 
 export interface AgentCapabilities {
@@ -36,6 +37,7 @@ export interface CurrentTask {
 export interface AgentInfo {
   id: string;
   name: string;
+  description: string;
   url: string;
   status: 'AVAILABLE' | 'BUSY' | 'BROKEN';
   capabilities: AgentCapabilities | null;

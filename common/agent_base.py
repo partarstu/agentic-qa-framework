@@ -15,7 +15,7 @@ from a2a.helpers import get_message_text, new_text_message
 from a2a.server.request_handlers import DefaultRequestHandler
 from a2a.server.routes import create_agent_card_routes, create_jsonrpc_routes
 from a2a.server.tasks import InMemoryTaskStore
-from a2a.types import AgentCapabilities, AgentCard, AgentInterface, Message
+from a2a.types import AgentCapabilities, AgentCard, AgentInterface, AgentSkill, Message
 from fastapi import FastAPI
 from jira import JIRA
 from pydantic import BaseModel
@@ -286,14 +286,20 @@ class AgentBase(ABC):
         return fetch_all_attachments(attachment_paths)
 
     def _get_server(self) -> FastAPI:
-        agent_card = AgentCard(
+        primary_skill = AgentSkill(
+            id=f"{self.agent_name.lower().replace(' ', '-')}-skill",
             name=self.agent_name,
             description=self.description,
+            tags=["qa"],
+        )
+        agent_card = AgentCard(
+            name=self.agent_name,
+            description=f"{self.agent_name} (Model: {self.model_name})",
             version="1.0.0",
             default_input_modes=["text"],
             default_output_modes=["text", "image"],
             capabilities=AgentCapabilities(streaming=True),
-            skills=[],
+            skills=[primary_skill],
             supported_interfaces=[
                 AgentInterface(
                     protocol_binding="JSONRPC",

@@ -620,7 +620,7 @@ async def review_jira_requirements(request: Request, api_key: str = Depends(_val
         await _verify_jira_webhook_signature(request)
         logger.info("Received an event from Jira, requesting requirements review from an agent.")
         user_story_id = await _get_jira_issue_key_from_request(request)
-        task_description = "Review the Jira user story"
+        task_description = f"Review the Jira user story {user_story_id}"
         completed_task = await _send_task_to_agent(f"Jira user story with key {user_story_id}", task_description)
         _validate_task_status(completed_task, f"Review of the user story {user_story_id}")
         logger.info("Received response from an agent, requirements review seems to be complete.")
@@ -1011,7 +1011,7 @@ async def _request_incident_creation(
         IncidentCreationResult containing the created incident information,
         or None if an AgentExecutionError occurred.
     """
-    task_description = "Create incident report"
+    task_description = f"Create incident report for test case {incident_input.test_case.key}"
 
     # Create message with JSON text part and ALL artifact file parts
     message_parts: list[Part] = [Part(text=incident_input.model_dump_json())]
@@ -1049,7 +1049,7 @@ async def _request_test_cases_generation(user_story_id) -> GeneratedTestCases:
     Raises:
         HTTPException: If an AgentExecutionError is returned by the agent.
     """
-    task_description = "Generate test cases"
+    task_description = f"Generate test cases for Jira user story {user_story_id}"
     completed_task = await _send_task_to_agent(f"Jira user story with key {user_story_id}", task_description)
     task_description = f"Generation of test cases for the user story {user_story_id}"
     received_artifacts = _get_artifacts_from_task(completed_task, task_description)
@@ -1070,13 +1070,13 @@ def _get_artifacts_from_task(task: Task, task_description: str) -> list[Artifact
 
 
 async def _request_test_cases_classification(test_cases: list[TestCase], user_story_id: str) -> list[Artifact]:
-    task_description = "Classify test cases"
+    task_description = f"Classify test cases for Jira user story {user_story_id}"
     completed_task = await _send_task_to_agent(f"Test cases:\n{test_cases}", task_description)
     return _get_artifacts_from_task(completed_task, f"Classification of test cases for the user story {user_story_id}")
 
 
 async def _request_test_cases_review(test_cases: list[TestCase], user_story_id: str) -> list[Artifact]:
-    task_description = "Review test cases"
+    task_description = f"Review test cases for Jira user story {user_story_id}"
     completed_task = await _send_task_to_agent(
         f"Test cases:\n{test_cases}\nUser Story ID: {user_story_id}", task_description
     )
@@ -1668,7 +1668,7 @@ async def _get_agents_info(available_agent_ids: list[str]) -> str:
         card = all_cards.get(agent_id)
         if card:
             agents_info += (
-                f"- Name: {card.name}, ID: {agent_id}, Description: {card.description}, Skills: "
+                f"- Name: {card.name}, ID: {agent_id}, Skills: "
                 f"{'; '.join(skill.description for skill in card.skills)}\n"
             )
     return agents_info

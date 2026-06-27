@@ -182,6 +182,12 @@ function Dashboard() {
             </div>
 
             <div className="flex items-center gap-4">
+              {summary?.orchestrator_model && (
+                <div className="hidden sm:flex items-center gap-2 text-sm text-slate-400 pr-3 border-r border-slate-600">
+                  <span className="text-slate-500">Orchestrator model:</span>
+                  <span className="text-slate-300 font-medium">{summary.orchestrator_model}</span>
+                </div>
+              )}
               <div className="flex items-center gap-2 text-sm text-slate-400">
                 <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></div>
                 <span>Live</span>

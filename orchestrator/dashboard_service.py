@@ -12,6 +12,7 @@ from typing import Any
 
 from google.protobuf.json_format import MessageToDict
 
+import config
 from common import utils
 from orchestrator.memory_log_handler import LogEntry, memory_log_handler
 from orchestrator.models import (
@@ -94,6 +95,7 @@ class OrchestratorDashboardService:
             "orchestrator_start_time": ORCHESTRATOR_START_TIME.isoformat(),
             "uptime_seconds": uptime_seconds,
             "current_time": datetime.now().isoformat(),
+            "orchestrator_model": config.OrchestratorConfig.MODEL_NAME,
         }
 
     async def get_agents_status(self) -> list[dict[str, Any]]:
@@ -121,6 +123,7 @@ class OrchestratorDashboardService:
                 {
                     "id": agent_id,
                     "name": card.name,
+                    "description": card.description,
                     "url": card.supported_interfaces[0].url if card.supported_interfaces else None,
                     "status": status.value,
                     "capabilities": MessageToDict(card.capabilities) if card.HasField("capabilities") else None,
