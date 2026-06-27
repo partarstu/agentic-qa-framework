@@ -41,7 +41,7 @@ function AgentDescription({ text }: { text: string }) {
 
   return (
     <div className="mb-2">
-      <p ref={ref} className="text-xs text-slate-300 break-words" style={clampStyle}>
+      <p ref={ref} className="text-xs text-slate-300 break-words whitespace-pre-line" style={clampStyle}>
         {text}
       </p>
       {(isOverflowing || expanded) && (
