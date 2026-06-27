@@ -92,8 +92,14 @@ export function TaskSummaryCards({ summary }: TaskSummaryCardsProps) {
     return `${hours}h ${minutes}m`;
   };
 
+  const formatTokens = (tokens: number) => {
+    if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(2)}M`;
+    if (tokens >= 1_000) return `${(tokens / 1_000).toFixed(1)}k`;
+    return `${tokens}`;
+  };
+
   return (
-    <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-4 mb-6">
+    <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-6">
       <div className="bg-slate-800/50 rounded-lg p-4 border border-slate-700">
         <p className="text-slate-400 text-xs uppercase tracking-wider">Running Tasks</p>
         <p className="text-2xl font-bold text-amber-400 mt-1">{summary.tasks_running}</p>
@@ -109,6 +115,13 @@ export function TaskSummaryCards({ summary }: TaskSummaryCardsProps) {
       <div className="bg-slate-800/50 rounded-lg p-4 border border-slate-700">
         <p className="text-slate-400 text-xs uppercase tracking-wider">Total Errors</p>
         <p className="text-2xl font-bold text-orange-400 mt-1">{summary.errors_total}</p>
+      </div>
+      <div className="bg-slate-800/50 rounded-lg p-4 border border-slate-700">
+        <p className="text-slate-400 text-xs uppercase tracking-wider">Est. Cost</p>
+        <p className="text-2xl font-bold text-teal-400 mt-1">
+          {summary.cost_usd_total === null ? 'n/a' : `$${summary.cost_usd_total.toFixed(2)}`}
+        </p>
+        <p className="text-slate-500 text-xs mt-1">{formatTokens(summary.tokens_total)} tokens</p>
       </div>
       <div className="bg-slate-800/50 rounded-lg p-4 border border-slate-700">
         <p className="text-slate-400 text-xs uppercase tracking-wider">Uptime</p>

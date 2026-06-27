@@ -9,10 +9,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from a2a.helpers import get_message_text
 from a2a.types import Message
+from pydantic_ai.usage import RunUsage
 
 if TYPE_CHECKING:
     from pydantic_ai.usage import UsageLimits
 
+import config
 from common.agent_base import AgentBase
 from common.agent_log_capture import AgentLogCaptureHandler
 from common.models import JsonSerializableModel
@@ -95,6 +97,7 @@ async def test_usage_limits_tool_calls_limit_is_doubled(test_agent_instance):
         captured.append(usage_limits)
         mock_result = MagicMock()
         mock_result.output = MockOutput(result="ok")
+        mock_result.usage.return_value = RunUsage(input_tokens=10, output_tokens=5)
         return mock_result
 
     test_agent_instance.agent = AsyncMock()
@@ -109,12 +112,14 @@ async def test_usage_limits_tool_calls_limit_is_doubled(test_agent_instance):
 
     assert len(captured) == 1
     assert captured[0].tool_calls_limit == test_agent_instance.get_max_requests_per_task() * 2
+    assert captured[0].total_tokens_limit == config.BudgetConfig.TOTAL_TOKENS_LIMIT_PER_TASK
 
 
 @pytest.mark.asyncio
 async def test_agent_run_success(test_agent_instance):
     mock_run_result = MagicMock()
     mock_run_result.output = MockOutput(result="success")
+    mock_run_result.usage.return_value = RunUsage(input_tokens=20, output_tokens=8)
 
     # Mock the internal agent's run method
     test_agent_instance.agent = AsyncMock()
@@ -131,6 +136,11 @@ async def test_agent_run_success(test_agent_instance):
 
         # Use raw string for regex-like escaping or double escape
         assert get_message_text(response) == '{"result":"success"}'
+
+    # The run's token usage is captured for the executor to emit as an artifact.
+    assert test_agent_instance.latest_token_usage is not None
+    assert test_agent_instance.latest_token_usage.input_tokens == 20
+    assert test_agent_instance.latest_token_usage.total_tokens == 28
 
 
 @pytest.mark.asyncio

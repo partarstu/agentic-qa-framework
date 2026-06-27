@@ -24,6 +24,17 @@ _STATUSES = [
     {"id": 2, "name": "Approved", "archived": False},
     {"id": 3, "name": "Review Complete", "archived": False},
 ]
+_STATUS_NAMES_BY_ID = {status["id"]: status["name"] for status in _STATUSES}
+
+
+def _resolve_status(status: dict) -> dict:
+    """Surface a human-readable status name.
+
+    A status change PUTs only ``{"id": N}``, so the stored status loses its name;
+    look it up from the status catalog for the assertions.
+    """
+    status_id = status.get("id")
+    return {"id": status_id, "name": status.get("name") or _STATUS_NAMES_BY_ID.get(status_id, "")}
 
 
 @app.post("/testcases")
@@ -89,7 +100,7 @@ async def recorded() -> dict:
                 "name": tc.get("name", ""),
                 "steps": tc.get("steps", []),
                 "labels": tc.get("labels", []),
-                "status": tc.get("status", {}),
+                "status": _resolve_status(tc.get("status", {})),
                 "review_comments": tc.get("customFields", {}).get("Review Comments", ""),
             }
             for tc in _test_cases.values()

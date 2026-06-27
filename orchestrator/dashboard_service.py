@@ -76,6 +76,21 @@ class OrchestratorDashboardService:
         completed_tasks = sum(1 for t in all_tasks if t.status.value == "COMPLETED")
         failed_tasks = sum(1 for t in all_tasks if t.status.value == "FAILED")
 
+        # Aggregate token consumption and estimated cost across recorded tasks. Cost is summed
+        # only over tasks with a known (priced) cost; it stays None when none are priced.
+        tokens_total = 0
+        cost_usd_total = 0.0
+        cost_known = False
+        for task in all_tasks:
+            usage = task.token_usage
+            if not usage:
+                continue
+            tokens_total += usage.get("total_tokens") or 0
+            cost = usage.get("cost_usd")
+            if cost is not None:
+                cost_usd_total += cost
+                cost_known = True
+
         # Get error count
         all_errors = await self.errors.get_all()
 
@@ -92,6 +107,8 @@ class OrchestratorDashboardService:
             "tasks_failed": failed_tasks,
             "tasks_total": len(all_tasks),
             "errors_total": len(all_errors),
+            "tokens_total": tokens_total,
+            "cost_usd_total": round(cost_usd_total, 4) if cost_known else None,
             "orchestrator_start_time": ORCHESTRATOR_START_TIME.isoformat(),
             "uptime_seconds": uptime_seconds,
             "current_time": datetime.now().isoformat(),

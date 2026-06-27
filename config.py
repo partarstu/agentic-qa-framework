@@ -102,6 +102,22 @@ OPEN_TELEMETRY_URL = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT")
 TOP_P = 1.0
 TEMPERATURE = 0.0
 
+
+class BudgetConfig:
+    """Token budget (hard limit) and pricing used for cost oversight."""
+
+    # Hard cap on the total number of tokens an agent may consume per task. When exceeded,
+    # the agent run is aborted with pydantic-ai's UsageLimitExceeded. The cap is token-based
+    # because pydantic-ai enforces token limits, not monetary ones.
+    TOTAL_TOKENS_LIMIT_PER_TASK = int(os.environ.get("TOTAL_TOKENS_LIMIT_PER_TASK", "1000000"))
+
+    # Indicative price in USD per 1,000,000 tokens, keyed by the pydantic-ai model name.
+    # Used only to estimate cost for oversight (logs + dashboard); keep these values current
+    # with the provider's published pricing. Models absent from this table report a null cost.
+    MODEL_PRICING: dict[str, dict[str, float]] = {
+        "google-gla:gemini-3.5-flash": {"input": 0.30, "output": 2.50},
+    }
+
 # Prompt injection detection config
 PROMPT_INJECTION_CHECK_ENABLED = os.environ.get("PROMPT_INJECTION_CHECK_ENABLED", "False").lower() in ("true", "1", "t")
 PROMPT_GUARD_PROVIDER = os.environ.get("PROMPT_GUARD_PROVIDER", "protect_ai")

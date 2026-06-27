@@ -65,6 +65,9 @@ class DefaultAgentExecutor(AgentExecutor):
         while not activity_queue.empty():
             activity_queue.get_nowait()
 
+        # Reset usage so a failed run cannot emit the previous task's usage artifact.
+        self.agent.latest_token_usage = None
+
         async def flush_activity_loop() -> None:
             # Forward each reported activity immediately as a WORKING status message.
             # A transient update_status failure is logged and the loop keeps streaming.
@@ -146,6 +149,20 @@ class DefaultAgentExecutor(AgentExecutor):
 
             # 4. Execution-result artifact (auto-generated unique artifact_id avoids id collisions).
             await updater.add_artifact(parts=list(result.parts), name=ArtifactName.EXECUTION_RESULT)
+
+            # 4b. Token-usage artifact so the orchestrator can record consumption and cost.
+            token_usage = self.agent.latest_token_usage
+            if token_usage is not None:
+                await updater.add_artifact(
+                    parts=[
+                        Part(
+                            raw=token_usage.model_dump_json().encode("utf-8"),
+                            media_type="application/json",
+                            filename="usage.json",
+                        )
+                    ],
+                    name=ArtifactName.USAGE,
+                )
 
             # 5. Terminal status — always last.
             await updater.complete()

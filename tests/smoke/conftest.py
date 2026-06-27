@@ -46,6 +46,9 @@ EXPECTED_AGENT_NAMES: set[str] = {
 }
 HEALTHY_AGENT_STATUSES = {"AVAILABLE", "BUSY"}
 
+# The status the review flow moves a reviewed test case to; tracks config as the source of truth.
+REVIEW_COMPLETE_STATUS = config.TestCaseReviewAgentConfig.REVIEW_COMPLETE_STATUS_NAME
+
 # The orchestrator startup + initial agent discovery can take a while to settle.
 ORCHESTRATOR_READY_TIMEOUT = 120.0
 AGENT_READY_TIMEOUT = 240.0

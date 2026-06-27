@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from orchestrator.dashboard_service import OrchestratorDashboardService
-from orchestrator.models import AgentRegistry, ErrorHistory, TaskHistory
+from orchestrator.models import AgentRegistry, ErrorHistory, TaskHistory, TaskRecord, TaskStatus
 
 
 @pytest.fixture
@@ -17,6 +17,48 @@ def mock_dashboard_service():
     tasks = MagicMock(spec=TaskHistory)
     errors = MagicMock(spec=ErrorHistory)
     return OrchestratorDashboardService(registry, tasks, errors)
+
+
+def _task_with_usage(task_id: str, total_tokens: int, cost_usd: float | None) -> TaskRecord:
+    return TaskRecord(
+        task_id=task_id,
+        agent_id="agent-1",
+        agent_name="Agent",
+        description="task",
+        status=TaskStatus.COMPLETED,
+        start_time=datetime.now(),
+        token_usage={"total_tokens": total_tokens, "cost_usd": cost_usd},
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_summary_aggregates_tokens_and_cost():
+    registry = AgentRegistry()
+    tasks = TaskHistory()
+    errors = ErrorHistory()
+    await tasks.add(_task_with_usage("t1", 1000, 0.01))
+    await tasks.add(_task_with_usage("t2", 500, 0.005))
+    await tasks.add(_task_with_usage("t3", 200, None))  # unpriced model: tokens count, cost ignored
+    service = OrchestratorDashboardService(registry, tasks, errors)
+
+    summary = await service.get_summary()
+
+    assert summary["tokens_total"] == 1700
+    assert summary["cost_usd_total"] == 0.015
+
+
+@pytest.mark.asyncio
+async def test_get_summary_cost_none_when_no_priced_tasks():
+    registry = AgentRegistry()
+    tasks = TaskHistory()
+    errors = ErrorHistory()
+    await tasks.add(_task_with_usage("t1", 200, None))
+    service = OrchestratorDashboardService(registry, tasks, errors)
+
+    summary = await service.get_summary()
+
+    assert summary["tokens_total"] == 200
+    assert summary["cost_usd_total"] is None
 
 
 def test_parse_agent_logs_standard(mock_dashboard_service):

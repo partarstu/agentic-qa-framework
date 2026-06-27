@@ -16,10 +16,23 @@ export interface DashboardSummary {
   tasks_failed: number;
   tasks_total: number;
   errors_total: number;
+  tokens_total: number;
+  cost_usd_total: number | null;
   orchestrator_start_time: string;
   uptime_seconds: number;
   current_time: string;
   orchestrator_model: string;
+}
+
+export interface TokenUsage {
+  model_name: string;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  cache_read_tokens: number;
+  requests: number;
+  tool_calls: number;
+  cost_usd: number | null;
 }
 
 export interface AgentCapabilities {
@@ -56,6 +69,7 @@ export interface TaskInfo {
   end_time: string | null;
   duration_ms: number | null;
   error_message: string | null;
+  token_usage: TokenUsage | null;
 }
 
 export interface ErrorInfo {

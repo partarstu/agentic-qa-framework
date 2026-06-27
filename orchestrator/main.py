@@ -72,6 +72,7 @@ from common.streaming import (
     SnapshotEvent,
     TaskDoneEvent,
 )
+from common.token_usage import TokenUsage
 from orchestrator.auth import LoginRequest, TokenResponse, auth_service, dashboard_auth
 from orchestrator.dashboard_service import dashboard_service
 from orchestrator.memory_log_handler import setup_memory_logging
@@ -575,11 +576,27 @@ def _get_results_extractor_agent(output_type: type[JsonSerializableModel] | type
     )
 
 
+def _log_orchestrator_usage(result) -> None:
+    """Log the token usage and estimated cost of one orchestrator-internal LLM run.
+
+    Best-effort oversight: a failure to read usage must never break the workflow.
+    """
+    if result is None:
+        return
+    try:
+        usage = TokenUsage.from_run_usage(result.usage(), config.OrchestratorConfig.MODEL_NAME)
+        logger.info(usage.summary_line())
+    except Exception as e:
+        logger.debug(f"Could not record orchestrator token usage: {e}")
+
+
 async def _run_agent_with_retry(agent_call, base_delay: float = config.RetryConfig.RETRY_BASE_DELAY_SECONDS):
     """Runs an agent call with retry on transient LLM provider errors."""
     for attempt in range(config.RetryConfig.MAX_RETRIES):
         try:
-            return await agent_call()
+            result = await agent_call()
+            _log_orchestrator_usage(result)
+            return result
         except (ModelHTTPError, httpx.TransportError) as e:
             is_retryable = isinstance(e, httpx.TransportError) or (
                 isinstance(e, ModelHTTPError) and e.status_code in config.RetryConfig.RETRYABLE_STATUS_CODES
@@ -1141,6 +1158,7 @@ The information inside the input you need to find: the Jira issue key of each te
 Result format: a list of all found test case issue keys as a lift of strings.
 """
     result = await _get_results_extractor_agent(str).run(user_prompt)
+    _log_orchestrator_usage(result)
     issue_keys: list[str] = result.output or []
     logger.info(f"Extracted issue keys of {len(issue_keys)} test cases from test case generation agent's response.")
     return result.output or None
@@ -1222,6 +1240,8 @@ def _get_file_contents_from_artifacts(artifacts: list[Artifact] | None) -> list[
     if not artifacts:
         return file_parts
     for artifact in artifacts:
+        if artifact.name == ArtifactName.USAGE:
+            continue  # bookkeeping artifact, not a payload file
         for part in artifact.parts:
             if part.HasField("raw"):
                 file_parts.append(FileArtifact(name=part.filename or "", raw=part.raw, media_type=part.media_type))
@@ -1346,6 +1366,25 @@ async def _save_agent_logs_from_task(task: Task, internal_task_id: str) -> None:
         logger.warning(f"Failed to extract logs for task {internal_task_id}: {e}")
 
 
+async def _save_agent_usage_from_task(task: Task, internal_task_id: str) -> None:
+    """Extract the token-usage artifact from a completed task and store it on its record."""
+    try:
+        for artifact in task.artifacts or []:
+            if artifact.name != ArtifactName.USAGE:
+                continue
+            for part in artifact.parts:
+                if part.HasField("raw"):
+                    usage = TokenUsage.model_validate_json(part.raw.decode("utf-8"))
+                    await task_history.update_usage(internal_task_id, usage.model_dump())
+                    logger.info(
+                        f"Task {internal_task_id} {usage.summary_line()}",
+                        extra={"task_id": internal_task_id},
+                    )
+                    return
+    except Exception as e:
+        logger.warning(f"Failed to extract token usage for task {internal_task_id}: {e}")
+
+
 async def _send_task_to_agent_with_message(message: Message, task_description: str) -> Task | None:
     """Send a custom message (with file parts) to an agent.
 
@@ -1408,6 +1447,7 @@ async def _send_task_to_agent_with_message(message: Message, task_description: s
                     completed_task = Task(id=last_task_id or "", status=last_status, artifacts=collected_artifacts)
                     await _finalize_task(internal_task_id, agent_id, final_status)
                     await _save_agent_logs_from_task(completed_task, internal_task_id)
+                    await _save_agent_usage_from_task(completed_task, internal_task_id)
                     await agent_registry.update_status(agent_id, AgentStatus.AVAILABLE)
                     await agent_registry.set_current_task(agent_id, None)
                     return completed_task
@@ -1465,6 +1505,7 @@ async def _send_task_to_agent_with_message(message: Message, task_description: s
                     completed_task = Task(id=last_task_id, status=last_status, artifacts=collected_artifacts)
                     await _finalize_task(internal_task_id, agent_id, final_status, error_msg)
                     await _save_agent_logs_from_task(completed_task, internal_task_id)
+                    await _save_agent_usage_from_task(completed_task, internal_task_id)
                     await agent_registry.update_status(agent_id, AgentStatus.AVAILABLE)
                     await agent_registry.set_current_task(agent_id, None)
                     return completed_task

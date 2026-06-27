@@ -16,3 +16,4 @@ class ArtifactName:
 
     LOGS = "logs"
     EXECUTION_RESULT = "agent_execution_result"
+    USAGE = "agent_usage"

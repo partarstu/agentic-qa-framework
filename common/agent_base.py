@@ -35,6 +35,7 @@ from common.custom_llm_wrapper import CustomLlmWrapper
 from common.models import AgentExecutionError, AgentRuntimeError, JsonSerializableModel
 from common.services.vector_db_service import VectorDbService
 from common.streaming import compute_activity_budget
+from common.token_usage import TokenUsage
 
 REGISTRATION_PATH = f"{config.ORCHESTRATOR_URL}/register"
 MCP_SERVER_ATTACHMENTS_FOLDER_PATH = config.MCP_SERVER_ATTACHMENTS_FOLDER_PATH
@@ -95,6 +96,9 @@ class AgentBase(ABC):
         if vector_db_collection_name:
             self.vector_db_service = VectorDbService(vector_db_collection_name)
         self.latest_received_message: Message | None = None
+        # Token usage of the most recent run; reset per task by the executor and read back
+        # by it to emit the usage artifact. None until a run completes.
+        self.latest_token_usage: TokenUsage | None = None
 
     @property
     def activity_queue(self) -> asyncio.Queue[str]:
@@ -149,7 +153,10 @@ class AgentBase(ABC):
         )
 
     async def _get_agent_execution_result(self, received_request: list[UserContent]) -> AgentRunResult[Any] | None:
-        usage_limits = UsageLimits(tool_calls_limit=compute_activity_budget(self.get_max_requests_per_task()))
+        usage_limits = UsageLimits(
+            tool_calls_limit=compute_activity_budget(self.get_max_requests_per_task()),
+            total_tokens_limit=config.BudgetConfig.TOTAL_TOKENS_LIMIT_PER_TASK,
+        )
         for attempt in range(config.RetryConfig.MAX_RETRIES):
             try:
                 logger.info(f"Starting agent run (attempt {attempt + 1}/{config.RetryConfig.MAX_RETRIES})...")
@@ -185,6 +192,7 @@ class AgentBase(ABC):
 
         try:
             result = await self._get_agent_execution_result(received_request)
+            self._capture_token_usage(result)
             self._log_llm_comments_if_result_incomplete(result.output)
             return self._get_text_message_from_results(result)
         except Exception as e:
@@ -203,6 +211,13 @@ class AgentBase(ABC):
                 else str(e)
             )
             raise AgentRuntimeError(list(error_message.parts), error_text) from e
+
+    def _capture_token_usage(self, result: AgentRunResult[Any] | None) -> None:
+        """Record and log the token usage and estimated cost of a completed run."""
+        if result is None:
+            return
+        self.latest_token_usage = TokenUsage.from_run_usage(result.usage(), self.model_name)
+        logger.info(self.latest_token_usage.summary_line())
 
     def _log_llm_comments_if_result_incomplete(self, output: BaseModel | None | str) -> None:
         """Logs LLM comments if the agent result appears empty or incomplete.
