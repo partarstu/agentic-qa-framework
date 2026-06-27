@@ -138,6 +138,7 @@ async def lifespan(app: FastAPI):
 
     # Start periodic tasks after initial discovery
     discovery_task = asyncio.create_task(periodic_agent_discovery())
+    health_check_task = asyncio.create_task(periodic_health_check())
     cancellation_task = asyncio.create_task(_retry_cancellation_task())
 
     yield
@@ -148,6 +149,12 @@ async def lifespan(app: FastAPI):
             await discovery_task
         except asyncio.CancelledError:
             logger.info("Agent discovery task successfully cancelled.")
+
+    if not health_check_task.cancel():
+        try:
+            await health_check_task
+        except asyncio.CancelledError:
+            logger.info("Agent health check task successfully cancelled.")
 
     if not cancellation_task.cancel():
         try:
@@ -608,6 +615,40 @@ async def periodic_agent_discovery():
             logger.info("Periodic agent discovery finished.")
         except Exception as e:
             _record_error(f"An error occurred during periodic agent discovery: {e}")
+
+
+async def _health_check_agents():
+    """Probes registered AVAILABLE agents for liveness. Unreachable agents are marked
+    BROKEN (OFFLINE) and queued for the recovery worker. BUSY and BROKEN agents are left
+    alone, as they are already covered by the dispatch path and the recovery worker."""
+    cards = await agent_registry.get_all_cards()
+
+    async def _check(agent_id: str, card: AgentCard):
+        if await agent_registry.get_status(agent_id) != AgentStatus.AVAILABLE:
+            return
+        if not card.supported_interfaces:
+            return
+        url = card.supported_interfaces[0].url
+        if await _check_agent_reachability(url):
+            return
+        # Re-check status to avoid clobbering an agent that just started a task.
+        if await agent_registry.get_status(agent_id) != AgentStatus.AVAILABLE:
+            return
+        logger.warning(f"Health check: agent {agent_id} at {url} is unreachable. Marking BROKEN (OFFLINE).")
+        await agent_registry.update_status(agent_id, AgentStatus.BROKEN, BrokenReason.OFFLINE)
+        await cancellation_queue.put((agent_id, time.time()))
+
+    await asyncio.gather(*(_check(agent_id, card) for agent_id, card in cards.items()))
+
+
+async def periodic_health_check():
+    """Periodically checks the liveness of already-registered agents."""
+    while True:
+        await asyncio.sleep(config.OrchestratorConfig.AGENT_HEALTH_CHECK_INTERVAL_SECONDS)
+        try:
+            await _health_check_agents()
+        except Exception as e:
+            _record_error(f"An error occurred during periodic agent health check: {e}")
 
 
 # noinspection PyUnusedLocal
@@ -1738,7 +1779,7 @@ async def _check_agent_reachability(agent_base_url: str) -> bool:
     try:
         async with httpx.AsyncClient() as client:
             response = await client.get(
-                agent_card_url, timeout=config.OrchestratorConfig.AGENT_DISCOVERY_TIMEOUT_SECONDS
+                agent_card_url, timeout=config.OrchestratorConfig.AGENT_HEALTH_CHECK_TIMEOUT_SECONDS
             )
             return response.status_code == 200
     except Exception:
@@ -1746,33 +1787,24 @@ async def _check_agent_reachability(agent_base_url: str) -> bool:
 
 
 async def _process_url_discovery(url: str):
-    existing_agent_id = await agent_registry.get_agent_id_by_url(url)
+    """Register a new agent found at the URL. Liveness of already-registered agents is the
+    health-check loop's responsibility, so known URLs are skipped here."""
+    if await agent_registry.get_agent_id_by_url(url):
+        return
+
+    agent_card = await _fetch_agent_card(url)
+    if not agent_card:
+        return
+
+    card_url = agent_card.supported_interfaces[0].url
+    existing_agent_id = await agent_registry.get_agent_id_by_url(card_url)
     if existing_agent_id:
-        if await _check_agent_reachability(url):
-            status = await agent_registry.get_status(existing_agent_id)
-            if status == AgentStatus.BROKEN:
-                broken_reason, _ = await agent_registry.get_broken_context(existing_agent_id)
-                if broken_reason in (BrokenReason.OFFLINE, BrokenReason.TASK_STUCK):
-                    logger.info(
-                        f"Agent {existing_agent_id} (URL: {url}) was BROKEN ({broken_reason}) "
-                        f"but is now responsive. Resetting to AVAILABLE."
-                    )
-                    await agent_registry.update_status(existing_agent_id, AgentStatus.AVAILABLE)
-        else:
-            logger.info(f"Agent {existing_agent_id} at {url} is unreachable. Removing from registry.")
-            await agent_registry.remove(existing_agent_id)
-    else:
-        agent_card = await _fetch_agent_card(url)
-        if agent_card:
-            existing_agent_id = await agent_registry.get_agent_id_by_url(agent_card.supported_interfaces[0].url)
-            if existing_agent_id:
-                logger.debug(
-                    f"Agent with URL {agent_card.supported_interfaces[0].url} is already registered with ID {existing_agent_id}."
-                )
-            else:
-                new_agent_id = str(uuid4())
-                await agent_registry.register(new_agent_id, agent_card)
-                logger.info(f"Discovered and registered agent with URL: {agent_card.supported_interfaces[0].url}")
+        logger.debug(f"Agent with URL {card_url} is already registered with ID {existing_agent_id}.")
+        return
+
+    new_agent_id = str(uuid4())
+    await agent_registry.register(new_agent_id, agent_card)
+    logger.info(f"Discovered and registered agent with URL: {card_url}")
 
 
 async def _discover_agents():

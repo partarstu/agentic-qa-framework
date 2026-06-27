@@ -16,12 +16,19 @@ from orchestrator.main import (
     _fetch_agent_card,
     _finalize_task,
     _handle_stream_chunk,
+    _health_check_agents,
     _LogStreamState,
     _select_agent,
     agent_registry,
+    cancellation_queue,
     discovery_agent,
 )
 from orchestrator.models import TaskStatus
+
+
+def _drain_queue(queue):
+    while not queue.empty():
+        queue.get_nowait()
 
 
 @pytest.fixture
@@ -31,11 +38,13 @@ async def clear_registry():
     agent_registry._statuses.clear()
     agent_registry._broken_reasons.clear()
     agent_registry._stuck_task_ids.clear()
+    _drain_queue(cancellation_queue)
     yield
     agent_registry._cards.clear()
     agent_registry._statuses.clear()
     agent_registry._broken_reasons.clear()
     agent_registry._stuck_task_ids.clear()
+    _drain_queue(cancellation_queue)
 
 
 @pytest.fixture
@@ -120,7 +129,7 @@ async def test_select_agent_none_found(clear_registry):
 
 
 @pytest.mark.asyncio
-async def test_discover_agents_existing_reachable(clear_registry, mock_agent_card):
+async def test_discover_agents_skips_existing(clear_registry, mock_agent_card):
     # Pre-register the agent
     await agent_registry.register("existing-id", mock_agent_card)
 
@@ -132,50 +141,57 @@ async def test_discover_agents_existing_reachable(clear_registry, mock_agent_car
     ):
         await _discover_agents()
 
-        # Verify _fetch_agent_card was NOT called
+        # A known URL is skipped: discovery neither fetches the card nor probes liveness.
         mock_fetch.assert_not_called()
-        # Verify check was called
-        mock_check.assert_called_once_with("http://localhost:8001")
+        mock_check.assert_not_called()
 
         # Verify agent is still there
         assert await agent_registry.contains("existing-id")
 
 
 @pytest.mark.asyncio
-async def test_discover_agents_existing_unreachable(clear_registry, mock_agent_card):
-    # Pre-register the agent
+async def test_health_check_unreachable_marks_broken(clear_registry, mock_agent_card):
     await agent_registry.register("existing-id", mock_agent_card)
 
-    with (
-        patch("config.OrchestratorConfig.REMOTE_EXECUTION_AGENT_HOSTS", "http://localhost"),
-        patch("config.OrchestratorConfig.AGENT_DISCOVERY_PORTS", "8001-8001"),
-        patch("orchestrator.main._fetch_agent_card", return_value=mock_agent_card),
-        patch("orchestrator.main._check_agent_reachability", return_value=False) as mock_check,
-    ):
-        await _discover_agents()
+    with patch("orchestrator.main._check_agent_reachability", return_value=False) as mock_check:
+        await _health_check_agents()
 
         mock_check.assert_called_once_with("http://localhost:8001")
 
-        # Verify agent REMOVED
-        assert not await agent_registry.contains("existing-id")
+        # Agent is marked BROKEN (OFFLINE), NOT removed.
+        assert await agent_registry.contains("existing-id")
+        assert await agent_registry.get_status("existing-id") == AgentStatus.BROKEN
+        broken_reason, _ = await agent_registry.get_broken_context("existing-id")
+        assert broken_reason == BrokenReason.OFFLINE
+
+    # Agent was queued for the recovery worker.
+    queued_agent_id, _ = cancellation_queue.get_nowait()
+    assert queued_agent_id == "existing-id"
 
 
 @pytest.mark.asyncio
-async def test_discover_agents_existing_recovery(clear_registry, mock_agent_card):
-    # Pre-register the agent as BROKEN/OFFLINE
+async def test_health_check_reachable_leaves_available(clear_registry, mock_agent_card):
     await agent_registry.register("existing-id", mock_agent_card)
-    await agent_registry.update_status("existing-id", AgentStatus.BROKEN, BrokenReason.OFFLINE)
 
-    with (
-        patch("config.OrchestratorConfig.REMOTE_EXECUTION_AGENT_HOSTS", "http://localhost"),
-        patch("config.OrchestratorConfig.AGENT_DISCOVERY_PORTS", "8001-8001"),
-        patch("orchestrator.main._fetch_agent_card", return_value=mock_agent_card),
-        patch("orchestrator.main._check_agent_reachability", return_value=True),
-    ):
-        await _discover_agents()
+    with patch("orchestrator.main._check_agent_reachability", return_value=True):
+        await _health_check_agents()
 
-        # Verify agent RECOVERED
         assert await agent_registry.get_status("existing-id") == AgentStatus.AVAILABLE
+
+    assert cancellation_queue.empty()
+
+
+@pytest.mark.asyncio
+async def test_health_check_skips_non_available(clear_registry, mock_agent_card):
+    await agent_registry.register("existing-id", mock_agent_card)
+    await agent_registry.update_status("existing-id", AgentStatus.BUSY)
+
+    with patch("orchestrator.main._check_agent_reachability", return_value=False) as mock_check:
+        await _health_check_agents()
+
+        # BUSY agents are not probed by the health check.
+        mock_check.assert_not_called()
+        assert await agent_registry.get_status("existing-id") == AgentStatus.BUSY
 
 
 @pytest.mark.asyncio

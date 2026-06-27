@@ -1,0 +1,127 @@
+# SPDX-FileCopyrightText: 2025-2026 Taras Paruta (partarstu@gmail.com)
+#
+# SPDX-License-Identifier: AGPL-3.0-only
+
+# Hermetic smoke topology: real orchestrator + 4 agents (all our own code, real
+# Gemini), with only the external boundaries mocked (Jira MCP, Jira REST, Zephyr).
+#
+# Prerequisite: the shared base image must be built first, since every service
+# here derives from it:
+#   docker build -t agentic-qa-base:latest -f Dockerfile.base .
+#
+# Then:  docker compose -f docker-compose.smoke.yml up --build
+#
+# GOOGLE_API_KEY must be exported in the environment (real Gemini calls).
+
+# Shared environment for the four execution agents. Each agent serves on :8001
+# inside its own service, and advertises its card URL as http://<service>:8001 so
+# the orchestrator can discover and dispatch to it.
+x-agent-env: &agent-env
+  PORT: "8001"
+  EXTERNAL_PORT: "8001"
+  JIRA_MCP_SERVER_URL: "http://jira_mcp_mock:9000/sse"
+  JIRA_URL: "http://jira_rest_mock:8080"
+  JIRA_USERNAME: "smoke"
+  JIRA_API_TOKEN: "smoke-token"
+  ZEPHYR_BASE_URL: "http://zephyr_mock:8090"
+  ZEPHYR_API_TOKEN: "smoke-token"
+  TEST_MANAGEMENT_SYSTEM: "zephyr"
+  PROMPT_INJECTION_CHECK_ENABLED: "false"
+  GOOGLE_API_KEY: "${GOOGLE_API_KEY}"
+
+services:
+  jira_mcp_mock:
+    build:
+      context: .
+      dockerfile: tests/smoke/mocks/Dockerfile
+    command: ["uvicorn", "mocks.jira_mcp_mock:app", "--host", "0.0.0.0", "--port", "9000"]
+    ports:
+      - "9000:9000"
+
+  jira_rest_mock:
+    build:
+      context: .
+      dockerfile: tests/smoke/mocks/Dockerfile
+    command: ["uvicorn", "mocks.jira_rest_mock:app", "--host", "0.0.0.0", "--port", "8080"]
+    ports:
+      - "8080:8080"
+
+  zephyr_mock:
+    build:
+      context: .
+      dockerfile: tests/smoke/mocks/Dockerfile
+    command: ["uvicorn", "mocks.zephyr_mock:app", "--host", "0.0.0.0", "--port", "8090"]
+    ports:
+      - "8090:8090"
+
+  requirements_review:
+    build:
+      context: .
+      dockerfile: agents/requirements_review/Dockerfile
+    environment:
+      <<: *agent-env
+      AGENT_BASE_URL: "http://requirements_review"
+    depends_on:
+      - jira_mcp_mock
+      - jira_rest_mock
+      - zephyr_mock
+
+  test_case_generation:
+    build:
+      context: .
+      dockerfile: agents/test_case_generation/Dockerfile
+    environment:
+      <<: *agent-env
+      AGENT_BASE_URL: "http://test_case_generation"
+    depends_on:
+      - jira_mcp_mock
+      - jira_rest_mock
+      - zephyr_mock
+
+  test_case_classification:
+    build:
+      context: .
+      dockerfile: agents/test_case_classification/Dockerfile
+    environment:
+      <<: *agent-env
+      AGENT_BASE_URL: "http://test_case_classification"
+    depends_on:
+      - jira_mcp_mock
+      - jira_rest_mock
+      - zephyr_mock
+
+  test_case_review:
+    build:
+      context: .
+      dockerfile: agents/test_case_review/Dockerfile
+    environment:
+      <<: *agent-env
+      AGENT_BASE_URL: "http://test_case_review"
+    depends_on:
+      - jira_mcp_mock
+      - jira_rest_mock
+      - zephyr_mock
+
+  orchestrator:
+    build:
+      context: .
+      dockerfile: orchestrator/Dockerfile
+    command: ["gunicorn", "-w", "1", "-k", "uvicorn.workers.UvicornWorker", "--bind", "0.0.0.0:8000", "orchestrator.main:orchestrator_app"]
+    environment:
+      ORCHESTRATOR_HOST: "0.0.0.0"
+      ORCHESTRATOR_PORT: "8000"
+      REMOTE_EXECUTION_AGENT_HOSTS: "http://requirements_review,http://test_case_generation,http://test_case_classification,http://test_case_review"
+      AGENT_DISCOVERY_PORTS: "8001-8001"
+      ORCHESTRATOR_API_KEY: "smoke-api-key"
+      DASHBOARD_USERNAME: "smoke"
+      DASHBOARD_PASSWORD: "smoke-pass"
+      DASHBOARD_JWT_SECRET: "smoke-jwt-secret"
+      PROMPT_INJECTION_CHECK_ENABLED: "false"
+      GOOGLE_API_KEY: "${GOOGLE_API_KEY}"
+    ports:
+      - "8000:8000"
+    depends_on:
+      - requirements_review
+      - test_case_generation
+      - test_case_classification
+      - test_case_review

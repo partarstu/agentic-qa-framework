@@ -68,6 +68,7 @@ jobs:
       - name: Run tests with coverage
         run: |
           uv run pytest tests/ \
+            -m "not smoke" \
             --cov=. \
             --cov-report=xml \
             --cov-report=term-missing \
@@ -158,3 +159,41 @@ jobs:
           -u url-mapping.json
           --strict
           -f pretty
+
+  smoke:
+    name: Smoke (hermetic, real LLM)
+    runs-on: ubuntu-latest
+    # Real, billed Gemini calls: only on pushes to main and manual runs, never on PRs.
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    timeout-minutes: 45
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.11.21"
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Build base image
+        run: docker build -t agentic-qa-base:latest -f Dockerfile.base .
+
+      - name: Start the smoke topology
+        env:
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+        run: docker compose -f docker-compose.smoke.yml up -d --build
+
+      - name: Run smoke tests
+        run: uv run pytest tests/smoke -m smoke -v
+
+      - name: Dump compose logs
+        if: always()
+        run: docker compose -f docker-compose.smoke.yml logs --no-color
+
+      - name: Tear down
+        if: always()
+        run: docker compose -f docker-compose.smoke.yml down -v

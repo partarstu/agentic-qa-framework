@@ -487,6 +487,30 @@ gcloud builds submit --config 'path/to/your/cloudbuild.yaml' --substitutions "`^
 will be assigned to each agent and orchestrator. That's why most probably you'll have to run the deployment command
 once, then identify the assigned URL of each service, update the substitution values in the command and run it again.
 
+### Hermetic smoke tests
+
+The smoke suite is a self-contained integration test, independent of any Cloud Run deployment. It runs the real
+orchestrator and the four agents (requirements review, test-case generation, classification and review) under
+`docker-compose.smoke.yml`, driven by a real Gemini model, with only the external boundaries replaced by recording
+mocks under `tests/smoke/mocks/` (Jira MCP, Jira REST and Zephyr). It drives the system through the orchestrator's
+public webhooks and asserts on what reaches each mocked boundary:
+
+* **Requirements review** (`POST /new-requirements-available`) → a non-empty review comment reaches Jira (REST or MCP).
+* **Test-case generation** (`POST /story-ready-for-test-case-generation`) → real test cases (name + steps) reach Zephyr.
+* **Test-case classification** (same webhook) → labels reach Zephyr.
+* **Test-case review** (same webhook) → a non-empty "Review Comments" value reaches Zephyr.
+
+It runs in GitHub Actions (the `smoke` job in `.github/workflows/ci.yml`) on pushes to `main` and on manual
+`workflow_dispatch` only — never on pull requests — because every run makes real, billed Gemini calls. The job needs a
+`GOOGLE_API_KEY` repository secret. To run it locally:
+
+```bash
+docker build -t agentic-qa-base:latest -f Dockerfile.base .
+GOOGLE_API_KEY=<your-key> docker compose -f docker-compose.smoke.yml up -d --build
+uv run pytest tests/smoke -m smoke -v
+docker compose -f docker-compose.smoke.yml down -v
+```
+
 ## Invoking Orchestrator Workflows
 
 ### Triggering Workflows via Jira Webhooks
@@ -673,6 +697,11 @@ uv run pytest tests/agents/
 uv run pytest tests/orchestrator/
 uv run pytest tests/common/
 ```
+
+The suite under `tests/smoke/` is marked `smoke` and targets a **deployed** environment rather than local code. Those
+checks skip themselves unless their `SMOKE_*` URLs/credentials are set, so they are harmless to collect locally; exclude
+them explicitly with `uv run pytest -m "not smoke"`, or run only them with `uv run pytest -m smoke`. They normally run
+automatically after a Cloud Run deployment (see *Post-deployment smoke tests* above).
 
 ## Contributing
 
