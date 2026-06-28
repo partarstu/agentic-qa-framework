@@ -48,7 +48,14 @@ _SEEDED_STORY = {
     },
 }
 
-_recorded: dict[str, list] = {"get_issue": [], "download_attachments": [], "comments": []}
+_recorded: dict[str, list] = {
+    "get_issue": [],
+    "download_attachments": [],
+    "comments": [],
+    "created_issues": [],
+    "updated_issues": [],
+}
+_issue_counter = 0
 
 # Agents reach this mock by its compose service-name host (e.g. "jira_mcp_mock:9000"),
 # which the MCP SDK's DNS-rebinding protection rejects with 421 by default (it only
@@ -88,6 +95,67 @@ async def jira_add_comment(issue_key: str, comment: str) -> str:
     """
     _recorded["comments"].append({"issue_key": issue_key, "comment": comment})
     return f"Successfully added comment to issue {issue_key}."
+
+
+@mcp.tool()
+async def jira_create_issue(
+    project_key: str,
+    summary: str,
+    issue_type: str,
+    description: str = "",
+    assignee: str = "",
+    components: str = "",
+    additional_fields: str = "",
+) -> str:
+    """Create a new Jira issue (e.g. a Bug) and return it as JSON.
+
+    Use this to file a new bug report. Provide the project key, a concise summary
+    (the bug title), the issue type (e.g. 'Bug') and a full description. Pass the
+    priority and any other fields as a JSON object string in additional_fields.
+    Returns the created issue's key and numeric id.
+    """
+    global _issue_counter
+    _issue_counter += 1
+    key = f"{project_key}-{1000 + _issue_counter}"
+    issue_id = str(20000 + _issue_counter)
+    _recorded["created_issues"].append(
+        {
+            "key": key,
+            "id": issue_id,
+            "project_key": project_key,
+            "summary": summary,
+            "issue_type": issue_type,
+            "description": description,
+            "additional_fields": additional_fields,
+        }
+    )
+    return json.dumps({"key": key, "id": issue_id, "summary": summary, "issueType": issue_type})
+
+
+@mcp.tool()
+async def jira_update_issue(
+    issue_key: str,
+    fields: str = "",
+    additional_fields: str = "",
+    components: str = "",
+    attachments: str = "",
+) -> str:
+    """Update an existing Jira issue and/or attach files to it.
+
+    To add attachments, pass the issue key and the attachment file paths in
+    ``attachments`` (a comma-separated list or a JSON array of paths). ``fields``
+    and ``additional_fields`` accept JSON objects of fields to update.
+    """
+    _recorded["updated_issues"].append(
+        {
+            "issue_key": issue_key,
+            "fields": fields,
+            "additional_fields": additional_fields,
+            "components": components,
+            "attachments": attachments,
+        }
+    )
+    return json.dumps({"key": issue_key, "success": True})
 
 
 async def _recorded_endpoint(_request: Request) -> JSONResponse:

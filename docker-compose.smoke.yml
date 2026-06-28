@@ -2,8 +2,10 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
-# Hermetic smoke topology: real orchestrator + 4 agents (all our own code, real
-# Gemini), with only the external boundaries mocked (Jira MCP, Jira REST, Zephyr).
+# Hermetic smoke topology: real orchestrator + the QA agents (all our own code,
+# real Gemini), with only the external boundaries mocked (Jira MCP, Jira REST,
+# Zephyr, Qdrant). A mock test-execution agent stands in for the VM-hosted real
+# executors so the /execute-tests + incident-creation flow can run end to end.
 #
 # Prerequisite: the shared base image must be built first, since every service
 # here derives from it:
@@ -54,6 +56,12 @@ services:
     ports:
       - "8090:8090"
 
+  qdrant_mock:
+    build:
+      context: .
+      dockerfile: tests/smoke/mocks/Dockerfile
+    command: ["uvicorn", "mocks.qdrant_mock:app", "--host", "0.0.0.0", "--port", "6333"]
+
   requirements_review:
     build:
       context: .
@@ -102,6 +110,35 @@ services:
       - jira_rest_mock
       - zephyr_mock
 
+  incident_creation:
+    build:
+      context: .
+      dockerfile: agents/incident_creation/Dockerfile
+    environment:
+      <<: *agent-env
+      AGENT_BASE_URL: "http://incident_creation"
+      QDRANT_URL: "http://qdrant_mock"
+      QDRANT_PORT: "6333"
+    depends_on:
+      - jira_mcp_mock
+      - jira_rest_mock
+      - zephyr_mock
+      - qdrant_mock
+
+  # Mock test-execution agent (real ones run on VMs, out of this repo). Returns a
+  # canned failed result so /execute-tests drives the incident-creation flow.
+  execution_agent:
+    build:
+      context: .
+      dockerfile: tests/smoke/mocks/Dockerfile.execution_agent
+    environment:
+      <<: *agent-env
+      AGENT_BASE_URL: "http://execution_agent"
+    depends_on:
+      - jira_mcp_mock
+      - jira_rest_mock
+      - zephyr_mock
+
   orchestrator:
     build:
       context: .
@@ -110,7 +147,7 @@ services:
     environment:
       ORCHESTRATOR_HOST: "0.0.0.0"
       ORCHESTRATOR_PORT: "8000"
-      REMOTE_EXECUTION_AGENT_HOSTS: "http://requirements_review,http://test_case_generation,http://test_case_classification,http://test_case_review"
+      REMOTE_EXECUTION_AGENT_HOSTS: "http://requirements_review,http://test_case_generation,http://test_case_classification,http://test_case_review,http://incident_creation,http://execution_agent"
       AGENT_DISCOVERY_PORTS: "8001-8001"
       ORCHESTRATOR_API_KEY: "smoke-api-key"
       DASHBOARD_USERNAME: "smoke"
@@ -125,3 +162,5 @@ services:
       - test_case_generation
       - test_case_classification
       - test_case_review
+      - incident_creation
+      - execution_agent

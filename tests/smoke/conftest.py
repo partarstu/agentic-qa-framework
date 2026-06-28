@@ -36,6 +36,10 @@ DASHBOARD_PASSWORD = "smoke-pass"
 
 # The story seeded by the Jira MCP mock (jira_mcp_mock.SEEDED_ISSUE_KEY).
 SEEDED_ISSUE_KEY = "SMOKE-1"
+# The project the executable test case is seeded under (zephyr_mock + jira_mcp_mock).
+SEEDED_PROJECT_KEY = "SMOKE"
+# Name the mock executor registers under; must match mocks/execution_agent.EXECUTION_AGENT_NAME.
+EXECUTION_AGENT_NAME = "Smoke API Test Executor"
 
 # Canonical agent names the four agents register under; tracks config as the source of truth.
 EXPECTED_AGENT_NAMES: set[str] = {
@@ -48,6 +52,9 @@ HEALTHY_AGENT_STATUSES = {"AVAILABLE", "BUSY"}
 
 # The status the review flow moves a reviewed test case to; tracks config as the source of truth.
 REVIEW_COMPLETE_STATUS = config.TestCaseReviewAgentConfig.REVIEW_COMPLETE_STATUS_NAME
+
+# Agents the /execute-tests + incident-creation flow needs (beyond the core four).
+EXECUTION_FLOW_AGENT_NAMES: set[str] = {EXECUTION_AGENT_NAME, config.IncidentCreationAgentConfig.OWN_NAME}
 
 # The orchestrator startup + initial agent discovery can take a while to settle.
 ORCHESTRATOR_READY_TIMEOUT = 120.0
@@ -88,9 +95,10 @@ def webhook_headers() -> dict[str, str]:
     return {"X-API-Key": ORCHESTRATOR_API_KEY}
 
 
-@pytest.fixture(scope="session")
-def agents_ready(http_client: httpx.Client, auth_headers: dict[str, str]) -> None:
-    """Wait until all four expected agents are registered and healthy.
+def _wait_for_agents_healthy(
+    http_client: httpx.Client, auth_headers: dict[str, str], expected_names: set[str]
+) -> None:
+    """Wait until every expected agent is registered and healthy.
 
     Triggers a fresh discovery each cycle so the wait does not depend on the
     orchestrator's periodic discovery interval.
@@ -102,16 +110,24 @@ def agents_ready(http_client: httpx.Client, auth_headers: dict[str, str]) -> Non
         response = http_client.get(f"{ORCHESTRATOR_URL}/api/dashboard/agents", headers=auth_headers)
         if response.status_code == 200:
             registered = {agent["name"]: agent["status"] for agent in response.json()}
-            healthy = {
-                name
-                for name in EXPECTED_AGENT_NAMES
-                if registered.get(name) in HEALTHY_AGENT_STATUSES
-            }
-            if healthy == EXPECTED_AGENT_NAMES:
+            healthy = {name for name in expected_names if registered.get(name) in HEALTHY_AGENT_STATUSES}
+            if healthy == expected_names:
                 return
         time.sleep(POLL_INTERVAL)
-    missing = EXPECTED_AGENT_NAMES - {n for n, s in registered.items() if s in HEALTHY_AGENT_STATUSES}
+    missing = expected_names - {n for n, s in registered.items() if s in HEALTHY_AGENT_STATUSES}
     pytest.fail(f"Agents not registered/healthy within {AGENT_READY_TIMEOUT}s. Missing: {missing}. Seen: {registered}")
+
+
+@pytest.fixture(scope="session")
+def agents_ready(http_client: httpx.Client, auth_headers: dict[str, str]) -> None:
+    """Wait until all four core agents are registered and healthy."""
+    _wait_for_agents_healthy(http_client, auth_headers, EXPECTED_AGENT_NAMES)
+
+
+@pytest.fixture(scope="session")
+def execution_stack_ready(http_client: httpx.Client, auth_headers: dict[str, str]) -> None:
+    """Wait until the mock executor and the incident-creation agent are registered and healthy."""
+    _wait_for_agents_healthy(http_client, auth_headers, EXECUTION_FLOW_AGENT_NAMES)
 
 
 def _post_webhook(path: str, headers: dict[str, str]) -> httpx.Response:
@@ -129,3 +145,12 @@ def requirements_review_response(agents_ready: None, webhook_headers: dict[str, 
 def test_case_flow_response(agents_ready: None, webhook_headers: dict[str, str]) -> httpx.Response:
     """Fire the test-case generation/classification/review webhook once and share the response."""
     return _post_webhook("/story-ready-for-test-case-generation", webhook_headers)
+
+
+@pytest.fixture(scope="session")
+def execute_tests_response(execution_stack_ready: None, webhook_headers: dict[str, str]) -> httpx.Response:
+    """Fire the /execute-tests webhook once for the seeded project and share the response."""
+    with httpx.Client(timeout=WEBHOOK_TIMEOUT, follow_redirects=True) as client:
+        return client.post(
+            f"{ORCHESTRATOR_URL}/execute-tests", headers=webhook_headers, json={"project_key": SEEDED_PROJECT_KEY}
+        )

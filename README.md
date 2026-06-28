@@ -516,16 +516,22 @@ once, then identify the assigned URL of each service, update the substitution va
 ### Hermetic smoke tests
 
 The smoke suite is a self-contained integration test, independent of any Cloud Run deployment. It runs the real
-orchestrator and the four agents (requirements review, test-case generation, classification and review) under
-`docker-compose.smoke.yml`, driven by a real Gemini model, with only the external boundaries replaced by recording
-mocks under `tests/smoke/mocks/` (Jira MCP, Jira REST and Zephyr). It drives the system through the orchestrator's
-public webhooks and asserts on what reaches each mocked boundary:
+orchestrator and the QA agents (requirements review, test-case generation, classification, review and incident creation)
+under `docker-compose.smoke.yml`, driven by a real Gemini model, with only the external boundaries replaced by mocks
+under `tests/smoke/mocks/` (Jira MCP, Jira REST, Zephyr and Qdrant). A mock test-execution agent stands in for the
+VM-hosted real executors. It drives the system through the orchestrator's public webhooks and asserts on what reaches
+each mocked boundary:
 
-* **Requirements review** (`POST /new-requirements-available`) → a non-empty review comment reaches Jira (REST or MCP).
+* **Requirements review** (`POST /new-requirements-available`) → a non-empty review comment reaches Jira (REST or MCP),
+  and the agent first fetched the source story via the Jira MCP.
 * **Test-case generation** (`POST /story-ready-for-test-case-generation`) → real test cases (name + steps) reach Zephyr,
   linked back to the originating story.
 * **Test-case classification** (same webhook) → labels reach Zephyr.
 * **Test-case review** (same webhook) → a non-empty "Review Comments" value and the "Review Complete" status reach Zephyr.
+* **Test execution / incident creation** (`POST /execute-tests`) → a failed automated test drives a real bug issue into
+  Jira.
+* **Negative paths** → both webhooks reject an invalid API key (401) and a missing `issue_key` (400) without dispatching
+  to an agent.
 
 It runs in GitHub Actions (the `smoke` job in `.github/workflows/ci.yml`) on pushes to `main` and on manual
 `workflow_dispatch` only — never on pull requests — because every run makes real, billed Gemini calls. The job needs a
@@ -744,10 +750,11 @@ uv run pytest tests/orchestrator/
 uv run pytest tests/common/
 ```
 
-The suite under `tests/smoke/` is marked `smoke` and targets a **deployed** environment rather than local code. Those
-checks skip themselves unless their `SMOKE_*` URLs/credentials are set, so they are harmless to collect locally; exclude
-them explicitly with `uv run pytest -m "not smoke"`, or run only them with `uv run pytest -m smoke`. They normally run
-automatically after a Cloud Run deployment (see *Post-deployment smoke tests* above).
+The suite under `tests/smoke/` is marked `smoke` and drives the hermetic docker-compose topology described in
+[Hermetic smoke tests](#hermetic-smoke-tests) above, not local code in isolation. Because it needs that stack running, it
+is excluded from a bare `uv run pytest` by default (via `addopts` in `pytest.ini`), so local runs stay harmless. Once the
+stack is up, run it explicitly with `uv run pytest -m smoke`. It runs in CI on pushes to `main` and on manual
+`workflow_dispatch` only (see *Hermetic smoke tests* above).
 
 ## Contributing
 

@@ -2,18 +2,21 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
-"""Hermetic end-to-end smoke checks for the two core QuAIA flows.
+"""Hermetic end-to-end smoke checks for the core QuAIA flows.
 
-All of our own code runs for real (orchestrator + 4 agents + real Gemini); only
+All of our own code runs for real (orchestrator + agents + real Gemini); only
 the external boundaries are mocked. Each test asserts on what reached a mocked
 boundary, read back from its ``/__recorded`` endpoint:
 
 * Requirements review   -> a non-empty comment reached Jira (REST or MCP).
+* Requirements review   -> the agent first fetched the source story via the Jira MCP.
 * Test-case generation  -> real test cases (name + steps) reached Zephyr.
 * Test-case generation  -> the created test cases were linked to the originating story.
 * Test-case classification -> labels reached Zephyr.
 * Test-case review      -> a non-empty "Review Comments" value reached Zephyr.
 * Test-case review      -> at least one test case reached the "Review Complete" status.
+* Test execution        -> a failed automated test drove a real bug issue into Jira.
+* Negative paths        -> the webhooks reject a bad API key (401) and a missing issue_key (400).
 """
 
 import time
@@ -25,7 +28,9 @@ import pytest
 from tests.smoke.conftest import (
     JIRA_MCP_RECORDED_URL,
     JIRA_REST_RECORDED_URL,
+    ORCHESTRATOR_URL,
     REVIEW_COMPLETE_STATUS,
+    SEEDED_ISSUE_KEY,
     ZEPHYR_RECORDED_URL,
 )
 
@@ -107,6 +112,18 @@ def test_review_comment_reached_jira(
     )
 
 
+def test_agent_read_source_story_from_jira(
+    requirements_review_response: httpx.Response, http_client: httpx.Client
+) -> None:
+    """The review must be grounded in the real story: the agent must fetch it via the Jira MCP first."""
+    data = _wait_for_recorded(
+        http_client, JIRA_MCP_RECORDED_URL, lambda d: SEEDED_ISSUE_KEY in d.get("get_issue", [])
+    )
+    assert SEEDED_ISSUE_KEY in data.get("get_issue", []), (
+        f"Agent never fetched the source story {SEEDED_ISSUE_KEY} via Jira MCP. Recorded: {data}"
+    )
+
+
 # --- Test-case generation / classification / review flow -------------------------------
 
 
@@ -181,3 +198,50 @@ def test_review_set_status_to_review_complete(
     )
     completed = [tc for tc in data.get("test_cases", []) if tc.get("status", {}).get("name") == REVIEW_COMPLETE_STATUS]
     assert completed, f"No test case was moved to '{REVIEW_COMPLETE_STATUS}'. Recorded: {data}"
+
+
+# --- Test execution / incident-creation flow -------------------------------------------
+
+
+def test_failed_execution_creates_bug_in_jira(
+    execute_tests_response: httpx.Response, http_client: httpx.Client
+) -> None:
+    """A failed automated test must drive incident creation: a real bug reaches Jira."""
+    data = _wait_for_recorded(
+        http_client,
+        JIRA_MCP_RECORDED_URL,
+        lambda d: any(
+            i.get("summary", "").strip() and i.get("description", "").strip() for i in d.get("created_issues", [])
+        ),
+    )
+    bugs = [
+        i
+        for i in data.get("created_issues", [])
+        if i.get("summary", "").strip() and i.get("description", "").strip()
+    ]
+    assert bugs, f"No bug issue reached Jira from the incident-creation flow. Recorded: {data}"
+
+
+# --- Negative paths (auth + validation; reach the orchestrator only, no LLM) ------------
+
+WEBHOOK_PATHS = ["/new-requirements-available", "/story-ready-for-test-case-generation"]
+
+
+@pytest.mark.parametrize("path", WEBHOOK_PATHS)
+def test_webhook_rejects_invalid_api_key(http_client: httpx.Client, path: str) -> None:
+    """A wrong orchestrator API key must be rejected with 401 before any work starts."""
+    response = http_client.post(
+        f"{ORCHESTRATOR_URL}{path}", headers={"X-API-Key": "wrong-key"}, json={"issue_key": SEEDED_ISSUE_KEY}
+    )
+    assert response.status_code == 401, f"{path} accepted an invalid API key: {response.status_code} {response.text}"
+
+
+@pytest.mark.parametrize("path", WEBHOOK_PATHS)
+def test_webhook_rejects_missing_issue_key(
+    http_client: httpx.Client, webhook_headers: dict[str, str], path: str
+) -> None:
+    """A valid key but no issue_key must fail validation with 400, without dispatching to an agent."""
+    response = http_client.post(f"{ORCHESTRATOR_URL}{path}", headers=webhook_headers, json={})
+    assert response.status_code == 400, (
+        f"{path} did not reject a missing issue_key with 400: {response.status_code} {response.text}"
+    )

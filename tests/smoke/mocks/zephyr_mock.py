@@ -4,10 +4,14 @@
 
 """Stateful recording mock for the Zephyr Scale Cloud REST surface.
 
-Serves only the endpoints the generation, classification and review flows exercise
+Serves the endpoints the generation, classification and review flows exercise
 (``ZephyrClient``): create test case + steps + issue link, status listing, and the
 read-modify-write ``GET``/``PUT`` cycle used to add labels, review comments and a
-status. The in-memory store is exposed at ``GET /__recorded`` for the assertions.
+status. It also serves the read endpoints (test-case listing, steps, links) and the
+test-cycle/test-execution writes the ``/execute-tests`` + incident-creation flow
+needs, around a pre-seeded ready-for-execution test case. The generation store is
+exposed at ``GET /__recorded`` for the assertions (the seeded executable case is
+deliberately excluded from it).
 """
 
 from fastapi import FastAPI, Request
@@ -18,6 +22,37 @@ app = FastAPI()
 _test_cases: dict[str, dict] = {}
 _issue_links: list[dict] = []
 _counter = 0
+_test_execution_counter = 0
+
+# A pre-seeded, ready-for-execution test case for the /execute-tests flow. Kept in
+# its own store (and out of /__recorded) so it cannot satisfy the generation-flow
+# assertions; it is "Approved" and carries the "automated" label the orchestrator
+# selects on.
+_EXECUTABLE_TC_KEY = "SMOKE-T100"
+_executable_test_cases: dict[str, dict] = {
+    _EXECUTABLE_TC_KEY: {
+        "key": _EXECUTABLE_TC_KEY,
+        "id": 1100,
+        "name": "Password reset email is sent for a registered address",
+        "objective": "Verify the API queues a reset email when given a registered address.",
+        "precondition": "A user account exists for the test email address.",
+        "labels": ["automated", "api"],
+        "status": {"id": 2, "name": "Approved"},
+        "customFields": {"Review Comments": ""},
+        "steps": [
+            {
+                "description": "Send POST /api/password-reset with a registered email address",
+                "expectedResult": "HTTP 200 and a password-reset email is queued",
+                "testData": "email=registered@example.com",
+            }
+        ],
+    }
+}
+
+
+def _all_test_cases() -> dict[str, dict]:
+    """Generation-created cases plus the pre-seeded executable case."""
+    return {**_executable_test_cases, **_test_cases}
 
 _STATUSES = [
     {"id": 1, "name": "Draft", "archived": False},
@@ -74,9 +109,48 @@ async def link_issue(key: str, request: Request) -> dict:
     return {}
 
 
+@app.get("/testcases")
+async def list_test_cases() -> dict:
+    """List all test cases; the client filters by status and label for execution."""
+    values = list(_all_test_cases().values())
+    return {"values": values, "maxResults": 100, "startAt": 0, "total": len(values), "isLast": True}
+
+
 @app.get("/testcases/{key}")
 async def get_test_case(key: str) -> dict:
-    return _test_cases.get(key, {})
+    return _all_test_cases().get(key, {})
+
+
+@app.get("/testcases/{key}/teststeps")
+async def get_test_steps(key: str) -> dict:
+    steps = _all_test_cases().get(key, {}).get("steps", [])
+    values = [{"inline": step} for step in steps]
+    return {"values": values, "maxResults": 100, "startAt": 0, "total": len(values), "isLast": True}
+
+
+@app.get("/testcases/{key}/links")
+async def get_test_case_links(key: str) -> dict:
+    """No issues are linked to the executable test case, so it yields no duplicate candidates."""
+    return {"issues": [], "webLinks": []}
+
+
+@app.post("/testcycles")
+async def create_test_cycle(request: Request) -> dict:
+    payload = await request.json()
+    project_key = payload.get("projectKey", "SMOKE")
+    return {"key": f"{project_key}-C1", "id": 5000}
+
+
+@app.post("/testexecutions")
+async def create_test_execution(request: Request) -> dict:
+    global _test_execution_counter
+    _test_execution_counter += 1
+    return {"id": 6000 + _test_execution_counter}
+
+
+@app.post("/testexecutions/{execution_id}/links/issues")
+async def link_issue_to_test_execution(execution_id: int, request: Request) -> dict:
+    return {}
 
 
 @app.put("/testcases/{key}")
