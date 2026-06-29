@@ -155,9 +155,14 @@ services:
       DASHBOARD_JWT_SECRET: "smoke-jwt-secret"
       PROMPT_INJECTION_CHECK_ENABLED: "false"
       GOOGLE_API_KEY: "${GOOGLE_API_KEY}"
+      # The /execute-tests flow makes the orchestrator a test-management client.
+      TEST_MANAGEMENT_SYSTEM: "zephyr"
+      ZEPHYR_BASE_URL: "http://zephyr_mock:8090"
+      ZEPHYR_API_TOKEN: "smoke-token"
     ports:
       - "8000:8000"
     depends_on:
+      - zephyr_mock
       - requirements_review
       - test_case_generation
       - test_case_classification
