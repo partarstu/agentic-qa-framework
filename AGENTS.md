@@ -117,6 +117,37 @@ CALM model as a first-class part of the codebase, on par with the source and the
   A clean run prints `No issues found.` and exits `0`. See `calm/README.md` for the full layout and the list of enforced
   controls.
 
+### Hermetic smoke suite
+
+The hermetic smoke suite under `tests/smoke/` is the end-to-end safety net for the whole system: it runs the real
+orchestrator and agents under `docker-compose.smoke.yml` (driven by a real Gemini model) with only the external
+boundaries mocked, and asserts on what reaches each boundary. It is enforced by the `smoke` CI job in
+`.github/workflows/ci.yml`. Treat the smoke suite as a first-class part of the codebase, on par with the source, the
+unit tests and the CALM model.
+
+* Whenever a change adds a new capability or extends an existing one — a new agent, a new orchestrator
+  workflow/endpoint, a new external integration, a new step in an existing flow, or a change to what an existing flow
+  produces — you **must** update the smoke suite in the same change so the new or changed behaviour is exercised and
+  asserted end-to-end:
+    - **New flow** → add a test in `tests/smoke/test_smoke.py` (plus any fixtures in `tests/smoke/conftest.py` and
+      recording mocks under `tests/smoke/mocks/` it needs) that drives it through the orchestrator's public interface and
+      asserts on what reached the mocked boundary.
+    - **Extended flow** → strengthen the existing assertions so they cover the new behaviour, instead of leaving it
+      untested.
+    - **New external boundary** → add or extend a recording mock under `tests/smoke/mocks/` and wire it into
+      `docker-compose.smoke.yml`.
+* A change that genuinely adds no observable end-to-end behaviour (e.g. an internal refactor) needs no smoke change —
+  but say so explicitly rather than skipping it silently.
+* The suite is excluded from a bare `uv run pytest` (see `addopts` in `pytest.ini`). Run it explicitly with the stack
+  up:
+  ```bash
+  docker build -t agentic-qa-base:latest -f Dockerfile.base .
+  GOOGLE_API_KEY=<your-key> docker compose -f docker-compose.smoke.yml up -d --build
+  uv run pytest tests/smoke -m smoke -v
+  docker compose -f docker-compose.smoke.yml down -v
+  ```
+  See the *Hermetic smoke tests* section of `README.md` for the full layout.
+
 ## General style requirements
 
 * Use **snake_case** for configuration keys in files like `.toml`, `.ini`, or `.yaml` (e.g., `api_key` instead of
