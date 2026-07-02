@@ -142,7 +142,7 @@ unit tests and the CALM model.
   up:
   ```bash
   docker build -t agentic-qa-base:latest -f Dockerfile.base .
-  GOOGLE_API_KEY=<your-key> docker compose -f docker-compose.smoke.yml up -d --build
+  GOOGLE_API_KEY=<your-key> docker compose -f docker-compose.smoke.yml up -d --build --wait
   uv run pytest tests/smoke -m smoke -v
   docker compose -f docker-compose.smoke.yml down -v
   ```

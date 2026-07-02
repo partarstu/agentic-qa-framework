@@ -9,8 +9,9 @@ Serves the endpoints the generation, classification and review flows exercise
 read-modify-write ``GET``/``PUT`` cycle used to add labels, review comments and a
 status. It also serves the read endpoints (test-case listing, steps, links) and the
 test-cycle/test-execution writes the ``/execute-tests`` + incident-creation flow
-needs, around a pre-seeded ready-for-execution test case. The generation store is
-exposed at ``GET /__recorded`` for the assertions (the seeded executable case is
+needs, around a pre-seeded ready-for-execution test case. The generation store,
+the recorded test cycles, test executions and execution-issue links are exposed
+at ``GET /__recorded`` for the assertions (the seeded executable case is
 deliberately excluded from it).
 """
 
@@ -21,6 +22,9 @@ app = FastAPI()
 # Test cases keyed by their Zephyr key. Each value mirrors what ZephyrClient reads back.
 _test_cases: dict[str, dict] = {}
 _issue_links: list[dict] = []
+_test_cycles: list[dict] = []
+_test_executions: list[dict] = []
+_execution_issue_links: list[dict] = []
 _counter = 0
 _test_execution_counter = 0
 
@@ -138,25 +142,46 @@ async def get_test_case_links(key: str) -> dict:
 async def create_test_cycle(request: Request) -> dict:
     payload = await request.json()
     project_key = payload.get("projectKey", "SMOKE")
-    return {"key": f"{project_key}-C1", "id": 5000}
+    key = f"{project_key}-C{len(_test_cycles) + 1}"
+    _test_cycles.append({"key": key, "projectKey": project_key, "name": payload.get("name", "")})
+    return {"key": key, "id": 5000 + len(_test_cycles)}
 
 
 @app.post("/testexecutions")
 async def create_test_execution(request: Request) -> dict:
     global _test_execution_counter
     _test_execution_counter += 1
-    return {"id": 6000 + _test_execution_counter}
+    execution_id = 6000 + _test_execution_counter
+    payload = await request.json()
+    _test_executions.append(
+        {
+            "id": execution_id,
+            "projectKey": payload.get("projectKey"),
+            "testCaseKey": payload.get("testCaseKey"),
+            "testCycleKey": payload.get("testCycleKey"),
+            "statusName": payload.get("statusName"),
+            "comment": payload.get("comment", ""),
+            "testScriptResults": payload.get("testScriptResults", []),
+        }
+    )
+    return {"id": execution_id}
 
 
 @app.post("/testexecutions/{execution_id}/links/issues")
 async def link_issue_to_test_execution(execution_id: int, request: Request) -> dict:
+    payload = await request.json()
+    _execution_issue_links.append({"execution_id": execution_id, "issue_id": payload.get("issueId")})
     return {}
 
 
 @app.put("/testcases/{key}")
 async def update_test_case(key: str, request: Request) -> dict:
+    """Read-modify-write updates on the seeded executable case must stay in its own
+    store, so they cannot leak into /__recorded and satisfy the generation-flow
+    assertions."""
     payload = await request.json()
-    _test_cases[key] = payload
+    store = _executable_test_cases if key in _executable_test_cases else _test_cases
+    store[key] = payload
     return {}
 
 
@@ -180,4 +205,7 @@ async def recorded() -> dict:
             for tc in _test_cases.values()
         ],
         "issue_links": _issue_links,
+        "test_cycles": _test_cycles,
+        "test_executions": _test_executions,
+        "execution_issue_links": _execution_issue_links,
     }

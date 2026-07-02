@@ -528,10 +528,17 @@ each mocked boundary:
   linked back to the originating story.
 * **Test-case classification** (same webhook) → labels reach Zephyr.
 * **Test-case review** (same webhook) → a non-empty "Review Comments" value and the "Review Complete" status reach Zephyr.
-* **Test execution / incident creation** (`POST /execute-tests`) → a failed automated test drives a real bug issue into
-  Jira.
-* **Negative paths** → both webhooks reject an invalid API key (401) and a missing `issue_key` (400) without dispatching
+* **Test execution / incident creation** (`POST /execute-tests`) → a failed automated test drives a real Bug issue into
+  the seeded Jira project, the failed execution is reported to Zephyr inside a fresh test cycle, the bug is linked to
+  that execution, and the duplicate search consulted the vector DB.
+* **RAG DB update** (`POST /update-rag-db`) → the sync pushes the seeded Jira story into the mocked vector DB
+  (collection creation + point upsert).
+* **Negative paths** → all four webhooks reject an invalid API key (401), a missing `issue_key` fails with 400, a
+  missing `project_key` fails with 422, and the dashboard API rejects a missing token (401) — all without dispatching
   to an agent.
+
+The four webhooks are fired once, concurrently (the flows are mutually independent), so the suite's wall time is the
+longest flow rather than the sum of all flows.
 
 It runs in GitHub Actions (the `smoke` job in `.github/workflows/ci.yml`) on pushes to `main` and on manual
 `workflow_dispatch` only — never on pull requests — because every run makes real, billed Gemini calls. The job needs a
@@ -539,7 +546,7 @@ It runs in GitHub Actions (the `smoke` job in `.github/workflows/ci.yml`) on pus
 
 ```bash
 docker build -t agentic-qa-base:latest -f Dockerfile.base .
-GOOGLE_API_KEY=<your-key> docker compose -f docker-compose.smoke.yml up -d --build
+GOOGLE_API_KEY=<your-key> docker compose -f docker-compose.smoke.yml up -d --build --wait
 uv run pytest tests/smoke -m smoke -v
 docker compose -f docker-compose.smoke.yml down -v
 ```

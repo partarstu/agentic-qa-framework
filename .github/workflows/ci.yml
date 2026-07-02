@@ -179,13 +179,26 @@ jobs:
       - name: Install dependencies
         run: uv sync --frozen
 
-      - name: Build base image
-        run: docker build -t agentic-qa-base:latest -f Dockerfile.base .
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # The base image carries all locked dependencies, so caching it saves the
+      # bulk of the cold-build time; the compose images derive from it and only
+      # copy code on top.
+      - name: Build base image (GHA-cached)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.base
+          tags: agentic-qa-base:latest
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       - name: Start the smoke topology
         env:
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
-        run: docker compose -f docker-compose.smoke.yml up -d --build
+        run: docker compose -f docker-compose.smoke.yml up -d --build --wait
 
       - name: Run smoke tests
         run: uv run pytest tests/smoke -m smoke -v

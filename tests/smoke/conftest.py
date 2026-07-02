@@ -5,11 +5,12 @@
 """Fixtures for the hermetic smoke suite.
 
 The suite runs against the ``docker-compose.smoke.yml`` topology: a real
-orchestrator and the four agents (driven by real Gemini), with the external
-boundaries (Jira MCP, Jira REST, Zephyr) replaced by recording mocks. The
-fixtures wait for the agents to register, then fire the two webhooks once each;
-the test functions read the mocks' ``/__recorded`` endpoints and assert on what
-reached each boundary.
+orchestrator and the agents (driven by real Gemini), with the external
+boundaries (Jira MCP, Jira REST, Zephyr, Qdrant + embedding) replaced by
+recording mocks. The fixtures wait for all agents to register, then fire the
+four webhooks once, concurrently — the flows are mutually independent, so the
+wall time is the longest flow instead of their sum. The test functions read the
+mocks' ``/__recorded`` endpoints and assert on what reached each boundary.
 
 URLs default to the published compose ports and are overridable via ``SMOKE_*``
 env vars. The dashboard/API credentials are the fixed throwaway values baked into
@@ -18,6 +19,7 @@ env vars. The dashboard/API credentials are the fixed throwaway values baked int
 
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import httpx
 import pytest
@@ -28,16 +30,22 @@ ORCHESTRATOR_URL = os.environ.get("SMOKE_ORCHESTRATOR_URL", "http://localhost:80
 JIRA_REST_RECORDED_URL = os.environ.get("SMOKE_JIRA_REST_RECORDED_URL", "http://localhost:8080/__recorded")
 JIRA_MCP_RECORDED_URL = os.environ.get("SMOKE_JIRA_MCP_RECORDED_URL", "http://localhost:9000/__recorded")
 ZEPHYR_RECORDED_URL = os.environ.get("SMOKE_ZEPHYR_RECORDED_URL", "http://localhost:8090/__recorded")
+QDRANT_RECORDED_URL = os.environ.get("SMOKE_QDRANT_RECORDED_URL", "http://localhost:6333/__recorded")
 
 # Fixed test credentials, matching docker-compose.smoke.yml.
 ORCHESTRATOR_API_KEY = "smoke-api-key"
 DASHBOARD_USERNAME = "smoke"
 DASHBOARD_PASSWORD = "smoke-pass"
 
-# The story seeded by the Jira MCP mock (jira_mcp_mock.SEEDED_ISSUE_KEY).
+# The story seeded by the Jira MCP mock (jira_mcp_mock.SEEDED_ISSUE_KEY) and its numeric id.
 SEEDED_ISSUE_KEY = "SMOKE-1"
+SEEDED_ISSUE_ID = 10001
 # The project the executable test case is seeded under (zephyr_mock + jira_mcp_mock).
 SEEDED_PROJECT_KEY = "SMOKE"
+# The ready-for-execution test case seeded by the Zephyr mock (zephyr_mock._EXECUTABLE_TC_KEY).
+SEEDED_EXECUTABLE_TC_KEY = "SMOKE-T100"
+# The collection the RAG sync stores Jira issues in; tracks config as the source of truth.
+TICKETS_COLLECTION_NAME = config.QdrantConfig.TICKETS_COLLECTION_NAME
 # Name the mock executor registers under; must match mocks/execution_agent.EXECUTION_AGENT_NAME.
 EXECUTION_AGENT_NAME = "Smoke API Test Executor"
 
@@ -119,38 +127,58 @@ def _wait_for_agents_healthy(
 
 
 @pytest.fixture(scope="session")
-def agents_ready(http_client: httpx.Client, auth_headers: dict[str, str]) -> None:
-    """Wait until all four core agents are registered and healthy."""
-    _wait_for_agents_healthy(http_client, auth_headers, EXPECTED_AGENT_NAMES)
+def all_agents_ready(http_client: httpx.Client, auth_headers: dict[str, str]) -> None:
+    """Wait once until every agent the four flows need is registered and healthy."""
+    _wait_for_agents_healthy(http_client, auth_headers, EXPECTED_AGENT_NAMES | EXECUTION_FLOW_AGENT_NAMES)
 
 
-@pytest.fixture(scope="session")
-def execution_stack_ready(http_client: httpx.Client, auth_headers: dict[str, str]) -> None:
-    """Wait until the mock executor and the incident-creation agent are registered and healthy."""
-    _wait_for_agents_healthy(http_client, auth_headers, EXECUTION_FLOW_AGENT_NAMES)
-
-
-def _post_webhook(path: str, headers: dict[str, str]) -> httpx.Response:
+def _post_webhook(path: str, headers: dict[str, str], payload: dict[str, str]) -> httpx.Response:
     with httpx.Client(timeout=WEBHOOK_TIMEOUT, follow_redirects=True) as client:
-        return client.post(f"{ORCHESTRATOR_URL}{path}", headers=headers, json={"issue_key": SEEDED_ISSUE_KEY})
+        return client.post(f"{ORCHESTRATOR_URL}{path}", headers=headers, json=payload)
+
+
+# The four flows are mutually independent: requirements review writes Jira comments;
+# the test-case flow's cases end at "Review Complete" and never become executable;
+# /execute-tests selects only the seeded Approved + "automated" case; the RAG sync
+# involves no agent at all. So they can safely run concurrently.
+_WEBHOOKS: dict[str, tuple[str, dict[str, str]]] = {
+    "requirements_review": ("/new-requirements-available", {"issue_key": SEEDED_ISSUE_KEY}),
+    "test_case_flow": ("/story-ready-for-test-case-generation", {"issue_key": SEEDED_ISSUE_KEY}),
+    "execute_tests": ("/execute-tests", {"project_key": SEEDED_PROJECT_KEY}),
+    "update_rag_db": ("/update-rag-db", {"project_key": SEEDED_PROJECT_KEY}),
+}
 
 
 @pytest.fixture(scope="session")
-def requirements_review_response(agents_ready: None, webhook_headers: dict[str, str]) -> httpx.Response:
-    """Fire the requirements-review webhook once and share the response."""
-    return _post_webhook("/new-requirements-available", webhook_headers)
+def webhook_responses(all_agents_ready: None, webhook_headers: dict[str, str]) -> dict[str, httpx.Response]:
+    """Fire all four webhooks once, concurrently, and share the responses.
+
+    Each webhook returns only after its whole flow completes, so posting them from
+    a thread pool cuts the suite's wall time from the sum of the flows to the max.
+    """
+    with ThreadPoolExecutor(max_workers=len(_WEBHOOKS)) as pool:
+        futures = {
+            name: pool.submit(_post_webhook, path, webhook_headers, payload)
+            for name, (path, payload) in _WEBHOOKS.items()
+        }
+        return {name: future.result() for name, future in futures.items()}
 
 
 @pytest.fixture(scope="session")
-def test_case_flow_response(agents_ready: None, webhook_headers: dict[str, str]) -> httpx.Response:
-    """Fire the test-case generation/classification/review webhook once and share the response."""
-    return _post_webhook("/story-ready-for-test-case-generation", webhook_headers)
+def requirements_review_response(webhook_responses: dict[str, httpx.Response]) -> httpx.Response:
+    return webhook_responses["requirements_review"]
 
 
 @pytest.fixture(scope="session")
-def execute_tests_response(execution_stack_ready: None, webhook_headers: dict[str, str]) -> httpx.Response:
-    """Fire the /execute-tests webhook once for the seeded project and share the response."""
-    with httpx.Client(timeout=WEBHOOK_TIMEOUT, follow_redirects=True) as client:
-        return client.post(
-            f"{ORCHESTRATOR_URL}/execute-tests", headers=webhook_headers, json={"project_key": SEEDED_PROJECT_KEY}
-        )
+def test_case_flow_response(webhook_responses: dict[str, httpx.Response]) -> httpx.Response:
+    return webhook_responses["test_case_flow"]
+
+
+@pytest.fixture(scope="session")
+def execute_tests_response(webhook_responses: dict[str, httpx.Response]) -> httpx.Response:
+    return webhook_responses["execute_tests"]
+
+
+@pytest.fixture(scope="session")
+def update_rag_db_response(webhook_responses: dict[str, httpx.Response]) -> httpx.Response:
+    return webhook_responses["update_rag_db"]

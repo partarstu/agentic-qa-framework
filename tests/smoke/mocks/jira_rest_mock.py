@@ -2,12 +2,14 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
-"""Minimal recording mock for the Jira REST API used by ``add_jira_comment``.
+"""Minimal recording mock for the Jira REST API.
 
 The ``jira`` Python client (``JIRA(server, basic_auth=...)``) probes ``myself`` and
 ``serverInfo`` on construction, then posts comments to
-``/rest/api/2/issue/{key}/comment``. Only those calls are served; every recorded
-comment is exposed at ``GET /__recorded`` for the smoke assertions.
+``/rest/api/2/issue/{key}/comment`` (``add_jira_comment``) and runs JQL searches
+against ``/rest/api/2/search`` (the RAG sync). Every search answers with the same
+seeded story the Jira MCP mock serves; every recorded comment is exposed at
+``GET /__recorded`` for the smoke assertions.
 """
 
 from fastapi import FastAPI, Request
@@ -16,6 +18,25 @@ from fastapi.responses import JSONResponse
 app = FastAPI()
 
 _recorded_comments: list[dict[str, str]] = []
+
+# The same story the Jira MCP mock seeds (jira_mcp_mock._SEEDED_STORY), in the raw
+# shape the jira client's search API returns. Its status must be one of
+# config.QdrantConfig.VALID_STATUSES so the RAG sync treats it as active.
+_SEEDED_SEARCH_ISSUE = {
+    "id": "10001",
+    "key": "SMOKE-1",
+    "self": "http://jira_rest_mock:8080/rest/api/2/issue/10001",
+    "fields": {
+        "summary": "User can reset their password via an emailed link",
+        "description": (
+            "As a registered user I want to reset my password through a link sent to my email "
+            "so that I can regain access when I forget it."
+        ),
+        "status": {"name": "To Do"},
+        "issuetype": {"name": "Story"},
+        "updated": "2026-01-01T00:00:00.000+0000",
+    },
+}
 
 
 @app.get("/rest/api/2/myself")
@@ -46,6 +67,13 @@ async def add_comment(issue_key: str, request: Request) -> JSONResponse:
             "body": body,
         }
     )
+
+
+@app.get("/rest/api/2/search")
+async def search_issues() -> dict:
+    """Answer every JQL search with the seeded story (the RAG sync searches twice:
+    all issue ids for reconciliation, then issues updated since the watermark)."""
+    return {"expand": "", "startAt": 0, "maxResults": 50, "total": 1, "issues": [_SEEDED_SEARCH_ISSUE]}
 
 
 @app.get("/__recorded")
