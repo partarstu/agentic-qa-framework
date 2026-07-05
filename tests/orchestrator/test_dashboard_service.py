@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from orchestrator.dashboard_service import OrchestratorDashboardService
-from orchestrator.models import AgentRegistry, ErrorHistory, TaskHistory
+from orchestrator.models import AgentRegistry, ErrorHistory, TaskHistory, TaskRecord, TaskStatus
 
 
 @pytest.fixture
@@ -17,6 +17,48 @@ def mock_dashboard_service():
     tasks = MagicMock(spec=TaskHistory)
     errors = MagicMock(spec=ErrorHistory)
     return OrchestratorDashboardService(registry, tasks, errors)
+
+
+def _task_with_usage(task_id: str, total_tokens: int, cost_usd: float | None) -> TaskRecord:
+    return TaskRecord(
+        task_id=task_id,
+        agent_id="agent-1",
+        agent_name="Agent",
+        description="task",
+        status=TaskStatus.COMPLETED,
+        start_time=datetime.now(),
+        token_usage={"total_tokens": total_tokens, "cost_usd": cost_usd},
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_summary_aggregates_tokens_and_cost():
+    registry = AgentRegistry()
+    tasks = TaskHistory()
+    errors = ErrorHistory()
+    await tasks.add(_task_with_usage("t1", 1000, 0.01))
+    await tasks.add(_task_with_usage("t2", 500, 0.005))
+    await tasks.add(_task_with_usage("t3", 200, None))  # unpriced model: tokens count, cost ignored
+    service = OrchestratorDashboardService(registry, tasks, errors)
+
+    summary = await service.get_summary()
+
+    assert summary["tokens_total"] == 1700
+    assert summary["cost_usd_total"] == 0.015
+
+
+@pytest.mark.asyncio
+async def test_get_summary_cost_none_when_no_priced_tasks():
+    registry = AgentRegistry()
+    tasks = TaskHistory()
+    errors = ErrorHistory()
+    await tasks.add(_task_with_usage("t1", 200, None))
+    service = OrchestratorDashboardService(registry, tasks, errors)
+
+    summary = await service.get_summary()
+
+    assert summary["tokens_total"] == 200
+    assert summary["cost_usd_total"] is None
 
 
 def test_parse_agent_logs_standard(mock_dashboard_service):
@@ -83,3 +125,26 @@ def test_parse_agent_logs_fallback_timestamp(mock_dashboard_service):
     assert len(parsed) == 1
     # Check that timestamp is empty
     assert parsed[0].timestamp == ""
+
+
+def test_parse_agent_logs_logback_format(mock_dashboard_service):
+    # The UI agent emits logback/SLF4J lines: "HH:mm:ss.SSS LEVEL Logger - message".
+    # These don't match the Python logging layout, so the level must be detected from the line
+    # instead of defaulting to INFO.
+    raw_logs = [
+        "21:10:43.758 ERROR UiTestAgent - Error during knowledge-based execution",
+        "21:10:43.754 DEBUG KnowledgeService - No procedure match found for description: 'x'",
+        "21:10:42.918 INFO  KnowledgeBasedExecutionOrchestrator - Processing execution item",
+    ]
+    parsed = mock_dashboard_service._parse_agent_logs(raw_logs, "task-1", "agent-1")
+
+    assert [entry.level for entry in parsed] == ["ERROR", "DEBUG", "INFO"]
+    # The full original line is preserved as the message for these formats.
+    assert parsed[0].message == raw_logs[0]
+
+
+def test_parse_agent_logs_warn_alias_normalised(mock_dashboard_service):
+    raw_logs = ["21:10:43.758 WARN UiTestAgent - something looks off"]
+    parsed = mock_dashboard_service._parse_agent_logs(raw_logs, "task-1", "agent-1")
+
+    assert parsed[0].level == "WARNING"

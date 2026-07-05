@@ -27,6 +27,17 @@ export function TaskList({ tasks, isLoading, liveTaskStates }: TaskListProps) {
     return new Date(isoString).toLocaleTimeString();
   };
 
+  const formatTokens = (tokens: number) => {
+    if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(2)}M`;
+    if (tokens >= 1_000) return `${(tokens / 1_000).toFixed(1)}k`;
+    return `${tokens}`;
+  };
+
+  const formatCost = (cost: number | null | undefined) => {
+    if (cost === null || cost === undefined) return '-';
+    return `$${cost.toFixed(4)}`;
+  };
+
   const getStatusIcon = (status: string) => {
     switch (status) {
       case 'COMPLETED':
@@ -89,6 +100,8 @@ export function TaskList({ tasks, isLoading, liveTaskStates }: TaskListProps) {
                   <th className="pb-3 font-medium">Agent</th>
                   <th className="pb-3 font-medium">Started</th>
                   <th className="pb-3 font-medium">Duration</th>
+                  <th className="pb-3 font-medium">Tokens</th>
+                  <th className="pb-3 font-medium">Cost</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-700/50">
@@ -118,6 +131,10 @@ export function TaskList({ tasks, isLoading, liveTaskStates }: TaskListProps) {
                     <td className="py-3 text-slate-300">{task.agent_name}</td>
                     <td className="py-3 text-slate-400">{formatTime(task.start_time)}</td>
                     <td className="py-3 text-slate-400">{formatDuration(task.duration_ms)}</td>
+                    <td className="py-3 text-slate-400">
+                      {task.token_usage ? formatTokens(task.token_usage.total_tokens) : '-'}
+                    </td>
+                    <td className="py-3 text-teal-400">{formatCost(task.token_usage?.cost_usd)}</td>
                   </tr>
                 ))}
               </tbody>

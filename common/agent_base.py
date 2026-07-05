@@ -15,7 +15,7 @@ from a2a.helpers import get_message_text, new_text_message
 from a2a.server.request_handlers import DefaultRequestHandler
 from a2a.server.routes import create_agent_card_routes, create_jsonrpc_routes
 from a2a.server.tasks import InMemoryTaskStore
-from a2a.types import AgentCapabilities, AgentCard, AgentInterface, Message
+from a2a.types import AgentCapabilities, AgentCard, AgentInterface, AgentSkill, Message
 from fastapi import FastAPI
 from jira import JIRA
 from pydantic import BaseModel
@@ -35,6 +35,7 @@ from common.custom_llm_wrapper import CustomLlmWrapper
 from common.models import AgentExecutionError, AgentRuntimeError, JsonSerializableModel
 from common.services.vector_db_service import VectorDbService
 from common.streaming import compute_activity_budget
+from common.token_usage import TokenUsage
 
 REGISTRATION_PATH = f"{config.ORCHESTRATOR_URL}/register"
 MCP_SERVER_ATTACHMENTS_FOLDER_PATH = config.MCP_SERVER_ATTACHMENTS_FOLDER_PATH
@@ -95,6 +96,9 @@ class AgentBase(ABC):
         if vector_db_collection_name:
             self.vector_db_service = VectorDbService(vector_db_collection_name)
         self.latest_received_message: Message | None = None
+        # Token usage of the most recent run; reset per task by the executor and read back
+        # by it to emit the usage artifact. None until a run completes.
+        self.latest_token_usage: TokenUsage | None = None
 
     @property
     def activity_queue(self) -> asyncio.Queue[str]:
@@ -133,7 +137,7 @@ class AgentBase(ABC):
         - Model: {self.model_name}
         - Output Type: {self.output_type.__name__}
         - MCP Servers: {[server.url for server in self.mcp_servers]}
-        - Tools: {[tool.__name__ for tool in self.tools]}""")
+        - Tools: {[getattr(tool, "__name__", None) or tool.name for tool in self.tools]}""")
 
         return CustomLlmWrapper.create_agent(
             model_name=self.model_name,
@@ -149,7 +153,10 @@ class AgentBase(ABC):
         )
 
     async def _get_agent_execution_result(self, received_request: list[UserContent]) -> AgentRunResult[Any] | None:
-        usage_limits = UsageLimits(tool_calls_limit=compute_activity_budget(self.get_max_requests_per_task()))
+        usage_limits = UsageLimits(
+            tool_calls_limit=compute_activity_budget(self.get_max_requests_per_task()),
+            total_tokens_limit=config.BudgetConfig.TOTAL_TOKENS_LIMIT_PER_TASK,
+        )
         for attempt in range(config.RetryConfig.MAX_RETRIES):
             try:
                 logger.info(f"Starting agent run (attempt {attempt + 1}/{config.RetryConfig.MAX_RETRIES})...")
@@ -185,6 +192,7 @@ class AgentBase(ABC):
 
         try:
             result = await self._get_agent_execution_result(received_request)
+            self._capture_token_usage(result)
             self._log_llm_comments_if_result_incomplete(result.output)
             return self._get_text_message_from_results(result)
         except Exception as e:
@@ -203,6 +211,13 @@ class AgentBase(ABC):
                 else str(e)
             )
             raise AgentRuntimeError(list(error_message.parts), error_text) from e
+
+    def _capture_token_usage(self, result: AgentRunResult[Any] | None) -> None:
+        """Record and log the token usage and estimated cost of a completed run."""
+        if result is None:
+            return
+        self.latest_token_usage = TokenUsage.from_run_usage(result.usage(), self.model_name)
+        logger.info(self.latest_token_usage.summary_line())
 
     def _log_llm_comments_if_result_incomplete(self, output: BaseModel | None | str) -> None:
         """Logs LLM comments if the agent result appears empty or incomplete.
@@ -286,14 +301,20 @@ class AgentBase(ABC):
         return fetch_all_attachments(attachment_paths)
 
     def _get_server(self) -> FastAPI:
+        primary_skill = AgentSkill(
+            id=f"{self.agent_name.lower().replace(' ', '-')}-skill",
+            name="Primary skill",
+            description=self.description,
+            tags=["qa"],
+        )
         agent_card = AgentCard(
             name=self.agent_name,
-            description=self.description,
+            description=f"Model: {self.model_name}",
             version="1.0.0",
             default_input_modes=["text"],
             default_output_modes=["text", "image"],
             capabilities=AgentCapabilities(streaming=True),
-            skills=[],
+            skills=[primary_skill],
             supported_interfaces=[
                 AgentInterface(
                     protocol_binding="JSONRPC",

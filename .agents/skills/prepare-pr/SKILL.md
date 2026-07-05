@@ -172,6 +172,18 @@ Get-ChildItem -Path ".agents/skills" -Directory | Select-Object Name
 For affected skills, update: **SKILL.md** (workflow steps), **resources/** (templates), **scripts/** (automation), **examples/** (code
 patterns).
 
+#### 6.5: Verify Smoke Suite Coverage
+
+The hermetic smoke suite (`tests/smoke/`) is a mandatory layer (see *Hermetic smoke suite* in `AGENTS.md`). From the diff
+in 6.2, check whether the change adds a new end-to-end capability or alters what an existing flow produces — a new agent,
+a new orchestrator workflow/endpoint, a new external integration, or a change to a flow's output.
+
+If so, confirm the same PR extends `tests/smoke/` (a test in `tests/smoke/test_smoke.py`, plus any fixtures, mocks under
+`tests/smoke/mocks/`, or `docker-compose.smoke.yml` service entries it needs). If that coverage is missing, follow the
+**Intervention Pattern** before continuing — do not proceed with a PR that adds or extends a flow but leaves the smoke
+suite untouched. The suite makes real, billed Gemini calls, so do not run it as part of this skill; it runs in the
+`smoke` CI job. A pure internal refactor with no observable end-to-end change is exempt.
+
 ### Step 7: Review Changes with User
 
 ```powershell
@@ -216,5 +228,6 @@ gh pr create --title "<short summary>" --body "<detailed description>"
 - [ ] `uv audit` has no unaddressed critical vulnerabilities
 - [ ] CALM validation passes (`Architecture (CALM)` gate): `npx -y @finos/calm-cli@1.46.0 validate -p patterns/quaia.pattern.json -a architecture/quaia.arch.json -u url-mapping.json --strict` from `calm/`
 - [ ] README.md reflects current code state
+- [ ] Smoke suite (`tests/smoke/`) extended if the change adds or extends an end-to-end flow (see *Hermetic smoke suite* in `AGENTS.md`)
 - [ ] User has reviewed and approved changes
 - [ ] PR has descriptive title and comprehensive description

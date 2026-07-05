@@ -1,0 +1,229 @@
+# SPDX-FileCopyrightText: 2025-2026 Taras Paruta (partarstu@gmail.com)
+#
+# SPDX-License-Identifier: AGPL-3.0-only
+
+# Hermetic smoke topology: real orchestrator + the QA agents (all our own code,
+# real Gemini), with only the external boundaries mocked (Jira MCP, Jira REST,
+# Zephyr, Qdrant + embedding). A mock test-execution agent stands in for the
+# VM-hosted real executors so the /execute-tests + incident-creation flow can run
+# end to end.
+#
+# Prerequisite: the shared base image must be built first, since every service
+# here derives from it:
+#   docker build -t agentic-qa-base:latest -f Dockerfile.base .
+#
+# Then:  docker compose -f docker-compose.smoke.yml up --build --wait
+#
+# GOOGLE_API_KEY must be exported in the environment (real Gemini calls).
+
+# Shared environment for the four execution agents. Each agent serves on :8001
+# inside its own service, and advertises its card URL as http://<service>:8001 so
+# the orchestrator can discover and dispatch to it.
+x-agent-env: &agent-env
+  PORT: "8001"
+  EXTERNAL_PORT: "8001"
+  JIRA_MCP_SERVER_URL: "http://jira_mcp_mock:9000/sse"
+  JIRA_URL: "http://jira_rest_mock:8080"
+  JIRA_USERNAME: "smoke"
+  JIRA_API_TOKEN: "smoke-token"
+  ZEPHYR_BASE_URL: "http://zephyr_mock:8090"
+  ZEPHYR_API_TOKEN: "smoke-token"
+  TEST_MANAGEMENT_SYSTEM: "zephyr"
+  PROMPT_INJECTION_CHECK_ENABLED: "false"
+  GOOGLE_API_KEY: "${GOOGLE_API_KEY}"
+
+# Agents serve their A2A card as soon as they are ready to take tasks.
+x-agent-healthcheck: &agent-healthcheck
+  test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/.well-known/agent-card.json')"]
+  interval: 5s
+  timeout: 5s
+  retries: 24
+  start_period: 20s
+
+x-mock-dependencies: &mock-dependencies
+  jira_mcp_mock:
+    condition: service_healthy
+  jira_rest_mock:
+    condition: service_healthy
+  zephyr_mock:
+    condition: service_healthy
+
+services:
+  # The four recording mocks share one image; only jira_mcp_mock builds it, the
+  # others reference the tag so it is built exactly once.
+  jira_mcp_mock:
+    build:
+      context: .
+      dockerfile: tests/smoke/mocks/Dockerfile
+    image: smoke-mocks:latest
+    command: ["uvicorn", "mocks.jira_mcp_mock:app", "--host", "0.0.0.0", "--port", "9000"]
+    ports:
+      - "9000:9000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9000/__recorded')"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+
+  jira_rest_mock:
+    image: smoke-mocks:latest
+    pull_policy: never
+    command: ["uvicorn", "mocks.jira_rest_mock:app", "--host", "0.0.0.0", "--port", "8080"]
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/__recorded')"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+
+  zephyr_mock:
+    image: smoke-mocks:latest
+    pull_policy: never
+    command: ["uvicorn", "mocks.zephyr_mock:app", "--host", "0.0.0.0", "--port", "8090"]
+    ports:
+      - "8090:8090"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8090/__recorded')"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+
+  qdrant_mock:
+    image: smoke-mocks:latest
+    pull_policy: never
+    command: ["uvicorn", "mocks.qdrant_mock:app", "--host", "0.0.0.0", "--port", "6333"]
+    ports:
+      - "6333:6333"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:6333/__recorded')"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+
+  requirements_review:
+    build:
+      context: .
+      dockerfile: agents/requirements_review/Dockerfile
+    environment:
+      <<: *agent-env
+      AGENT_BASE_URL: "http://requirements_review"
+    depends_on: *mock-dependencies
+    healthcheck: *agent-healthcheck
+
+  test_case_generation:
+    build:
+      context: .
+      dockerfile: agents/test_case_generation/Dockerfile
+    environment:
+      <<: *agent-env
+      AGENT_BASE_URL: "http://test_case_generation"
+    depends_on: *mock-dependencies
+    healthcheck: *agent-healthcheck
+
+  test_case_classification:
+    build:
+      context: .
+      dockerfile: agents/test_case_classification/Dockerfile
+    environment:
+      <<: *agent-env
+      AGENT_BASE_URL: "http://test_case_classification"
+    depends_on: *mock-dependencies
+    healthcheck: *agent-healthcheck
+
+  test_case_review:
+    build:
+      context: .
+      dockerfile: agents/test_case_review/Dockerfile
+    environment:
+      <<: *agent-env
+      AGENT_BASE_URL: "http://test_case_review"
+    depends_on: *mock-dependencies
+    healthcheck: *agent-healthcheck
+
+  incident_creation:
+    build:
+      context: .
+      dockerfile: agents/incident_creation/Dockerfile
+    environment:
+      <<: *agent-env
+      AGENT_BASE_URL: "http://incident_creation"
+      QDRANT_URL: "http://qdrant_mock"
+      QDRANT_PORT: "6333"
+      # The duplicate search embeds its query once the tickets collection exists
+      # (the concurrently running RAG sync creates it).
+      EMBEDDING_SERVICE_URL: "http://qdrant_mock:6333"
+    depends_on:
+      <<: *mock-dependencies
+      qdrant_mock:
+        condition: service_healthy
+    healthcheck: *agent-healthcheck
+
+  # Mock test-execution agent (real ones run on VMs, out of this repo). Returns a
+  # canned failed result so /execute-tests drives the incident-creation flow.
+  execution_agent:
+    build:
+      context: .
+      dockerfile: tests/smoke/mocks/Dockerfile.execution_agent
+    environment:
+      <<: *agent-env
+      AGENT_BASE_URL: "http://execution_agent"
+    depends_on: *mock-dependencies
+    healthcheck: *agent-healthcheck
+
+  orchestrator:
+    build:
+      context: .
+      dockerfile: orchestrator/Dockerfile
+    command: ["gunicorn", "-w", "1", "-k", "uvicorn.workers.UvicornWorker", "--bind", "0.0.0.0:8000", "orchestrator.main:orchestrator_app"]
+    environment:
+      ORCHESTRATOR_HOST: "0.0.0.0"
+      ORCHESTRATOR_PORT: "8000"
+      REMOTE_EXECUTION_AGENT_HOSTS: "http://requirements_review,http://test_case_generation,http://test_case_classification,http://test_case_review,http://incident_creation,http://execution_agent"
+      AGENT_DISCOVERY_PORTS: "8001-8001"
+      ORCHESTRATOR_API_KEY: "smoke-api-key"
+      DASHBOARD_USERNAME: "smoke"
+      DASHBOARD_PASSWORD: "smoke-pass"
+      DASHBOARD_JWT_SECRET: "smoke-jwt-secret"
+      PROMPT_INJECTION_CHECK_ENABLED: "false"
+      GOOGLE_API_KEY: "${GOOGLE_API_KEY}"
+      # The /execute-tests flow makes the orchestrator a test-management client.
+      TEST_MANAGEMENT_SYSTEM: "zephyr"
+      ZEPHYR_BASE_URL: "http://zephyr_mock:8090"
+      ZEPHYR_API_TOKEN: "smoke-token"
+      # The /update-rag-db flow makes the orchestrator a Jira REST and vector DB client.
+      JIRA_URL: "http://jira_rest_mock:8080"
+      JIRA_USERNAME: "smoke"
+      JIRA_API_TOKEN: "smoke-token"
+      QDRANT_URL: "http://qdrant_mock"
+      QDRANT_PORT: "6333"
+      EMBEDDING_SERVICE_URL: "http://qdrant_mock:6333"
+    ports:
+      - "8000:8000"
+    depends_on:
+      zephyr_mock:
+        condition: service_healthy
+      qdrant_mock:
+        condition: service_healthy
+      requirements_review:
+        condition: service_healthy
+      test_case_generation:
+        condition: service_healthy
+      test_case_classification:
+        condition: service_healthy
+      test_case_review:
+        condition: service_healthy
+      incident_creation:
+        condition: service_healthy
+      execution_agent:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/openapi.json')"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 10s

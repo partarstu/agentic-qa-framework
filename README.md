@@ -209,6 +209,7 @@ EXTERNAL_PORT=8001 # Default: 8001. The externally accessible port for the agent
 # Agent Discovery (for remote agents)
 REMOTE_EXECUTION_AGENT_HOSTS=http://localhost # Default: http://localhost. Comma-separated URLs of remote agent hosts.
 AGENT_DISCOVERY_PORTS=8001-8007 # Default: 8001-8007. Port range for agent discovery.
+REMOTE_EXECUTION_AGENT_AUTH_TOKEN= # Optional. Shared bearer token sent to the execution agents' main A2A endpoint. Leave empty for local agents started without auth.
 
 # Google Cloud Storage (via Volume Mounts)
 # In cloud deployments, GCS buckets are mounted as local folders via Cloud Run volume mounts.
@@ -382,9 +383,9 @@ access the dashboard. You will be prompted to log in with your configured creden
 
 #### Dashboard Features
 
-* **Summary View:** Displays orchestrator uptime, total tasks processed, success/failure rates, and agent health overview.
+* **Summary View:** Displays orchestrator uptime, total tasks processed, success/failure rates, agent health overview, and the aggregated token consumption and estimated cost across recorded tasks.
 * **Agent Grid:** Shows all registered agents with their current status (AVAILABLE, BUSY, BROKEN), capabilities, and last activity. Includes a manual "Discover Agents" button to trigger re-discovery on demand.
-* **Task History:** Lists recent tasks with execution details, duration, assigned agent, and status. Click on a task to view its execution logs.
+* **Task History:** Lists recent tasks with execution details, duration, assigned agent, status, and the tokens consumed and estimated cost per task. Click on a task to view its execution logs.
 * **Error Log:** Displays recent errors with context, including traceback snippets and related task/agent information.
 * **Log Viewer:** Filterable log viewer supporting level filtering (INFO, WARNING, ERROR), task/agent-specific log queries, and paginated log loading ("Load More").
 
@@ -414,6 +415,32 @@ start.bat
 ```
 
 This will build the React application and copy the static files to `orchestrator/static/` for serving by the orchestrator.
+
+### Token Budget and Cost Oversight
+
+Every LLM call made by the agents and the orchestrator is metered. After each agent run, the consumed token counts
+(input/output/total, requests, tool calls) and an estimated USD cost are:
+
+* **logged** as a one-line summary by the agent and by the orchestrator, and
+* **surfaced in the dashboard** — per task (Tokens/Cost columns) and as an aggregate on the summary cards.
+
+The orchestrator's own routing/extraction LLM runs are logged as well.
+
+#### Hard per-task limit
+
+Each agent run is capped at a **total token budget per task**. When a run exceeds it, the run is aborted with
+pydantic-ai's `UsageLimitExceeded` and the task is reported as failed. The cap is **token-based** because pydantic-ai
+enforces token limits, not monetary ones — the USD figure is for oversight only.
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `TOTAL_TOKENS_LIMIT_PER_TASK` | Maximum total tokens an agent may consume in a single task. | `1000000` |
+
+#### Cost estimation
+
+USD cost is derived from a static price table, `BudgetConfig.MODEL_PRICING` in `config.py`, keyed by the pydantic-ai
+model name and expressed in USD per 1,000,000 tokens (`input`/`output`). Keep it current with your provider's published
+pricing. Models that are not present in the table report a `null` cost (their tokens are still counted).
 
 ### Deployment to Google Cloud Run
 
@@ -485,6 +512,44 @@ gcloud builds submit --config 'path/to/your/cloudbuild.yaml' --substitutions "`^
 **Important**: Before the initial deployment of the framework into Google Cloud Run it's quite hard to know which URL
 will be assigned to each agent and orchestrator. That's why most probably you'll have to run the deployment command
 once, then identify the assigned URL of each service, update the substitution values in the command and run it again.
+
+### Hermetic smoke tests
+
+The smoke suite is a self-contained integration test, independent of any Cloud Run deployment. It runs the real
+orchestrator and the QA agents (requirements review, test-case generation, classification, review and incident creation)
+under `docker-compose.smoke.yml`, driven by a real Gemini model, with only the external boundaries replaced by mocks
+under `tests/smoke/mocks/` (Jira MCP, Jira REST, Zephyr and Qdrant). A mock test-execution agent stands in for the
+VM-hosted real executors. It drives the system through the orchestrator's public webhooks and asserts on what reaches
+each mocked boundary:
+
+* **Requirements review** (`POST /new-requirements-available`) → a non-empty review comment reaches Jira (REST or MCP),
+  and the agent first fetched the source story via the Jira MCP.
+* **Test-case generation** (`POST /story-ready-for-test-case-generation`) → real test cases (name + steps) reach Zephyr,
+  linked back to the originating story.
+* **Test-case classification** (same webhook) → labels reach Zephyr.
+* **Test-case review** (same webhook) → a non-empty "Review Comments" value and the "Review Complete" status reach Zephyr.
+* **Test execution / incident creation** (`POST /execute-tests`) → a failed automated test drives a real Bug issue into
+  the seeded Jira project, the failed execution is reported to Zephyr inside a fresh test cycle, the bug is linked to
+  that execution, and the duplicate search consulted the vector DB.
+* **RAG DB update** (`POST /update-rag-db`) → the sync pushes the seeded Jira story into the mocked vector DB
+  (collection creation + point upsert).
+* **Negative paths** → all four webhooks reject an invalid API key (401), a missing `issue_key` fails with 400, a
+  missing `project_key` fails with 422, and the dashboard API rejects a missing token (401) — all without dispatching
+  to an agent.
+
+The four webhooks are fired once, concurrently (the flows are mutually independent), so the suite's wall time is the
+longest flow rather than the sum of all flows.
+
+It runs in GitHub Actions (the `smoke` job in `.github/workflows/ci.yml`) on pushes to `main` and on manual
+`workflow_dispatch` only — never on pull requests — because every run makes real, billed Gemini calls. The job needs a
+`GOOGLE_API_KEY` repository secret. To run it locally:
+
+```bash
+docker build -t agentic-qa-base:latest -f Dockerfile.base .
+GOOGLE_API_KEY=<your-key> docker compose -f docker-compose.smoke.yml up -d --build --wait
+uv run pytest tests/smoke -m smoke -v
+docker compose -f docker-compose.smoke.yml down -v
+```
 
 ## Invoking Orchestrator Workflows
 
@@ -623,6 +688,25 @@ this executor will not emit it; the dashboard falls back to polling for logs.
 }
 ```
 
+#### `agent_usage` (OPTIONAL)
+
+A single `application/json` artifact (name `agent_usage`) emitted by `DefaultAgentExecutor` once a run completes,
+carrying the run's token usage and estimated cost. The orchestrator records it on the task and aggregates it for the
+dashboard. Missing it is not an error.
+
+```json
+{
+  "model_name": "google-gla:gemini-3.5-flash",
+  "input_tokens": 1200,
+  "output_tokens": 340,
+  "total_tokens": 1540,
+  "cache_read_tokens": 0,
+  "requests": 2,
+  "tool_calls": 3,
+  "cost_usd": 0.0012
+}
+```
+
 ### Dashboard SSE Streams
 
 The dashboard receives streaming updates via two Server-Sent Event (SSE) endpoints.
@@ -672,6 +756,12 @@ uv run pytest tests/agents/
 uv run pytest tests/orchestrator/
 uv run pytest tests/common/
 ```
+
+The suite under `tests/smoke/` is marked `smoke` and drives the hermetic docker-compose topology described in
+[Hermetic smoke tests](#hermetic-smoke-tests) above, not local code in isolation. Because it needs that stack running, it
+is excluded from a bare `uv run pytest` by default (via `addopts` in `pytest.ini`), so local runs stay harmless. Once the
+stack is up, run it explicitly with `uv run pytest -m smoke`. It runs in CI on pushes to `main` and on manual
+`workflow_dispatch` only (see *Hermetic smoke tests* above).
 
 ## Contributing
 

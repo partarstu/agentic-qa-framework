@@ -27,6 +27,11 @@ tests/
 └── scripts/             # Script tests
 ```
 
+> **Unit tests do not replace the smoke suite.** The hermetic smoke suite under `tests/smoke/` is a separate, mandatory
+> layer (see *Hermetic smoke suite* in `AGENTS.md`). When your change adds a new end-to-end capability or extends an
+> existing flow, you **must** also extend `tests/smoke/` so the behaviour is asserted end-to-end — adding unit tests
+> alone is not sufficient.
+
 ## ⚡ Auto-Run Policy
 
 This skill is designed to run with minimal interruption.
@@ -185,6 +190,7 @@ After writing tests, verify:
 - [ ] Edge cases are covered
 - [ ] Tests pass locally: `pytest tests/<test_file>.py -v`
 - [ ] Coverage is adequate: `pytest --cov=<module> tests/<test_file>.py`
+- [ ] If the change adds or extends an end-to-end flow, `tests/smoke/` was extended to assert the new behaviour (see *Hermetic smoke suite* in `AGENTS.md`)
 
 ## Common Issues and Solutions
 

@@ -240,6 +240,12 @@
       "node-type": "system",
       "name": "LLM Provider",
       "description": "External large-language-model provider (Google Gemini) used by the orchestrator and agents."
+    },
+    {
+      "unique-id": "execution-agents",
+      "node-type": "system",
+      "name": "Test Execution Agents",
+      "description": "External UI and API test execution agents that run test cases and expose an A2A endpoint guarded by a shared bearer token."
     }
   ],
   "relationships": [
@@ -256,6 +262,34 @@
             "test-case-classification-agent",
             "test-case-review-agent",
             "incident-creation-agent"
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "rel-orchestrator-routes-execution-tasks",
+      "description": "Orchestrator routes test-execution tasks to the external UI/API execution agents over the A2A protocol.",
+      "protocol": "HTTPS",
+      "relationship-type": {
+        "connects": {
+          "source": { "node": "orchestrator" },
+          "destination": { "node": "execution-agents" }
+        }
+      },
+      "controls": {
+        "execution-agent-bearer-token": {
+          "description": "When REMOTE_EXECUTION_AGENT_AUTH_TOKEN is set, the orchestrator presents it as an Authorization: Bearer token on the agents' guarded main A2A endpoint; the agents reject mismatching or missing tokens with HTTP 401.",
+          "requirements": [
+            {
+              "requirement-url": "https://quaia.finos.calm/controls/authentication.requirement.json",
+              "config": {
+                "control-id": "quaia-execution-agent-bearer-token",
+                "name": "Execution Agent Bearer Token",
+                "description": "Calls to the execution agents' main A2A endpoint are authenticated with a shared bearer token.",
+                "auth-method": "api-key",
+                "enforced": true
+              }
+            }
           ]
         }
       }

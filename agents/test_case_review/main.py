@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 
 from pydantic_ai.mcp import MCPServerSSE
 from pydantic_ai.settings import ThinkingLevel
+from pydantic_ai.tools import Tool
 
 import config
 from agents.test_case_review.prompt import TestCaseReviewSystemPrompt, TestCaseReviewWithAttachmentsPrompt
@@ -51,8 +52,12 @@ class TestCaseReviewAgent(AgentBase):
             mcp_servers=[jira_mcp_server],
             description="Agent which reviews generated test cases for coherence, redundancy, and effectiveness.",
             tools=[
-                self.add_review_feedback,
-                self.set_test_case_status_to_review_complete,
+                # These two tools both do a full read-modify-write PUT on the same Jira/Zephyr
+                # test case. Marking them sequential forces pydantic-ai to run the whole turn one
+                # call at a time, so the status update and the comment update can't race and
+                # clobber each other's field (last-writer-wins).
+                Tool(self.add_review_feedback, sequential=True),
+                Tool(self.set_test_case_status_to_review_complete, sequential=True),
                 self._review_test_cases_with_attachments,
             ],
         )

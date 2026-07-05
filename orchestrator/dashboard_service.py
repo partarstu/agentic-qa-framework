@@ -6,11 +6,13 @@
 Dashboard service for aggregating orchestrator state for the Web UI.
 """
 
+import re
 from datetime import datetime
 from typing import Any
 
 from google.protobuf.json_format import MessageToDict
 
+import config
 from common import utils
 from orchestrator.memory_log_handler import LogEntry, memory_log_handler
 from orchestrator.models import (
@@ -25,6 +27,22 @@ from orchestrator.models import (
 )
 
 logger = utils.get_logger("orchestrator_dashboard")
+
+# Uppercase log-level tokens used as a fallback for agent log formats that don't match the
+# Python logging layout (e.g. the logback/SLF4J format "HH:mm:ss.SSS LEVEL Logger - message"
+# emitted by the UI agent). Matching is case-sensitive on purpose so a lowercase "error"
+# inside a JSON payload is not mistaken for an ERROR-level line.
+_LEVEL_TOKEN_PATTERN = re.compile(r"\b(CRITICAL|FATAL|ERROR|WARNING|WARN|INFO|DEBUG|TRACE)\b")
+_LEVEL_ALIASES = {"WARN": "WARNING", "FATAL": "CRITICAL"}
+
+
+def _detect_log_level(line: str) -> str | None:
+    """Return the first recognised uppercase log-level token in a line, normalising aliases."""
+    match = _LEVEL_TOKEN_PATTERN.search(line)
+    if match is None:
+        return None
+    token = match.group(1)
+    return _LEVEL_ALIASES.get(token, token)
 
 
 class OrchestratorDashboardService:
@@ -58,6 +76,21 @@ class OrchestratorDashboardService:
         completed_tasks = sum(1 for t in all_tasks if t.status.value == "COMPLETED")
         failed_tasks = sum(1 for t in all_tasks if t.status.value == "FAILED")
 
+        # Aggregate token consumption and estimated cost across recorded tasks. Cost is summed
+        # only over tasks with a known (priced) cost; it stays None when none are priced.
+        tokens_total = 0
+        cost_usd_total = 0.0
+        cost_known = False
+        for task in all_tasks:
+            usage = task.token_usage
+            if not usage:
+                continue
+            tokens_total += usage.get("total_tokens") or 0
+            cost = usage.get("cost_usd")
+            if cost is not None:
+                cost_usd_total += cost
+                cost_known = True
+
         # Get error count
         all_errors = await self.errors.get_all()
 
@@ -74,9 +107,12 @@ class OrchestratorDashboardService:
             "tasks_failed": failed_tasks,
             "tasks_total": len(all_tasks),
             "errors_total": len(all_errors),
+            "tokens_total": tokens_total,
+            "cost_usd_total": round(cost_usd_total, 4) if cost_known else None,
             "orchestrator_start_time": ORCHESTRATOR_START_TIME.isoformat(),
             "uptime_seconds": uptime_seconds,
             "current_time": datetime.now().isoformat(),
+            "orchestrator_model": config.OrchestratorConfig.MODEL_NAME,
         }
 
     async def get_agents_status(self) -> list[dict[str, Any]]:
@@ -104,6 +140,7 @@ class OrchestratorDashboardService:
                 {
                     "id": agent_id,
                     "name": card.name,
+                    "description": card.description,
                     "url": card.supported_interfaces[0].url if card.supported_interfaces else None,
                     "status": status.value,
                     "capabilities": MessageToDict(card.capabilities) if card.HasField("capabilities") else None,
@@ -226,6 +263,12 @@ class OrchestratorDashboardService:
                     logger_name = parsed_logger.strip()
                     level = parsed_level.strip().upper()
                     message = parsed_message
+                else:
+                    # Formats that don't match the Python logging layout (e.g. the UI agent's
+                    # logback format): fall back to scanning the line for a level token.
+                    detected_level = _detect_log_level(line)
+                    if detected_level is not None:
+                        level = detected_level
 
                 # If timestamp parsing failed completely, use empty string as fallback
                 if timestamp is None:

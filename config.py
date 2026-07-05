@@ -102,6 +102,22 @@ OPEN_TELEMETRY_URL = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT")
 TOP_P = 1.0
 TEMPERATURE = 0.0
 
+
+class BudgetConfig:
+    """Token budget (hard limit) and pricing used for cost oversight."""
+
+    # Hard cap on the total number of tokens an agent may consume per task. When exceeded,
+    # the agent run is aborted with pydantic-ai's UsageLimitExceeded. The cap is token-based
+    # because pydantic-ai enforces token limits, not monetary ones.
+    TOTAL_TOKENS_LIMIT_PER_TASK = int(os.environ.get("TOTAL_TOKENS_LIMIT_PER_TASK", "1000000"))
+
+    # Indicative price in USD per 1,000,000 tokens, keyed by the pydantic-ai model name.
+    # Used only to estimate cost for oversight (logs + dashboard); keep these values current
+    # with the provider's published pricing. Models absent from this table report a null cost.
+    MODEL_PRICING: dict[str, dict[str, float]] = {
+        "google-gla:gemini-3.5-flash": {"input": 0.30, "output": 2.50},
+    }
+
 # Prompt injection detection config
 PROMPT_INJECTION_CHECK_ENABLED = os.environ.get("PROMPT_INJECTION_CHECK_ENABLED", "False").lower() in ("true", "1", "t")
 PROMPT_GUARD_PROVIDER = os.environ.get("PROMPT_GUARD_PROVIDER", "protect_ai")
@@ -119,13 +135,18 @@ class OrchestratorConfig:
     THINKING_LEVEL: ThinkingLevel = "low"
     AUTOMATED_TC_LABEL = "automated"
     AGENTS_DISCOVERY_INTERVAL_SECONDS = 300
+    AGENT_HEALTH_CHECK_INTERVAL_SECONDS = 60
+    AGENT_HEALTH_CHECK_TIMEOUT_SECONDS = 10
     TASK_EXECUTION_TIMEOUT = 500.0
     AGENT_DISCOVERY_TIMEOUT_SECONDS = 120
     INCOMING_REQUEST_WAIT_TIMEOUT = AGENT_DISCOVERY_TIMEOUT_SECONDS + 5
     MODEL_NAME = "google-gla:gemini-3.5-flash"
     API_KEY = os.environ.get("ORCHESTRATOR_API_KEY")
-    AGENT_DISCOVERY_PORTS = os.environ.get("AGENT_DISCOVERY_PORTS", "8001-8006")
+    AGENT_DISCOVERY_PORTS = os.environ.get("AGENT_DISCOVERY_PORTS", "8001-8007")
     REMOTE_EXECUTION_AGENT_HOSTS = os.environ.get("REMOTE_EXECUTION_AGENT_HOSTS", AGENT_BASE_URL)
+    # Shared bearer token expected by the execution agents' main A2A endpoint. Empty means the agents run without
+    # auth (e.g. local dev), so no Authorization header is attached.
+    REMOTE_EXECUTION_AGENT_AUTH_TOKEN = os.environ.get("REMOTE_EXECUTION_AGENT_AUTH_TOKEN", "")
 
 
 # Dashboard Authentication
@@ -188,7 +209,7 @@ class TestCaseReviewAgentConfig:
 class IncidentCreationAgentConfig:
     THINKING_LEVEL: ThinkingLevel = "medium"
     OWN_NAME = "Incident Creation Agent"
-    PORT = int(os.environ.get("PORT", "8006"))
+    PORT = int(os.environ.get("PORT", "8007"))
     EXTERNAL_PORT = int(os.environ.get("EXTERNAL_PORT", PORT))
     PROTOCOL = "http"
     MODEL_NAME = "google-gla:gemini-3.5-flash"

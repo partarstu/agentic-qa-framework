@@ -232,6 +232,20 @@ job. When a PR changes the component topology, flag any missing model update:
 A PR that adds an agent or an integration but leaves the CALM model untouched is **incomplete** — treat it as a
 `[MAJOR]` finding (the `Architecture (CALM)` gate should catch it, but call it out in review).
 
+### Hermetic Smoke Suite
+
+The hermetic smoke suite under `tests/smoke/` is the end-to-end safety net, enforced by the `smoke` CI job. When a PR
+changes observable end-to-end behaviour, the smoke suite must be updated in the same PR:
+
+- A new agent, a new orchestrator workflow/endpoint, or a new external integration must be exercised by a test in
+  `tests/smoke/test_smoke.py` (with any fixtures in `tests/smoke/conftest.py`, recording mocks under
+  `tests/smoke/mocks/`, and service entries in `docker-compose.smoke.yml` it needs).
+- A change to what an existing flow produces must be reflected in strengthened smoke assertions, not left untested.
+
+A PR that adds or extends an end-to-end flow but leaves `tests/smoke/` untouched is **incomplete** — treat it as a
+`[MAJOR]` finding. A pure internal refactor with no observable end-to-end change is exempt; confirm that is genuinely
+the case.
+
 ---
 
 ## Review Comment Severity Levels

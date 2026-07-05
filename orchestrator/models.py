@@ -58,6 +58,7 @@ class TaskRecord:
     error_message: str | None = None
     agent_logs: list[str] | None = None
     current_activity: str | None = None
+    token_usage: dict[str, Any] | None = None
 
     @property
     def duration_ms(self) -> int | None:
@@ -80,6 +81,7 @@ class TaskRecord:
             "error_message": self.error_message,
             "agent_logs": self.agent_logs,
             "current_activity": self.current_activity,
+            "token_usage": self.token_usage,
         }
 
 
@@ -146,6 +148,12 @@ class TaskHistory:
             if task_id in self._tasks_by_id:
                 task = self._tasks_by_id[task_id]
                 task.agent_logs = logs
+
+    async def update_usage(self, task_id: str, usage: dict[str, Any]) -> None:
+        """Update task with the agent's token usage and estimated cost."""
+        async with self._lock:
+            if task_id in self._tasks_by_id:
+                self._tasks_by_id[task_id].token_usage = usage
 
     async def get_by_id(self, task_id: str) -> TaskRecord | None:
         """Get a specific task by ID."""

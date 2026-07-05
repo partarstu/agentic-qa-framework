@@ -129,6 +129,7 @@ criteria.
 3. **Error handling**: Look for bare except blocks, silent failures
 4. **Security**: Check for hardcoded secrets, unsanitized inputs
 5. **Style**: Verify PEP 8 compliance, code clarity
+6. **End-to-end coverage**: If the PR adds a new agent/workflow/integration or changes what an existing flow produces, verify the hermetic smoke suite (`tests/smoke/`) was extended — a missing update is a `[MAJOR]` finding (see the *Hermetic Smoke Suite* section of the criteria doc)
 
 **For each issue found, record:**
 

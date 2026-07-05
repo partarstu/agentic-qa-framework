@@ -23,6 +23,9 @@ def mock_agent():
     queue = asyncio.Queue()
     agent._activity_queue = queue
     agent.activity_queue = queue
+    # Real agents start with no captured usage; the executor only emits a usage
+    # artifact when this is set, so default to None to mirror that contract.
+    agent.latest_token_usage = None
     return agent
 
 
@@ -77,6 +80,48 @@ async def test_execute_success(mock_agent, mock_context, mock_event_queue):
 
     assert isinstance(calls[3][0][0], TaskStatusUpdateEvent)
     assert calls[3][0][0].status.state == TaskState.TASK_STATE_COMPLETED
+
+
+@pytest.mark.asyncio
+async def test_execute_emits_usage_artifact(mock_agent, mock_context, mock_event_queue):
+    """When the agent captured token usage, a usage artifact is emitted before completion."""
+    from common.token_usage import TokenUsage
+
+    executor = DefaultAgentExecutor(mock_agent)
+    mock_context.message = MagicMock(spec=Message)
+
+    usage = TokenUsage(
+        model_name="openai:test-model",
+        input_tokens=100,
+        output_tokens=50,
+        total_tokens=150,
+        cache_read_tokens=0,
+        requests=1,
+        tool_calls=2,
+        cost_usd=0.0012,
+    )
+
+    # Mirror AgentBase.run, which populates latest_token_usage during the run (the executor
+    # resets it to None at task start, so it must be set from within run()).
+    async def run_and_capture_usage(_message):
+        mock_agent.latest_token_usage = usage
+        result = MagicMock()
+        result.parts = []
+        return result
+
+    mock_agent.run.side_effect = run_and_capture_usage
+
+    await executor.execute(mock_context, mock_event_queue)
+
+    usage_artifacts = [
+        call[0][0]
+        for call in mock_event_queue.enqueue_event.call_args_list
+        if isinstance(call[0][0], TaskArtifactUpdateEvent) and call[0][0].artifact.name == "agent_usage"
+    ]
+    assert len(usage_artifacts) == 1
+    payload = TokenUsage.model_validate_json(usage_artifacts[0].artifact.parts[0].raw.decode("utf-8"))
+    assert payload.total_tokens == 150
+    assert payload.cost_usd == 0.0012
 
 
 @pytest.mark.asyncio

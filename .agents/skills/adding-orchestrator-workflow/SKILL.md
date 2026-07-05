@@ -192,6 +192,26 @@ Create test cases in `tests/orchestrator/test_endpoints.py` or a new file:
 
 📄 **Example:** [examples/test_endpoint_example.py](examples/test_endpoint_example.py)
 
+### Step 12: Extend the Hermetic Smoke Suite
+
+The smoke suite under `tests/smoke/` drives the whole system end-to-end through the orchestrator's public interface
+against the real agents in `docker-compose.smoke.yml`, and the `smoke` CI job runs it. A new workflow — or a change to
+what an existing workflow produces — is new end-to-end behaviour, so the smoke suite **must** be updated in the same
+change. It is not optional.
+
+* **New endpoint/flow** → add a smoke test in `tests/smoke/test_smoke.py` (plus any fixtures in
+  `tests/smoke/conftest.py` and recording mocks under `tests/smoke/mocks/` it needs) that posts to the endpoint and
+  asserts on what reached the mocked boundary, following the existing tests.
+* **Extended flow** → strengthen the existing smoke assertions to cover the new behaviour rather than leaving it
+  untested.
+* Run it with the stack up:
+  ```bash
+  docker build -t agentic-qa-base:latest -f Dockerfile.base .
+  GOOGLE_API_KEY=<your-key> docker compose -f docker-compose.smoke.yml up -d --build
+  uv run pytest tests/smoke -m smoke -v
+  docker compose -f docker-compose.smoke.yml down -v
+  ```
+
 ## Complete Workflow Example
 
 For a full example including models and endpoint:
@@ -211,5 +231,6 @@ After adding the workflow, verify:
 - [ ] Unit tests cover success and failure cases
 - [ ] Documentation updated in README.md
 - [ ] CALM model updated if the workflow added an integration edge or a security control (and validation passes)
+- [ ] Smoke suite extended: a `tests/smoke/` test drives the new/changed workflow end-to-end and asserts on what reaches the mocked boundary
 - [ ] Tests pass: `pytest tests/orchestrator/ -v`
 - [ ] Endpoint accessible: `curl -X POST http://localhost:8000/<endpoint-path> -d '...'`

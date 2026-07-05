@@ -72,6 +72,7 @@ from common.streaming import (
     SnapshotEvent,
     TaskDoneEvent,
 )
+from common.token_usage import TokenUsage
 from orchestrator.auth import LoginRequest, TokenResponse, auth_service, dashboard_auth
 from orchestrator.dashboard_service import dashboard_service
 from orchestrator.memory_log_handler import setup_memory_logging
@@ -138,6 +139,7 @@ async def lifespan(app: FastAPI):
 
     # Start periodic tasks after initial discovery
     discovery_task = asyncio.create_task(periodic_agent_discovery())
+    health_check_task = asyncio.create_task(periodic_health_check())
     cancellation_task = asyncio.create_task(_retry_cancellation_task())
 
     yield
@@ -148,6 +150,12 @@ async def lifespan(app: FastAPI):
             await discovery_task
         except asyncio.CancelledError:
             logger.info("Agent discovery task successfully cancelled.")
+
+    if not health_check_task.cancel():
+        try:
+            await health_check_task
+        except asyncio.CancelledError:
+            logger.info("Agent health check task successfully cancelled.")
 
     if not cancellation_task.cancel():
         try:
@@ -471,6 +479,15 @@ async def _retry_cancellation_task():
             await asyncio.sleep(5)
 
 
+def _build_agent_auth_headers() -> dict[str, str]:
+    """Build the Authorization header for calls to the execution agents' guarded main endpoint.
+
+    Returns an empty mapping when no token is configured, so requests to local no-auth agents are unaffected.
+    """
+    token = config.OrchestratorConfig.REMOTE_EXECUTION_AGENT_AUTH_TOKEN
+    return {"Authorization": f"Bearer {token}"} if token else {}
+
+
 async def _cancel_agent_task(agent_card: AgentCard, task_id: str) -> bool:
     """Attempt to cancel a task on an agent using the A2A protocol.
 
@@ -483,7 +500,9 @@ async def _cancel_agent_task(agent_card: AgentCard, task_id: str) -> bool:
     """
     httpx_client: httpx.AsyncClient | None = None
     try:
-        httpx_client = httpx.AsyncClient(timeout=config.OrchestratorConfig.TASK_EXECUTION_TIMEOUT)
+        httpx_client = httpx.AsyncClient(
+            timeout=config.OrchestratorConfig.TASK_EXECUTION_TIMEOUT, headers=_build_agent_auth_headers()
+        )
         a2a_client = await create_client(
             agent_card,
             client_config=ClientConfig(httpx_client=httpx_client),
@@ -557,11 +576,27 @@ def _get_results_extractor_agent(output_type: type[JsonSerializableModel] | type
     )
 
 
+def _log_orchestrator_usage(result) -> None:
+    """Log the token usage and estimated cost of one orchestrator-internal LLM run.
+
+    Best-effort oversight: a failure to read usage must never break the workflow.
+    """
+    if result is None:
+        return
+    try:
+        usage = TokenUsage.from_run_usage(result.usage(), config.OrchestratorConfig.MODEL_NAME)
+        logger.info(usage.summary_line())
+    except Exception as e:
+        logger.debug(f"Could not record orchestrator token usage: {e}")
+
+
 async def _run_agent_with_retry(agent_call, base_delay: float = config.RetryConfig.RETRY_BASE_DELAY_SECONDS):
     """Runs an agent call with retry on transient LLM provider errors."""
     for attempt in range(config.RetryConfig.MAX_RETRIES):
         try:
-            return await agent_call()
+            result = await agent_call()
+            _log_orchestrator_usage(result)
+            return result
         except (ModelHTTPError, httpx.TransportError) as e:
             is_retryable = isinstance(e, httpx.TransportError) or (
                 isinstance(e, ModelHTTPError) and e.status_code in config.RetryConfig.RETRYABLE_STATUS_CODES
@@ -599,6 +634,40 @@ async def periodic_agent_discovery():
             _record_error(f"An error occurred during periodic agent discovery: {e}")
 
 
+async def _health_check_agents():
+    """Probes registered AVAILABLE agents for liveness. Unreachable agents are marked
+    BROKEN (OFFLINE) and queued for the recovery worker. BUSY and BROKEN agents are left
+    alone, as they are already covered by the dispatch path and the recovery worker."""
+    cards = await agent_registry.get_all_cards()
+
+    async def _check(agent_id: str, card: AgentCard):
+        if await agent_registry.get_status(agent_id) != AgentStatus.AVAILABLE:
+            return
+        if not card.supported_interfaces:
+            return
+        url = card.supported_interfaces[0].url
+        if await _check_agent_reachability(url):
+            return
+        # Re-check status to avoid clobbering an agent that just started a task.
+        if await agent_registry.get_status(agent_id) != AgentStatus.AVAILABLE:
+            return
+        logger.warning(f"Health check: agent {agent_id} at {url} is unreachable. Marking BROKEN (OFFLINE).")
+        await agent_registry.update_status(agent_id, AgentStatus.BROKEN, BrokenReason.OFFLINE)
+        await cancellation_queue.put((agent_id, time.time()))
+
+    await asyncio.gather(*(_check(agent_id, card) for agent_id, card in cards.items()))
+
+
+async def periodic_health_check():
+    """Periodically checks the liveness of already-registered agents."""
+    while True:
+        await asyncio.sleep(config.OrchestratorConfig.AGENT_HEALTH_CHECK_INTERVAL_SECONDS)
+        try:
+            await _health_check_agents()
+        except Exception as e:
+            _record_error(f"An error occurred during periodic agent health check: {e}")
+
+
 # noinspection PyUnusedLocal
 @orchestrator_app.post("/new-requirements-available")
 async def review_jira_requirements(request: Request, api_key: str = Depends(_validate_api_key)):
@@ -609,7 +678,7 @@ async def review_jira_requirements(request: Request, api_key: str = Depends(_val
         await _verify_jira_webhook_signature(request)
         logger.info("Received an event from Jira, requesting requirements review from an agent.")
         user_story_id = await _get_jira_issue_key_from_request(request)
-        task_description = "Review the Jira user story"
+        task_description = f"Review the Jira user story {user_story_id}"
         completed_task = await _send_task_to_agent(f"Jira user story with key {user_story_id}", task_description)
         _validate_task_status(completed_task, f"Review of the user story {user_story_id}")
         logger.info("Received response from an agent, requirements review seems to be complete.")
@@ -1000,7 +1069,7 @@ async def _request_incident_creation(
         IncidentCreationResult containing the created incident information,
         or None if an AgentExecutionError occurred.
     """
-    task_description = "Create incident report"
+    task_description = f"Create incident report for test case {incident_input.test_case.key}"
 
     # Create message with JSON text part and ALL artifact file parts
     message_parts: list[Part] = [Part(text=incident_input.model_dump_json())]
@@ -1038,7 +1107,7 @@ async def _request_test_cases_generation(user_story_id) -> GeneratedTestCases:
     Raises:
         HTTPException: If an AgentExecutionError is returned by the agent.
     """
-    task_description = "Generate test cases"
+    task_description = f"Generate test cases for Jira user story {user_story_id}"
     completed_task = await _send_task_to_agent(f"Jira user story with key {user_story_id}", task_description)
     task_description = f"Generation of test cases for the user story {user_story_id}"
     received_artifacts = _get_artifacts_from_task(completed_task, task_description)
@@ -1059,13 +1128,13 @@ def _get_artifacts_from_task(task: Task, task_description: str) -> list[Artifact
 
 
 async def _request_test_cases_classification(test_cases: list[TestCase], user_story_id: str) -> list[Artifact]:
-    task_description = "Classify test cases"
+    task_description = f"Classify test cases for Jira user story {user_story_id}"
     completed_task = await _send_task_to_agent(f"Test cases:\n{test_cases}", task_description)
     return _get_artifacts_from_task(completed_task, f"Classification of test cases for the user story {user_story_id}")
 
 
 async def _request_test_cases_review(test_cases: list[TestCase], user_story_id: str) -> list[Artifact]:
-    task_description = "Review test cases"
+    task_description = f"Review test cases for Jira user story {user_story_id}"
     completed_task = await _send_task_to_agent(
         f"Test cases:\n{test_cases}\nUser Story ID: {user_story_id}", task_description
     )
@@ -1089,6 +1158,7 @@ The information inside the input you need to find: the Jira issue key of each te
 Result format: a list of all found test case issue keys as a lift of strings.
 """
     result = await _get_results_extractor_agent(str).run(user_prompt)
+    _log_orchestrator_usage(result)
     issue_keys: list[str] = result.output or []
     logger.info(f"Extracted issue keys of {len(issue_keys)} test cases from test case generation agent's response.")
     return result.output or None
@@ -1170,6 +1240,8 @@ def _get_file_contents_from_artifacts(artifacts: list[Artifact] | None) -> list[
     if not artifacts:
         return file_parts
     for artifact in artifacts:
+        if artifact.name == ArtifactName.USAGE:
+            continue  # bookkeeping artifact, not a payload file
         for part in artifact.parts:
             if part.HasField("raw"):
                 file_parts.append(FileArtifact(name=part.filename or "", raw=part.raw, media_type=part.media_type))
@@ -1294,6 +1366,25 @@ async def _save_agent_logs_from_task(task: Task, internal_task_id: str) -> None:
         logger.warning(f"Failed to extract logs for task {internal_task_id}: {e}")
 
 
+async def _save_agent_usage_from_task(task: Task, internal_task_id: str) -> None:
+    """Extract the token-usage artifact from a completed task and store it on its record."""
+    try:
+        for artifact in task.artifacts or []:
+            if artifact.name != ArtifactName.USAGE:
+                continue
+            for part in artifact.parts:
+                if part.HasField("raw"):
+                    usage = TokenUsage.model_validate_json(part.raw.decode("utf-8"))
+                    await task_history.update_usage(internal_task_id, usage.model_dump())
+                    logger.info(
+                        f"Task {internal_task_id} {usage.summary_line()}",
+                        extra={"task_id": internal_task_id},
+                    )
+                    return
+    except Exception as e:
+        logger.warning(f"Failed to extract token usage for task {internal_task_id}: {e}")
+
+
 async def _send_task_to_agent_with_message(message: Message, task_description: str) -> Task | None:
     """Send a custom message (with file parts) to an agent.
 
@@ -1326,7 +1417,9 @@ async def _send_task_to_agent_with_message(message: Message, task_description: s
         await task_history.add(task_record)
         await agent_registry.set_current_task(agent_id, internal_task_id)
 
-        httpx_client = httpx.AsyncClient(timeout=config.OrchestratorConfig.TASK_EXECUTION_TIMEOUT)
+        httpx_client = httpx.AsyncClient(
+            timeout=config.OrchestratorConfig.TASK_EXECUTION_TIMEOUT, headers=_build_agent_auth_headers()
+        )
         a2a_client = await create_client(
             agent_card,
             client_config=ClientConfig(httpx_client=httpx_client),
@@ -1354,6 +1447,7 @@ async def _send_task_to_agent_with_message(message: Message, task_description: s
                     completed_task = Task(id=last_task_id or "", status=last_status, artifacts=collected_artifacts)
                     await _finalize_task(internal_task_id, agent_id, final_status)
                     await _save_agent_logs_from_task(completed_task, internal_task_id)
+                    await _save_agent_usage_from_task(completed_task, internal_task_id)
                     await agent_registry.update_status(agent_id, AgentStatus.AVAILABLE)
                     await agent_registry.set_current_task(agent_id, None)
                     return completed_task
@@ -1411,6 +1505,7 @@ async def _send_task_to_agent_with_message(message: Message, task_description: s
                     completed_task = Task(id=last_task_id, status=last_status, artifacts=collected_artifacts)
                     await _finalize_task(internal_task_id, agent_id, final_status, error_msg)
                     await _save_agent_logs_from_task(completed_task, internal_task_id)
+                    await _save_agent_usage_from_task(completed_task, internal_task_id)
                     await agent_registry.update_status(agent_id, AgentStatus.AVAILABLE)
                     await agent_registry.set_current_task(agent_id, None)
                     return completed_task
@@ -1655,7 +1750,7 @@ async def _get_agents_info(available_agent_ids: list[str]) -> str:
         card = all_cards.get(agent_id)
         if card:
             agents_info += (
-                f"- Name: {card.name}, ID: {agent_id}, Description: {card.description}, Skills: "
+                f"- Name: {card.name}, ID: {agent_id}, Skills: "
                 f"{'; '.join(skill.description for skill in card.skills)}\n"
             )
     return agents_info
@@ -1725,7 +1820,7 @@ async def _check_agent_reachability(agent_base_url: str) -> bool:
     try:
         async with httpx.AsyncClient() as client:
             response = await client.get(
-                agent_card_url, timeout=config.OrchestratorConfig.AGENT_DISCOVERY_TIMEOUT_SECONDS
+                agent_card_url, timeout=config.OrchestratorConfig.AGENT_HEALTH_CHECK_TIMEOUT_SECONDS
             )
             return response.status_code == 200
     except Exception:
@@ -1733,33 +1828,24 @@ async def _check_agent_reachability(agent_base_url: str) -> bool:
 
 
 async def _process_url_discovery(url: str):
-    existing_agent_id = await agent_registry.get_agent_id_by_url(url)
+    """Register a new agent found at the URL. Liveness of already-registered agents is the
+    health-check loop's responsibility, so known URLs are skipped here."""
+    if await agent_registry.get_agent_id_by_url(url):
+        return
+
+    agent_card = await _fetch_agent_card(url)
+    if not agent_card:
+        return
+
+    card_url = agent_card.supported_interfaces[0].url
+    existing_agent_id = await agent_registry.get_agent_id_by_url(card_url)
     if existing_agent_id:
-        if await _check_agent_reachability(url):
-            status = await agent_registry.get_status(existing_agent_id)
-            if status == AgentStatus.BROKEN:
-                broken_reason, _ = await agent_registry.get_broken_context(existing_agent_id)
-                if broken_reason in (BrokenReason.OFFLINE, BrokenReason.TASK_STUCK):
-                    logger.info(
-                        f"Agent {existing_agent_id} (URL: {url}) was BROKEN ({broken_reason}) "
-                        f"but is now responsive. Resetting to AVAILABLE."
-                    )
-                    await agent_registry.update_status(existing_agent_id, AgentStatus.AVAILABLE)
-        else:
-            logger.info(f"Agent {existing_agent_id} at {url} is unreachable. Removing from registry.")
-            await agent_registry.remove(existing_agent_id)
-    else:
-        agent_card = await _fetch_agent_card(url)
-        if agent_card:
-            existing_agent_id = await agent_registry.get_agent_id_by_url(agent_card.supported_interfaces[0].url)
-            if existing_agent_id:
-                logger.debug(
-                    f"Agent with URL {agent_card.supported_interfaces[0].url} is already registered with ID {existing_agent_id}."
-                )
-            else:
-                new_agent_id = str(uuid4())
-                await agent_registry.register(new_agent_id, agent_card)
-                logger.info(f"Discovered and registered agent with URL: {agent_card.supported_interfaces[0].url}")
+        logger.debug(f"Agent with URL {card_url} is already registered with ID {existing_agent_id}.")
+        return
+
+    new_agent_id = str(uuid4())
+    await agent_registry.register(new_agent_id, agent_card)
+    logger.info(f"Discovered and registered agent with URL: {card_url}")
 
 
 async def _discover_agents():

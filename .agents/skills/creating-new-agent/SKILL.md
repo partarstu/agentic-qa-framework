@@ -140,6 +140,27 @@ Create `tests/agents/test_<agent_name>.py`:
 
 📄 **Example:** [examples/test_agent_example.py](examples/test_agent_example.py)
 
+### Step 11: Extend the Hermetic Smoke Suite
+
+The smoke suite under `tests/smoke/` exercises the whole system end-to-end against the real orchestrator and agents in
+`docker-compose.smoke.yml`, and the `smoke` CI job runs it. A new agent is new end-to-end behaviour, so the smoke suite
+**must** be updated in the same change — it is not optional.
+
+1. Add the agent to the `docker-compose.smoke.yml` topology so it starts and registers with the orchestrator, mirroring
+   the existing agent services.
+2. If the agent reaches an external boundary, add or extend a recording mock under `tests/smoke/mocks/` so its effect is
+   captured.
+3. Add a smoke test in `tests/smoke/test_smoke.py` (plus any fixtures it needs in `tests/smoke/conftest.py`) that drives
+   the agent through the orchestrator's public webhooks and asserts on what reached the mocked boundary, following the
+   existing tests.
+4. Run the suite with the stack up:
+   ```bash
+   docker build -t agentic-qa-base:latest -f Dockerfile.base .
+   GOOGLE_API_KEY=<your-key> docker compose -f docker-compose.smoke.yml up -d --build
+   uv run pytest tests/smoke -m smoke -v
+   docker compose -f docker-compose.smoke.yml down -v
+   ```
+
 ## Verification Checklist
 
 After creating the agent, verify:
@@ -154,6 +175,7 @@ After creating the agent, verify:
 - [ ] Agent registered as a node (with its `prompt-injection-guard` control) in `calm/architecture/quaia.arch.json` and asserted in `calm/patterns/quaia.pattern.json`
 - [ ] CALM validation passes: `npx -y @finos/calm-cli@1.46.0 validate -p patterns/quaia.pattern.json -a architecture/quaia.arch.json -u url-mapping.json --strict` (from `calm/`)
 - [ ] Unit tests pass: `pytest tests/agents/test_<agent_name>.py -v`
+- [ ] Smoke suite extended: the agent runs in `docker-compose.smoke.yml` and a `tests/smoke/` test asserts its end-to-end behaviour
 - [ ] Agent starts successfully: `python agents/<agent_name>/main.py`
 - [ ] Agent card is discoverable at `http://localhost:<port>/.well-known/agent.json`
 
