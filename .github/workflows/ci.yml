@@ -195,6 +195,11 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      # The compose build below must see the base image via the local daemon's
+      # image store, which the docker-container builder above does not share.
+      - name: Switch back to the default builder
+        run: docker buildx use default
+
       - name: Start the smoke topology
         env:
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
