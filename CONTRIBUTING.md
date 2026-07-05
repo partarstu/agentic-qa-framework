@@ -9,8 +9,8 @@ Pycharm's default Code Formatter is currently being used in this project. The co
 
 Commits should be small and compilable.
 
-In order to start any contribution work, first you need to create a custom branch from the master branch. After your changes are completed, 
-merge the master branch into yours before submitting your PR. Any conflicts will have to be resolved in order to achieve this.
+In order to start any contribution work, first you need to create a custom branch from the main branch. After your changes are completed, 
+merge the main branch into yours before submitting your PR. Any conflicts will have to be resolved in order to achieve this.
 
 Please add unit tests, if possible, for the implemented feature or bug fix, unless you pull request contains no code changes (e.g. docs updates etc.).
 

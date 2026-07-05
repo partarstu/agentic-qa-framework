@@ -1,73 +1,50 @@
-# React + TypeScript + Vite
+# Orchestrator Dashboard UI
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+A React + TypeScript + Vite single-page app that provides the QuAIA™ orchestrator's real-time web monitoring
+dashboard: agent status, task history, error log and log viewer, served by the orchestrator (see the root
+[README](../../README.md#web-ui-monitoring-dashboard) for the feature list and dashboard REST/SSE API reference).
 
-Currently, two official plugins are available:
+## Stack
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+* React 19 + TypeScript, built with Vite 7
+* Tailwind CSS v4 for styling
+* TanStack Query + `axios` for data fetching against the orchestrator's `/api/dashboard/*` REST endpoints
+* Native `EventSource` (see `src/api/sse.ts`) for the orchestrator's SSE streams (`snapshot`, `agent_activity`,
+  `task_done`, `log_batch`, `gap`, `heartbeat`), with reconnect/backoff and short-lived stream-token handling
+  (`src/api/streamToken.ts`)
+* JWT-based login (`src/components/LoginPage.tsx`, `src/context/AuthContext.tsx`, `src/api/authApi.ts`) against the
+  orchestrator's `/api/auth/*` endpoints
 
-## React Compiler
+## Running in development
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+The dev server proxies `/api` requests to a locally running orchestrator, so the orchestrator's port must be known
+up front:
 
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+cd orchestrator/ui
+export ORCHESTRATOR_PORT=8000   # must match the running orchestrator; Windows: set ORCHESTRATOR_PORT=8000
+npm install
+npm run dev
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+The dev server runs at `http://localhost:5173` and proxies `/api` calls to `http://localhost:$ORCHESTRATOR_PORT`.
+`vite.config.ts` throws immediately on `npm run dev`/`vite` if `ORCHESTRATOR_PORT` is not set.
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+## Building for production
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+cd orchestrator/ui
+# Windows
+start.bat
+# Linux/macOS
+./start.sh
 ```
+
+Both scripts also require `ORCHESTRATOR_PORT` to be set. They install dependencies if needed, run `npm run build`
+(`tsc -b && vite build`), copy the resulting `dist/` into `orchestrator/static/` so the orchestrator can serve the
+built assets directly, and then start the dev server (`npm run dev`) on top of that build.
+
+## Other scripts
+
+* `npm run lint` — ESLint (`eslint.config.js`)
+* `npm run preview` — serve the last production build locally without the orchestrator proxy

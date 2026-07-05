@@ -29,6 +29,7 @@ drift away from the system without the build failing.
 | `jira-webhook-hmac` | `rel-jira-webhook-orchestrator` | `X-Hub-Signature` HMAC-SHA256 (`JIRA_WEBHOOK_SECRET`) |
 | `prompt-injection-guard` | every agent node | Prompt-injection screening (`PROMPT_INJECTION_CHECK_ENABLED`) |
 | `internal-service-api-key` | `embedding-service`, `prompt-guard-service` | Shared `X-API-Key` (`INTERNAL_SERVICE_API_KEY`) |
+| `execution-agent-bearer-token` | `rel-orchestrator-routes-execution-tasks` | `Authorization: Bearer` on the execution agents' main A2A endpoint (`REMOTE_EXECUTION_AGENT_AUTH_TOKEN`) |
 
 ## Running validation locally
 

@@ -116,6 +116,7 @@ The model captures every service and external system as `nodes`, the integration
 | Jira webhook HMAC | Jira → Orchestrator | `X-Hub-Signature` HMAC-SHA256 (`JIRA_WEBHOOK_SECRET`) |
 | Prompt-injection guard | Every agent | Prompt-injection screening (`PROMPT_INJECTION_CHECK_ENABLED`) |
 | Internal service API key | Embedding & Prompt Guard services | Shared `X-API-Key` (`INTERNAL_SERVICE_API_KEY`) |
+| Execution agent bearer token | Orchestrator → execution agents | `Authorization: Bearer` on the execution agents' main A2A endpoint (`REMOTE_EXECUTION_AGENT_AUTH_TOKEN`) |
 
 A governance **pattern** (`calm/patterns/quaia.pattern.json`) asserts that every required node, relationship and control
 is present. The CI pipeline runs this validation as a **blocking** `Architecture (CALM)` job, so removing an agent or
@@ -174,9 +175,16 @@ Create a `.env` file in the project root and configure the following environment
 behavior of the orchestrator and agents.
 
 ```
+# LLM Provider
+GOOGLE_API_KEY=YOUR_GOOGLE_API_KEY # Required. Gemini API key consumed directly by pydantic-ai's google-gla provider
+                                 # for every agent's and the orchestrator's LLM calls.
+
 # Logging
 LOG_LEVEL=INFO # Default: INFO. Controls the verbosity of logging.
 GOOGLE_CLOUD_LOGGING_ENABLED=False # Default: False. Set to "True" to enable Google Cloud Logging.
+LOG_TO_FILE=True # Default: True. When enabled, each service also writes its logs to a rotating file under LOG_DIR
+                                 # (e.g. orchestrator.log, requirements_review.log).
+LOG_DIR=logs # Default: a "logs" directory next to config.py. Directory for the rotating per-service log files.
 
 # Orchestrator
 ORCHESTRATOR_HOST=localhost # Default: localhost. The host where the orchestrator runs.
@@ -189,6 +197,11 @@ ORCHESTRATOR_API_KEY=YOUR_ORCHESTRATOR_API_KEY # Required. Authenticates the orc
 JIRA_WEBHOOK_SECRET= # Optional but recommended. When set, Jira webhook requests must carry a valid
                                  # 'X-Hub-Signature' HMAC-SHA256 of the raw body; invalid/missing signatures are rejected.
 JIRA_MCP_SERVER_URL=http://localhost:9000/sse # Default: http://localhost:9000/sse. The URL of the Jira MCP server.
+JIRA_URL=YOUR_JIRA_INSTANCE_URL # Required for the orchestrator's RAG DB sync and for Xray. The base URL of your Jira
+                                 # instance (e.g. https://your-company.atlassian.net). Also used by the separate Jira
+                                 # MCP server (see "Jira MCP Server Setup" below), which has its own .env file.
+JIRA_USERNAME=YOUR_JIRA_USERNAME # Required alongside JIRA_URL. The email address associated with your Jira account.
+JIRA_API_TOKEN=YOUR_JIRA_API_TOKEN # Required alongside JIRA_URL. A Jira API token for authentication.
 
 # Dashboard Authentication
 # These settings control access to the UI monitoring dashboard at /api/dashboard/*
@@ -198,8 +211,14 @@ DASHBOARD_JWT_SECRET=change-me-in-production-please # Required. Secret key for J
 DASHBOARD_JWT_EXPIRE_HOURS=24 # Default: 24. Number of hours before JWT tokens expire.
 
 # Zephyr Test Management System
-ZEPHYR_BASE_URL=YOUR_ZEPHYR_BASE_URL # Required. The base URL of your Zephyr instance.
-ZEPHYR_API_TOKEN=YOUR_ZEPHYR_API_TOKEN # Required. API token for Zephyr authentication.
+ZEPHYR_BASE_URL=YOUR_ZEPHYR_BASE_URL # Required if TEST_MANAGEMENT_SYSTEM=zephyr. The base URL of your Zephyr instance.
+ZEPHYR_API_TOKEN=YOUR_ZEPHYR_API_TOKEN # Required if TEST_MANAGEMENT_SYSTEM=zephyr. API token for Zephyr authentication.
+
+# Xray Test Management System
+XRAY_BASE_URL=YOUR_XRAY_BASE_URL # Required if TEST_MANAGEMENT_SYSTEM=xray. The base URL of your Xray instance.
+XRAY_CLIENT_ID=YOUR_XRAY_CLIENT_ID # Required if TEST_MANAGEMENT_SYSTEM=xray. Xray API client ID.
+XRAY_CLIENT_SECRET=YOUR_XRAY_CLIENT_SECRET # Required if TEST_MANAGEMENT_SYSTEM=xray. Xray API client secret.
+XRAY_PRECONDITIONS_FIELD_ID=Pre-conditions # Default: Pre-conditions. Jira field ID/name holding a test case's preconditions.
 
 # Agent Configuration
 AGENT_BASE_URL=http://localhost # Default: http://localhost. Base URL for agents.
@@ -223,43 +242,50 @@ JIRA_ATTACHMENT_SKIP_POSTFIX=_SKIP # Default: _SKIP. Attachments with filenames 
 OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 # Default: http://localhost:4317. Endpoint for OpenTelemetry collector.
 
 # Test Management System
-TEST_MANAGEMENT_SYSTEM=zephyr # Default: zephyr. Specifies the test management system in use.
+TEST_MANAGEMENT_SYSTEM=zephyr # Default: zephyr. Specifies the test management system in use. One of "zephyr" or "xray".
 
 # Test Reporting
 TEST_REPORTER=allure # Default: allure. Specifies the test reporting tool.
-ALLURE_RESULTS_DIR=allure-results # Default: allure-results. Directory for Allure test results.
-ALLURE_REPORT_DIR=allure-report # Default: allure-report. Directory for generated Allure reports.
-
-# Common Model Configuration
-TOP_P=1.0 # Default: 1.0. Top-p sampling parameter for models.
-TEMPERATURE=0.0 # Default: 0.0. Temperature parameter for models.
 
 # Qdrant Vector Database (for RAG and semantic search)
 QDRANT_URL=http://localhost # Default: http://localhost. URL of the Qdrant server.
 QDRANT_PORT=6333 # Default: 6333. Port of the Qdrant server.
 QDRANT_API_KEY= # Optional. API key for Qdrant authentication.
+QDRANT_TIMEOUT_SECONDS=30 # Default: 30. Request timeout for the Qdrant client.
 QDRANT_COLLECTION_NAME=jira_issues # Default: jira_issues. Name of the main collection for Jira issues.
+QDRANT_TICKETS_COLLECTION_NAME=jira_issues # Default: jira_issues. Name of the collection the RAG DB sync writes Jira issues to.
 QDRANT_METADATA_COLLECTION_NAME=rag_metadata # Default: rag_metadata. Name of the collection for RAG metadata.
 RAG_MIN_SIMILARITY_SCORE=0.7 # Default: 0.7. Minimum similarity score for vector search results.
 RAG_MAX_RESULTS=5 # Default: 5. Maximum number of results to return from vector search.
 RAG_EMBEDDING_MODEL=Qwen/Qwen3-Embedding-0.6B # Default: Qwen/Qwen3-Embedding-0.6B. SentenceTransformer model for embeddings.
 EMBEDDING_SERVICE_URL= # Required for agents using Vector DB. URL of the embedding service for remote embedding generation.
-EMBEDDING_SERVICE_TIMEOUT_SECONDS=60.0 # Default: 60.0. Timeout for embedding service requests.
+EMBEDDING_SERVICE_TIMEOUT_SECONDS=120.0 # Default: 120.0. Timeout for embedding service requests.
 EMBEDDING_SERVICE_MAX_RETRIES=6 # Default: 6. Connect/timeout retry attempts (with backoff) while the embedding service starts (e.g. Cloud Run cold start).
 EMBEDDING_SERVICE_RETRY_BACKOFF_CAP_SECONDS=32.0 # Default: 32.0. Upper bound for the exponential backoff between embedding service retries.
+JIRA_VALID_STATUSES=To Do,In Review,Ready for Development,In Progress,Done # Default shown. Comma-separated Jira
+                                 # statuses eligible to be synced into the RAG vector DB.
 
 # Incident Creation Agent Configuration
 INCIDENT_AGENT_MIN_SIMILARITY_SCORE=0.7 # Default: 0.7. Minimum score for duplicate detection.
 ISSUE_PRIORITY_FIELD_ID=priority # Default: priority. Jira field ID for issue priority.
 ISSUE_SEVERITY_FIELD_NAME=customfield_10124 # Default: customfield_10124. Jira custom field name for severity.
+JIRA_BUG_ISSUE_TYPE=Bug # Default: Bug. Jira issue type used when searching the vector DB for duplicate bugs.
+INCIDENT_AGENT_SEVERITY_VALUES='10020':blocker or crash,'10021':functional failure,'10022':UI/UX issue,'10023':typo or minor visual issue
+                                 # Default shown. Comma-separated "value:description" pairs offered to the LLM for the
+                                 # ISSUE_SEVERITY_FIELD_NAME field.
+INCIDENT_AGENT_PRIORITY_VALUES=High:immediate fix,Medium:normal release,Low:backlog # Default shown. Comma-separated
+                                 # "value:description" pairs offered to the LLM for the ISSUE_PRIORITY_FIELD_ID field.
+INCIDENT_AGENT_TERMINAL_STATUSES=Closed,Done,Duplicate,Rejected,Won't Fix,Cannot Reproduce,Resolved # Default shown.
+                                 # Comma-separated Jira statuses excluded from duplicate-bug detection.
 
 # Prompt Injection Detection
-PROMPT_INJECTION_CHECK_ENABLED=True # Default: True (secure by default). Set to "False" to disable prompt injection detection. When enabled, PROMPT_GUARD_SERVICE_URL must point to a running prompt guard service.
+PROMPT_INJECTION_CHECK_ENABLED=False # Default: False. Set to "True" to enable prompt injection detection. When enabled, PROMPT_GUARD_SERVICE_URL must point to a running prompt guard service.
 PROMPT_GUARD_PROVIDER=protect_ai # Default: protect_ai. The provider for prompt injection detection.
 PROMPT_GUARD_SERVICE_URL= # Required if PROMPT_INJECTION_CHECK_ENABLED is True. URL of the prompt guard service.
 INTERNAL_SERVICE_API_KEY= # Optional shared secret. When set, the embedding and prompt-guard services require a matching X-API-Key header (and their clients send it). Recommended whenever those services are not strictly network-isolated.
 PROMPT_INJECTION_MIN_SCORE=0.8 # Default: 0.8. The minimum score for a prompt to be considered an injection.
 PROMPT_INJECTION_MODEL_NAME=ProtectAI/deberta-v3-base-prompt-injection-v2 # Default: ProtectAI/deberta-v3-base-prompt-injection-v2. The name of the model used for prompt injection detection.
+```
 
 **Note on Local Models:**
 If you are running the orchestrator or agents locally (not in a Docker container deployed to the cloud), you must manually download the necessary models:
@@ -267,16 +293,6 @@ If you are running the orchestrator or agents locally (not in a Docker container
 2. **Embedding Model:** Required for components using the Vector DB (the Incident Creation agent and the Orchestrator, which runs the Jira RAG sync). Run `scripts/download_embedding_model.py`.
 
 When deploying to cloud environments via Docker, the model downloads are handled automatically as part of the Docker image build process.
-# Specific Agent Model Names (example values, adjust as needed)
-# These specify the AI model to be used by each component.
-# Refer to your model provider's documentation for available model names.
-ORCHESTRATOR_MODEL_NAME=google-gla:gemini-2.5-flash
-REQUIREMENTS_REVIEW_AGENT_MODEL_NAME=google-gla:gemini-2.5-pro
-TEST_CASE_CLASSIFICATION_AGENT_MODEL_NAME=google-gla:gemini-2.5-flash
-TEST_CASE_GENERATION_AGENT_MODEL_NAME=google-gla:gemini-2.5-flash
-INCIDENT_CREATION_AGENT_MODEL_NAME=google-gla:gemini-2.5-flash
-TEST_CASE_REVIEW_AGENT_MODEL_NAME=google-gla:gemini-2.5-pro
-```
 
 ### Jira MCP Server Setup
 
@@ -375,11 +391,13 @@ The orchestrator includes a built-in web UI for monitoring agent status, tasks, 
 Once the orchestrator is running, navigate to `http://localhost:8000/` (or your configured orchestrator URL) to
 access the dashboard. You will be prompted to log in with your configured credentials.
 
-**Default Credentials:**
-- Username: `admin`
-- Password: `admin`
+**Credentials:**
 
-> **⚠️ Important:** Change the default credentials in production by setting the `DASHBOARD_USERNAME`, `DASHBOARD_PASSWORD`, and `DASHBOARD_JWT_SECRET` environment variables.
+`DASHBOARD_USERNAME`, `DASHBOARD_PASSWORD`, and `DASHBOARD_JWT_SECRET` have no default values — until all three are
+set, the dashboard fails closed and login returns HTTP 503. The `.env` example above uses `admin`/`admin` only as a
+placeholder.
+
+> **⚠️ Important:** Never use placeholder credentials in production.
 
 #### Dashboard Features
 
@@ -391,10 +409,12 @@ access the dashboard. You will be prompted to log in with your configured creden
 
 #### Starting the UI Development Server (For Development Only)
 
-If you want to run the UI in development mode with hot-reloading:
+If you want to run the UI in development mode with hot-reloading, `ORCHESTRATOR_PORT` must be set to the port the
+orchestrator is running on first — the dev server's proxy configuration requires it and fails to start otherwise:
 
 ```bash
 cd orchestrator/ui
+export ORCHESTRATOR_PORT=8000   # Windows (PowerShell): $env:ORCHESTRATOR_PORT=8000
 npm install
 npm run dev
 ```
@@ -403,7 +423,7 @@ The development server runs on port 5173 with a proxy to the orchestrator backen
 
 #### Building the UI for Production
 
-To build the UI and integrate it with the orchestrator:
+To build the UI and integrate it with the orchestrator (`ORCHESTRATOR_PORT` must be set as above):
 
 ```bash
 cd orchestrator/ui
@@ -414,7 +434,8 @@ start.bat
 ./start.sh
 ```
 
-This will build the React application and copy the static files to `orchestrator/static/` for serving by the orchestrator.
+This will build the React application, copy the static files to `orchestrator/static/` for serving by the
+orchestrator, and then start the dev server on top of that build.
 
 ### Token Budget and Cost Oversight
 
@@ -477,6 +498,11 @@ you run any of the commands below.
     * `ZEPHYR_BASE_URL`
     * `JIRA_MCP_SERVER_URL`
     * `ORCHESTRATOR_API_KEY`
+    * `QDRANT_API_KEY`
+    * `DASHBOARD_USERNAME`
+    * `DASHBOARD_PASSWORD`
+    * `DASHBOARD_JWT_SECRET`
+    * `AGENT_AUTH_TOKEN` (mapped to the orchestrator's `REMOTE_EXECUTION_AGENT_AUTH_TOKEN`)
 5. Cloud Storage bucket for general operations (with all needed folders created, see "Substitution Variables").
 6. Cloud Storage bucket for storing and publicly serving test execution reports (this bucket needs to have public
    access)
@@ -496,8 +522,8 @@ gcloud builds submit --config 'path/to/your/cloudbuild.yaml' --substitutions "`^
 **Substitution Variables:**
 * `_BUCKET_NAME`: The name of the Google Cloud Storage bucket used for storing attachments downloaded by Jira MCP
   server.
-* `_JIRA_ATTACHMENTS_FOLDER`: The name of the folder where attachments from Jira MCP server will be saved, must be the
-  same as 'JIRA_ATTACHMENTS_CLOUD_STORAGE_FOLDER' environment variable
+* `_JIRA_ATTACHMENTS_FOLDER`: The name of the subdirectory within `_BUCKET_NAME` that is mounted as the Jira MCP
+  server's attachments volume (`only-dir` on the Cloud Run volume mount). Default: `jira`.
 * `_ALLURE_REPORTS_BUCKET`: The GCS bucket where test execution HTML reports will be stored.
 * `_REQUIREMENTS_REVIEW_AGENT_BASE_URL`: The URL of the deployed Requirements Review Agent.
 * `_TEST_CASE_GENERATION_AGENT_BASE_URL`: The URL of the deployed Test Case Generation Agent.
@@ -507,7 +533,18 @@ gcloud builds submit --config 'path/to/your/cloudbuild.yaml' --substitutions "`^
 * `_REMOTE_EXECUTION_AGENT_HOSTS`: A comma-separated list of URLs for all deployed agents that the orchestrator will
   interact with.
 * `_PROMPT_GUARD_SERVICE_URL`: The URL of the deployed Prompt Guard Service.
-* `_DEPLOY_ALL_SERVICES`: Set to `true` to deploy all services. Individual service flags (e.g., `_DEPLOY_JIRA_MCP`) are available for granular deployment.
+* `_EMBEDDING_SERVICE_URL`: The URL of the deployed Embedding Service.
+* `_QDRANT_URL`: The URL of the deployed Qdrant service.
+* `_QDRANT_STORAGE_FOLDER`: The subdirectory within `_BUCKET_NAME` mounted as Qdrant's storage volume. Default: `qdrant`.
+* `_TIMEZONE`: The `TZ` environment variable applied to every deployed service. Default: `Europe/Vienna`.
+* `_ORCHESTRATOR_REQUEST_TIMEOUT`: The Cloud Run request timeout for the orchestrator service. Default: `3500s`.
+* `_ALLURE_REPORTS_CONTAINER_PATH`: The path inside the orchestrator container where the Allure reports volume is
+  mounted. Default: `/app/allure-report`.
+* `_LOCAL_ATTACHMENTS_MOUNT_PATH` / `_JIRA_MCP_SERVER_ATTACHMENTS_MOUNT_PATH`: The container paths where the shared
+  attachments volume is mounted for the orchestrator/agents and for the Jira MCP server, respectively. Both default to
+  `/tmp` and correspond to `ATTACHMENTS_LOCAL_DESTINATION_FOLDER_PATH` / `MCP_SERVER_ATTACHMENTS_FOLDER_PATH`.
+* `_DEPLOY_ALL_SERVICES`: Set to `true` to deploy all services. Individual service flags — `_DEPLOY_JIRA_MCP`,
+  `_DEPLOY_EMBEDDING_SERVICE`, `_DEPLOY_PROMPT_GUARD`, `_DEPLOY_QDRANT` — are available for granular deployment instead.
 
 **Important**: Before the initial deployment of the framework into Google Cloud Run it's quite hard to know which URL
 will be assigned to each agent and orchestrator. That's why most probably you'll have to run the deployment command
@@ -540,8 +577,8 @@ each mocked boundary:
 The four webhooks are fired once, concurrently (the flows are mutually independent), so the suite's wall time is the
 longest flow rather than the sum of all flows.
 
-It runs in GitHub Actions (the `smoke` job in `.github/workflows/ci.yml`) on pushes to `main` and on manual
-`workflow_dispatch` only — never on pull requests — because every run makes real, billed Gemini calls. The job needs a
+It runs in GitHub Actions (the `smoke` job in `.github/workflows/ci.yml`) on pull requests and on manual
+`workflow_dispatch` only — never on pushes to `main` — because every run makes real, billed Gemini calls. The job needs a
 `GOOGLE_API_KEY` repository secret. To run it locally:
 
 ```bash
@@ -633,6 +670,10 @@ The dashboard exposes REST API endpoints for programmatic access to monitoring d
 * `GET /api/dashboard/errors?limit=20` - Get recent errors with context.
 * `GET /api/dashboard/logs?limit=100&offset=0&level=ERROR&task_id=xxx&agent_id=yyy` - Get filtered application logs (supports pagination via `offset`).
 * `POST /api/dashboard/discovery` - Manually trigger agent discovery.
+
+**Other (unauthenticated):**
+
+* `GET /api/source` - AGPL-3.0 §13 compliance: returns the project's name, copyright, license and source-code URL.
 
 ## A2A Streaming Contract
 
@@ -760,7 +801,7 @@ uv run pytest tests/common/
 The suite under `tests/smoke/` is marked `smoke` and drives the hermetic docker-compose topology described in
 [Hermetic smoke tests](#hermetic-smoke-tests) above, not local code in isolation. Because it needs that stack running, it
 is excluded from a bare `uv run pytest` by default (via `addopts` in `pytest.ini`), so local runs stay harmless. Once the
-stack is up, run it explicitly with `uv run pytest -m smoke`. It runs in CI on pushes to `main` and on manual
+stack is up, run it explicitly with `uv run pytest -m smoke`. It runs in CI on pull requests and on manual
 `workflow_dispatch` only (see *Hermetic smoke tests* above).
 
 ## Contributing
