@@ -198,6 +198,7 @@ jobs:
       - name: Start the smoke topology
         env:
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          COMPOSE_BAKE: "false"
         run: docker compose -f docker-compose.smoke.yml up -d --build --wait
 
       - name: Run smoke tests
