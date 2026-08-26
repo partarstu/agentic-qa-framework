@@ -16,6 +16,8 @@ from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
+from urllib.parse import urlparse
 from uuid import uuid4
 
 import httpx
@@ -48,6 +50,7 @@ from common.a2a_contract import ArtifactName
 from common.custom_llm_wrapper import CustomLlmWrapper
 from common.models import (
     AgentExecutionError,
+    AgentInfo,
     FileArtifact,
     GeneratedTestCases,
     IncidentCreationInput,
@@ -479,6 +482,30 @@ async def _retry_cancellation_task():
             await asyncio.sleep(5)
 
 
+def _build_agent_info(card: AgentCard | None, agent_name: str) -> AgentInfo:
+    """Traceability data for a test execution result: which agent ran it, in which version and environment."""
+    return AgentInfo(
+        agent_name=card.name if card else agent_name,
+        agent_version=card.version if card else "unknown",
+        environment=config.OrchestratorConfig.TEST_ENVIRONMENT_LABEL,
+    )
+
+
+def _describe_execution_system(agent_info: AgentInfo) -> str:
+    """Fallback description of the system a test case was executed on."""
+    return (
+        f"Agent: {agent_info.agent_name} (version {agent_info.agent_version}), "
+        f"Environment: {agent_info.environment}"
+    )
+
+
+def _get_agent_host(card: AgentCard | None) -> str:
+    """Hostname of an agent's primary interface, so log lines name the machine the agent runs on."""
+    if not card or not card.supported_interfaces:
+        return "unknown"
+    return urlparse(card.supported_interfaces[0].url).hostname or "unknown"
+
+
 def _build_agent_auth_headers() -> dict[str, str]:
     """Build the Authorization header for calls to the execution agents' guarded main endpoint.
 
@@ -612,13 +639,43 @@ async def _run_agent_with_retry(agent_call, base_delay: float = config.RetryConf
                 raise
 
 
-async def _run_results_extractor_with_retry(user_prompt: str) -> TestExecutionResult | None:
-    """Runs the results extractor with retry on transient LLM provider errors."""
-    result = await _run_agent_with_retry(
-        lambda: _get_results_extractor_agent(TestExecutionResult).run(user_prompt),
-        base_delay=config.RetryConfig.LLM_RESULTS_EXTRACTOR_RETRY_BASE_DELAY_SECONDS,
-    )
-    return result.output
+async def _extract_with_retry(
+    output_type: type[JsonSerializableModel] | type[str], user_prompt: str, task_description: str
+) -> Any:
+    """Extract structured information, retrying once with a differently shaped prompt.
+
+    The model occasionally returns nothing for the plain prompt; restating the very same request as a
+    labelled JSON payload gives it a second chance before the extraction is declared failed.
+
+    Raises:
+        RuntimeError: If both attempts fail or yield an empty result.
+    """
+    attempt_prompts = [
+        user_prompt,
+        json.dumps({"task_description": task_description, "source_prompt": user_prompt}, indent=2),
+    ]
+    last_failure: str = ""
+    for attempt, prompt in enumerate(attempt_prompts, start=1):
+        try:
+            result = await _run_agent_with_retry(
+                lambda extraction_prompt=prompt: _get_results_extractor_agent(output_type).run(extraction_prompt),
+                base_delay=config.RetryConfig.LLM_RESULTS_EXTRACTOR_RETRY_BASE_DELAY_SECONDS,
+            )
+            output = result.output if result else None
+            if output is not None and output != "":
+                return output
+            last_failure = "the extractor returned an empty result"
+        except Exception as e:
+            last_failure = f"{type(e).__name__}: {e}"
+        logger.warning(
+            f"Extraction attempt {attempt}/{len(attempt_prompts)} of '{task_description}' failed: {last_failure}"
+        )
+    raise RuntimeError(f"Extraction of '{task_description}' failed after {len(attempt_prompts)} attempts.")
+
+
+async def _run_results_extractor_with_retry(user_prompt: str) -> TestExecutionResult:
+    """Runs the test execution results extractor with retry on transient LLM provider errors."""
+    return await _extract_with_retry(TestExecutionResult, user_prompt, "test execution results extraction")
 
 
 async def periodic_agent_discovery():
@@ -876,7 +933,8 @@ async def _select_execution_agents_for_each_test_label(labels: list[str]) -> dic
             logger.error(f"Failed to select agents for label '{label}': {result}")
             label_agent_mapping[label] = []
         elif result:
-            logger.info(f"Selected agent(s) {result} for label '{label}'.")
+            hosts = [_get_agent_host(await agent_registry.get_card(agent_id)) for agent_id in result]
+            logger.info(f"Selected agent(s) {result} on host(s) {hosts} for label '{label}'.")
             label_agent_mapping[label] = result
         else:
             logger.warning(f"No suitable agents found for label '{label}'.")
@@ -909,7 +967,10 @@ async def _execute_test_group(
 
     results: list[TestExecutionResult] = []
     workers = []
-    for agent_id in valid_agent_ids:
+    # One worker can only ever process one test case at a time, so agents beyond the number of test
+    # cases get no worker - but they stay in the pool, as failover targets for a worker whose agent
+    # breaks.
+    for agent_id in valid_agent_ids[: len(test_cases)]:
         workers.append(asyncio.create_task(_agent_worker(agent_id, queue, results, valid_agent_ids)))
 
     # Wait for all items in the queue to be processed
@@ -951,11 +1012,14 @@ async def _agent_worker(
                 if result:
                     results.append(result)
             except Exception as e:
-                logger.exception(f"Error in worker for agent {agent_id}.")
-                # Mark agent as BROKEN - task execution failed
-                await agent_registry.update_status(agent_id, AgentStatus.BROKEN, BrokenReason.TASK_STUCK)
-                # Hand the agent to the recovery task (matches the other BROKEN sites).
-                await cancellation_queue.put((agent_id, time.time()))
+                agent_card = await agent_registry.get_card(agent_id)
+                logger.exception(f"Error in worker for agent {agent_id} on host '{_get_agent_host(agent_card)}'.")
+                # The send-task path may already have marked the agent BROKEN together with the id of the
+                # task it got stuck on; re-marking it here would destroy that tracked id.
+                if await agent_registry.get_status(agent_id) != AgentStatus.BROKEN:
+                    await agent_registry.update_status(agent_id, AgentStatus.BROKEN, BrokenReason.TASK_STUCK)
+                    # Hand the agent to the recovery task (matches the other BROKEN sites).
+                    await cancellation_queue.put((agent_id, time.time()))
 
                 # Check if any other agents in the pool are still alive (not BROKEN)
                 any_agents_alive = False
@@ -967,7 +1031,8 @@ async def _agent_worker(
                             break
 
                 if any_agents_alive:
-                    # Retry logic: Put back in queue
+                    # The agent is already queued for recovery, which frees it from the task it is
+                    # stuck on; the test case goes back into the queue without waiting for that.
                     logger.info(f"Agent {agent_id} broken, but other agents available. Re-queueing task.")
                     queue.put_nowait((test_case, test_type))
                 else:
@@ -976,16 +1041,20 @@ async def _agent_worker(
                         f"All agents for this group are broken. Returning failed result for test case {test_case.key}."
                     )
                     agent_name = await agent_registry.get_name(agent_id)
+                    agent_info = _build_agent_info(agent_card, agent_name)
                     failed_result = TestExecutionResult(
                         stepResults=[],
                         testCaseKey=test_case.key,
                         testCaseName=test_case.name,
                         testExecutionStatus="error",
                         generalErrorMessage=f"All agents failed. Last error from {agent_name}: {e}",
-                        start_timestamp=datetime.now().isoformat(),
-                        end_timestamp=datetime.now().isoformat(),
-                        system_description=f"Agent: {agent_name} (Failed - No Retry Available)",
+                        start_timestamp=datetime.now(UTC).isoformat(),
+                        end_timestamp=datetime.now(UTC).isoformat(),
+                        system_description=(
+                            f"{_describe_execution_system(agent_info)} (Failed - No Retry Available)"
+                        ),
                         test_case=test_case,
+                        agent_info=agent_info,
                     )
                     results.append(failed_result)
 
@@ -995,23 +1064,26 @@ async def _agent_worker(
     except asyncio.CancelledError:
         logger.info(f"Agent worker for {agent_id} cancelled.")
     except Exception as e:
-        _record_error(f"Unexpected error in agent worker {agent_id}: {e}")
+        host = _get_agent_host(await agent_registry.get_card(agent_id))
+        _record_error(f"Unexpected error in agent worker {agent_id} on host '{host}': {e}")
 
 
 async def _execute_single_test(agent_id: str, test_case: TestCase, test_type: str) -> TestExecutionResult | None:
     task_description = f"Execution of test case {test_case.key} (type: {test_type})"
     execution_request = TestExecutionRequest(test_case=test_case)
     artifacts = []
-    start_timestamp = datetime.now()
+    # Reported to the test management systems, which read every timestamp as UTC.
+    start_timestamp = datetime.now(UTC)
     try:
         completed_task = await _send_task_to_agent(execution_request.model_dump_json(), task_description)
         artifacts = _get_artifacts_from_task(completed_task, task_description)
     except Exception as e:
         _handle_exception(f"Failed to execute test case {test_case.key}. Error: {e}", 500)
     finally:
-        end_timestamp = datetime.now()
+        end_timestamp = datetime.now(UTC)
 
     agent_name = await agent_registry.get_name(agent_id)
+    agent_info = _build_agent_info(await agent_registry.get_card(agent_id), agent_name)
     if not artifacts:
         _handle_exception(f"No test case execution results received from agent {agent_name}", 500)
     text_parts = _get_text_content_from_artifacts(artifacts, task_description)
@@ -1034,8 +1106,9 @@ Test case execution results:\n```{text_results}```
             generalErrorMessage=f"Failed to extract test results: {e}",
             start_timestamp=start_timestamp.isoformat(),
             end_timestamp=end_timestamp.isoformat(),
-            system_description=f"Agent: {agent_name}, Environment: Standard Test Environment",
+            system_description=_describe_execution_system(agent_info),
             test_case=test_case,
+            agent_info=agent_info,
         )
 
     test_execution_result.testCaseKey = test_case.key
@@ -1048,9 +1121,10 @@ Test case execution results:\n```{text_results}```
     test_execution_result.artifacts = file_artifacts
 
     if not test_execution_result.system_description:
-        test_execution_result.system_description = f"Agent: {agent_name}, Environment: Standard Test Environment"
+        test_execution_result.system_description = _describe_execution_system(agent_info)
 
     test_execution_result.test_case = test_case
+    test_execution_result.agent_info = agent_info
 
     logger.info(f"Executed test case {test_case.key}. Status: {test_execution_result.testExecutionStatus}")
     return test_execution_result
@@ -1139,29 +1213,6 @@ async def _request_test_cases_review(test_cases: list[TestCase], user_story_id: 
         f"Test cases:\n{test_cases}\nUser Story ID: {user_story_id}", task_description
     )
     return _get_artifacts_from_task(completed_task, "Review of test cases")
-
-
-async def _extract_generated_test_case_issue_keys_from_agent_response(
-    results: list[Artifact], task_description: str
-) -> list[str]:
-    text_parts = _get_text_content_from_artifacts(results, task_description)
-    if len(text_parts) != 1:
-        _handle_exception(
-            f"Expected exactly one text artifact from test case generation, but received {len(text_parts)}."
-        )
-    test_case_generation_results = text_parts[0]
-    user_prompt = f"""
-Your input:\n"{test_case_generation_results}".
-
-The information inside the input you need to find: the Jira issue key of each test case.
-
-Result format: a list of all found test case issue keys as a lift of strings.
-"""
-    result = await _get_results_extractor_agent(str).run(user_prompt)
-    _log_orchestrator_usage(result)
-    issue_keys: list[str] = result.output or []
-    logger.info(f"Extracted issue keys of {len(issue_keys)} test cases from test case generation agent's response.")
-    return result.output or None
 
 
 def _get_text_content_from_artifacts(
@@ -1464,20 +1515,16 @@ async def _send_task_to_agent_with_message(message: Message, task_description: s
                     agent_id,
                 )
             except TimeoutError:
-                logger.error(
-                    f"Task '{task_description}' timed out while waiting for completion.",
-                    extra={"task_id": internal_task_id, "agent_id": agent_id},
+                timeout_message = (
+                    f"Task '{task_description}' timed out while waiting for completion on agent host "
+                    f"'{_get_agent_host(agent_card)}'."
                 )
+                logger.error(timeout_message, extra={"task_id": internal_task_id, "agent_id": agent_id})
                 await _finalize_task(internal_task_id, agent_id, TaskStatus.FAILED, "Task timed out")
                 await agent_registry.update_status(agent_id, AgentStatus.BROKEN, BrokenReason.TASK_STUCK, last_task_id)
                 await agent_registry.set_current_task(agent_id, None)
                 await cancellation_queue.put((agent_id, time.time()))
-                _handle_exception(
-                    f"Task '{task_description}' timed out while waiting for completion.",
-                    408,
-                    internal_task_id,
-                    agent_id,
-                )
+                _handle_exception(timeout_message, 408, internal_task_id, agent_id)
 
             if chunk.HasField("status_update"):
                 status_event = chunk.status_update
@@ -1537,7 +1584,11 @@ async def _send_task_to_agent_with_message(message: Message, task_description: s
         await agent_registry.set_current_task(agent_id, None)
         await cancellation_queue.put((agent_id, time.time()))
         _handle_exception(
-            f"Task for {task_description} wasn't complete within timeout.", 408, internal_task_id, agent_id
+            f"Task for {task_description} wasn't complete within timeout on agent host "
+            f"'{_get_agent_host(agent_card)}'.",
+            408,
+            internal_task_id,
+            agent_id,
         )
         return None
 
@@ -1545,8 +1596,10 @@ async def _send_task_to_agent_with_message(message: Message, task_description: s
         # HTTPException is raised by _handle_exception, agent status already handled above
         raise
     except Exception as e:
+        host = _get_agent_host(await agent_registry.get_card(agent_id))
         logger.exception(
-            f"Error communicating with agent {agent_id}.", extra={"task_id": internal_task_id, "agent_id": agent_id}
+            f"Error communicating with agent {agent_id} on host '{host}'.",
+            extra={"task_id": internal_task_id, "agent_id": agent_id},
         )
         with suppress(Exception):
             await _finalize_task(internal_task_id, agent_id, TaskStatus.FAILED, str(e))
@@ -1612,7 +1665,8 @@ async def reserve_agent_waiting_if_needed(
                             await agent_registry.update_status(agent_id, AgentStatus.BUSY)
                             agent_name = await agent_registry.get_name(agent_id)
                             logger.info(
-                                f"Reserved agent '{agent_name}' (ID: {agent_id}) for task '{task_description}'",
+                                f"Reserved agent '{agent_name}' (ID: {agent_id}) on host "
+                                f"'{_get_agent_host(agent_card)}' for task '{task_description}'",
                                 extra={"task_id": task_id, "agent_id": agent_id},
                             )
                             return agent_id, agent_card

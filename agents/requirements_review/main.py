@@ -4,7 +4,6 @@
 
 from typing import TYPE_CHECKING
 
-from pydantic_ai.mcp import MCPServerSSE
 from pydantic_ai.settings import ThinkingLevel
 
 import config
@@ -13,12 +12,12 @@ from common import utils
 from common.agent_base import MCP_SERVER_ATTACHMENTS_FOLDER_PATH, AgentBase
 from common.custom_llm_wrapper import CustomLlmWrapper
 from common.models import JiraUserStory, RequirementsReviewFeedback
+from common.services.jira_mcp import build_jira_mcp_server_toolset
 
 if TYPE_CHECKING:
     from pydantic_ai.messages import BinaryContent
 
 logger = utils.get_logger("reviewer_agent")
-jira_mcp_server = MCPServerSSE(url=config.JIRA_MCP_SERVER_URL, timeout=config.MCP_SERVER_TIMEOUT_SECONDS)
 
 
 class RequirementsReviewAgent(AgentBase):
@@ -42,9 +41,10 @@ class RequirementsReviewAgent(AgentBase):
             external_port=config.RequirementsReviewAgentConfig.EXTERNAL_PORT,
             protocol=config.RequirementsReviewAgentConfig.PROTOCOL,
             model_name=config.RequirementsReviewAgentConfig.MODEL_NAME,
+            version=config.RequirementsReviewAgentConfig.VERSION,
             output_type=RequirementsReviewFeedback,
             instructions=instruction_prompt.get_prompt(),
-            mcp_servers=[jira_mcp_server],
+            mcp_toolset_factories=[build_jira_mcp_server_toolset],
             deps_type=JiraUserStory,
             description="Agent which does the review of requirements including Jira user stories",
             tools=[self._review_with_attachments, self.add_jira_comment],

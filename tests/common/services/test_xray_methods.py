@@ -108,9 +108,9 @@ def test_create_test_execution_ignores_invalid_timestamps(mock_request, xray_cli
     xray_client.create_test_execution(results, "PROJ", "PLAN-1")
 
     payload = mock_request.call_args.kwargs["json"]
-    assert payload["info"]["startDate"] == "2023-01-01T10:00:00"
+    assert payload["info"]["startDate"] == "2023-01-01T10:00:00+00:00"
     assert "finishDate" not in payload["info"]
-    assert payload["tests"][0]["start"] == "2023-01-01T10:00:00"
+    assert payload["tests"][0]["start"] == "2023-01-01T10:00:00+00:00"
     assert "finish" not in payload["tests"][0]
 
 

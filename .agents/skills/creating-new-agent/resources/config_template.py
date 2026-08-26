@@ -14,6 +14,7 @@ import os
 
 class <AgentName>AgentConfig:
     THINKING_LEVEL = "MEDIUM"  # Token budget for thinking (0 to disable)
+    VERSION = os.environ.get("<AGENT_NAME>_AGENT_VERSION", "1.0")  # Reported in the A2A agent card
     OWN_NAME = "<Human-Readable Agent Name>"
     PORT = int(os.environ.get("PORT", "<unique_port>"))  # e.g., 8008
     EXTERNAL_PORT = int(os.environ.get("EXTERNAL_PORT", PORT))

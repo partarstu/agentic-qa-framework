@@ -10,7 +10,27 @@ import pytest
 from a2a.types import TaskState
 
 from common.models import TestCase, TestExecutionResult
-from orchestrator.main import AgentStatus, BrokenReason, _agent_worker, _execute_single_test
+from orchestrator.main import (
+    AgentStatus,
+    BrokenReason,
+    _agent_worker,
+    _execute_single_test,
+    _execute_test_group,
+)
+from tests.orchestrator.conftest import agent_card
+
+
+def _test_case(key: str = "TC-1") -> TestCase:
+    return TestCase(
+        key=key,
+        summary="Sum",
+        name="Name",
+        steps=[],
+        labels=[],
+        comment="",
+        preconditions="",
+        parent_issue_key="STORY-1",
+    )
 
 
 @pytest.fixture
@@ -18,6 +38,8 @@ def mock_registry():
     with patch("orchestrator.main.agent_registry") as mock:
         mock.get_name = AsyncMock(return_value="Agent 1")
         mock.get_status = AsyncMock(return_value=AgentStatus.AVAILABLE)
+        mock.get_card = AsyncMock(return_value=agent_card())
+        mock.get_broken_context = AsyncMock(return_value=(None, None))
         yield mock
 
 
@@ -163,3 +185,78 @@ async def test_execute_single_test_success(mock_registry):
 
         assert result.testExecutionStatus == "passed"
         assert result.testCaseKey == "TC-1"
+
+
+@pytest.mark.asyncio
+async def test_agent_worker_keeps_stuck_task_id_when_agent_is_already_broken(mock_registry, mock_queue):
+    """The send path already marked the agent BROKEN with a stuck task id - the worker must not overwrite it."""
+    mock_queue.get.side_effect = [(_test_case(), "UI")]
+    mock_registry.get_status = AsyncMock(side_effect=[AgentStatus.AVAILABLE, AgentStatus.BROKEN])
+    mock_registry.update_status = AsyncMock()
+    mock_registry.get_broken_context = AsyncMock(return_value=(BrokenReason.TASK_STUCK, "stuck-task-1"))
+
+    with (
+        patch("orchestrator.main._execute_single_test", new_callable=AsyncMock) as mock_exec,
+        patch("orchestrator.main.cancellation_queue") as mock_cancellation_queue,
+    ):
+        mock_exec.side_effect = RuntimeError("iterator finished before completion")
+        mock_cancellation_queue.put = AsyncMock()
+
+        await _agent_worker("agent-1", mock_queue, [], ["agent-1"])
+
+        mock_registry.update_status.assert_not_awaited()
+        mock_cancellation_queue.put.assert_not_awaited()
+        reason, stuck_task_id = await mock_registry.get_broken_context("agent-1")
+        assert (reason, stuck_task_id) == (BrokenReason.TASK_STUCK, "stuck-task-1")
+
+
+@pytest.mark.asyncio
+async def test_agent_worker_requeues_and_leaves_cancellation_to_the_recovery_task(mock_registry, mock_queue):
+    """With another agent alive the case is re-queued; freeing the stuck task is the recovery task's job."""
+    test_case = _test_case()
+    mock_queue.get.side_effect = [(test_case, "UI")]
+    mock_registry.get_status = AsyncMock(
+        side_effect=[AgentStatus.AVAILABLE, AgentStatus.BROKEN, AgentStatus.AVAILABLE]
+    )
+    mock_registry.update_status = AsyncMock()
+    mock_registry.get_broken_context = AsyncMock(return_value=(BrokenReason.TASK_STUCK, "stuck-task-1"))
+
+    with (
+        patch("orchestrator.main._execute_single_test", new_callable=AsyncMock) as mock_exec,
+        patch("orchestrator.main.cancellation_queue") as mock_cancellation_queue,
+        patch("orchestrator.main._cancel_agent_task", new_callable=AsyncMock) as mock_cancel,
+    ):
+        mock_exec.side_effect = RuntimeError("iterator finished before completion")
+        mock_cancellation_queue.put = AsyncMock()
+
+        results = []
+        await _agent_worker("agent-1", mock_queue, results, ["agent-1", "agent-2"])
+        await asyncio.sleep(0)
+
+        mock_cancel.assert_not_awaited()
+        mock_queue.put_nowait.assert_called_once_with((test_case, "UI"))
+        assert results == []
+
+
+@pytest.mark.asyncio
+async def test_execute_test_group_spawns_one_worker_per_test_case(mock_registry):
+    """Agents beyond the number of test cases get no worker, but stay in the pool as failover targets."""
+    mock_registry.contains = AsyncMock(return_value=True)
+    test_cases = [_test_case("TC-1"), _test_case("TC-2")]
+    all_agent_ids = ["a-1", "a-2", "a-3", "a-4", "a-5"]
+    started_agent_ids: list[str] = []
+    seen_pools: list[list[str]] = []
+
+    async def _drain_queue(agent_id, queue, results, pool_agent_ids):
+        """Stand-in worker that only consumes the queue, so _execute_test_group can finish."""
+        started_agent_ids.append(agent_id)
+        seen_pools.append(pool_agent_ids)
+        while await queue.get() is not None:
+            queue.task_done()
+        queue.task_done()
+
+    with patch("orchestrator.main._agent_worker", _drain_queue):
+        await asyncio.wait_for(_execute_test_group("UI", test_cases, all_agent_ids), timeout=5)
+
+    assert started_agent_ids == ["a-1", "a-2"]
+    assert seen_pools == [all_agent_ids, all_agent_ids]

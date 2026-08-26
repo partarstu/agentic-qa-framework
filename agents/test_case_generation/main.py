@@ -2,7 +2,6 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
-from pydantic_ai.mcp import MCPServerSSE
 from pydantic_ai.messages import BinaryContent
 from pydantic_ai.settings import ThinkingLevel
 
@@ -22,10 +21,10 @@ from common.models import (
     JiraUserStory,
     TestStepsSequenceList,
 )
+from common.services.jira_mcp import build_jira_mcp_server_toolset
 from common.services.test_management_system_client_provider import get_test_management_client
 
 logger = utils.get_logger("test_case_generation_agent")
-jira_mcp_server = MCPServerSSE(url=config.JIRA_MCP_SERVER_URL, timeout=config.MCP_SERVER_TIMEOUT_SECONDS)
 
 
 class TestCaseGenerationAgent(AgentBase):
@@ -44,7 +43,6 @@ class TestCaseGenerationAgent(AgentBase):
             model_name=model_name,
             output_type=AcceptanceCriteriaList,
             system_prompt=self.ac_extraction_prompt.get_prompt(),
-            toolsets=[jira_mcp_server],
             name="ac_extractor",
             thinking_level=config.TestCaseGenerationAgentConfig.THINKING_LEVEL,
         )
@@ -76,9 +74,10 @@ class TestCaseGenerationAgent(AgentBase):
             external_port=config.TestCaseGenerationAgentConfig.EXTERNAL_PORT,
             protocol=config.TestCaseGenerationAgentConfig.PROTOCOL,
             model_name=config.TestCaseGenerationAgentConfig.MODEL_NAME,
+            version=config.TestCaseGenerationAgentConfig.VERSION,
             output_type=GeneratedTestCases,
             instructions=instruction_prompt.get_prompt(),
-            mcp_servers=[jira_mcp_server],
+            mcp_toolset_factories=[build_jira_mcp_server_toolset],
             deps_type=JiraUserStory,
             description="Agent which generates test cases based on Jira user stories.",
             tools=[self._upload_test_cases_into_test_management_system, self._generate_test_cases],
@@ -155,7 +154,9 @@ Test Step Sequences:
                 user_message_parts.append(binary_content)
 
         logger.info("Starting AC extraction with %d attachments", len(attachments_content))
-        result = await self.ac_extractor_agent.run(user_message_parts)
+        # Own, short-lived Jira MCP session for this sub-agent run, as for the main agent.
+        async with build_jira_mcp_server_toolset() as jira_toolset:
+            result = await self.ac_extractor_agent.run(user_message_parts, toolsets=[jira_toolset])
         extracted_acceptance_criteria: AcceptanceCriteriaList = result.output
         logger.info(f"Extracted {len(extracted_acceptance_criteria.items)} ACs")
         return extracted_acceptance_criteria

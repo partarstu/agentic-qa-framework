@@ -47,7 +47,10 @@ class IncidentCreationPrompt(PromptBase):
         logger.info("Generating incident creation system prompt")
         severity_values = _format_values_for_prompt(config.IncidentCreationAgentConfig.SEVERITY_VALUES)
         priority_values = _format_values_for_prompt(config.IncidentCreationAgentConfig.PRIORITY_VALUES)
-        return self.template.format(SEVERITY_VALUES=severity_values, PRIORITY_VALUES=priority_values)
+        terminal_statuses = ", ".join(config.IncidentCreationAgentConfig.TERMINAL_STATUSES)
+        return self.template.format(
+            SEVERITY_VALUES=severity_values, PRIORITY_VALUES=priority_values, TERMINAL_STATUSES=terminal_statuses
+        )
 
 
 class DuplicateDetectionPrompt(PromptBase):

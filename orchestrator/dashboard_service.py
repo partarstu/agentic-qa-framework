@@ -113,6 +113,7 @@ class OrchestratorDashboardService:
             "uptime_seconds": uptime_seconds,
             "current_time": datetime.now().isoformat(),
             "orchestrator_model": config.OrchestratorConfig.MODEL_NAME,
+            "orchestrator_version": config.OrchestratorConfig.VERSION,
         }
 
     async def get_agents_status(self) -> list[dict[str, Any]]:
@@ -140,6 +141,7 @@ class OrchestratorDashboardService:
                 {
                     "id": agent_id,
                     "name": card.name,
+                    "version": card.version,
                     "description": card.description,
                     "url": card.supported_interfaces[0].url if card.supported_interfaces else None,
                     "status": status.value,

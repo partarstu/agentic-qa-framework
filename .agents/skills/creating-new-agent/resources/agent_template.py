@@ -11,18 +11,14 @@ Replace <OutputModel> with the Pydantic model for structured output.
 Replace <DepsModel> with the context/dependencies type (optional).
 """
 
-from pydantic_ai.mcp import MCPServerSSE
-
 import config
 from agents.<agent_name>.prompt import <AgentName>SystemPrompt
 from common import utils
 from common.agent_base import AgentBase
 from common.models import <OutputModel>, <DepsModel>  # Import relevant models
+from common.services.jira_mcp import build_jira_mcp_server_toolset
 
 logger = utils.get_logger("<agent_name>_agent")
-
-# Add MCP servers if the agent needs external tools
-# jira_mcp_server = MCPServerSSE(url=config.JIRA_MCP_SERVER_URL, timeout=config.MCP_SERVER_TIMEOUT_SECONDS)
 
 
 class <AgentName>Agent(AgentBase):
@@ -37,9 +33,12 @@ class <AgentName>Agent(AgentBase):
             external_port=config.<AgentName>AgentConfig.EXTERNAL_PORT,
             protocol=config.<AgentName>AgentConfig.PROTOCOL,
             model_name=config.<AgentName>AgentConfig.MODEL_NAME,
+            version=config.<AgentName>AgentConfig.VERSION,
             output_type=<OutputModel>,  # The Pydantic model for structured output
             instructions=instruction_prompt.get_prompt(),
-            mcp_servers=[],  # Add MCP servers here if needed
+            # Factories, not live connections: one fresh MCP session is built per agent run and closed
+            # with it. Drop this argument if the agent needs no MCP tools.
+            mcp_toolset_factories=[build_jira_mcp_server_toolset],
             deps_type=<DepsModel>,  # Optional: context/dependencies type
             description="<Brief description of what this agent does>",
             tools=[self.<custom_tool>]  # Add custom tools here

@@ -26,6 +26,8 @@ def mock_agent():
     # Real agents start with no captured usage; the executor only emits a usage
     # artifact when this is set, so default to None to mirror that contract.
     agent.latest_token_usage = None
+    agent.model_name = "openai:test-model"
+    agent.version = "2.5"
     return agent
 
 
@@ -366,3 +368,23 @@ async def test_execute_cancelled_swallowed_and_emits_canceled_event(mock_agent, 
         if isinstance(call[0][0], TaskStatusUpdateEvent) and call[0][0].status.state == TaskState.TASK_STATE_CANCELED
     ]
     assert len(canceled_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_task_start_log_names_model_and_agent_version(
+    mock_agent, mock_context, mock_event_queue, caplog
+):
+    """Every task start must be traceable to the agent version and the model that served it."""
+    executor = DefaultAgentExecutor(mock_agent)
+    mock_context.message = MagicMock(spec=Message)
+    mock_result = MagicMock()
+    mock_result.parts = []
+    mock_agent.run.return_value = mock_result
+
+    with caplog.at_level(logging.INFO, logger="agent_executor"):
+        await executor.execute(mock_context, mock_event_queue)
+
+    start_records = [r for r in caplog.records if r.message.startswith("Executing task")]
+    assert start_records, f"No task-start record was emitted. Records: {caplog.text}"
+    assert "openai:test-model" in start_records[0].message
+    assert "2.5" in start_records[0].message

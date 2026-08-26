@@ -94,6 +94,31 @@ A background task continuously monitors broken agents and attempts recovery:
 2. For `TASK_STUCK` agents: Attempts to cancel the stuck task using the A2A protocol before marking the agent as available.
 3. Agents that remain unrecoverable for 24 hours are given up on.
 
+### Jira MCP Sessions
+
+Every agent that uses Jira tools obtains them through a **per-request MCP session**: `AgentBase` is given toolset
+*factories* rather than a live connection, and it builds a fresh session for each agent run and closes it as soon as the
+run ends (a retried run gets a new one too). A session that went stale between requests can therefore never break the
+next one.
+
+Within a run, the session is **self-healing**: a recoverable transport failure — a closed or broken stream, an
+end-of-stream, a timeout (including an MCP request timeout), or an HTTP network/protocol error — tears the session down,
+re-establishes it (full handshake, including log-level negotiation) and retries the failed operation **exactly once**.
+The budget is one reconnect per operation, and both tool discovery and tool invocation are covered. Anything that is not
+recoverable — a bad argument, an unknown issue key — propagates unchanged, so real errors still reach the model.
+
+### Traceability of Agents and Test Results
+
+Each agent reports a configurable `VERSION` in its A2A agent card, which the orchestrator surfaces in the dashboard's
+agents view; each task-start log line names both the agent version and the model that served it. For test executions,
+the orchestrator attaches an `agent_info` block (agent name, agent version and `TEST_ENVIRONMENT_LABEL`) to every
+`TestExecutionResult` — successful, failed-extraction and all-agents-broken alike. The Allure report turns those three
+values into three separate tags, so a report can be filtered by agent, by agent version, or by environment
+independently.
+
+**Timestamps** reported by agents are normalised to UTC: a timestamp without an offset is interpreted as UTC rather
+than as the reporting host's local time, so Zephyr, Xray and Allure all record the same instant.
+
 For a visual representation of the system's architecture and data flow, please refer to the following diagrams:
 
 * [Architectural Diagram](architectural_diagram.html) ([German Version](architectural_diagram_DE.html))
@@ -202,6 +227,10 @@ JIRA_URL=YOUR_JIRA_INSTANCE_URL # Required for the orchestrator's RAG DB sync an
                                  # MCP server (see "Jira MCP Server Setup" below), which has its own .env file.
 JIRA_USERNAME=YOUR_JIRA_USERNAME # Required alongside JIRA_URL. The email address associated with your Jira account.
 JIRA_API_TOKEN=YOUR_JIRA_API_TOKEN # Required alongside JIRA_URL. A Jira API token for authentication.
+ORCHESTRATOR_VERSION=1.0 # Default: 1.0. Version of the orchestrator, reported for traceability.
+TEST_ENVIRONMENT_LABEL=Standard Test Environment # Default: Standard Test Environment. Label describing the
+                                 # environment tests are executed against. Reported on every test execution
+                                 # result and emitted as an Allure tag.
 
 # Dashboard Authentication
 # These settings control access to the UI monitoring dashboard at /api/dashboard/*
@@ -224,6 +253,13 @@ XRAY_PRECONDITIONS_FIELD_ID=Pre-conditions # Default: Pre-conditions. Jira field
 AGENT_BASE_URL=http://localhost # Default: http://localhost. Base URL for agents.
 PORT=8001 # Default: 8001. The internal port an agent listens on.
 EXTERNAL_PORT=8001 # Default: 8001. The externally accessible port for the agent.
+# Version each agent reports in its A2A agent card (visible in the dashboard) and, for execution agents,
+# on every test execution result. Each agent reads its own variable.
+REQUIREMENTS_REVIEW_AGENT_VERSION=1.0 # Default: 1.0.
+TEST_CASE_CLASSIFICATION_AGENT_VERSION=1.0 # Default: 1.0.
+TEST_CASE_GENERATION_AGENT_VERSION=1.0 # Default: 1.0.
+TEST_CASE_REVIEW_AGENT_VERSION=1.0 # Default: 1.0.
+INCIDENT_CREATION_AGENT_VERSION=1.0 # Default: 1.0.
 
 # Agent Discovery (for remote agents)
 REMOTE_EXECUTION_AGENT_HOSTS=http://localhost # Default: http://localhost. Comma-separated URLs of remote agent hosts.

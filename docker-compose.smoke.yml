@@ -172,6 +172,8 @@ services:
     environment:
       <<: *agent-env
       AGENT_BASE_URL: "http://execution_agent"
+      # An explicit, non-default version so the smoke suite can assert it is reported end to end.
+      EXECUTION_AGENT_VERSION: "9.9-smoke"
     depends_on: *mock-dependencies
     healthcheck: *agent-healthcheck
 
@@ -183,6 +185,10 @@ services:
     environment:
       ORCHESTRATOR_HOST: "0.0.0.0"
       ORCHESTRATOR_PORT: "8000"
+      # Explicit, non-default values so the smoke suite can assert both reach their consumers:
+      # the version through the dashboard, the environment label through the created incident.
+      ORCHESTRATOR_VERSION: "8.8-smoke"
+      TEST_ENVIRONMENT_LABEL: "Smoke Test Environment"
       REMOTE_EXECUTION_AGENT_HOSTS: "http://requirements_review,http://test_case_generation,http://test_case_classification,http://test_case_review,http://incident_creation,http://execution_agent"
       AGENT_DISCOVERY_PORTS: "8001-8001"
       ORCHESTRATOR_API_KEY: "smoke-api-key"

@@ -133,6 +133,10 @@ PROMPT_GUARD_SERVICE_URL = os.environ.get("PROMPT_GUARD_SERVICE_URL")
 # Orchestrator
 class OrchestratorConfig:
     THINKING_LEVEL: ThinkingLevel = "low"
+    VERSION = os.environ.get("ORCHESTRATOR_VERSION", "1.0")
+    # Label describing the environment the execution agents run their test cases against; reported
+    # alongside every test execution result.
+    TEST_ENVIRONMENT_LABEL = os.environ.get("TEST_ENVIRONMENT_LABEL", "Standard Test Environment")
     AUTOMATED_TC_LABEL = "automated"
     AGENTS_DISCOVERY_INTERVAL_SECONDS = 300
     AGENT_HEALTH_CHECK_INTERVAL_SECONDS = 60
@@ -163,6 +167,7 @@ class DashboardAuthConfig:
 # Requirements Review Agent
 class RequirementsReviewAgentConfig:
     THINKING_LEVEL: ThinkingLevel = "medium"
+    VERSION = os.environ.get("REQUIREMENTS_REVIEW_AGENT_VERSION", "1.0")
     OWN_NAME = "Jira Requirements Reviewer"
     PORT = int(os.environ.get("PORT", "8001"))
     EXTERNAL_PORT = int(os.environ.get("EXTERNAL_PORT", PORT))
@@ -174,6 +179,7 @@ class RequirementsReviewAgentConfig:
 # Test Case Classification Agent
 class TestCaseClassificationAgentConfig:
     THINKING_LEVEL: ThinkingLevel = "minimal"
+    VERSION = os.environ.get("TEST_CASE_CLASSIFICATION_AGENT_VERSION", "1.0")
     OWN_NAME = "Test Case Classification Agent"
     PORT = int(os.environ.get("PORT", "8003"))
     EXTERNAL_PORT = int(os.environ.get("EXTERNAL_PORT", PORT))
@@ -185,6 +191,7 @@ class TestCaseClassificationAgentConfig:
 # Test Case Generation Agent
 class TestCaseGenerationAgentConfig:
     THINKING_LEVEL: ThinkingLevel = "minimal"
+    VERSION = os.environ.get("TEST_CASE_GENERATION_AGENT_VERSION", "1.0")
     OWN_NAME = "Test Case Generation Agent"
     PORT = int(os.environ.get("PORT", "8002"))
     EXTERNAL_PORT = int(os.environ.get("EXTERNAL_PORT", PORT))
@@ -196,6 +203,7 @@ class TestCaseGenerationAgentConfig:
 # Test Case Review Agent
 class TestCaseReviewAgentConfig:
     THINKING_LEVEL: ThinkingLevel = "medium"
+    VERSION = os.environ.get("TEST_CASE_REVIEW_AGENT_VERSION", "1.0")
     REVIEW_COMPLETE_STATUS_NAME = "Review Complete"
     OWN_NAME = "Test Case Review Agent"
     PORT = int(os.environ.get("PORT", "8004"))
@@ -208,6 +216,7 @@ class TestCaseReviewAgentConfig:
 # Incident Creation Agent
 class IncidentCreationAgentConfig:
     THINKING_LEVEL: ThinkingLevel = "medium"
+    VERSION = os.environ.get("INCIDENT_CREATION_AGENT_VERSION", "1.0")
     OWN_NAME = "Incident Creation Agent"
     PORT = int(os.environ.get("PORT", "8007"))
     EXTERNAL_PORT = int(os.environ.get("EXTERNAL_PORT", PORT))

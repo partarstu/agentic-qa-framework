@@ -198,7 +198,8 @@ class TestCaseReviewRequest(JsonSerializableModel):
     test_cases: list[TestCase]
 
 
-class TestCaseReviewFeedback(JsonSerializableModel):
+class TestCaseReviewFeedback(BaseAgentResult):
+    __test__ = False
     test_case_id: str = Field(description="The ID or key of the test case which was reviewed")
     review_feedback: list[str] = Field(description="List of improvements suggested by the test case review")
 
@@ -221,6 +222,14 @@ class TestStepResult(JsonSerializableModel):
     errorMessage: str = Field(description="Error message if the test step failed")
     executionStartTimestamp: str | None = Field(default=None, description="Timestamp when the step execution started")
     executionEndTimestamp: str | None = Field(default=None, description="Timestamp when the step execution ended")
+
+
+class AgentInfo(JsonSerializableModel):
+    """Traceability data about the agent that produced a test execution result."""
+
+    agent_name: str
+    agent_version: str
+    environment: str
 
 
 class TestExecutionResult(JsonSerializableModel):
@@ -248,6 +257,11 @@ class TestExecutionResult(JsonSerializableModel):
         default=None, description="Result of the incident creation process if the test failed"
     )
     test_case: Optional["TestCase"] = Field(default=None, description="The full test case object that was executed")
+    agent_info: AgentInfo | None = Field(
+        default=None,
+        description="Name and version of the agent which executed the test case and the environment it ran against. "
+        "Populated by the orchestrator, not expected from the execution agent.",
+    )
 
 
 class TestCaseKeys(JsonSerializableModel):

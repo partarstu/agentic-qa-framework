@@ -48,6 +48,13 @@ SEEDED_EXECUTABLE_TC_KEY = "SMOKE-T100"
 TICKETS_COLLECTION_NAME = config.QdrantConfig.TICKETS_COLLECTION_NAME
 # Name the mock executor registers under; must match mocks/execution_agent.EXECUTION_AGENT_NAME.
 EXECUTION_AGENT_NAME = "Smoke API Test Executor"
+# Version the mock executor is started with; must match EXECUTION_AGENT_VERSION in docker-compose.smoke.yml.
+EXECUTION_AGENT_VERSION = "9.9-smoke"
+# Version the orchestrator is started with; must match ORCHESTRATOR_VERSION in docker-compose.smoke.yml.
+ORCHESTRATOR_VERSION = "8.8-smoke"
+# Environment label the orchestrator reports every execution against; must match
+# TEST_ENVIRONMENT_LABEL in docker-compose.smoke.yml.
+TEST_ENVIRONMENT_LABEL = "Smoke Test Environment"
 
 # Canonical agent names the four agents register under; tracks config as the source of truth.
 EXPECTED_AGENT_NAMES: set[str] = {

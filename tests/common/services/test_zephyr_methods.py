@@ -99,6 +99,7 @@ def test_create_test_execution_ignores_invalid_timestamps(mock_post, mock_get, z
                     errorMessage="",
                     testData=[],
                     expectedResults="",
+                    executionStartTimestamp="not-a-timestamp",
                     executionEndTimestamp="not-a-timestamp",
                 )
             ],
@@ -116,7 +117,47 @@ def test_create_test_execution_ignores_invalid_timestamps(mock_post, mock_get, z
     payload = mock_post.call_args.kwargs["json"]
     assert payload["actualStartDate"] == "2023-01-01T10:00:00Z"
     assert "actualEndDate" not in payload
+    assert "actualStartDate" not in payload["testScriptResults"][0]
     assert "actualEndDate" not in payload["testScriptResults"][0]
+
+
+@patch("httpx.Client.get")
+@patch("httpx.Client.post")
+def test_create_test_execution_reports_step_timestamps(mock_post, mock_get, zephyr_client):
+    mock_post.return_value.status_code = 201
+    mock_post.return_value.json.return_value = {"id": "EXEC-1"}
+
+    mock_get.return_value.status_code = 200
+    mock_get.return_value.json.return_value = {"values": []}
+
+    results = [
+        TestExecutionResult(
+            stepResults=[
+                TestStepResult(
+                    stepDescription="Step 1",
+                    success=True,
+                    actualResults="OK",
+                    errorMessage="",
+                    testData=[],
+                    expectedResults="",
+                    executionStartTimestamp="2023-01-01T10:00:05",
+                    executionEndTimestamp="2023-01-01T10:00:09",
+                )
+            ],
+            testCaseKey="TEST-1",
+            testCaseName="TC1",
+            testExecutionStatus="passed",
+            generalErrorMessage="",
+            start_timestamp="2023-01-01T10:00:00",
+            end_timestamp="2023-01-01T10:01:00",
+        )
+    ]
+
+    zephyr_client.create_test_execution(results, "PROJ", "CYCLE-1")
+
+    step_entry = mock_post.call_args.kwargs["json"]["testScriptResults"][0]
+    assert step_entry["actualStartDate"] == "2023-01-01T10:00:05Z"
+    assert step_entry["actualEndDate"] == "2023-01-01T10:00:09Z"
 
 
 @patch("httpx.Client.post")

@@ -177,6 +177,10 @@ export function AgentGrid({ agents, isLoading, liveTaskStates }: AgentGridProps)
                   {agent.url}
                 </p>
 
+                {agent.version && (
+                  <p className="text-xs text-slate-400 mb-2">Version: {agent.version}</p>
+                )}
+
                 {agent.description && <AgentDescription text={agent.description} />}
 
                 {agent.current_task && (

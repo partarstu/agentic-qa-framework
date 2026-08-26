@@ -7,7 +7,6 @@ import os
 import time
 import uuid
 
-from pydantic_ai.mcp import MCPServerSSE
 from pydantic_ai.settings import ThinkingLevel
 from qdrant_client import models as qdrant_models
 
@@ -23,6 +22,7 @@ from common.models import (
     IncidentCreationResult,
     JiraIssue,
 )
+from common.services.jira_mcp import build_jira_mcp_server_toolset
 from common.services.test_management_system_client_provider import get_test_management_client
 
 logger = utils.get_logger("incident_creation_agent")
@@ -32,9 +32,6 @@ QDRANT_COLLECTION_NAME = getattr(config.QdrantConfig, "TICKETS_COLLECTION_NAME",
 RAG_MIN_SIMILARITY = getattr(config.IncidentCreationAgentConfig, "MIN_SIMILARITY_SCORE", 0.7)
 BUG_ISSUE_TYPE = getattr(config.QdrantConfig, "BUG_ISSUE_TYPE", "Bug")
 TERMINAL_STATUSES = set(getattr(config.IncidentCreationAgentConfig, "TERMINAL_STATUSES", []))
-JIRA_MCP_SERVER_URL = config.JIRA_MCP_SERVER_URL
-
-jira_mcp_server = MCPServerSSE(url=JIRA_MCP_SERVER_URL, timeout=config.MCP_SERVER_TIMEOUT_SECONDS)
 
 
 class IncidentCreationAgent(AgentBase):
@@ -62,9 +59,10 @@ class IncidentCreationAgent(AgentBase):
             port=config.IncidentCreationAgentConfig.PORT,
             external_port=config.IncidentCreationAgentConfig.EXTERNAL_PORT,
             model_name=model_name,
+            version=config.IncidentCreationAgentConfig.VERSION,
             output_type=IncidentCreationResult,
             instructions=self.main_prompt.get_prompt(),
-            mcp_servers=[jira_mcp_server],
+            mcp_toolset_factories=[build_jira_mcp_server_toolset],
             deps_type=IncidentCreationInput,
             description="Agent which creates detailed incident reports in Jira based on test execution results.",
             tools=[
@@ -217,9 +215,10 @@ class IncidentCreationAgent(AgentBase):
         unique_candidates: list[DuplicateCandidate] = []
         seen_keys: set[str] = set()
         for candidate in candidates:
-            if candidate.key in seen_keys:
+            candidate_key = candidate.key.casefold()
+            if candidate_key in seen_keys:
                 continue
-            seen_keys.add(candidate.key)
+            seen_keys.add(candidate_key)
             unique_candidates.append(candidate)
 
         duplicate_count = len(candidates) - len(unique_candidates)

@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from allure_commons.model2 import Status
 
-from common.models import FileArtifact, TestExecutionResult, TestStepResult
+from common.models import AgentInfo, FileArtifact, TestExecutionResult, TestStepResult
 from common.services.allure_client import AllureClient
 
 
@@ -162,3 +162,33 @@ def test_clean_directories(allure_client):
     assert not (report_dir / "dummy.html").exists()
     assert results_dir.exists()
     assert report_dir.exists()
+
+
+def _result_with_agent_info(agent_info: AgentInfo | None) -> TestExecutionResult:
+    return TestExecutionResult(
+        stepResults=[],
+        testCaseKey="TEST-1",
+        testCaseName="TC1",
+        testExecutionStatus="passed",
+        generalErrorMessage="",
+        start_timestamp="2023-01-01T10:00:00Z",
+        end_timestamp="2023-01-01T10:01:00Z",
+        agent_info=agent_info,
+    )
+
+
+def test_agent_info_becomes_three_individually_filterable_tags(mock_logger_cls, allure_client):
+    agent_info = AgentInfo(agent_name="Agent 1", agent_version="2.5", environment="Staging")
+
+    allure_client._process_test_execution_result(_result_with_agent_info(agent_info))
+
+    test_result = mock_logger_cls.return_value.report_result.call_args.args[0]
+    tags = [label.value for label in test_result.labels if label.name == "tag"]
+    assert tags == ["Agent 1", "2.5", "Staging"]
+
+
+def test_no_tags_are_added_without_agent_info(mock_logger_cls, allure_client):
+    allure_client._process_test_execution_result(_result_with_agent_info(None))
+
+    test_result = mock_logger_cls.return_value.report_result.call_args.args[0]
+    assert [label for label in test_result.labels if label.name == "tag"] == []

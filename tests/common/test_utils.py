@@ -4,6 +4,7 @@
 
 import mimetypes
 import os
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import MagicMock, mock_open, patch
 
@@ -73,6 +74,20 @@ def test_parse_timestamp_cleans_trailing_comma_content():
     assert timestamp.year == 2026
     assert timestamp.microsecond == 442422
     assert timestamp.utcoffset().total_seconds() == 0
+
+
+@pytest.mark.parametrize(
+    "timestamp_str",
+    [
+        "2026-05-04T10:33:56",
+        "2026-05-04T12:33:56+02:00",
+        "2026-05-04T10:33:56Z",
+    ],
+)
+def test_parse_timestamp_normalizes_to_the_same_utc_instant(timestamp_str):
+    timestamp = utils.parse_timestamp(timestamp_str, "step execution start timestamp")
+
+    assert timestamp == datetime(2026, 5, 4, 10, 33, 56, tzinfo=UTC)
 
 
 def test_parse_timestamp_returns_none_for_invalid_value():

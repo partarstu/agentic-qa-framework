@@ -9,6 +9,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from a2a.helpers import get_message_text
 from a2a.types import Message
+from a2a.utils.constants import AGENT_CARD_WELL_KNOWN_PATH
+from fastapi.testclient import TestClient
 from pydantic_ai.usage import RunUsage
 
 if TYPE_CHECKING:
@@ -45,9 +47,9 @@ def test_agent_instance():
             port=8000,
             external_port=8000,
             model_name="openai:test-model",
+            version="2.5",
             output_type=MockOutput,
             instructions="test instructions",
-            mcp_servers=[],
         )
         return agent
 
@@ -73,9 +75,9 @@ def test_no_extra_tools_added_beyond_report_activity():
             port=8000,
             external_port=8000,
             model_name="openai:test-model",
+            version="2.5",
             output_type=MockOutput,
             instructions="instructions",
-            mcp_servers=[],
             tools=(),
         )
     assert agent.tools == [agent.report_activity]
@@ -93,7 +95,7 @@ async def test_usage_limits_tool_calls_limit_is_doubled(test_agent_instance):
     """tool_calls_limit must equal get_max_requests_per_task() * 2."""
     captured: list[UsageLimits] = []
 
-    async def fake_run(request, usage_limits=None):
+    async def fake_run(request, usage_limits=None, toolsets=None):
         captured.append(usage_limits)
         mock_result = MagicMock()
         mock_result.output = MockOutput(result="ok")
@@ -149,3 +151,67 @@ async def test_activity_queue_bounded_and_drops_items(test_agent_instance):
     for i in range(1005):
         await test_agent_instance.report_activity(f"activity-{i}")
     assert test_agent_instance.activity_queue.qsize() == 1000
+
+
+def test_agent_card_carries_the_configured_version(test_agent_instance):
+    """The version reported by the A2A agent card must be the one the agent was configured with."""
+    client = TestClient(test_agent_instance.a2a_server)
+
+    card = client.get(AGENT_CARD_WELL_KNOWN_PATH).json()
+
+    assert card["version"] == "2.5"
+
+
+@pytest.mark.asyncio
+async def test_each_run_gets_a_fresh_mcp_toolset_whose_session_the_run_owns():
+    """Sessions must be per request, and opened by the run itself so it can also re-open them."""
+    built_toolsets: list[MagicMock] = []
+
+    def build_toolset() -> MagicMock:
+        toolset = MagicMock()
+        toolset.__aenter__ = AsyncMock(return_value=toolset)
+        toolset.__aexit__ = AsyncMock(return_value=None)
+        built_toolsets.append(toolset)
+        return toolset
+
+    with patch("common.agent_base.Agent"):
+        agent = TestAgent(
+            agent_name="test-agent",
+            base_url="http://localhost",
+            protocol="http",
+            port=8000,
+            external_port=8000,
+            model_name="openai:test-model",
+            version="2.5",
+            output_type=MockOutput,
+            instructions="test instructions",
+            mcp_toolset_factories=[build_toolset],
+        )
+
+    passed_toolsets: list[list[MagicMock]] = []
+
+    async def fake_run(request, usage_limits=None, toolsets=None):
+        passed_toolsets.append(toolsets)
+        mock_result = MagicMock()
+        mock_result.output = MockOutput(result="ok")
+        mock_result.usage.return_value = RunUsage(input_tokens=10, output_tokens=5)
+        return mock_result
+
+    agent.agent = AsyncMock()
+    agent.agent.run = fake_run
+    agent.agent.__aenter__.return_value = agent.agent
+    agent.agent.__aexit__.return_value = None
+
+    with patch("common.agent_base.get_message_text", return_value="hello"):
+        mock_message = MagicMock(spec=Message)
+        mock_message.parts = []
+        await agent.run(mock_message)
+        await agent.run(mock_message)
+
+    assert len(built_toolsets) == 2, "Each run must build its own toolset"
+    assert built_toolsets[0] is not built_toolsets[1]
+    assert passed_toolsets == [[built_toolsets[0]], [built_toolsets[1]]]
+    for toolset in built_toolsets:
+        # Entering it here as well would make the session count 2 and stop it from ever being torn
+        # down mid-run, which is exactly what the self-healing reconnect needs to be able to do.
+        toolset.__aenter__.assert_not_awaited()

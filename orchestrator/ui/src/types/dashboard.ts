@@ -22,6 +22,7 @@ export interface DashboardSummary {
   uptime_seconds: number;
   current_time: string;
   orchestrator_model: string;
+  orchestrator_version: string;
 }
 
 export interface TokenUsage {
@@ -50,6 +51,7 @@ export interface CurrentTask {
 export interface AgentInfo {
   id: string;
   name: string;
+  version: string;
   description: string;
   url: string;
   status: 'AVAILABLE' | 'BUSY' | 'BROKEN';

@@ -14,6 +14,7 @@ drives incident creation. No LLM is called by this agent (``run`` is overridden)
 """
 
 import os
+from datetime import UTC, datetime, timedelta
 
 from a2a.helpers import new_text_message
 from a2a.types import Message
@@ -25,17 +26,38 @@ from common.agent_base import AgentBase
 
 EXECUTION_AGENT_NAME = "Smoke API Test Executor"
 
-_FAILED_EXECUTION_REPORT = """\
+_FAILED_EXECUTION_REPORT_TEMPLATE = """\
 TEST EXECUTION REPORT
 Overall status: FAILED
+Execution started: {execution_started}
+Execution ended: {execution_ended}
 
 Step 1: Send POST /api/password-reset with a registered email address
+  Started:  {step_started}
+  Ended:    {step_ended}
   Expected: HTTP 200 and a password-reset email is queued
   Actual:   HTTP 500 Internal Server Error; no email was queued
   Error:    AssertionError: expected response status 200 but received 500
 
 Environment: Smoke API Test Executor, ephemeral containerised test environment
 """
+
+
+def _as_utc_text(timestamp: datetime) -> str:
+    return timestamp.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _build_failed_execution_report() -> str:
+    """Builds the report around this run's UTC instant, so the smoke suite can assert that
+    the dates reaching the test management system are UTC rather than a local time."""
+    execution_ended = datetime.now(UTC)
+    execution_started = execution_ended - timedelta(seconds=15)
+    return _FAILED_EXECUTION_REPORT_TEMPLATE.format(
+        execution_started=_as_utc_text(execution_started),
+        execution_ended=_as_utc_text(execution_ended),
+        step_started=_as_utc_text(execution_started + timedelta(seconds=5)),
+        step_ended=_as_utc_text(execution_started + timedelta(seconds=13)),
+    )
 
 
 class _ExecutionOutput(BaseModel):
@@ -56,9 +78,9 @@ class MockExecutionAgent(AgentBase):
             port=port,
             external_port=int(os.environ.get("EXTERNAL_PORT", port)),
             model_name="google-gla:gemini-3.5-flash",
+            version=os.environ.get("EXECUTION_AGENT_VERSION", "1.0"),
             output_type=_ExecutionOutput,
             instructions="Unused: this mock returns a fixed result without calling the model.",
-            mcp_servers=[],
             description=(
                 "Executes automated API and integration test cases against the system under test "
                 "and reports detailed pass/fail execution results."
@@ -73,7 +95,7 @@ class MockExecutionAgent(AgentBase):
 
     async def run(self, received_message: Message) -> Message:
         self.latest_received_message = received_message
-        return new_text_message(text=_FAILED_EXECUTION_REPORT)
+        return new_text_message(text=_build_failed_execution_report())
 
 
 agent = MockExecutionAgent()

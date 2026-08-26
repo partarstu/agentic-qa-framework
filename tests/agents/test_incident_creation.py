@@ -2,16 +2,20 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
+import logging
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-# Mock MCPServerSSE and VectorDbService so importing the module (which instantiates the
-# agent at module level) does not open a real Qdrant client / network connection.
-with patch("common.agent_base.VectorDbService"), patch("pydantic_ai.mcp.MCPServerSSE"):
+import config
+
+# Mock VectorDbService so importing the module (which instantiates the agent at module
+# level) does not open a real Qdrant client.
+with patch("common.agent_base.VectorDbService"):
     from agents.incident_creation.main import IncidentCreationAgent
 
+from agents.incident_creation.prompt import IncidentCreationPrompt
 from common.models import (
     DuplicateCandidate,
     DuplicateDetectionResult,
@@ -31,6 +35,7 @@ def mock_config():
         mock_conf.IncidentCreationAgentConfig.EXTERNAL_PORT = 8005
         mock_conf.IncidentCreationAgentConfig.PROTOCOL = "http"
         mock_conf.IncidentCreationAgentConfig.MODEL_NAME = "test"
+        mock_conf.IncidentCreationAgentConfig.VERSION = "2.5"
         mock_conf.IncidentCreationAgentConfig.THINKING_LEVEL = "HIGH"
         mock_conf.JIRA_MCP_SERVER_URL = "http://jira-mcp"
         mock_conf.MCP_SERVER_TIMEOUT_SECONDS = 30
@@ -170,3 +175,46 @@ async def test_check_all_duplicates_batches_candidates_and_deduplicates_by_key(a
     assert "First candidate content" in prompt
     assert "Second candidate content" in prompt
     assert "Duplicate candidate content" not in prompt
+
+
+@pytest.mark.asyncio
+async def test_check_all_duplicates_deduplicates_keys_case_insensitively(agent, caplog):
+    test_case = TestCase(
+        key="TC-123",
+        labels=[],
+        name="Sample Test Case",
+        summary="Test case for testing",
+        comment="",
+        preconditions=None,
+        steps=[],
+        parent_issue_key=None,
+    )
+    input_data = IncidentCreationInput(
+        test_case=test_case,
+        test_execution_result="Failed with NPE",
+        test_step_results=[],
+        system_description="Win10",
+        issue_priority_field_id="priority",
+    )
+    candidates = [
+        DuplicateCandidate(issue_id="10001", key="PROJ-1", content="Original candidate content"),
+        DuplicateCandidate(issue_id="10001", key="proj-1", content="Lower-cased duplicate content"),
+    ]
+    agent.duplicate_detector.run = AsyncMock(
+        return_value=MagicMock(output=DuplicateDetectionResult(duplicates=[], message="No duplicates."))
+    )
+
+    with caplog.at_level(logging.INFO, logger="incident_creation_agent"):
+        await agent._check_all_duplicates(input_data, candidates)
+
+    prompt = agent.duplicate_detector.run.await_args.args[0]
+    assert '"key": "PROJ-1"' in prompt
+    assert "Original candidate content" in prompt
+    assert "Lower-cased duplicate content" not in prompt
+    assert "Removed 1 candidate(s)" in caplog.text
+
+
+def test_incident_creation_prompt_lists_configured_terminal_statuses():
+    prompt = IncidentCreationPrompt().get_prompt()
+    for status in config.IncidentCreationAgentConfig.TERMINAL_STATUSES:
+        assert status in prompt

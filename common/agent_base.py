@@ -4,7 +4,7 @@
 
 import asyncio
 from abc import ABC, abstractmethod
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from contextlib import asynccontextmanager
 from typing import Any
 from urllib.parse import urlparse
@@ -22,10 +22,10 @@ from pydantic import BaseModel
 from pydantic_ai import Agent, Tool
 from pydantic_ai.agent import AgentRunResult
 from pydantic_ai.exceptions import ModelHTTPError
-from pydantic_ai.mcp import MCPServerSSE
 from pydantic_ai.messages import BinaryContent, UserContent
 from pydantic_ai.settings import ThinkingLevel
 from pydantic_ai.tools import AgentDepsT, ToolFuncEither
+from pydantic_ai.toolsets import AbstractToolset
 from pydantic_ai.usage import UsageLimits
 
 import config
@@ -48,6 +48,13 @@ logger = utils.get_logger("agent_base")
 _ACTIVITY_QUEUE_MAXSIZE = 1000
 
 
+def _contains_connect_error(exc: BaseException) -> bool:
+    """Whether a failure - possibly nested in exception groups - was a failure to connect."""
+    if isinstance(exc, ExceptionGroup):
+        return any(_contains_connect_error(member) for member in exc.exceptions)
+    return isinstance(exc, httpx.ConnectError)
+
+
 class AgentBase(ABC):
     def __init__(
         self,
@@ -57,9 +64,10 @@ class AgentBase(ABC):
         port: int,
         external_port: int,
         model_name: str,
+        version: str,
         output_type: type[BaseModel],
         instructions: str,
-        mcp_servers: list[MCPServerSSE],
+        mcp_toolset_factories: Sequence[Callable[[], AbstractToolset]] = (),
         deps_type: type[BaseModel] | None = None,
         description: str = "",
         tools: Sequence[Tool[AgentDepsT] | ToolFuncEither[AgentDepsT, ...]] = (),
@@ -78,11 +86,13 @@ class AgentBase(ABC):
         self.protocol = protocol
         self.url = f"{self.base_url}:{self.external_port}"
         self.model_name = model_name
+        self.version = version
         self.output_type = output_type
         self.instructions = instructions
         self.deps_type = deps_type
         self.description = description
-        self.mcp_servers = mcp_servers or []
+        # Factories rather than live connections: a fresh MCP session is built for each agent run.
+        self.mcp_toolset_factories = list(mcp_toolset_factories)
         self._activity_queue: asyncio.Queue[str] = asyncio.Queue(maxsize=_ACTIVITY_QUEUE_MAXSIZE)
         self.tools = [*tools, self.report_activity]
         self.instructions = (
@@ -136,21 +146,25 @@ class AgentBase(ABC):
         logger.info(f"""Creating agent '{self.agent_name}' with the following configuration:
         - Model: {self.model_name}
         - Output Type: {self.output_type.__name__}
-        - MCP Servers: {[server.url for server in self.mcp_servers]}
+        - MCP Server: {self._get_mcp_server_description()}
         - Tools: {[getattr(tool, "__name__", None) or tool.name for tool in self.tools]}""")
 
+        # No toolsets here: the MCP toolsets are built per run and passed to agent.run(...).
         return CustomLlmWrapper.create_agent(
             model_name=self.model_name,
             output_type=self.output_type,
             instructions=self.instructions,
             name=self.agent_name,
             thinking_level=self.get_thinking_level(),
-            toolsets=self.mcp_servers,
             tools=self.tools,
             deps_type=self.deps_type,
             retries=config.RetryConfig.MAX_RETRIES,
             output_retries=config.RetryConfig.MAX_RETRIES,
         )
+
+    def _get_mcp_server_description(self) -> str:
+        """The MCP server the per-run toolsets connect to, or a marker when the agent uses none."""
+        return config.JIRA_MCP_SERVER_URL if self.mcp_toolset_factories else "none"
 
     async def _get_agent_execution_result(self, received_request: list[UserContent]) -> AgentRunResult[Any] | None:
         usage_limits = UsageLimits(
@@ -161,14 +175,17 @@ class AgentBase(ABC):
             try:
                 logger.info(f"Starting agent run (attempt {attempt + 1}/{config.RetryConfig.MAX_RETRIES})...")
                 try:
+                    # Fresh MCP sessions per run - a retry therefore never reuses a broken session.
+                    # The run itself opens and closes them, so each session is entered exactly once
+                    # and a self-healing toolset can really tear its own session down.
+                    toolsets = [build_toolset() for build_toolset in self.mcp_toolset_factories]
                     async with self.agent:
-                        return await self.agent.run(received_request, usage_limits=usage_limits)
+                        return await self.agent.run(received_request, usage_limits=usage_limits, toolsets=toolsets)
                 except ExceptionGroup as eg:
-                    if any(isinstance(exc, httpx.ConnectError) for exc in eg.exceptions) and self.mcp_servers:
-                        mcp_urls = [server.url for server in self.mcp_servers]
+                    if _contains_connect_error(eg) and self.mcp_toolset_factories:
                         raise ConnectionError(
-                            f"MCP connection failed: could not connect to MCP server(s) {mcp_urls}. "
-                            "Ensure the MCP server(s) are running and accessible."
+                            f"MCP connection failed: could not connect to MCP server "
+                            f"{config.JIRA_MCP_SERVER_URL}. Ensure the MCP server is running and accessible."
                         ) from eg
                     raise
             except (ModelHTTPError, httpx.TransportError) as e:
@@ -280,7 +297,7 @@ class AgentBase(ABC):
     @asynccontextmanager
     async def _lifespan(self, app: FastAPI):
         logger.info(f"{self.agent_name} started.")
-        logger.info(f"Using following MCP server URLs: {[server.url for server in self.mcp_servers]}")
+        logger.info(f"Using following MCP server: {self._get_mcp_server_description()}")
         yield
         if self.vector_db_service:
             await self.vector_db_service.close()
@@ -310,7 +327,7 @@ class AgentBase(ABC):
         agent_card = AgentCard(
             name=self.agent_name,
             description=f"Model: {self.model_name}",
-            version="1.0.0",
+            version=self.version,
             default_input_modes=["text"],
             default_output_modes=["text", "image"],
             capabilities=AgentCapabilities(streaming=True),

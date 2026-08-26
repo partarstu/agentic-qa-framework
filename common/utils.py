@@ -6,7 +6,7 @@ import logging
 import mimetypes
 import os
 import sys
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 from dateutil import parser
@@ -111,7 +111,11 @@ def parse_timestamp(timestamp_str: str | None, field_name: str = "timestamp") ->
         return None
 
     try:
-        return parser.parse(cleaned_timestamp)
+        parsed = parser.parse(cleaned_timestamp)
+        # Timestamps without an offset are treated as UTC, so every consumer works with the same instant.
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=UTC)
+        return parsed.astimezone(UTC)
     except (OverflowError, TypeError, ValueError) as e:
         get_logger(__name__).warning(
             f"Ignoring invalid timestamp value for '{field_name}': '{timestamp_str}'. Error: {e}"

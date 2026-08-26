@@ -2,7 +2,6 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
-from pydantic_ai.mcp import MCPServerSSE
 from pydantic_ai.settings import ThinkingLevel
 
 import config
@@ -10,10 +9,10 @@ from agents.test_case_classification.prompt import TestCaseClassificationSystemP
 from common import utils
 from common.agent_base import AgentBase
 from common.models import ClassifiedTestCases, TestCaseKeys
+from common.services.jira_mcp import build_jira_mcp_server_toolset
 from common.services.test_management_system_client_provider import get_test_management_client
 
 logger = utils.get_logger("test_case_classification_agent")
-jira_mcp_server = MCPServerSSE(url=config.JIRA_MCP_SERVER_URL, timeout=config.MCP_SERVER_TIMEOUT_SECONDS)
 
 
 class TestCaseClassificationAgent(AgentBase):
@@ -28,9 +27,10 @@ class TestCaseClassificationAgent(AgentBase):
             external_port=config.TestCaseClassificationAgentConfig.EXTERNAL_PORT,
             protocol=config.TestCaseClassificationAgentConfig.PROTOCOL,
             model_name=config.TestCaseClassificationAgentConfig.MODEL_NAME,
+            version=config.TestCaseClassificationAgentConfig.VERSION,
             output_type=ClassifiedTestCases,
             instructions=instruction_prompt.get_prompt(),
-            mcp_servers=[jira_mcp_server],
+            mcp_toolset_factories=[build_jira_mcp_server_toolset],
             deps_type=TestCaseKeys,
             description="Agent which classifies test cases based on their content",
             tools=[self.add_labels_to_test_case],

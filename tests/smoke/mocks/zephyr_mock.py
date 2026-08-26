@@ -161,6 +161,8 @@ async def create_test_execution(request: Request) -> dict:
             "testCycleKey": payload.get("testCycleKey"),
             "statusName": payload.get("statusName"),
             "comment": payload.get("comment", ""),
+            "actualStartDate": payload.get("actualStartDate"),
+            "actualEndDate": payload.get("actualEndDate"),
             "testScriptResults": payload.get("testScriptResults", []),
         }
     )

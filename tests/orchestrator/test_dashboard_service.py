@@ -6,6 +6,7 @@ from datetime import datetime
 from unittest.mock import MagicMock
 
 import pytest
+from a2a.types import AgentCard, AgentInterface
 
 from orchestrator.dashboard_service import OrchestratorDashboardService
 from orchestrator.models import AgentRegistry, ErrorHistory, TaskHistory, TaskRecord, TaskStatus
@@ -148,3 +149,20 @@ def test_parse_agent_logs_warn_alias_normalised(mock_dashboard_service):
     parsed = mock_dashboard_service._parse_agent_logs(raw_logs, "task-1", "agent-1")
 
     assert parsed[0].level == "WARNING"
+
+
+@pytest.mark.asyncio
+async def test_get_agents_status_reports_the_agent_version():
+    registry = AgentRegistry()
+    card = AgentCard(
+        name="Agent 1",
+        description="Model: test",
+        version="2.5",
+        supported_interfaces=[AgentInterface(protocol_binding="JSONRPC", url="http://agent-host:8001")],
+    )
+    await registry.register("agent-1", card)
+    service = OrchestratorDashboardService(registry, TaskHistory(), ErrorHistory())
+
+    agents = await service.get_agents_status()
+
+    assert [agent["version"] for agent in agents] == ["2.5"]

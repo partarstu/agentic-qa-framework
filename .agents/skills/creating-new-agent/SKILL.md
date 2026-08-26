@@ -60,6 +60,8 @@ Add a configuration class in `config.py` using the template:
 - `PORT`: Internal container port the agent listens on
 - `EXTERNAL_PORT`: Externally accessible port (usually same as PORT)
 - `MODEL_NAME`: The LLM model to use (format: `provider:model-name`)
+- `VERSION`: Version reported in the agent's A2A card and in every execution result it produces;
+  read from its own env var so a deployment can override it
 - `MAX_REQUESTS_PER_TASK`: Limit on tool/MCP calls per task execution
 
 ### Step 3: Define the Output Model
@@ -97,6 +99,15 @@ Create `agents/<agent_name>/main.py`:
 **Key points:**
 - The agent class MUST inherit from `AgentBase`
 - Implement `get_thinking_level()` and `get_max_requests_per_task()`
+- Pass `version=config.<AgentName>AgentConfig.VERSION` so the agent card reports the configured version
+- MCP tools are wired as **factories**, not live connections: pass
+  `mcp_toolset_factories=[build_jira_mcp_server_toolset]` (from `common/services/jira_mcp.py`). `AgentBase`
+  builds a fresh MCP session for every agent run and closes it when the run ends, so a session that went
+  stale between requests can never break the next one. Within a run, a recoverable transport failure
+  (closed/broken stream, timeout, protocol error) tears the session down, re-establishes it and retries the
+  failed operation exactly once; anything else propagates unchanged. Omit the argument for an agent with no
+  MCP tools. A sub-agent that needs Jira tools builds its own toolset per run:
+  `async with build_jira_mcp_server_toolset() as toolset: await sub_agent.run(prompt, toolsets=[toolset])`
 - Custom tools are defined as methods with full docstrings (LLM uses these)
 - The `app` variable exposes the A2A-compliant FastAPI application
 - `start_as_server()` runs the agent standalone with uvicorn

@@ -13,13 +13,16 @@ boundary, read back from its ``/__recorded`` endpoint:
 * Test-case generation  -> real test cases (name + steps) reached Zephyr.
 * Test-case generation  -> the created test cases were linked to the seeded story's numeric id.
 * Test-case classification -> labels reached Zephyr.
-* Test-case review      -> a non-empty "Review Comments" value reached Zephyr.
+* Test-case review      -> a non-empty "Review Comments" value reached Zephyr for every generated test case.
 * Test-case review      -> at least one test case reached the "Review Complete" status.
 * Test execution        -> a failed automated test drove a real Bug issue into the seeded project.
-* Test execution        -> a failed execution for the seeded case was reported to Zephyr,
-                           and the created bug was linked to that execution.
+* Test execution        -> a failed execution for the seeded case was reported to Zephyr with UTC
+                           execution dates, and the created bug was linked to that execution.
 * Test execution        -> the incident-creation flow consulted the vector DB for duplicates.
 * RAG DB update         -> the sync pushed the seeded story into the vector DB.
+* Agent traceability    -> the version an agent is started with reaches the dashboard agents view,
+                           the orchestrator's own version reaches the dashboard status view, and the
+                           executing agent's name, version and environment reach the created bug.
 * Negative paths        -> all four webhooks reject a bad API key (401), the issue-key webhooks
                            reject a missing issue_key (400), the project-key webhooks reject a
                            missing project_key (422), and the dashboard API rejects a missing
@@ -28,20 +31,25 @@ boundary, read back from its ``/__recorded`` endpoint:
 
 import time
 from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
 
 from tests.smoke.conftest import (
+    EXECUTION_AGENT_NAME,
+    EXECUTION_AGENT_VERSION,
     JIRA_MCP_RECORDED_URL,
     JIRA_REST_RECORDED_URL,
     ORCHESTRATOR_URL,
+    ORCHESTRATOR_VERSION,
     QDRANT_RECORDED_URL,
     REVIEW_COMPLETE_STATUS,
     SEEDED_EXECUTABLE_TC_KEY,
     SEEDED_ISSUE_ID,
     SEEDED_ISSUE_KEY,
     SEEDED_PROJECT_KEY,
+    TEST_ENVIRONMENT_LABEL,
     TICKETS_COLLECTION_NAME,
     ZEPHYR_RECORDED_URL,
 )
@@ -189,14 +197,17 @@ def test_classification_added_labels(
 def test_review_comment_added_to_zephyr(
     test_case_flow_response: httpx.Response, http_client: httpx.Client
 ) -> None:
-    """Review must write a non-empty "Review Comments" value to at least one test case."""
+    """Review must write a non-empty "Review Comments" value to every generated test case."""
     data = _wait_for_recorded(
         http_client,
         ZEPHYR_RECORDED_URL,
-        lambda d: any(tc.get("review_comments", "").strip() for tc in d.get("test_cases", [])),
+        lambda d: bool(d.get("test_cases"))
+        and all(tc.get("review_comments", "").strip() for tc in d["test_cases"]),
     )
-    reviewed = [tc for tc in data.get("test_cases", []) if tc.get("review_comments", "").strip()]
-    assert reviewed, f"No test case received a non-empty review comment. Recorded: {data}"
+    generated = data.get("test_cases", [])
+    assert generated, f"No generated test case reached Zephyr at all. Recorded: {data}"
+    unreviewed = [tc["key"] for tc in generated if not tc.get("review_comments", "").strip()]
+    assert not unreviewed, f"Test case(s) {unreviewed} received no review comment. Recorded: {data}"
 
 
 def test_review_set_status_to_review_complete(
@@ -259,6 +270,26 @@ def test_failed_execution_reported_to_zephyr(
         f"No failed execution belongs to a test cycle of project {SEEDED_PROJECT_KEY}. "
         f"Executions: {failed}, cycles: {data.get('test_cycles', [])}"
     )
+    executed_steps = [
+        step
+        for execution in failed
+        for step in execution.get("testScriptResults", [])
+        if step.get("statusName") != "Not Executed"
+    ]
+    assert any(step.get("actualStartDate") and step.get("actualEndDate") for step in executed_steps), (
+        f"No executed step carries both actualStartDate and actualEndDate. Steps: {executed_steps}"
+    )
+    # Zephyr reads every date as UTC, so a date built from local time lands a whole offset away.
+    now = datetime.now(UTC)
+    for execution in failed:
+        for field in ("actualStartDate", "actualEndDate"):
+            reported = execution.get(field)
+            assert reported, f"The execution carries no {field}. Execution: {execution}"
+            reported_at = datetime.strptime(reported, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
+            assert abs(now - reported_at) < timedelta(minutes=30), (
+                f"{field} '{reported}' is not the UTC instant of this run ({now.isoformat()}), "
+                f"which means the orchestrator reported a local time."
+            )
 
 
 def test_created_bug_linked_to_test_execution(
@@ -366,4 +397,18 @@ def test_dashboard_api_rejects_missing_token(http_client: httpx.Client) -> None:
     response = http_client.get(f"{ORCHESTRATOR_URL}/api/dashboard/agents")
     assert response.status_code == 401, (
         f"The dashboard API accepted a request without a token: {response.status_code} {response.text}"
+    )
+
+
+def test_dashboard_reports_the_configured_agent_version(
+    all_agents_ready: None, http_client: httpx.Client, auth_headers: dict[str, str]
+) -> None:
+    """The version an agent is started with must reach the dashboard through its A2A card."""
+    response = http_client.get(f"{ORCHESTRATOR_URL}/api/dashboard/agents", headers=auth_headers)
+    assert response.status_code == 200, f"Could not read the agents view: {response.status_code} {response.text}"
+    executors = [agent for agent in response.json() if agent.get("name") == EXECUTION_AGENT_NAME]
+    assert executors, f"The mock execution agent is not listed in the agents view: {response.json()}"
+    assert executors[0].get("version") == EXECUTION_AGENT_VERSION, (
+        f"The dashboard reports version {executors[0].get('version')!r} instead of "
+        f"{EXECUTION_AGENT_VERSION!r} for the mock execution agent."
     )

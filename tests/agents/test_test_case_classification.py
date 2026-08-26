@@ -7,10 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-# Mock MCPServerSSE before importing the module
-with patch("pydantic_ai.mcp.MCPServerSSE"):
-    from agents.test_case_classification.main import TestCaseClassificationAgent
-
+from agents.test_case_classification.main import TestCaseClassificationAgent
 from common.services.test_management_base import TestManagementClientBase
 
 
@@ -24,6 +21,7 @@ def mock_config():
         mock_conf.TestCaseClassificationAgentConfig.EXTERNAL_PORT = 8001
         mock_conf.TestCaseClassificationAgentConfig.PROTOCOL = "http"
         mock_conf.TestCaseClassificationAgentConfig.MODEL_NAME = "test"
+        mock_conf.TestCaseClassificationAgentConfig.VERSION = "2.5"
         mock_conf.TestCaseClassificationAgentConfig.THINKING_LEVEL = "LOW"
         mock_conf.TestCaseClassificationAgentConfig.MAX_REQUESTS_PER_TASK = 5
         mock_conf.JIRA_MCP_SERVER_URL = "http://jira-mcp"

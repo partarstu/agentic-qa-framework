@@ -7,10 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-# Mock MCPServerSSE before importing the module
-with patch("pydantic_ai.mcp.MCPServerSSE"):
-    from agents.test_case_generation.main import TestCaseGenerationAgent
-
+from agents.test_case_generation.main import TestCaseGenerationAgent
 from common.models import AcceptanceCriteriaList, GeneratedTestCases, TestStepsSequenceList
 from common.services.test_management_base import TestManagementClientBase
 
@@ -24,6 +21,7 @@ def mock_config():
         mock_conf.TestCaseGenerationAgentConfig.EXTERNAL_PORT = 8002
         mock_conf.TestCaseGenerationAgentConfig.PROTOCOL = "http"
         mock_conf.TestCaseGenerationAgentConfig.MODEL_NAME = "test"
+        mock_conf.TestCaseGenerationAgentConfig.VERSION = "2.5"
         mock_conf.TestCaseGenerationAgentConfig.THINKING_LEVEL = "MEDIUM"
         mock_conf.TestCaseGenerationAgentConfig.MAX_REQUESTS_PER_TASK = 10
         mock_conf.JIRA_MCP_SERVER_URL = "http://jira-mcp"
@@ -79,12 +77,22 @@ async def test_generate_test_cases_flow(agent):
     # Mock _fetch_attachments to return empty dict
     agent._fetch_attachments = MagicMock(return_value={})
 
+    # The AC extraction opens its own Jira MCP session; stub the factory so no connection is attempted.
+    jira_toolset = MagicMock()
+    jira_toolset.__aenter__ = AsyncMock(return_value=jira_toolset)
+    jira_toolset.__aexit__ = AsyncMock(return_value=None)
+
     # Pass file paths instead of BinaryContent objects
-    result = await agent._generate_test_cases("Jira Content", ["/path/to/attachment.png"])
+    with patch(
+        "agents.test_case_generation.main.build_jira_mcp_server_toolset", return_value=jira_toolset
+    ):
+        result = await agent._generate_test_cases("Jira Content", ["/path/to/attachment.png"])
 
     assert isinstance(result, GeneratedTestCases)
     agent._fetch_attachments.assert_called_once_with(["/path/to/attachment.png"])
     agent.ac_extractor_agent.run.assert_called_once()
+    assert agent.ac_extractor_agent.run.await_args.kwargs["toolsets"] == [jira_toolset]
+    jira_toolset.__aexit__.assert_awaited_once()
     agent.steps_generator_agent.run.assert_called_once()
     agent.test_case_creator_agent.run.assert_called_once()
 

@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 
 from allure_commons.logger import AllureFileLogger
-from allure_commons.model2 import Attachment, Status, StatusDetails, TestResult, TestStepResult
+from allure_commons.model2 import Attachment, Label, Status, StatusDetails, TestResult, TestStepResult
 
 import config
 from common import utils
@@ -82,6 +82,14 @@ class AllureClient(TestReportingClientBase):
         test_result.stop = self._timestamp_to_millis(
             test_execution_result.end_timestamp, "test execution end timestamp", fallback_to_now=True
         )
+
+        if test_execution_result.agent_info:
+            # One tag per value so each of them can be filtered on individually in the report.
+            agent_info = test_execution_result.agent_info
+            test_result.labels.extend(
+                Label(name="tag", value=value)
+                for value in (agent_info.agent_name, agent_info.agent_version, agent_info.environment)
+            )
 
         if test_execution_result.artifacts:
             for artifact in test_execution_result.artifacts:
