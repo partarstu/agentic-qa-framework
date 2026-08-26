@@ -26,6 +26,9 @@ from common.agent_base import AgentBase
 
 EXECUTION_AGENT_NAME = "Smoke API Test Executor"
 
+# The report deliberately describes no environment of its own: the orchestrator only falls back to
+# its own agent/version/environment description when the executor supplied none, and that fallback
+# is what carries the execution traceability into the created incident.
 _FAILED_EXECUTION_REPORT_TEMPLATE = """\
 TEST EXECUTION REPORT
 Overall status: FAILED
@@ -38,8 +41,6 @@ Step 1: Send POST /api/password-reset with a registered email address
   Expected: HTTP 200 and a password-reset email is queued
   Actual:   HTTP 500 Internal Server Error; no email was queued
   Error:    AssertionError: expected response status 200 but received 500
-
-Environment: Smoke API Test Executor, ephemeral containerised test environment
 """
 
 

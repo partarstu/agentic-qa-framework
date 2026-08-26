@@ -33,6 +33,7 @@ from pydantic_ai.settings import ThinkingLevel
 
 import config
 from common import utils
+from common.model_factory import build_model
 from common.models import JsonSerializableModel
 from common.prompt_injection.guard import GuardPrompt, PromptGuardFactory
 
@@ -43,7 +44,7 @@ logger = utils.get_logger("llm_wrapper")
 
 class CustomLlmWrapper(WrapperModel):
     def __init__(self, model_name: str, thinking_level: ThinkingLevel | None = None):
-        super().__init__(model_name)
+        super().__init__(build_model(model_name, thinking_level))
         self.wrapped_model_name: str = model_name
         self.latest_instructions: str | None = None
         self.thinking_level = thinking_level

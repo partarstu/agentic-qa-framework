@@ -102,6 +102,19 @@ OPEN_TELEMETRY_URL = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT")
 TOP_P = 1.0
 TEMPERATURE = 0.0
 
+# Model used by the orchestrator and every agent. Either a pydantic-ai model string
+# (e.g. "google-gla:gemini-3.5-flash") or "qwen:<model>" for the self-hosted Qwen endpoint below.
+DEFAULT_MODEL_NAME = os.environ.get("MODEL_NAME", "google-gla:gemini-3.5-flash")
+
+# Self-hosted, OpenAI-compatible Qwen endpoint, used by model names prefixed with "qwen:". An endpoint
+# served by Cloud Run authenticates through an IAM identity token minted from the application default
+# credentials, so QWEN_API_KEY only applies to any other host.
+QWEN_ENDPOINT = os.environ.get("QWEN_ENDPOINT", "")
+QWEN_API_KEY = os.environ.get("QWEN_API_KEY", "")
+# Master switch for Qwen's thinking. When on, each agent's THINKING_LEVEL grades it; when off, thinking is
+# disabled through Qwen's chat template, which is the only way to switch it off entirely.
+QWEN_THINKING_ENABLED = os.environ.get("QWEN_THINKING_ENABLED", "True").lower() in ("true", "1", "t")
+
 
 class BudgetConfig:
     """Token budget (hard limit) and pricing used for cost oversight."""
@@ -144,7 +157,7 @@ class OrchestratorConfig:
     TASK_EXECUTION_TIMEOUT = 500.0
     AGENT_DISCOVERY_TIMEOUT_SECONDS = 120
     INCOMING_REQUEST_WAIT_TIMEOUT = AGENT_DISCOVERY_TIMEOUT_SECONDS + 5
-    MODEL_NAME = "google-gla:gemini-3.5-flash"
+    MODEL_NAME = DEFAULT_MODEL_NAME
     API_KEY = os.environ.get("ORCHESTRATOR_API_KEY")
     AGENT_DISCOVERY_PORTS = os.environ.get("AGENT_DISCOVERY_PORTS", "8001-8007")
     REMOTE_EXECUTION_AGENT_HOSTS = os.environ.get("REMOTE_EXECUTION_AGENT_HOSTS", AGENT_BASE_URL)
@@ -172,7 +185,7 @@ class RequirementsReviewAgentConfig:
     PORT = int(os.environ.get("PORT", "8001"))
     EXTERNAL_PORT = int(os.environ.get("EXTERNAL_PORT", PORT))
     PROTOCOL = "http"
-    MODEL_NAME = "google-gla:gemini-3.5-flash"
+    MODEL_NAME = DEFAULT_MODEL_NAME
     MAX_REQUESTS_PER_TASK = 30
 
 
@@ -184,7 +197,7 @@ class TestCaseClassificationAgentConfig:
     PORT = int(os.environ.get("PORT", "8003"))
     EXTERNAL_PORT = int(os.environ.get("EXTERNAL_PORT", PORT))
     PROTOCOL = "http"
-    MODEL_NAME = "google-gla:gemini-3.5-flash"
+    MODEL_NAME = DEFAULT_MODEL_NAME
     MAX_REQUESTS_PER_TASK = 30
 
 
@@ -196,7 +209,7 @@ class TestCaseGenerationAgentConfig:
     PORT = int(os.environ.get("PORT", "8002"))
     EXTERNAL_PORT = int(os.environ.get("EXTERNAL_PORT", PORT))
     PROTOCOL = "http"
-    MODEL_NAME = "google-gla:gemini-3.5-flash"
+    MODEL_NAME = DEFAULT_MODEL_NAME
     MAX_REQUESTS_PER_TASK = 30
 
 
@@ -209,7 +222,7 @@ class TestCaseReviewAgentConfig:
     PORT = int(os.environ.get("PORT", "8004"))
     EXTERNAL_PORT = int(os.environ.get("EXTERNAL_PORT", PORT))
     PROTOCOL = "http"
-    MODEL_NAME = "google-gla:gemini-3.5-flash"
+    MODEL_NAME = DEFAULT_MODEL_NAME
     MAX_REQUESTS_PER_TASK = 30
 
 
@@ -221,7 +234,7 @@ class IncidentCreationAgentConfig:
     PORT = int(os.environ.get("PORT", "8007"))
     EXTERNAL_PORT = int(os.environ.get("EXTERNAL_PORT", PORT))
     PROTOCOL = "http"
-    MODEL_NAME = "google-gla:gemini-3.5-flash"
+    MODEL_NAME = DEFAULT_MODEL_NAME
     MAX_REQUESTS_PER_TASK = 30
     MIN_SIMILARITY_SCORE = float(os.environ.get("INCIDENT_AGENT_MIN_SIMILARITY_SCORE", "0.7"))
     ISSUE_PRIORITY_FIELD_ID = os.environ.get("ISSUE_PRIORITY_FIELD_ID", "priority")

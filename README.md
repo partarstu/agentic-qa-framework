@@ -201,8 +201,23 @@ behavior of the orchestrator and agents.
 
 ```
 # LLM Provider
-GOOGLE_API_KEY=YOUR_GOOGLE_API_KEY # Required. Gemini API key consumed directly by pydantic-ai's google-gla provider
-                                 # for every agent's and the orchestrator's LLM calls.
+GOOGLE_API_KEY=YOUR_GOOGLE_API_KEY # Required for the default Gemini model. Gemini API key consumed directly by
+                                 # pydantic-ai's google-gla provider for every agent's and the orchestrator's LLM calls.
+MODEL_NAME=google-gla:gemini-3.5-flash # Default: google-gla:gemini-3.5-flash. The model the orchestrator and every
+                                 # agent use. Either a pydantic-ai model string, or "qwen:<model>" (e.g.
+                                 # qwen:Qwen/Qwen3.8-27B-FP8) to route all workflows to the self-hosted, OpenAI-
+                                 # compatible Qwen deployment configured below.
+QWEN_ENDPOINT= # Required for a "qwen:" model name. Base URL of the OpenAI-compatible Qwen endpoint, including the
+                                 # API version (e.g. https://qwen-3-8-<id>.europe-west4.run.app/v1/).
+QWEN_API_KEY= # Optional. Static API key for the Qwen endpoint. An endpoint served by Cloud Run (*.run.app) ignores it
+                                 # and authenticates through an IAM identity token minted from the application default
+                                 # credentials instead, so it needs either a service account key file in
+                                 # GOOGLE_APPLICATION_CREDENTIALS, or 'gcloud auth application-default login
+                                 # --impersonate-service-account=<invoker service account>'.
+QWEN_THINKING_ENABLED=True # Default: True, meaning each agent's configured thinking level grades Qwen's reasoning
+                                 # effort (Qwen accepts low, medium and xhigh, so "minimal" is sent as "low" and "high"
+                                 # as "xhigh"). Set to False to disable thinking entirely through Qwen's chat template,
+                                 # e.g. to compare the model with and without it.
 
 # Logging
 LOG_LEVEL=INFO # Default: INFO. Controls the verbosity of logging.

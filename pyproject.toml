@@ -12,7 +12,7 @@ license = "AGPL-3.0-only"
 
 # Shared runtime dependencies for the orchestrator and all agents.
 dependencies = [
-    "pydantic-ai-slim[google,mcp]==1.89.0",
+    "pydantic-ai-slim[google,mcp,openai]==1.89.0",
     "a2a-sdk==1.0.3",
     "allure-python-commons==2.15.2",
     "python-dotenv==1.2.2",
@@ -50,10 +50,6 @@ dev = [
     "pytest-asyncio==1.3.0",
     "ruff",
     "bandit",
-    # The test suite builds agents with an `openai:` model string, so the
-    # OpenAI provider is required for tests but not at runtime (production uses
-    # the Google provider only). uv merges this with the base extras above.
-    "pydantic-ai-slim[openai]==1.89.0",
 ]
 
 [tool.uv]

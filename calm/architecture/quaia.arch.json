@@ -239,7 +239,7 @@
       "unique-id": "llm-provider",
       "node-type": "system",
       "name": "LLM Provider",
-      "description": "External large-language-model provider (Google Gemini) used by the orchestrator and agents."
+      "description": "Large-language-model provider used by the orchestrator and agents: Google Gemini by default, or a self-hosted OpenAI-compatible deployment (Qwen on Cloud Run, authenticated with an IAM identity token)."
     },
     {
       "unique-id": "execution-agents",

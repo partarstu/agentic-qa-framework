@@ -251,6 +251,34 @@ def test_failed_execution_creates_bug_in_jira(
     )
 
 
+def test_created_bug_carries_execution_traceability(
+    execute_tests_response: httpx.Response, http_client: httpx.Client
+) -> None:
+    """The agent and environment the orchestrator recorded for the execution must reach the bug.
+
+    When the executor describes no environment of its own - as the mock executor deliberately does
+    not - the orchestrator falls back to describing the execution itself, from the executing agent's
+    card and its own environment label, and hands that to the incident-creation agent, which turns
+    it into the environment details of the created bug.
+    """
+    data = _wait_for_recorded(
+        http_client,
+        JIRA_MCP_RECORDED_URL,
+        lambda d: any(i.get("issue_type") == "Bug" for i in d.get("created_issues", [])),
+    )
+    descriptions = [
+        i.get("description", "")
+        for i in data.get("created_issues", [])
+        if i.get("issue_type") == "Bug" and i.get("project_key") == SEEDED_PROJECT_KEY
+    ]
+    assert descriptions, f"No Bug issue for project {SEEDED_PROJECT_KEY} reached Jira. Recorded: {data}"
+    for traced_value in (TEST_ENVIRONMENT_LABEL, EXECUTION_AGENT_NAME, EXECUTION_AGENT_VERSION):
+        assert any(traced_value.casefold() in description.casefold() for description in descriptions), (
+            f"No created bug carries {traced_value!r}, so the execution traceability data did not "
+            f"survive the way to Jira. Descriptions: {descriptions}"
+        )
+
+
 def test_failed_execution_reported_to_zephyr(
     execute_tests_response: httpx.Response, http_client: httpx.Client
 ) -> None:
@@ -411,4 +439,16 @@ def test_dashboard_reports_the_configured_agent_version(
     assert executors[0].get("version") == EXECUTION_AGENT_VERSION, (
         f"The dashboard reports version {executors[0].get('version')!r} instead of "
         f"{EXECUTION_AGENT_VERSION!r} for the mock execution agent."
+    )
+
+
+def test_dashboard_reports_the_configured_orchestrator_version(
+    http_client: httpx.Client, auth_headers: dict[str, str]
+) -> None:
+    """The version the orchestrator is started with must reach the dashboard summary view."""
+    response = http_client.get(f"{ORCHESTRATOR_URL}/api/dashboard/summary", headers=auth_headers)
+    assert response.status_code == 200, f"Could not read the summary view: {response.status_code} {response.text}"
+    reported_version = response.json().get("orchestrator_version")
+    assert reported_version == ORCHESTRATOR_VERSION, (
+        f"The dashboard reports orchestrator version {reported_version!r} instead of {ORCHESTRATOR_VERSION!r}."
     )
