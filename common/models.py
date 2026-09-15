@@ -5,6 +5,7 @@
 import hashlib
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Literal, Optional
 
 from a2a.types import Part
@@ -286,12 +287,49 @@ class AggregatedTestResults(JsonSerializableModel):
     results: list[TestExecutionResult]
 
 
-class SelectedAgent(JsonSerializableModel):
-    id: str = Field(description="ID of the agent that is most suitable for the task execution")
+class AgentSkillDeclaration(JsonSerializableModel):
+    """Declared skill of a Python agent, published on its A2A card.
+
+    Every agent declares exactly one skill with a stable identity; AgentBase requires it and
+    never falls back to a generic one.
+    """
+
+    id: str = Field(description="Stable, unique skill ID, e.g. 'jira-requirements-review'")
+    name: str = Field(description="Human-readable skill name, e.g. 'Jira Requirements Review'")
+    description: str = Field(description="What the agent can do, used for routing decisions")
+    tags: list[str] = Field(default_factory=lambda: ["qa"], description="Skill tags")
+
+
+class RoutingOutcome(StrEnum):
+    """Outcome of one routing decision over the full agent registry."""
+
+    AGENT_SELECTED = "agent_selected"
+    SUITABLE_BUT_BUSY = "suitable_but_busy"
+    NONE_SUITABLE = "none_suitable"
+
+
+class AgentRoutingDecision(JsonSerializableModel):
+    """Result of one routing call that sees every registered agent, including availability.
+
+    The justification is mandatory for every outcome, so an unusable decision is never silent.
+    """
+
+    selected_agent_id: str | None = Field(
+        default=None,
+        description="ID of the single most suitable agent. Must be None unless the outcome is 'agent_selected'.",
+    )
+    outcome: RoutingOutcome = Field(description="One of the three routing outcomes")
+    justification: str = Field(
+        description="Elaborate justification of the decision. Must always be given, whatever the outcome."
+    )
 
 
 class SelectedAgents(JsonSerializableModel):
     ids: list[str] = Field(description="The IDs of all agents that are suitable for the task execution")
+    justification: str = Field(
+        default="",
+        description="Justification of the selection, to be given whenever the selected set is empty or partial",
+    )
 
 
 class IncidentCreationInput(JsonSerializableModel):

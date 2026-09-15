@@ -51,13 +51,14 @@ from common.custom_llm_wrapper import CustomLlmWrapper
 from common.models import (
     AgentExecutionError,
     AgentInfo,
+    AgentRoutingDecision,
     FileArtifact,
     GeneratedTestCases,
     IncidentCreationInput,
     IncidentCreationResult,
     JsonSerializableModel,
     ProjectExecutionRequest,
-    SelectedAgent,
+    RoutingOutcome,
     SelectedAgents,
     TestCase,
     TestExecutionRequest,
@@ -88,6 +89,11 @@ from orchestrator.models import (
     agent_registry,
     error_history,
     task_history,
+)
+from orchestrator.prompt import (
+    MULTI_ROUTING_INSTRUCTION,
+    RESULTS_EXTRACTOR_INSTRUCTION,
+    ROUTING_INSTRUCTION,
 )
 from orchestrator.streaming_hub import _Subscriber, streaming_hub
 
@@ -493,10 +499,7 @@ def _build_agent_info(card: AgentCard | None, agent_name: str) -> AgentInfo:
 
 def _describe_execution_system(agent_info: AgentInfo) -> str:
     """Fallback description of the system a test case was executed on."""
-    return (
-        f"Agent: {agent_info.agent_name} (version {agent_info.agent_version}), "
-        f"Environment: {agent_info.environment}"
-    )
+    return f"Agent: {agent_info.agent_name} (version {agent_info.agent_version}), Environment: {agent_info.environment}"
 
 
 def _get_agent_host(card: AgentCard | None) -> str:
@@ -561,12 +564,8 @@ async def _cancel_agent_task(agent_card: AgentCard, task_id: str) -> bool:
 # --- For selecting the single best for the task agent ---
 discovery_agent = CustomLlmWrapper.create_agent(
     model_name=config.OrchestratorConfig.MODEL_NAME,
-    output_type=SelectedAgent,
-    instructions="You are an intelligent orchestrator specialized on routing the target task to one of the agents "
-    "which are registered with you. Your task is to select one agent to handle the target "
-    "task based on the description of this task and the list of all available candidate agents "
-    " (this list has the info about the capabilities of each agent). If there is no agent that can "
-    "execute the target task, return an empty string.",
+    output_type=AgentRoutingDecision,
+    instructions=ROUTING_INSTRUCTION,
     name="Discovery Agent",
     retries=config.RetryConfig.MAX_RETRIES,
     thinking_level=config.OrchestratorConfig.THINKING_LEVEL,
@@ -577,9 +576,7 @@ discovery_agent = CustomLlmWrapper.create_agent(
 multi_discovery_agent = CustomLlmWrapper.create_agent(
     model_name=config.OrchestratorConfig.MODEL_NAME,
     output_type=SelectedAgents,
-    instructions="You are an intelligent orchestrator specialized on routing tasks. Your task is to select all agents "
-    "that can handle the target task based on the task's description and a list of available agents. "
-    "If no agents can execute the task, return an empty list.",
+    instructions=MULTI_ROUTING_INSTRUCTION,
     name="Multi-Discovery Agent",
     retries=config.RetryConfig.MAX_RETRIES,
     thinking_level=config.OrchestratorConfig.THINKING_LEVEL,
@@ -592,10 +589,7 @@ def _get_results_extractor_agent(output_type: type[JsonSerializableModel] | type
     return CustomLlmWrapper.create_agent(
         model_name=config.OrchestratorConfig.MODEL_NAME,
         output_type=output_type,
-        instructions="You are an intelligent agent specialized on extracting the structured information based on the input "
-        "provided to you. Your task is to analyze the provided to you input, identify the requested "
-        "information inside of this input and return it in a format which is requested by the user. If you've "
-        "identified no matching information inside of the provided to you input, return an empty result.",
+        instructions=RESULTS_EXTRACTOR_INSTRUCTION,
         name="Results Extractor Agent",
         thinking_level=config.OrchestratorConfig.THINKING_LEVEL,
         retries=config.RetryConfig.MAX_RETRIES,
@@ -1050,9 +1044,7 @@ async def _agent_worker(
                         generalErrorMessage=f"All agents failed. Last error from {agent_name}: {e}",
                         start_timestamp=datetime.now(UTC).isoformat(),
                         end_timestamp=datetime.now(UTC).isoformat(),
-                        system_description=(
-                            f"{_describe_execution_system(agent_info)} (Failed - No Retry Available)"
-                        ),
+                        system_description=(f"{_describe_execution_system(agent_info)} (Failed - No Retry Available)"),
                         test_case=test_case,
                         agent_info=agent_info,
                     )
@@ -1648,38 +1640,57 @@ async def reserve_agent_waiting_if_needed(
 
     max_wait_time = config.OrchestratorConfig.TASK_EXECUTION_TIMEOUT
     start_time = time.time()
+    last_justification = "no routing decision was made"
 
     while (time.time() - start_time) < max_wait_time:
         # Try to atomically select and reserve an agent
         async with agent_selection_lock:
-            available_agent_ids = await agent_registry.get_available_agents()
-            if available_agent_ids:
-                agent_id = await _select_agent(task_description, available_agent_ids, task_id)
-                if agent_id:
-                    # Double-check agent is still available (might have changed during _select_agent)
-                    current_status = await agent_registry.get_status(agent_id)
-                    if current_status == AgentStatus.AVAILABLE:
-                        agent_card = await agent_registry.get_card(agent_id)
-                        if agent_card:
-                            # Atomically mark as BUSY before releasing the lock
-                            await agent_registry.update_status(agent_id, AgentStatus.BUSY)
-                            agent_name = await agent_registry.get_name(agent_id)
-                            logger.info(
-                                f"Reserved agent '{agent_name}' (ID: {agent_id}) on host "
-                                f"'{_get_agent_host(agent_card)}' for task '{task_description}'",
-                                extra={"task_id": task_id, "agent_id": agent_id},
-                            )
-                            return agent_id, agent_card
-                # If _select_agent returned None, it means no suitable agent is currently
-                # available. Continue waiting - the suitable agent might become available later.
+            decision = await _route_task(task_description, task_id)
+            last_justification = decision.justification
 
-        # No agent was reserved - wait 1s and retry (outside the lock)
+            if decision.outcome == RoutingOutcome.NONE_SUITABLE:
+                # Fail fast: no registered agent can execute the task, so waiting is pointless.
+                _record_error(
+                    f"No registered agent can execute task '{task_description}'. "
+                    f"Routing justification: {decision.justification}",
+                    task_id=task_id,
+                )
+                _handle_exception(
+                    f"No registered agent can execute task '{task_description}'. "
+                    f"Routing justification: {decision.justification}",
+                    404,
+                    task_id=task_id,
+                )
+
+            available_agent_ids = await agent_registry.get_available_agents()
+            agent_id = _selected_agent_if_available(decision, available_agent_ids, task_description, task_id)
+            if agent_id:
+                # Double-check agent is still available (might have changed during _select_agent)
+                current_status = await agent_registry.get_status(agent_id)
+                if current_status == AgentStatus.AVAILABLE:
+                    agent_card = await agent_registry.get_card(agent_id)
+                    if agent_card:
+                        # Atomically mark as BUSY before releasing the lock
+                        await agent_registry.update_status(agent_id, AgentStatus.BUSY)
+                        agent_name = await agent_registry.get_name(agent_id)
+                        logger.info(
+                            f"Reserved agent '{agent_name}' (ID: {agent_id}) on host "
+                            f"'{_get_agent_host(agent_card)}' for task '{task_description}'",
+                            extra={"task_id": task_id, "agent_id": agent_id},
+                        )
+                        return agent_id, agent_card
+            # Anything else counts as "a suitable agent exists but none is available right now":
+            # an invalid or unavailable selection is treated like busy, so the wait-and-retry loop
+            # continues - the suitable agent might become available later.
+
+        # No agent was reserved - wait and retry (outside the lock)
         await asyncio.sleep(10)
 
-    # Timeout reached
+    # Timeout reached: a suitable agent existed but stayed busy the whole time.
     _handle_exception(
         f"Timeout waiting for an available agent to handle task '{task_description}'. "
-        f"All agents have been busy for {max_wait_time} seconds.",
+        f"A suitable agent exists but none of the suitable agents became available within "
+        f"{max_wait_time} seconds. Last routing justification: {last_justification}",
         503,
         task_id=task_id,
     )
@@ -1765,22 +1776,25 @@ def _get_time_left_for_task_completion_waiting(start_time):
 async def _select_all_suitable_agent_ids(task_description: str) -> list[str]:
     """Selects all suitable agents from the registry for a given task.
 
-    Only considers agents that are currently AVAILABLE for new tasks.
+    The routing model sees the full registry (including busy agents, so it can tell "busy" from
+    "incapable"), but only agents that are currently AVAILABLE are returned.
     """
-    available_agent_ids = await agent_registry.get_available_agents()
-    agents_info = await _get_agents_info(available_agent_ids)
+    agents_info = await _get_agents_info()
+    if not agents_info:
+        return []
+
     user_prompt = f"""
 Target task description: "{task_description}".
 
-The list of all registered with you agents:\n{agents_info}
+The list of all registered with you agents:
+{agents_info}
 """
-
     result = await _run_agent_with_retry(lambda: multi_discovery_agent.run(user_prompt))
     selected_agent_ids = result.output.ids or []
     valid_agent_ids = []
     for agent_id in selected_agent_ids:
-        # Verify agent exists AND is in our available agents list
-        if await agent_registry.contains(agent_id) and agent_id in available_agent_ids:
+        # Verify agent exists AND is currently available
+        if agent_id in await agent_registry.get_available_agents():
             valid_agent_ids.append(agent_id)
 
     for agent_id in valid_agent_ids:
@@ -1789,31 +1803,90 @@ The list of all registered with you agents:\n{agents_info}
     return valid_agent_ids
 
 
-async def _get_agents_info(available_agent_ids: list[str]) -> str:
-    """Get information about agents that are AVAILABLE for new tasks.
+def _describe_agent_card(card: AgentCard) -> str:
+    """Human-readable capability description of one agent card.
+
+    External execution agents may publish generic or incomplete cards, so every field is
+    optional: whatever exists is included and nothing ever fails.
+    """
+    parts = [f"Name: {card.name}", f"Description: {card.description or 'none'}"]
+    if card.skills:
+        skill_descriptions = "; ".join(
+            f"{skill.name or 'unnamed skill'}: {skill.description or 'no description'}" for skill in card.skills
+        )
+        parts.append(f"Skills: {skill_descriptions}")
+    else:
+        parts.append("Skills: none declared")
+    return ", ".join(parts)
+
+
+async def _get_agents_info(agent_ids: list[str] | None = None) -> str:
+    """Get information about the given agents, or every registered agent when none are given.
+
+    Every agent is listed with its identity, capabilities and current availability, so the
+    routing model can tell "busy" from "incapable" and can pick an available agent among
+    several equally capable ones.
 
     Args:
-        available_agent_ids: List of agent IDs that are currently AVAILABLE.
+        agent_ids: Optional list of agent IDs to describe. Defaults to all registered agents.
 
     Returns:
         Formatted string with agent information for the discovery agent.
     """
-    agents_info = ""
     all_cards = await agent_registry.get_all_cards()
-    for agent_id in available_agent_ids:
+    if agent_ids is None:
+        agent_ids = list(all_cards.keys())
+    agents_info = ""
+    for agent_id in agent_ids:
         card = all_cards.get(agent_id)
         if card:
-            agents_info += (
-                f"- Name: {card.name}, ID: {agent_id}, Skills: "
-                f"{'; '.join(skill.description for skill in card.skills)}\n"
-            )
+            status = await agent_registry.get_status(agent_id)
+            availability = "available" if status == AgentStatus.AVAILABLE else f"not available ({status.value})"
+            agents_info += f"- ID: {agent_id}, {_describe_agent_card(card)}, Availability: {availability}\n"
     return agents_info
+
+
+async def _route_task(task_description: str, task_id: str | None = None) -> AgentRoutingDecision:
+    """Asks the routing model for one three-way decision over the full agent registry.
+
+    Args:
+        task_description: Description of the task to be assigned.
+        task_id: Optional ID of the task for logging purposes.
+
+    Returns:
+        The routing decision: outcome, selected agent ID (when applicable) and justification.
+    """
+    agents_info = await _get_agents_info()
+    if not agents_info:
+        return AgentRoutingDecision(
+            outcome=RoutingOutcome.NONE_SUITABLE,
+            justification="No agents are registered with the orchestrator.",
+        )
+
+    user_prompt = f"""
+Target task description: "{task_description}".
+
+The list of all registered with you agents:
+{agents_info}
+"""
+    result = await _run_agent_with_retry(lambda: discovery_agent.run(user_prompt))
+    decision = result.output
+    logger.info(
+        f"Routing decision for task '{task_description}': outcome={decision.outcome.value}, "
+        f"selected_agent_id={decision.selected_agent_id}, justification: {decision.justification}",
+        extra={"task_id": task_id},
+    )
+    return decision
 
 
 async def _select_agent(
     task_description: str, available_agent_ids: list[str], task_id: str | None = None
 ) -> str | None:
-    """Selects the best agent from the available agents to handle a given task.
+    """Selects the best available agent to handle a given task.
+
+    The routing call sees all registered agents (so it can tell "busy" from "incapable"); this
+    helper keeps only a selected agent that is registered and currently AVAILABLE, which keeps
+    reservation atomic under agent_selection_lock.
 
     Args:
         task_description: Description of the task to be assigned.
@@ -1821,34 +1894,44 @@ async def _select_agent(
         task_id: Optional ID of the task for logging purposes.
 
     Returns:
-        The ID of the selected agent, or None if no suitable agent found.
+        The ID of the selected agent, or None if no suitable available agent was selected.
     """
-    agents_info = await _get_agents_info(available_agent_ids)
-    if not agents_info:
+    decision = await _route_task(task_description, task_id)
+    return _selected_agent_if_available(decision, available_agent_ids, task_description, task_id)
+
+
+def _selected_agent_if_available(
+    decision: AgentRoutingDecision,
+    available_agent_ids: list[str],
+    task_description: str,
+    task_id: str | None = None,
+) -> str | None:
+    """Validate one routing decision against the currently available agents.
+
+    An invalid or unavailable selected ID counts as an invalid routing result: it is logged with
+    the justification and treated like the busy outcome.
+
+    Returns:
+        The selected agent ID when it is currently AVAILABLE, otherwise None.
+    """
+    if decision.outcome != RoutingOutcome.AGENT_SELECTED:
         return None
-
-    user_prompt = f"""
-Target task description: "{task_description}".
-
-The list of all registered with you agents:\n{agents_info}
-"""
-    result = await _run_agent_with_retry(lambda: discovery_agent.run(user_prompt))
-    selected_agent_id = result.output.id or None
-    # Verify the selected agent is in our available list
-    if selected_agent_id and selected_agent_id in available_agent_ids:
-        logger.info(
-            f"Selected agent ID: {selected_agent_id} for task: '{task_description}'", extra={"task_id": task_id}
-        )
-        return selected_agent_id
-    elif selected_agent_id:
-        logger.info(
-            f"Model returned invalid agent ID: {selected_agent_id} for task: '{task_description}'",
+    selected_agent_id = decision.selected_agent_id
+    if not selected_agent_id:
+        logger.warning(
+            f"Routing returned outcome '{RoutingOutcome.AGENT_SELECTED.value}' without an agent ID for "
+            f"task '{task_description}': {decision.justification}",
             extra={"task_id": task_id},
         )
         return None
-    else:
-        logger.info(f"Model identified no suitable agent for the task '{task_description}'")
+    if selected_agent_id not in available_agent_ids:
+        logger.warning(
+            f"Routing selected invalid or unavailable agent ID '{selected_agent_id}' for "
+            f"task '{task_description}': {decision.justification}",
+            extra={"task_id": task_id},
+        )
         return None
+    return selected_agent_id
 
 
 async def _fetch_agent_card(agent_base_url: str) -> AgentCard | None:

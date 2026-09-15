@@ -8,6 +8,7 @@ import pytest
 from a2a.types import AgentCapabilities, AgentCard, AgentInterface, Artifact, Part, TaskArtifactUpdateEvent
 
 import config
+from common.models import RoutingOutcome
 from common.streaming import AgentActivityEvent, LogBatchEvent, TaskDoneEvent
 from orchestrator.main import (
     AgentStatus,
@@ -18,6 +19,7 @@ from orchestrator.main import (
     _handle_stream_chunk,
     _health_check_agents,
     _LogStreamState,
+    _route_task,
     _select_agent,
     agent_registry,
     cancellation_queue,
@@ -105,27 +107,69 @@ async def test_discover_agents_success(clear_registry, mock_agent_card):
         assert next(iter(cards.values())).name == "Discovered Agent"
 
 
+def _routing_result(outcome: RoutingOutcome, selected_agent_id: str | None = None) -> MagicMock:
+    """Mocked discovery agent run result for one routing decision."""
+    mock_result = MagicMock()
+    mock_result.output.outcome = outcome
+    mock_result.output.selected_agent_id = selected_agent_id
+    mock_result.output.justification = "Test justification."
+    return mock_result
+
+
 @pytest.mark.asyncio
-async def test_select_agent(clear_registry, mock_agent_card):
+async def test_route_task_agent_selected(clear_registry, mock_agent_card):
     # Register an agent first
     await agent_registry.register("test-id", mock_agent_card)
 
-    # Mock LLM response
-    mock_result = MagicMock()
-    mock_result.output.id = "test-id"
-
-    # Mock discovery agent run
     with patch.object(discovery_agent, "run", new_callable=AsyncMock) as mock_run:
-        mock_run.return_value = mock_result
+        mock_run.return_value = _routing_result(RoutingOutcome.AGENT_SELECTED, "test-id")
 
         agent_id = await _select_agent("some task", ["test-id"])
         assert agent_id == "test-id"
 
 
 @pytest.mark.asyncio
-async def test_select_agent_none_found(clear_registry):
-    agent_id = await _select_agent("some task", [])
-    assert agent_id is None
+async def test_route_task_suitable_but_busy(clear_registry, mock_agent_card):
+    await agent_registry.register("test-id", mock_agent_card)
+
+    with patch.object(discovery_agent, "run", new_callable=AsyncMock) as mock_run:
+        mock_run.return_value = _routing_result(RoutingOutcome.SUITABLE_BUT_BUSY)
+
+        agent_id = await _select_agent("some task", [])
+        assert agent_id is None
+
+
+@pytest.mark.asyncio
+async def test_route_task_none_suitable(clear_registry, mock_agent_card):
+    await agent_registry.register("test-id", mock_agent_card)
+
+    with patch.object(discovery_agent, "run", new_callable=AsyncMock) as mock_run:
+        mock_run.return_value = _routing_result(RoutingOutcome.NONE_SUITABLE)
+
+        decision = await _route_task("some task")
+        assert decision.outcome == RoutingOutcome.NONE_SUITABLE
+        assert decision.selected_agent_id is None
+
+
+@pytest.mark.asyncio
+async def test_route_task_no_agents_registered(clear_registry):
+    # No routing model call happens when no agents are registered at all
+    with patch.object(discovery_agent, "run", new_callable=AsyncMock) as mock_run:
+        decision = await _route_task("some task")
+        assert decision.outcome == RoutingOutcome.NONE_SUITABLE
+        mock_run.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_select_agent_none_found(clear_registry, mock_agent_card):
+    # A suitable agent exists but is busy: nothing is selected among the available agents
+    await agent_registry.register("test-id", mock_agent_card)
+
+    with patch.object(discovery_agent, "run", new_callable=AsyncMock) as mock_run:
+        mock_run.return_value = _routing_result(RoutingOutcome.SUITABLE_BUT_BUSY)
+
+        agent_id = await _select_agent("some task", [])
+        assert agent_id is None
 
 
 @pytest.mark.asyncio
