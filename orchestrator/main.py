@@ -38,9 +38,10 @@ from a2a.types import (
     TaskState,
 )
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Security
+from fastapi.responses import JSONResponse
 from fastapi.security import APIKeyHeader
 from fastapi.staticfiles import StaticFiles
-from pydantic import ValidationError
+from pydantic import BaseModel, Field, ValidationError
 from pydantic_ai.exceptions import ModelHTTPError
 from sse_starlette.sse import EventSourceResponse, ServerSentEvent
 
@@ -64,9 +65,9 @@ from common.models import (
     TestExecutionRequest,
     TestExecutionResult,
 )
-from common.services.rag_sync_service import get_rag_sync_service
 from common.services.test_management_system_client_provider import get_test_management_client
 from common.services.test_reporting_client_base_provider import get_test_reporting_client
+from common.services.vector_db_service import VectorDbService
 from common.streaming import (
     AgentActivityEvent,
     AgentSnapshot,
@@ -77,6 +78,7 @@ from common.streaming import (
     TaskDoneEvent,
 )
 from common.token_usage import TokenUsage
+from common.utils import compile_name_pattern
 from orchestrator.auth import LoginRequest, TokenResponse, auth_service, dashboard_auth
 from orchestrator.dashboard_service import dashboard_service
 from orchestrator.memory_log_handler import setup_memory_logging
@@ -96,6 +98,7 @@ from orchestrator.prompt import (
     ROUTING_INSTRUCTION,
     build_additional_fields_instruction,
 )
+from orchestrator.rag_sync_trigger import RagSyncTrigger, SyncTriggerError
 from orchestrator.streaming_hub import _Subscriber, streaming_hub
 
 logger = utils.get_logger("orchestrator")
@@ -785,22 +788,87 @@ async def trigger_test_case_generation_workflow(request: Request, api_key: str =
         _handle_exception(f"Test case generation workflow failed: {e}")
 
 
-# noinspection PyUnusedLocal
-@orchestrator_app.post("/update-rag-db")
-async def update_rag_db(request: ProjectExecutionRequest, api_key: str = Depends(_validate_api_key)):
-    """
-    Triggers the RAG Vector DB update for the given project.
-    """
-    project_key = request.project_key
-    logger.info(f"Starting RAG update for project {project_key}")
+# =============================================================================
+# RAG Sync Endpoints (WS8)
+# =============================================================================
+
+# Serializes lock acquisitions: valid because the orchestrator runs as a single
+# instance (its agent registry is in-memory and it is deployed with max-instances=1).
+_rag_sync_lock = asyncio.Lock()
+_rag_sync_trigger: RagSyncTrigger | None = None
+
+
+def _get_rag_sync_trigger() -> RagSyncTrigger:
+    """Lazily-created singleton trigger (avoids import-time vector DB clients)."""
+    global _rag_sync_trigger
+    if _rag_sync_trigger is None:
+        metadata_db = VectorDbService(config.QdrantConfig.METADATA_COLLECTION_NAME)
+        _rag_sync_trigger = RagSyncTrigger(metadata_db)
+    return _rag_sync_trigger
+
+
+class JiraSyncRequest(BaseModel):
+    project_key: str = Field(min_length=1, pattern=r"^[A-Z][A-Z0-9_]*$")
+
+
+class ConfluenceSyncRequest(BaseModel):
+    space_key: str = Field(min_length=1, pattern=r"^[~]?[A-Za-z0-9._~-]+$")
+    page_id: int | None = Field(default=None, gt=0)
+    attachment_name_pattern: str | None = Field(default=None, max_length=200)
+    skip_page_body: bool = False
+
+
+async def _trigger_rag_sync(source: str, scope_id: str, runner_args: list[str]) -> Any:
+    """Acquires the scope lock (serialized) and starts the sync in the configured mode."""
+    trigger = _get_rag_sync_trigger()
     try:
-        result = await get_rag_sync_service().sync_project(project_key)
-        logger.info(f"RAG update completed: {result}")
-        return {"message": "RAG update completed.", "details": result.model_dump()}
-    except HTTPException:
-        raise
-    except Exception as e:
-        _handle_exception(f"RAG update failed: {e}")
+        async with _rag_sync_lock:
+            return await trigger.trigger(source, scope_id, runner_args)
+    except SyncTriggerError as e:
+        if e.start_confirmed:
+            _record_error(str(e))
+            status_code = 409 if "already running" in str(e) else 503
+            raise HTTPException(status_code=status_code, detail=str(e))
+        # Unconfirmed start (timeout, dropped connection or server error): an execution
+        # may exist. The lock is kept and the start allowance decides the takeover.
+        _record_error(f"Unconfirmed RAG sync start for {source}:{scope_id}: {e}")
+        raise HTTPException(status_code=502, detail=f"{e} The start is unconfirmed; the lock expires automatically.")
+
+
+def _sync_response(result: Any) -> Any:
+    """202 + execution name in job mode; the runner's result in local mode."""
+    if result["status_code"] == 202:
+        return JSONResponse(status_code=202, content={"message": "RAG sync started.", "execution": result["execution"]})
+    return result["response"]
+
+
+# noinspection PyUnusedLocal
+@orchestrator_app.post("/update-jira-db")
+async def update_jira_db(request: JiraSyncRequest, api_key: str = Depends(_validate_api_key)):
+    """Triggers the RAG Vector DB update for the given Jira project (WS8)."""
+    logger.info(f"Triggering RAG sync for Jira project {request.project_key}")
+    result = await _trigger_rag_sync("jira", request.project_key, ["--project-key", request.project_key])
+    return _sync_response(result)
+
+
+# noinspection PyUnusedLocal
+@orchestrator_app.post("/update-confluence-db")
+async def update_confluence_db(request: ConfluenceSyncRequest, api_key: str = Depends(_validate_api_key)):
+    """Triggers the Confluence documents sync for the given scope (ingestion ships next)."""
+    if request.attachment_name_pattern:
+        try:
+            compile_name_pattern(request.attachment_name_pattern)
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e))
+    runner_args = ["--space-key", request.space_key]
+    if request.page_id:
+        runner_args += ["--page-id", str(request.page_id)]
+    if request.attachment_name_pattern:
+        runner_args += ["--attachment-name-pattern", request.attachment_name_pattern]
+    if request.skip_page_body:
+        runner_args += ["--skip-page-body"]
+    result = await _trigger_rag_sync("confluence", request.space_key, runner_args)
+    return _sync_response(result)
 
 
 # noinspection PyUnusedLocal

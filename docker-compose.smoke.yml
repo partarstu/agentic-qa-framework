@@ -105,6 +105,34 @@ services:
       retries: 12
       start_period: 5s
 
+  # WS8: the local RAG sync service. The orchestrator's /update-jira-db forwards to it
+  # (local mode), and it runs the Jira sync inline against the mocked Jira REST + Qdrant.
+  rag_sync_local:
+    build:
+      context: .
+      dockerfile: services/rag_sync/Dockerfile
+    entrypoint: ["python", "-m", "rag_sync.local_service"]
+    command: ["--port", "8085"]
+    environment:
+      TZ: "Europe/Vienna"
+      INTERNAL_SERVICE_API_KEY: "smoke-internal-key"
+      JIRA_URL: "http://jira_rest_mock:8080"
+      JIRA_USERNAME: "smoke"
+      JIRA_API_TOKEN: "smoke-token"
+      QDRANT_URL: "http://qdrant_mock:6333"
+      EMBEDDING_SERVICE_URL: "http://qdrant_mock:6333"
+    depends_on:
+      jira_rest_mock:
+        condition: service_healthy
+      qdrant_mock:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8085/health')"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+
   requirements_review:
     build:
       context: .
@@ -208,15 +236,20 @@ services:
       TEST_MANAGEMENT_SYSTEM: "zephyr"
       ZEPHYR_BASE_URL: "http://zephyr_mock:8090"
       ZEPHYR_API_TOKEN: "smoke-token"
-      # The /update-rag-db flow makes the orchestrator a Jira REST and vector DB client.
+      # The /update-jira-db flow makes the local sync service a Jira REST and vector DB client.
       JIRA_URL: "http://jira_rest_mock:8080"
       JIRA_USERNAME: "smoke"
       JIRA_API_TOKEN: "smoke-token"
       QDRANT_URL: "http://qdrant_mock:6333"
       EMBEDDING_SERVICE_URL: "http://qdrant_mock:6333"
+      # WS8: local mode - the orchestrator forwards /update-jira-db to the local sync service.
+      RAG_SYNC_SERVICE_URL: "http://rag_sync_local:8085"
+      INTERNAL_SERVICE_API_KEY: "smoke-internal-key"
     ports:
       - "8000:8000"
     depends_on:
+      rag_sync_local:
+        condition: service_healthy
       zephyr_mock:
         condition: service_healthy
       qdrant_mock:

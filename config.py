@@ -41,7 +41,7 @@ JIRA_TOKEN = os.environ.get("JIRA_API_TOKEN")
 NEW_REQUIREMENTS_WEBHOOK_URL = f"{ORCHESTRATOR_URL}/new-requirements-available"
 STORY_READY_FOR_TEST_CASE_GENERATION_WEBHOOK_URL = f"{ORCHESTRATOR_URL}/story-ready-for-test-case-generation"
 EXECUTE_TESTS_WEBHOOK_URL = f"{ORCHESTRATOR_URL}/execute-tests"
-UPDATE_RAG_DB_WEBHOOK_URL = f"{ORCHESTRATOR_URL}/update-rag-db"
+UPDATE_JIRA_DB_WEBHOOK_URL = f"{ORCHESTRATOR_URL}/update-jira-db"
 
 # Secrets
 JIRA_WEBHOOK_SECRET = os.environ.get("JIRA_WEBHOOK_SECRET")
@@ -355,3 +355,27 @@ class EmbeddingServiceConfig:
     # Input limits guarding against memory exhaustion.
     MAX_BATCH_SIZE = int(os.environ.get("EMBEDDING_MAX_BATCH_SIZE", "32"))
     MAX_TEXT_LENGTH = int(os.environ.get("EMBEDDING_MAX_TEXT_LENGTH", "50000"))
+
+
+class RagSyncConfig:
+    """RAG sync runtime, triggering, locks and cursors (WS8).
+
+    Job mode is enabled by the Cloud Run job identity; local mode by the local sync
+    service URL. When neither is configured the sync endpoints answer with an error
+    naming the missing configuration.
+    """
+
+    # Cloud Run job resource name, e.g. projects/<p>/locations/<region>/jobs/<job>.
+    JOB_NAME = os.environ.get("RAG_SYNC_JOB_NAME")
+    JOB_REGION = os.environ.get("RAG_SYNC_JOB_REGION", "us-central1")
+    # Local sync service URL (development/debug only); the orchestrator forwards requests to it.
+    SERVICE_URL = os.environ.get("RAG_SYNC_SERVICE_URL")
+    # Duration bound of one job task; task retries stay 0 (the next scheduled call retries).
+    JOB_TASK_TIMEOUT_SECONDS = int(os.environ.get("RAG_SYNC_JOB_TASK_TIMEOUT_SECONDS", "3600"))
+    # Lock expiry. Defaults to the task timeout plus a safety margin, so a live job never
+    # outlives its lock and a crashed job frees the scope after the TTL.
+    LOCK_TTL_SECONDS = int(
+        os.environ.get("RAG_SYNC_LOCK_TTL_SECONDS", str(JOB_TASK_TIMEOUT_SECONDS + 300))
+    )
+    # How long an unconfirmed job start keeps the lock before the next request may take over.
+    START_ALLOWANCE_SECONDS = int(os.environ.get("RAG_SYNC_START_ALLOWANCE_SECONDS", "300"))

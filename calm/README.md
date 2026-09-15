@@ -31,6 +31,7 @@ drift away from the system without the build failing.
 | `internal-service-api-key` | `embedding-service`, `prompt-guard-service` | Shared `X-API-Key` (`INTERNAL_SERVICE_API_KEY`) |
 | `execution-agent-bearer-token` | `rel-orchestrator-routes-execution-tasks` | `Authorization: Bearer` on the execution agents' main A2A endpoint (`REMOTE_EXECUTION_AGENT_AUTH_TOKEN`) |
 | `vector-db-api-key` | `rel-incident-agent-qdrant`, `rel-orchestrator-qdrant` | Shared API key on every call into Qdrant (`QDRANT_API_KEY`, sent by all clients when configured) |
+| `job-invocation-iam` | `rel-orchestrator-rag-sync-job` | The orchestrator's runtime identity may only run the sync job with overrides (`run.jobs.runWithOverrides`, scoped to `rag-sync-job`) |
 
 ## Running validation locally
 

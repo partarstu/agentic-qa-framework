@@ -153,7 +153,7 @@ _WEBHOOKS: dict[str, tuple[str, dict[str, str]]] = {
     "requirements_review": ("/new-requirements-available", {"issue_key": SEEDED_ISSUE_KEY}),
     "test_case_flow": ("/story-ready-for-test-case-generation", {"issue_key": SEEDED_ISSUE_KEY}),
     "execute_tests": ("/execute-tests", {"project_key": SEEDED_PROJECT_KEY}),
-    "update_rag_db": ("/update-rag-db", {"project_key": SEEDED_PROJECT_KEY}),
+    "update_jira_db": ("/update-jira-db", {"project_key": SEEDED_PROJECT_KEY}),
 }
 
 
@@ -188,5 +188,5 @@ def execute_tests_response(webhook_responses: dict[str, httpx.Response]) -> http
 
 
 @pytest.fixture(scope="session")
-def update_rag_db_response(webhook_responses: dict[str, httpx.Response]) -> httpx.Response:
-    return webhook_responses["update_rag_db"]
+def update_jira_db_response(webhook_responses: dict[str, httpx.Response]) -> httpx.Response:
+    return webhook_responses["update_jira_db"]

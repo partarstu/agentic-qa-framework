@@ -23,7 +23,7 @@ Watch a demo of QuAIA™ in action:
     * Test Case Review
     * UI & API Test Execution (separate project)    
     * Incident Report Creation
-* **Jira RAG Sync:** Keeps the Qdrant vector store in sync with a project's Jira issues programmatically (triggered via the orchestrator's `/update-rag-db` endpoint), without invoking an LLM agent.
+* **Jira RAG Sync:** Keeps the Qdrant vector store in sync with a project's Jira issues programmatically (triggered via the orchestrator's `/update-jira-db` endpoint, executed by the sync job or the local sync service), without invoking an LLM agent.
 * **Dedicated Prompt Guard Service:** A dedicated microservice for detecting prompt injection attacks using the ProtectAI model.
 * **Web UI Monitoring Dashboard:** Real-time monitoring interface for:
     * Agent status visualization (AVAILABLE, BUSY, BROKEN states)
@@ -332,6 +332,14 @@ EMBEDDING_SERVICE_TIMEOUT_SECONDS=120.0 # Default: 120.0. Timeout for embedding 
 EMBEDDING_SERVICE_MAX_RETRIES=6 # Default: 6. Connect/timeout retry attempts (with backoff) while the embedding service starts (e.g. Cloud Run cold start).
 EMBEDDING_SERVICE_RETRY_BACKOFF_CAP_SECONDS=32.0 # Default: 32.0. Upper bound for the exponential backoff between embedding service retries.
 QDRANT_UPSERT_BATCH_SIZE=64 # Default: 64. Number of points per batched vector upsert.
+
+# RAG Sync Runtime (WS8)
+RAG_SYNC_JOB_NAME= # Unset by default. Cloud Run job resource name (projects/<p>/locations/<r>/jobs/<job>); enables job mode.
+RAG_SYNC_JOB_REGION=us-central1 # Default: us-central1. Region of the sync job.
+RAG_SYNC_SERVICE_URL= # Unset by default. Local sync service URL (development only); enables local mode.
+RAG_SYNC_JOB_TASK_TIMEOUT_SECONDS=3600 # Default: 3600. Task timeout bounding one sync run.
+RAG_SYNC_LOCK_TTL_SECONDS=3900 # Default: task timeout + 300. Lock expiry; a live job never outlives its lock.
+RAG_SYNC_START_ALLOWANCE_SECONDS=300 # Default: 300. How long an unconfirmed job start keeps the lock before takeover.
 JIRA_VALID_STATUSES=To Do,In Review,Ready for Development,In Progress,Done # Default shown. Comma-separated Jira
                                  # statuses eligible to be synced into the RAG vector DB.
 
@@ -646,7 +654,7 @@ each mocked boundary:
 * **Test execution / incident creation** (`POST /execute-tests`) → a failed automated test drives a real Bug issue into
   the seeded Jira project, the failed execution is reported to Zephyr inside a fresh test cycle, the bug is linked to
   that execution, and the duplicate search consulted the vector DB.
-* **RAG DB update** (`POST /update-rag-db`) → the sync pushes the seeded Jira story into the mocked vector DB
+* **Jira DB update** (`POST /update-jira-db`) → the orchestrator forwards to the local sync service, which pushes the seeded Jira story into the mocked vector DB
   (collection creation + point upsert).
 * **Negative paths** → all four webhooks reject an invalid API key (401), a missing `issue_key` fails with 400, a
   missing `project_key` fails with 422, and the dashboard API rejects a missing token (401) — all without dispatching
@@ -763,19 +771,47 @@ You can trigger the execution of automated tests for a specific project.
 
 ### Updating the RAG Vector Database
 
-To keep the vector database synchronized with Jira issues for duplicate detection:
+The RAG sync runs in its own deployable image (a Cloud Run Job in production, a local
+service in development) so its dependencies stay out of the orchestrator. The
+orchestrator acquires a per-scope lock (`jira:<project>` / `confluence:<space>`) and
+starts the sync in the configured mode:
 
-* **Update RAG DB:**
-  Send a POST request to `/update-rag-db` with a JSON payload containing the `project_key` of the Jira project. The
-  orchestrator then syncs the project's issues from Jira (read directly via the Jira REST API) into the Qdrant vector
-  database, enabling semantic search for duplicate detection. The sync runs programmatically — no LLM agent is involved.
+* **Job mode** (`RAG_SYNC_JOB_NAME` set): the orchestrator starts a job execution through
+  the Cloud Run Admin API, passing the scope options and the lock token as per-execution
+  container arguments, and answers `202 Accepted` with the execution name.
+* **Local mode** (`RAG_SYNC_SERVICE_URL` set): the orchestrator forwards the request to
+  the local sync service, awaits the result and returns it. Start it with
+  `python services/rag_sync/local_service.py`.
+* Neither configured: the endpoints answer with an error naming the missing configuration.
 
-  Example payload:
+An external scheduler (e.g. Cloud Scheduler) calls the endpoints on a cadence with the
+API key and a short deadline. `409 Conflict` means a sync is already running for the
+scope and must not trigger aggressive retries. A crashed job frees its scope after the
+lock TTL.
+
+* **Update the Jira issues collection:**
+  Send a POST request to `/update-jira-db` with a JSON payload containing the `project_key`
+  of the Jira project. The sync runs programmatically — no LLM agent is involved.
   ```json
-  {
-      "project_key": "SCRUM"
-  }
+  {"project_key": "SCRUM"}
   ```
+
+* **Update the documents collection (Confluence):**
+  Send a POST request to `/update-confluence-db` with a JSON payload containing the
+  `space_key` (personal spaces start with `~`), and optionally a `page_id`, an
+  `attachment_name_pattern` (case-insensitive regex) and a `skip_page_body` flag. The
+  page and attachment ingestion ships with the document RAG phase; the endpoint already
+  validates the scope options.
+  ```json
+  {"space_key": "DEV", "page_id": 12345, "attachment_name_pattern": "^report.*\\.pdf$", "skip_page_body": false}
+  ```
+
+The command-line runner executes one sync for one scope to completion and is what the
+Cloud Run Job invokes:
+```bash
+python -m services.rag_sync.cli jira --project-key SCRUM
+python -m services.rag_sync.cli confluence --space-key DEV
+```
 
 ### Dashboard API Endpoints
 

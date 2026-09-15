@@ -6,7 +6,7 @@
 
 Serves the endpoints ``VectorDbService`` exercises: the collection list/create
 cycle, point upsert/retrieve/scroll/delete and similarity queries. The RAG sync
-flow (``/update-rag-db``) creates its collections and upserts the seeded story
+flow (``/update-jira-db``, forwarded to the local sync service) creates its collections and upserts the seeded story
 here; the incident-creation agent's duplicate search probes the collection list
 and, when the collection exists, queries it (always answered with no hits, so the
 "no duplicates -> create a fresh bug" path is taken deterministically).

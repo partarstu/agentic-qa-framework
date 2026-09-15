@@ -378,19 +378,19 @@ def test_incident_creation_consulted_vector_db(
     assert query.get("fusion") == "rrf", f"Expected RRF fusion, got {query.get('fusion')}"
 
 
-# --- RAG vector DB update flow ----------------------------------------------------------
+# --- RAG vector DB update flow (WS8: local mode via the sync service) ---------------------
 
 
-def test_update_rag_db_webhook_accepted(update_rag_db_response: httpx.Response) -> None:
-    assert update_rag_db_response.status_code == 200, (
-        f"RAG-update webhook failed: {update_rag_db_response.status_code} {update_rag_db_response.text}"
+def test_update_jira_db_webhook_accepted(update_jira_db_response: httpx.Response) -> None:
+    assert update_jira_db_response.status_code == 200, (
+        f"Jira-sync webhook failed: {update_jira_db_response.status_code} {update_jira_db_response.text}"
     )
-    details = update_rag_db_response.json().get("details", {})
+    details = update_jira_db_response.json().get("details", {})
     assert details.get("processed_count", 0) >= 1, f"The RAG sync processed no issues: {details}"
 
 
 def test_rag_sync_upserted_seeded_story_into_vector_db(
-    update_rag_db_response: httpx.Response, http_client: httpx.Client
+    update_jira_db_response: httpx.Response, http_client: httpx.Client
 ) -> None:
     """The sync must push the seeded story into the tickets collection of the vector DB."""
     data = wait_for_recorded(
@@ -418,12 +418,12 @@ def test_rag_sync_upserted_seeded_story_into_vector_db(
 # --- Negative paths (auth + validation; reach the orchestrator only, no LLM) ------------
 
 ISSUE_KEY_WEBHOOK_PATHS = ["/new-requirements-available", "/story-ready-for-test-case-generation"]
-PROJECT_KEY_WEBHOOK_PATHS = ["/execute-tests", "/update-rag-db"]
+PROJECT_KEY_WEBHOOK_PATHS = ["/execute-tests", "/update-jira-db"]
 AUTHENTICATED_WEBHOOKS = [
     ("/new-requirements-available", {"issue_key": SEEDED_ISSUE_KEY}),
     ("/story-ready-for-test-case-generation", {"issue_key": SEEDED_ISSUE_KEY}),
     ("/execute-tests", {"project_key": SEEDED_PROJECT_KEY}),
-    ("/update-rag-db", {"project_key": SEEDED_PROJECT_KEY}),
+    ("/update-jira-db", {"project_key": SEEDED_PROJECT_KEY}),
 ]
 
 

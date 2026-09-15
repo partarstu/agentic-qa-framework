@@ -4,6 +4,7 @@
 
 import asyncio
 import time
+import uuid
 
 import httpx
 from qdrant_client import AsyncQdrantClient, models
@@ -18,6 +19,14 @@ logger = utils.get_logger("vector_db_service")
 DENSE_VECTOR_NAME = "dense"
 SPARSE_VECTOR_NAME = "sparse"
 
+
+def _record_uuid(record_id: str) -> str:
+    """Deterministic UUID for a metadata record, derived from its ID.
+
+    Qdrant's local mode validates string IDs as UUIDs; deriving one from the record ID
+    keeps records addressable across processes and safe in local mode alike.
+    """
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"quaia:{record_id}"))
 
 class VectorDbService:
     def __init__(self, collection_name: str, metadata_collection_name: str | None = None):
@@ -451,3 +460,61 @@ class VectorDbService:
         except Exception:
             logger.exception("Error scrolling Vector DB")
             raise
+
+    async def upsert_payload_record(self, record_id: str, payload: dict) -> None:
+        """Store a metadata record by ID without vectors or embedding (locks, sync state).
+
+        Writing these records must never call the embedding service (WS7 plan), so the
+        point carries no vectors at all.
+        """
+        try:
+            await self.ensure_payload_collection()
+            await self.client.upsert(
+                collection_name=self.collection_name,
+                points=[models.PointStruct(id=_record_uuid(record_id), vector={}, payload=payload)],
+            )
+        except Exception:
+            logger.exception(f"Error storing record {record_id} in {self.collection_name}")
+            raise
+
+    async def get_payload_record(self, record_id: str) -> dict | None:
+        """Read one metadata record's payload, or None when it doesn't exist."""
+        try:
+            points = await self.client.retrieve(
+                collection_name=self.collection_name,
+                ids=[_record_uuid(record_id)],
+            )
+            if points and points[0].payload:
+                return points[0].payload
+            return None
+        except Exception:
+            logger.exception(f"Error reading record {record_id} from {self.collection_name}")
+            raise
+
+    async def delete_payload_record(self, record_id: str) -> None:
+        """Delete one metadata record by ID."""
+        try:
+            await self.client.delete(
+                collection_name=self.collection_name,
+                points_selector=models.PointIdsList(points=[_record_uuid(record_id)]),
+            )
+        except Exception:
+            logger.exception(f"Error deleting record {record_id} from {self.collection_name}")
+            raise
+
+    async def ensure_payload_collection(self) -> None:
+        """Creates the metadata collection when missing. It holds no vectors, so no
+        embedding call is needed; the vector params are minimal placeholders."""
+        if await self._collection_exists():
+            return
+        try:
+            await self.client.create_collection(
+                collection_name=self.collection_name,
+                vectors_config={},
+            )
+            logger.info(f"Created vectorless metadata collection {self.collection_name}.")
+        except Exception as e:
+            if "already exists" in str(e).lower() or "conflict" in str(e).lower():
+                logger.info(f"Collection {self.collection_name} already exists (race condition handled).")
+            else:
+                raise e

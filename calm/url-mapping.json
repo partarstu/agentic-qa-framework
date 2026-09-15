@@ -1,3 +1,4 @@
 {
-  "https://quaia.finos.calm/controls/authentication.requirement.json": "controls/requirements/authentication.requirement.json"
+  "https://quaia.finos.calm/controls/authentication.requirement.json": "controls/requirements/authentication.requirement.json",
+  "https://quaia.finos.calm/controls/job-invocation.requirement.json": "controls/requirements/job-invocation.requirement.json"
 }

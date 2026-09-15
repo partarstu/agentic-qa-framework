@@ -5,6 +5,7 @@
 import logging
 import mimetypes
 import os
+import re
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
@@ -16,6 +17,25 @@ import config
 from common.models import FileArtifact
 
 logging_initialized = False
+
+# Length cap for user-supplied name patterns, shared by all call sites.
+MAX_NAME_PATTERN_LENGTH = 200
+
+
+def compile_name_pattern(pattern: str) -> re.Pattern:
+    """Compile a user-supplied attachment/document name pattern.
+
+    Patterns are case-insensitive and matched as an unanchored search, so a plain
+    pattern like ``report`` behaves like the old substring match. An invalid or
+    over-long pattern raises a clear error; patterns only ever run against short
+    name strings.
+    """
+    if len(pattern) > MAX_NAME_PATTERN_LENGTH:
+        raise ValueError(f"Name pattern exceeds the {MAX_NAME_PATTERN_LENGTH}-character limit.")
+    try:
+        return re.compile(pattern, re.IGNORECASE)
+    except re.error as e:
+        raise ValueError(f"Invalid name pattern '{pattern}': {e}") from e
 
 
 def _initialize_logging():

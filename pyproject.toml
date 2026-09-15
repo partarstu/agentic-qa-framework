@@ -26,6 +26,7 @@ dependencies = [
     "PyJWT==2.12.0",
     "jira==3.10.5",
     "sse-starlette==3.4.1",
+    "google-cloud-run==0.16.1",
 ]
 
 # Optional, service-specific dependencies installed only in the respective
