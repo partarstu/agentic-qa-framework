@@ -29,6 +29,7 @@ import config
 ORCHESTRATOR_URL = os.environ.get("SMOKE_ORCHESTRATOR_URL", "http://localhost:8000").rstrip("/")
 JIRA_REST_RECORDED_URL = os.environ.get("SMOKE_JIRA_REST_RECORDED_URL", "http://localhost:8080/__recorded")
 JIRA_MCP_RECORDED_URL = os.environ.get("SMOKE_JIRA_MCP_RECORDED_URL", "http://localhost:9000/__recorded")
+JIRA_MCP_SEEDED_STORY_URL = os.environ.get("SMOKE_JIRA_MCP_STORY_URL", "http://localhost:9000/__seeded_story")
 ZEPHYR_RECORDED_URL = os.environ.get("SMOKE_ZEPHYR_RECORDED_URL", "http://localhost:8090/__recorded")
 QDRANT_RECORDED_URL = os.environ.get("SMOKE_QDRANT_RECORDED_URL", "http://localhost:6333/__recorded")
 

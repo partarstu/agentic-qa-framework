@@ -24,7 +24,7 @@ from pydantic_ai.agent import AgentRunResult
 from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.messages import BinaryContent, UserContent
 from pydantic_ai.settings import ThinkingLevel
-from pydantic_ai.tools import AgentDepsT, ToolFuncEither
+from pydantic_ai.tools import AgentDepsT, RunContext, ToolFuncEither
 from pydantic_ai.toolsets import AbstractToolset
 from pydantic_ai.usage import UsageLimits
 
@@ -38,7 +38,6 @@ from common.streaming import compute_activity_budget
 from common.token_usage import TokenUsage
 
 REGISTRATION_PATH = f"{config.ORCHESTRATOR_URL}/register"
-MCP_SERVER_ATTACHMENTS_FOLDER_PATH = config.MCP_SERVER_ATTACHMENTS_FOLDER_PATH
 ATTACHMENTS_LOCAL_DESTINATION_FOLDER_PATH = config.ATTACHMENTS_LOCAL_DESTINATION_FOLDER_PATH
 
 logger = utils.get_logger("agent_base")
@@ -304,18 +303,18 @@ class AgentBase(ABC):
         logger.info("Shutting down.")
 
     @staticmethod
-    def _fetch_attachments(attachment_paths: list[str]) -> dict[str, BinaryContent]:
-        """Fetches all attachments, returning them as binary content for multimodal processing.
+    def _resolve_attachments(ctx: RunContext[Any]) -> dict[str, BinaryContent]:
+        """Resolves the attachments downloaded in this run, as binary content for multimodal processing.
 
         Args:
-            attachment_paths: List of file paths to the downloaded attachments.
+            ctx: The run context of the calling tool, carrying the messages of the current run.
 
         Returns:
-            Dictionary mapping filename to BinaryContent for valid, supported attachments.
+            Dictionary mapping identifier to BinaryContent for valid, supported attachments.
         """
-        from common.attachment_handler import fetch_all_attachments
+        from common.attachment_handler import resolve_attachments
 
-        return fetch_all_attachments(attachment_paths)
+        return resolve_attachments(ctx.messages)
 
     def _get_server(self) -> FastAPI:
         primary_skill = AgentSkill(

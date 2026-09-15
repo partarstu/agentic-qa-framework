@@ -639,6 +639,56 @@ uv run pytest tests/smoke -m smoke -v
 docker compose -f docker-compose.smoke.yml down -v
 ```
 
+#### A/B comparison against a baseline
+
+The assertions above prove that a flow *ran*; they say nothing about the quality of what the model wrote, so a change to
+the model, its settings or an agent's prompt can degrade every output while the suite stays green. The A/B checks in
+`tests/smoke/test_ab_compare.py` (marker `ab`, part of the same smoke run and reusing the same webhook execution) close
+that gap: they capture what a run produced - the requirements review, the generated test cases, their review comments and
+the bug created for a failed execution - and compare it against a snapshot committed under `tests/smoke/baselines/`, on
+two levels:
+
+* **Structural metrics** (`tests/smoke/artifacts.py`) - test cases per run, steps per case, share of cases carrying an
+  objective, labels and a review comment, bugs created, output lengths. Each is "higher is better", so a candidate below
+  its baseline value means the run produced *less*.
+* **Judged quality** (`tests/smoke/judge.py`) - both runs' outputs for a dimension are handed to a judge model as
+  anonymous "Output A" and "Output B", scored 1-10 against the requirement they came from, and judged a second time with
+  the two swapped so the judge's position bias cancels out. A candidate scoring below its baseline means the run produced
+  something *worse*.
+
+Both levels apply a tolerance (25% for a metric, one point for a judge score) because the artifacts come from a
+non-deterministic model; a regression beyond that fails the run. Every comparison writes a full report - per-metric
+deltas, per-dimension scores and the judge's rationale - to `logs/smoke_ab_report.md`.
+
+Capture a baseline once per configuration you want to compare against, then compare later runs against it (both with the
+smoke stack up):
+
+```bash
+# Capture: this run becomes tests/smoke/baselines/gemini.json
+SMOKE_WRITE_BASELINE=1 SMOKE_BASELINE_NAME=gemini uv run pytest tests/smoke -m smoke -v
+
+# Compare a candidate configuration against it
+SMOKE_BASELINE_NAME=gemini SMOKE_RUN_LABEL=qwen3-vl-32b uv run pytest tests/smoke -m smoke -v
+```
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `SMOKE_BASELINE_NAME` | `default` | Which snapshot under `tests/smoke/baselines/` to compare against. |
+| `SMOKE_WRITE_BASELINE` | unset | When set, the run is saved as that baseline instead of being compared. |
+| `SMOKE_RUN_LABEL` | `MODEL_NAME` | What the candidate run is called in the report (the stack's own model is configured in compose). |
+| `SMOKE_JUDGE_MODEL` | `google-gla:gemini-3.7-flash` | The judge, deliberately independent of the model under test. |
+
+The committed `tests/smoke/baselines/default.json` is an **authored reference**, not a recording of a run: its review,
+test cases, review comments and bug report were written by hand for the seeded `SMOKE-1` story, so the bar is a
+deliberate quality floor from the very first run rather than whatever a model happened to emit on the day the baseline
+was taken. Its metric values are set to be clearable by a good but terser run - the tolerance leaves roughly a quarter of
+each value as headroom. Replace it with a recorded run at any time by capturing over it (`SMOKE_WRITE_BASELINE=1`), and
+keep additional named baselines beside it for the configurations you compare against. Asking for a baseline name that
+does not exist skips the comparison with the capture command in its message.
+
+When a change is *meant* to alter what the agents produce, refresh the baseline in the same change instead of loosening
+the checks; deselect the comparison with `-m "smoke and not ab"` while iterating.
+
 ## Invoking Orchestrator Workflows
 
 ### Triggering Workflows via Jira Webhooks

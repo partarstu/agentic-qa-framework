@@ -136,6 +136,11 @@ unit tests and the CALM model.
       untested.
     - **New external boundary** → add or extend a recording mock under `tests/smoke/mocks/` and wire it into
       `docker-compose.smoke.yml`.
+* The suite also A/B-compares each run's outputs against a committed baseline under `tests/smoke/baselines/`
+  (`tests/smoke/test_ab_compare.py`), on structural metrics and on judged quality, and **fails on a regression**. When a
+  change is meant to alter what the agents produce (a new prompt, a different model, changed output fields), refresh the
+  baseline in the same change - `SMOKE_WRITE_BASELINE=1 SMOKE_BASELINE_NAME=<name> uv run pytest tests/smoke -m smoke` -
+  rather than loosening the checks. See the *A/B comparison against a baseline* part of `README.md`.
 * A change that genuinely adds no observable end-to-end behaviour (e.g. an internal refactor) needs no smoke change —
   but say so explicitly rather than skipping it silently.
 * The suite is excluded from a bare `uv run pytest` (see `addopts` in `pytest.ini`). Run it explicitly with the stack

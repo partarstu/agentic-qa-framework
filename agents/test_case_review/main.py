@@ -5,13 +5,13 @@
 from typing import TYPE_CHECKING
 
 from pydantic_ai.settings import ThinkingLevel
-from pydantic_ai.tools import Tool
+from pydantic_ai.tools import RunContext, Tool
 from pydantic_ai.usage import RunUsage, UsageLimits
 
 import config
 from agents.test_case_review.prompt import TestCaseReviewSystemPrompt, TestCaseReviewWithAttachmentsPrompt
 from common import utils
-from common.agent_base import MCP_SERVER_ATTACHMENTS_FOLDER_PATH, AgentBase
+from common.agent_base import AgentBase
 from common.custom_llm_wrapper import CustomLlmWrapper
 from common.models import TestCase, TestCaseReviewFeedback, TestCaseReviewFeedbacks, TestCaseReviewRequest
 from common.services.jira_mcp import build_jira_mcp_server_toolset
@@ -36,9 +36,7 @@ class TestCaseReviewAgent(AgentBase):
             thinking_level=config.TestCaseReviewAgentConfig.THINKING_LEVEL,
         )
 
-        instruction_prompt = TestCaseReviewSystemPrompt(
-            attachments_remote_folder_path=MCP_SERVER_ATTACHMENTS_FOLDER_PATH
-        )
+        instruction_prompt = TestCaseReviewSystemPrompt()
         super().__init__(
             agent_name=config.TestCaseReviewAgentConfig.OWN_NAME,
             base_url=config.AGENT_BASE_URL,
@@ -70,21 +68,23 @@ class TestCaseReviewAgent(AgentBase):
         return config.TestCaseReviewAgentConfig.MAX_REQUESTS_PER_TASK
 
     async def _review_test_cases_with_attachments(
-        self, jira_issue_content: str, attachment_paths: list[str], test_cases: list[TestCase]
+        self,
+        ctx: RunContext[TestCaseReviewRequest],
+        jira_issue_content: str,
+        test_cases: list[TestCase],
     ) -> TestCaseReviewFeedbacks:
         """
         Reviews a list of test cases, taking into account the Jira issue content and its attachments.
 
         Args:
             jira_issue_content: The complete content of the Jira issue.
-            attachment_paths: List of file paths to the downloaded attachments.
             test_cases: The list of test cases to review.
 
         Returns:
             Test case review feedbacks with improvement suggestions for each test case.
         """
 
-        attachments_content = self._fetch_attachments(attachment_paths)
+        attachments_content = self._resolve_attachments(ctx)
         attachment_parts: list[str | BinaryContent] = []
         for filename, binary_content in (attachments_content or {}).items():
             attachment_parts.append(f"Attachment: {filename}")

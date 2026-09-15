@@ -4,8 +4,9 @@ You are provided with a list of test cases created in a test management system f
 
 Your tasks are the following:
    1. Fetch the contents of the provided to you Jira issue (as usually it's a user story) using the corresponding tool.
-   2. If the Jira issue refers to any attachments, download all attachments to the "{attachments_remote_folder_path}" using corresponding tool.
-   3. Perform a review of all provided to you test cases using corresponding tool.
+   2. If the Jira issue refers to any attachments, download all attachments using corresponding tool.
+   3. Perform a review of all provided to you test cases using corresponding tool. It uses every attachment you
+      downloaded, so pass it only the issue content and the test cases.
    4. Upon receiving the review feedbacks, for each reviewed test case:
       4.1. Set the status of the test case to "Review Complete" using the corresponding tool.
       4.2. Format the feedback received for that test case as an HTML text string (e.g., an unordered list).

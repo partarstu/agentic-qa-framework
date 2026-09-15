@@ -74,22 +74,22 @@ async def test_generate_test_cases_flow(agent):
     mock_tc_result.output = GeneratedTestCases(test_cases=[])
     agent.test_case_creator_agent.run = AsyncMock(return_value=mock_tc_result)
 
-    # Mock _fetch_attachments to return empty dict
-    agent._fetch_attachments = MagicMock(return_value={})
+    # Mock _resolve_attachments to return empty dict
+    agent._resolve_attachments = MagicMock(return_value={})
 
     # The AC extraction opens its own Jira MCP session; stub the factory so no connection is attempted.
     jira_toolset = MagicMock()
     jira_toolset.__aenter__ = AsyncMock(return_value=jira_toolset)
     jira_toolset.__aexit__ = AsyncMock(return_value=None)
 
-    # Pass file paths instead of BinaryContent objects
+    run_context = MagicMock()
     with patch(
         "agents.test_case_generation.main.build_jira_mcp_server_toolset", return_value=jira_toolset
     ):
-        result = await agent._generate_test_cases("Jira Content", ["/path/to/attachment.png"])
+        result = await agent._generate_test_cases(run_context, "Jira Content")
 
     assert isinstance(result, GeneratedTestCases)
-    agent._fetch_attachments.assert_called_once_with(["/path/to/attachment.png"])
+    agent._resolve_attachments.assert_called_once_with(run_context)
     agent.ac_extractor_agent.run.assert_called_once()
     assert agent.ac_extractor_agent.run.await_args.kwargs["toolsets"] == [jira_toolset]
     jira_toolset.__aexit__.assert_awaited_once()

@@ -1,0 +1,219 @@
+{
+  "label": "authored reference baseline (not a recorded run)",
+  "captured_at": "2026-08-27T00:00:00+00:00",
+  "story": {
+    "key": "SMOKE-1",
+    "id": "10001",
+    "fields": {
+      "project": {
+        "key": "SMOKE",
+        "id": "10000"
+      },
+      "issuetype": {
+        "name": "Story"
+      },
+      "summary": "User can reset their password via an emailed link",
+      "description": "As a registered user I want to reset my password through a link sent to my email so that I can regain access when I forget it.\n\nProject Key: SMOKE\nIssue ID (numeric): 10001\n\nAcceptance Criteria:\n1. A 'Forgot password' link on the login page opens a form that accepts an email address.\n2. Submitting a registered email sends a password-reset link that expires after 60 minutes.\n3. Submitting an unregistered email shows the same confirmation message (no account enumeration).\n4. Opening a valid link lets the user set a new password that must meet the complexity policy.\n5. An expired or already-used link shows an error and offers to request a new one.",
+      "attachment": [
+        {
+          "filename": "reset-policy.txt",
+          "mimeType": "text/plain"
+        },
+        {
+          "filename": "reset-request.json",
+          "mimeType": "application/json"
+        }
+      ]
+    }
+  },
+  "review_comments": [
+    "h3. Requirements review: SMOKE-1\n\nThe five acceptance criteria cover the main flow and are largely testable, but four leave the observable\noutcome open and the attached reset policy adds a rule none of them mention.\n\n*Findings*\n# The attached reset-policy.txt caps reset requests at 3 per account per hour, but no criterion covers\nit: the behaviour of the 4th request within an hour is undefined.\n# AC 3 requires the same confirmation message for an unregistered address, but not the same status code\nor response time. Either difference re-introduces the account enumeration the criterion exists to prevent.\n# AC 4 refers to \"the complexity policy\" without naming or restating it, so it cannot be turned into a\ntest with a definite outcome.\n# AC 5 covers an expired or already-used link, yet the story never says whether the link is single-use,\nnor whether requesting a new one invalidates the previous one.\n# The attachment reset-request.json carries a locale, but no criterion states the reset email is sent in it.\n\n*Missing*: nothing describes what happens to active sessions on other devices after a successful reset.\n\n*Suggestion*: add criteria for the rate limit, the single-use guarantee and the complexity rules, and\nrestate AC 3 as \"the response is indistinguishable for registered and unregistered addresses\"."
+  ],
+  "test_cases": [
+    {
+      "key": "SMOKE-T1",
+      "name": "Forgot password link opens the email entry form",
+      "objective": "Verify that the login page offers a 'Forgot password' entry point that leads to a form accepting an email address.",
+      "precondition": "The login page is reachable and the user is not authenticated.",
+      "labels": [
+        "ui",
+        "positive",
+        "smoke"
+      ],
+      "review_comments": "Covers AC 1 end to end. Add an assertion that the form is reachable by keyboard, since it is the only entry point to the flow.",
+      "steps": [
+        {
+          "description": "Open the login page as an unauthenticated user.",
+          "expected_result": "The login page is displayed with a 'Forgot password' link.",
+          "test_data": ""
+        },
+        {
+          "description": "Click the 'Forgot password' link.",
+          "expected_result": "A form with a single email address field and a submit button is displayed.",
+          "test_data": ""
+        },
+        {
+          "description": "Inspect the form fields.",
+          "expected_result": "The email field accepts an email address and is the only required input.",
+          "test_data": ""
+        }
+      ]
+    },
+    {
+      "key": "SMOKE-T2",
+      "name": "Reset link is emailed for a registered address",
+      "objective": "Verify that submitting a registered email address sends a password-reset link to that address.",
+      "precondition": "A user account exists for registered@example.com and the mailbox is observable.",
+      "labels": [
+        "api",
+        "positive",
+        "smoke"
+      ],
+      "review_comments": "Good coverage of AC 2. Assert on the recipient of the email as well, so a reset link sent to the wrong address cannot pass.",
+      "steps": [
+        {
+          "description": "Submit registered@example.com in the 'Forgot password' form.",
+          "expected_result": "The request is accepted and a confirmation message is displayed.",
+          "test_data": "email=registered@example.com"
+        },
+        {
+          "description": "Read the mailbox of registered@example.com.",
+          "expected_result": "Exactly one password-reset email addressed to registered@example.com has arrived.",
+          "test_data": ""
+        },
+        {
+          "description": "Open the reset link from the email.",
+          "expected_result": "The set-new-password form is displayed.",
+          "test_data": ""
+        }
+      ]
+    },
+    {
+      "key": "SMOKE-T3",
+      "name": "Reset link expires 60 minutes after it was issued",
+      "objective": "Verify that a reset link is rejected once its 60-minute validity from the reset policy has elapsed.",
+      "precondition": "A reset link has been requested for registered@example.com and its issuing time is known.",
+      "labels": [
+        "api",
+        "negative",
+        "boundary"
+      ],
+      "review_comments": "The boundary is the valuable part here. State explicitly whether 60 minutes exactly is still valid, so the step at the boundary has one unambiguous outcome.",
+      "steps": [
+        {
+          "description": "Request a reset link for registered@example.com and record the time it was issued.",
+          "expected_result": "The reset email arrives and the link is valid.",
+          "test_data": "email=registered@example.com"
+        },
+        {
+          "description": "Open the link 59 minutes after it was issued.",
+          "expected_result": "The set-new-password form is displayed.",
+          "test_data": "elapsed=59m"
+        },
+        {
+          "description": "Open the link 61 minutes after it was issued.",
+          "expected_result": "The link is rejected with an expiry error and no password form is shown.",
+          "test_data": "elapsed=61m"
+        }
+      ]
+    },
+    {
+      "key": "SMOKE-T4",
+      "name": "Unregistered address gets the same confirmation as a registered one",
+      "objective": "Verify that the response to an unregistered email address is indistinguishable from the response to a registered one, so accounts cannot be enumerated.",
+      "precondition": "no-account@example.com has no user account; registered@example.com has one.",
+      "labels": [
+        "api",
+        "negative",
+        "security"
+      ],
+      "review_comments": "Directly covers AC 3. Compare the HTTP status and the response body of both submissions, not only the visible message, otherwise enumeration through the status code still passes.",
+      "steps": [
+        {
+          "description": "Submit registered@example.com in the 'Forgot password' form and record the response.",
+          "expected_result": "A confirmation message is displayed and the response status is recorded.",
+          "test_data": "email=registered@example.com"
+        },
+        {
+          "description": "Submit no-account@example.com in the same form and record the response.",
+          "expected_result": "The same confirmation message is displayed with the same response status.",
+          "test_data": "email=no-account@example.com"
+        },
+        {
+          "description": "Check the mailbox of no-account@example.com.",
+          "expected_result": "No password-reset email was sent.",
+          "test_data": ""
+        }
+      ]
+    },
+    {
+      "key": "SMOKE-T5",
+      "name": "New password must satisfy the complexity policy",
+      "objective": "Verify that the set-new-password form rejects a password violating the complexity policy and accepts a compliant one.",
+      "precondition": "A valid, unused reset link for registered@example.com is available.",
+      "labels": [
+        "ui",
+        "negative",
+        "validation"
+      ],
+      "review_comments": "Covers AC 4, but the policy it asserts against is not defined in the story; pin the expected rules in the test data once the requirement names them.",
+      "steps": [
+        {
+          "description": "Open the valid reset link and submit the password 'test'.",
+          "expected_result": "The password is rejected with a message naming the unmet complexity rules.",
+          "test_data": "password=test"
+        },
+        {
+          "description": "Submit a password meeting the complexity policy.",
+          "expected_result": "The password is accepted and a confirmation is displayed.",
+          "test_data": "password=Str0ng!Passw0rd"
+        },
+        {
+          "description": "Log in with the new password.",
+          "expected_result": "The user is authenticated and reaches the account home page.",
+          "test_data": "email=registered@example.com"
+        }
+      ]
+    },
+    {
+      "key": "SMOKE-T6",
+      "name": "Used or expired link is rejected and a new one can be requested",
+      "objective": "Verify that a reset link cannot be used twice and that the rejection offers a way to request a new link.",
+      "precondition": "A reset password flow has been completed once with a valid link for registered@example.com.",
+      "labels": [
+        "api",
+        "negative",
+        "regression"
+      ],
+      "review_comments": "Covers AC 5 including the recovery path. Also assert that the newly requested link works, so the offer is not merely cosmetic.",
+      "steps": [
+        {
+          "description": "Complete the password reset with a valid link.",
+          "expected_result": "The password is changed and a confirmation is displayed.",
+          "test_data": "password=Str0ng!Passw0rd"
+        },
+        {
+          "description": "Open the same reset link a second time.",
+          "expected_result": "The link is rejected with an error stating it has already been used.",
+          "test_data": ""
+        },
+        {
+          "description": "Follow the offer to request a new reset link.",
+          "expected_result": "A new reset email arrives for registered@example.com.",
+          "test_data": "email=registered@example.com"
+        },
+        {
+          "description": "Open the newly received link.",
+          "expected_result": "The set-new-password form is displayed.",
+          "test_data": ""
+        }
+      ]
+    }
+  ],
+  "bugs": [
+    {
+      "summary": "Password reset request for a registered address returns HTTP 500 and queues no email",
+      "description": "*Steps to reproduce*\n# Send POST /api/password-reset with the body {\"email\": \"registered@example.com\", \"locale\": \"en-GB\"}.\n# Observe the response status and body.\n# Inspect the outgoing mail queue for that address.\n\n*Expected result*\nHTTP 200 and a password-reset email queued for registered@example.com, as acceptance criterion 2 of\nSMOKE-1 requires.\n\n*Actual result*\nHTTP 500 with an empty body, and nothing reached the mail queue, so a registered user cannot recover\ntheir account through the emailed link at all.\n\n*Environment*\nSmoke Test Environment, executed by the agent 'Smoke API Test Executor', version 9.9-smoke.\n\n*Traceability*\nStory SMOKE-1, test case SMOKE-T100. The request never reaches the mail queue, which points at the reset\nendpoint rather than at the mail transport."
+    }
+  ]
+}

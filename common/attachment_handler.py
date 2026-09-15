@@ -5,26 +5,21 @@
 """
 Utility module for handling Jira attachments for agent processing.
 
-Provides functionality to fetch, filter, and convert attachments to BinaryContent
-for multimodal processing by Pydantic AI agents.
+Provides functionality to resolve and filter the attachments a tool has already returned, as
+BinaryContent for multimodal processing by Pydantic AI agents.
 """
 
-import mimetypes
 from pathlib import Path
 from typing import get_args
 
-try:
-    import magic
-except ImportError:
-    import warnings
-
-    warnings.warn("python-magic not available, MIME detection will rely on file extensions only.", stacklevel=2)
-    magic = None
 from pydantic_ai.messages import (
     AudioMediaType,
     BinaryContent,
     DocumentMediaType,
     ImageMediaType,
+    ModelMessage,
+    ToolReturnPart,
+    UserPromptPart,
     VideoMediaType,
 )
 
@@ -52,33 +47,17 @@ PYDANTIC_SUPPORTED_MIME_TYPES: set[str] = (
 #   2. Supported by Pydantic AI's type system
 SUPPORTED_MIME_TYPES: set[str] = config.SUPPORTED_ATTACHMENT_MIME_TYPES & PYDANTIC_SUPPORTED_MIME_TYPES
 
+# Types Pydantic AI has no document type for, although the models read them as plain text. Without
+# this, a Jira attachment such as a JSON request payload would be dropped as unsupported.
+TEXT_EQUIVALENT_MIME_TYPES: dict[str, str] = {"application/json": "text/plain"}
 
-def get_mime_type(file_path: str) -> str | None:
-    """
-    Determine the MIME type of file.
 
-    First attempts to guess from the file extension using mimetypes.
-    If that fails, uses python-magic to detect the MIME type from file content.
-
-    Args:
-        file_path: Path to the file (used for extension-based detection and magic).
-    Returns:
-        The detected MIME type string, or None if detection fails.
-    """
-    # Try extension-based detection first
-    mime_type, _ = mimetypes.guess_file_type(file_path)
-    if mime_type:
-        return mime_type
-
-    # Fall back to content-based detection
-    if magic:
-        try:
-            return magic.from_file(file_path, mime=True)
-        except Exception as e:
-            logger.warning("Failed to detect MIME type using magic for %s: %s", file_path, e)
-    else:
-        logger.warning("python-magic not available, skipping content-based MIME detection for %s", file_path)
-    return None
+def as_text_equivalent(content: BinaryContent) -> BinaryContent:
+    """Return the attachment under a text media type when its own one is only readable as text."""
+    text_media_type = TEXT_EQUIVALENT_MIME_TYPES.get(content.media_type)
+    if text_media_type is None:
+        return content
+    return BinaryContent(data=content.data, media_type=text_media_type, identifier=content.identifier)
 
 
 def should_skip_attachment(filename: str, skip_postfix: str | None = None) -> bool:
@@ -121,99 +100,61 @@ def is_supported_mime_type(mime_type: str | None) -> bool:
     return mime_type in SUPPORTED_MIME_TYPES
 
 
-def _fetch_file_bytes(file_path: str) -> tuple[bytes, str]:
-    """
-    Fetch file bytes from local storage.
-
-    In cloud deployments, GCS buckets are mounted as local folders via Cloud Run
-    volume mounts, so all file access is done through the local file system.
-
-    Args:
-        file_path: The path to the file (relative path as returned by MCP server).
-
-    Returns:
-        Tuple of (file_bytes, filename).
-
-    Raises:
-        RuntimeError: If the file cannot be found or read.
-    """
-    file_name = Path(file_path).name
-    local_file_path = Path(config.ATTACHMENTS_LOCAL_DESTINATION_FOLDER_PATH) / file_name
-    local_file_path = local_file_path.resolve()
-
-    if not local_file_path.is_file():
-        raise RuntimeError(f"File {local_file_path} does not exist.")
-
-    file_bytes = local_file_path.read_bytes()
-
-    return file_bytes, file_name
+def _iter_binary_contents(messages: list[ModelMessage]):
+    """Yield every attachment a tool has already returned or a user message already carries."""
+    for message in messages:
+        for part in message.parts:
+            if isinstance(part, ToolReturnPart):
+                yield from (file for file in part.files if isinstance(file, BinaryContent))
+            elif isinstance(part, UserPromptPart) and not isinstance(part.content, str):
+                yield from (item for item in part.content if isinstance(item, BinaryContent))
 
 
-def fetch_all_attachments(attachment_paths: list[str], skip_postfix: str | None = None) -> dict[str, BinaryContent]:
-    """
-    Fetch and filter all valid attachments, returning them as a dictionary.
+def resolve_attachments(messages: list[ModelMessage], skip_postfix: str | None = None) -> dict[str, BinaryContent]:
+    """Collect the attachments already downloaded in this run, as binary content for the model.
 
-    This method:
-    1. Skips files with the configured skip postfix
-    2. Fetches file bytes from local storage or GCS
-    3. Detects MIME types (using extension or content-based detection)
-    4. Filters out unsupported MIME types (including types like .docx, .xlsx that
-       Pydantic AI includes but Gemini API doesn't actually support)
-    5. Returns a dictionary mapping filenames to BinaryContent objects
+    The Jira MCP server returns attachments as embedded resources rather than writing them to a
+    filesystem, so pydantic-ai already carries them through the run and nothing is read from disk.
+    Everything downloaded is taken: which identifiers a model can actually see depends on how its
+    provider maps files in a tool result, so letting it name a subset loses attachments silently.
 
     Args:
-        attachment_paths: List of file paths to process (as returned by MCP server).
+        messages: The messages of the current run, as carried by the tool's run context.
         skip_postfix: Optional override for the skip postfix.
                      Defaults to config.JIRA_ATTACHMENT_SKIP_POSTFIX.
 
     Returns:
-        Dictionary mapping filename to BinaryContent for valid, supported attachments.
+        Dictionary mapping identifier to BinaryContent for every supported attachment in the run.
     """
-    if not attachment_paths:
-        return {}
-
     if skip_postfix is None:
         skip_postfix = config.JIRA_ATTACHMENT_SKIP_POSTFIX
 
     attachments: dict[str, BinaryContent] = {}
     skipped_count = 0
     unsupported_count = 0
-    error_count = 0
 
-    for file_path in attachment_paths:
-        filename = Path(file_path).name
-        if should_skip_attachment(filename, skip_postfix):
-            logger.info("Skipping attachment '%s' due to skip postfix '%s'", filename, skip_postfix)
+    for downloaded in _iter_binary_contents(messages):
+        identifier = downloaded.identifier
+        # Only meaningful when the identifier is a file name; MCP-provided ones are opaque.
+        if should_skip_attachment(identifier, skip_postfix):
+            logger.info("Skipping attachment '%s' due to skip postfix '%s'", identifier, skip_postfix)
             skipped_count += 1
             continue
 
-        try:
-            file_bytes, _ = _fetch_file_bytes(file_path)
-        except Exception as e:
-            logger.warning("Failed to fetch attachment '%s': %s", filename, e)
-            error_count += 1
-            continue
-
-        # Detect MIME type
-        mime_type = get_mime_type(file_path)
-
-        # Check if MIME type is supported
-        if not is_supported_mime_type(mime_type):
-            logger.info("Skipping attachment '%s' - unsupported MIME type: %s", filename, mime_type or "unknown")
+        content = as_text_equivalent(downloaded)
+        if not is_supported_mime_type(content.media_type):
+            logger.info("Skipping attachment '%s' - unsupported MIME type: %s", identifier, content.media_type)
             unsupported_count += 1
             continue
 
-        # Create BinaryContent with identifier for reference
-        binary_content = BinaryContent(data=file_bytes, media_type=mime_type, identifier=filename)
-        attachments[filename] = binary_content
-        logger.debug("Added attachment '%s' with MIME type '%s'", filename, mime_type)
+        attachments[identifier] = content
+        logger.debug("Resolved attachment '%s' with MIME type '%s'", identifier, content.media_type)
 
     logger.info(
-        "Processed %d attachments: %d valid, %d skipped (postfix), %d unsupported, %d errors",
-        len(attachment_paths),
+        "Resolved %d attachments: %d valid, %d skipped (postfix), %d unsupported",
+        len(attachments) + skipped_count + unsupported_count,
         len(attachments),
         skipped_count,
         unsupported_count,
-        error_count,
     )
     return attachments

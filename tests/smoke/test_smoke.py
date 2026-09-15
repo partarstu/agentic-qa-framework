@@ -10,6 +10,7 @@ boundary, read back from its ``/__recorded`` endpoint:
 
 * Requirements review   -> a non-empty comment reached Jira (REST or MCP) on the seeded story.
 * Requirements review   -> the agent first fetched the source story via the Jira MCP.
+* Requirements review   -> the story's attachment was pulled over the protocol, by issue key alone.
 * Test-case generation  -> real test cases (name + steps) reached Zephyr.
 * Test-case generation  -> the created test cases were linked to the seeded story's numeric id.
 * Test-case classification -> labels reached Zephyr.
@@ -29,8 +30,6 @@ boundary, read back from its ``/__recorded`` endpoint:
                            token (401).
 """
 
-import time
-from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 
 import httpx
@@ -53,50 +52,9 @@ from tests.smoke.conftest import (
     TICKETS_COLLECTION_NAME,
     ZEPHYR_RECORDED_URL,
 )
+from tests.smoke.recordings import wait_for_any_recorded, wait_for_recorded
 
 pytestmark = pytest.mark.smoke
-
-# The webhook returns only after the whole flow completes, so the recordings are
-# already in place; this short poll only absorbs any last write lag.
-RECORD_POLL_TIMEOUT = 30.0
-RECORD_POLL_INTERVAL = 2.0
-
-
-def _wait_for_recorded(
-    http_client: httpx.Client, url: str, predicate: Callable[[dict], bool]
-) -> dict:
-    """Poll a mock's /__recorded endpoint until the predicate holds or time runs out."""
-    deadline = time.monotonic() + RECORD_POLL_TIMEOUT
-    data: dict = {}
-    while time.monotonic() < deadline:
-        response = http_client.get(url)
-        if response.status_code == 200:
-            data = response.json()
-            if predicate(data):
-                return data
-        time.sleep(RECORD_POLL_INTERVAL)
-    return data
-
-
-def _wait_for_any_recorded(
-    http_client: httpx.Client, urls: dict[str, str], predicate: Callable[[dict[str, dict]], bool]
-) -> dict[str, dict]:
-    """Poll several /__recorded endpoints together until the predicate holds over all their data.
-
-    Polling them in one loop means a result on any source ends the wait immediately,
-    instead of spending the whole timeout on a source that will never satisfy it.
-    """
-    deadline = time.monotonic() + RECORD_POLL_TIMEOUT
-    data: dict[str, dict] = {name: {} for name in urls}
-    while time.monotonic() < deadline:
-        for name, url in urls.items():
-            response = http_client.get(url)
-            if response.status_code == 200:
-                data[name] = response.json()
-        if predicate(data):
-            return data
-        time.sleep(RECORD_POLL_INTERVAL)
-    return data
 
 
 # --- Requirements review flow ----------------------------------------------------------
@@ -122,7 +80,7 @@ def test_review_comment_reached_jira(
     requirements_review_response: httpx.Response, http_client: httpx.Client
 ) -> None:
     """The agent must post a non-empty review comment to Jira, via REST or MCP."""
-    data = _wait_for_any_recorded(
+    data = wait_for_any_recorded(
         http_client,
         {"rest": JIRA_REST_RECORDED_URL, "mcp": JIRA_MCP_RECORDED_URL},
         _has_jira_comment,
@@ -132,11 +90,23 @@ def test_review_comment_reached_jira(
     )
 
 
+def test_agent_downloaded_the_story_attachment(
+    requirements_review_response: httpx.Response, http_client: httpx.Client
+) -> None:
+    """The attachment must reach the agent over the protocol, with no folder to download it to."""
+    data = wait_for_recorded(http_client, JIRA_MCP_RECORDED_URL, lambda d: bool(d.get("download_attachments")))
+    downloads = data.get("download_attachments", [])
+    assert downloads, f"Agent never downloaded the attachment of {SEEDED_ISSUE_KEY}. Recorded: {data}"
+    assert all(call == {"issue_key": SEEDED_ISSUE_KEY} for call in downloads), (
+        f"Attachments must be requested by issue key alone, with no target path. Recorded: {downloads}"
+    )
+
+
 def test_agent_read_source_story_from_jira(
     requirements_review_response: httpx.Response, http_client: httpx.Client
 ) -> None:
     """The review must be grounded in the real story: the agent must fetch it via the Jira MCP first."""
-    data = _wait_for_recorded(
+    data = wait_for_recorded(
         http_client, JIRA_MCP_RECORDED_URL, lambda d: SEEDED_ISSUE_KEY in d.get("get_issue", [])
     )
     assert SEEDED_ISSUE_KEY in data.get("get_issue", []), (
@@ -158,7 +128,7 @@ def test_real_test_cases_created_in_zephyr(
     test_case_flow_response: httpx.Response, http_client: httpx.Client
 ) -> None:
     """Generation must create real test cases (non-empty name + steps) in Zephyr."""
-    data = _wait_for_recorded(
+    data = wait_for_recorded(
         http_client,
         ZEPHYR_RECORDED_URL,
         lambda d: any(tc.get("name", "").strip() and tc.get("steps") for tc in d.get("test_cases", [])),
@@ -171,7 +141,7 @@ def test_generated_test_cases_linked_to_story(
     test_case_flow_response: httpx.Response, http_client: httpx.Client
 ) -> None:
     """Generation must link the created test cases to the seeded story's numeric id."""
-    data = _wait_for_recorded(http_client, ZEPHYR_RECORDED_URL, lambda d: bool(d.get("issue_links")))
+    data = wait_for_recorded(http_client, ZEPHYR_RECORDED_URL, lambda d: bool(d.get("issue_links")))
     created_keys = {tc.get("key") for tc in data.get("test_cases", [])}
     links = [
         link
@@ -185,7 +155,7 @@ def test_classification_added_labels(
     test_case_flow_response: httpx.Response, http_client: httpx.Client
 ) -> None:
     """Classification must add labels to at least one test case in Zephyr."""
-    data = _wait_for_recorded(
+    data = wait_for_recorded(
         http_client,
         ZEPHYR_RECORDED_URL,
         lambda d: any(tc.get("labels") for tc in d.get("test_cases", [])),
@@ -198,7 +168,7 @@ def test_review_comment_added_to_zephyr(
     test_case_flow_response: httpx.Response, http_client: httpx.Client
 ) -> None:
     """Review must write a non-empty "Review Comments" value to every generated test case."""
-    data = _wait_for_recorded(
+    data = wait_for_recorded(
         http_client,
         ZEPHYR_RECORDED_URL,
         lambda d: bool(d.get("test_cases"))
@@ -214,7 +184,7 @@ def test_review_set_status_to_review_complete(
     test_case_flow_response: httpx.Response, http_client: httpx.Client
 ) -> None:
     """Review must move at least one test case to the "Review Complete" status."""
-    data = _wait_for_recorded(
+    data = wait_for_recorded(
         http_client,
         ZEPHYR_RECORDED_URL,
         lambda d: any(tc.get("status", {}).get("name") == REVIEW_COMPLETE_STATUS for tc in d.get("test_cases", [])),
@@ -230,7 +200,7 @@ def test_failed_execution_creates_bug_in_jira(
     execute_tests_response: httpx.Response, http_client: httpx.Client
 ) -> None:
     """A failed automated test must drive incident creation: a real Bug reaches the seeded project."""
-    data = _wait_for_recorded(
+    data = wait_for_recorded(
         http_client,
         JIRA_MCP_RECORDED_URL,
         lambda d: any(
@@ -261,7 +231,7 @@ def test_created_bug_carries_execution_traceability(
     card and its own environment label, and hands that to the incident-creation agent, which turns
     it into the environment details of the created bug.
     """
-    data = _wait_for_recorded(
+    data = wait_for_recorded(
         http_client,
         JIRA_MCP_RECORDED_URL,
         lambda d: any(i.get("issue_type") == "Bug" for i in d.get("created_issues", [])),
@@ -284,7 +254,7 @@ def test_failed_execution_reported_to_zephyr(
 ) -> None:
     """The reporting half of /execute-tests: a failed execution of the seeded case must reach
     Zephyr, inside a test cycle created for the seeded project."""
-    data = _wait_for_recorded(
+    data = wait_for_recorded(
         http_client,
         ZEPHYR_RECORDED_URL,
         lambda d: any(e.get("testCaseKey") == SEEDED_EXECUTABLE_TC_KEY for e in d.get("test_executions", [])),
@@ -324,10 +294,10 @@ def test_created_bug_linked_to_test_execution(
     execute_tests_response: httpx.Response, http_client: httpx.Client
 ) -> None:
     """The bug created for the failed execution must be linked back to the Zephyr execution."""
-    zephyr = _wait_for_recorded(http_client, ZEPHYR_RECORDED_URL, lambda d: bool(d.get("execution_issue_links")))
+    zephyr = wait_for_recorded(http_client, ZEPHYR_RECORDED_URL, lambda d: bool(d.get("execution_issue_links")))
     links = zephyr.get("execution_issue_links", [])
     assert links, f"No issue was linked to any test execution in Zephyr. Recorded: {zephyr}"
-    mcp = _wait_for_recorded(http_client, JIRA_MCP_RECORDED_URL, lambda d: bool(d.get("created_issues")))
+    mcp = wait_for_recorded(http_client, JIRA_MCP_RECORDED_URL, lambda d: bool(d.get("created_issues")))
     created_issue_ids = {str(issue.get("id")) for issue in mcp.get("created_issues", [])}
     assert any(str(link.get("issue_id")) in created_issue_ids for link in links), (
         f"No created bug ({created_issue_ids}) was linked to a test execution. Links: {links}"
@@ -338,7 +308,7 @@ def test_incident_creation_consulted_vector_db(
     execute_tests_response: httpx.Response, http_client: httpx.Client
 ) -> None:
     """The duplicate search must consult the vector DB (at least the collection-list probe)."""
-    data = _wait_for_recorded(http_client, QDRANT_RECORDED_URL, lambda d: d.get("collections_probes", 0) > 0)
+    data = wait_for_recorded(http_client, QDRANT_RECORDED_URL, lambda d: d.get("collections_probes", 0) > 0)
     assert data.get("collections_probes", 0) > 0, f"The vector DB was never consulted. Recorded: {data}"
 
 
@@ -357,7 +327,7 @@ def test_rag_sync_upserted_seeded_story_into_vector_db(
     update_rag_db_response: httpx.Response, http_client: httpx.Client
 ) -> None:
     """The sync must push the seeded story into the tickets collection of the vector DB."""
-    data = _wait_for_recorded(
+    data = wait_for_recorded(
         http_client,
         QDRANT_RECORDED_URL,
         lambda d: any(

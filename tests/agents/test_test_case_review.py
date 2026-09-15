@@ -89,8 +89,8 @@ async def test_review_with_attachments_runs_once_per_test_case(agent):
         ]
     )
 
-    with patch.object(agent, "_fetch_attachments", return_value={}):
-        feedbacks = await agent._review_test_cases_with_attachments("Jira issue content", [], test_cases)
+    with patch.object(agent, "_resolve_attachments", return_value={}):
+        feedbacks = await agent._review_test_cases_with_attachments(MagicMock(), "Jira issue content", test_cases)
 
     assert agent.review_agent.run.await_count == 3
     assert [feedback.test_case_id for feedback in feedbacks.review_feedbacks] == ["TC-1", "TC-2", "TC-3"]
@@ -114,8 +114,8 @@ async def test_review_with_attachments_shares_one_token_budget_across_the_runs(a
         ]
     )
 
-    with patch.object(agent, "_fetch_attachments", return_value={}):
-        await agent._review_test_cases_with_attachments("Jira issue content", [], test_cases)
+    with patch.object(agent, "_resolve_attachments", return_value={}):
+        await agent._review_test_cases_with_attachments(MagicMock(), "Jira issue content", test_cases)
 
     usages = {id(call.kwargs["usage"]) for call in agent.review_agent.run.await_args_list}
     assert len(usages) == 1, "All the runs must accumulate into the same usage, or the cap bounds none of them"

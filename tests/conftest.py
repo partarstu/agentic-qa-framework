@@ -22,13 +22,6 @@ os.environ.setdefault("PROMPT_INJECTION_CHECK_ENABLED", "False")
 mock_sentence_transformers = MagicMock()
 sys.modules["sentence_transformers"] = mock_sentence_transformers
 
-# Mock python-magic: importing it loads libmagic via ctypes, which segfaults on this
-# platform's binary. Tests that need it patch common.attachment_handler.magic explicitly.
-# Default from_file to None so content-based detection yields "no type" unless configured.
-_mock_magic = MagicMock()
-_mock_magic.from_file.return_value = None
-sys.modules["magic"] = _mock_magic
-
 import pytest  # noqa: E402
 
 # Add the project root to sys.path so that imports work correctly

@@ -8,48 +8,9 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-from pydantic_ai.messages import BinaryContent
+from pydantic_ai.messages import BinaryContent, ModelRequest, ModelResponse, TextPart, ToolReturnPart, UserPromptPart
 
 from common import attachment_handler
-
-
-class TestGetMimeType:
-    """Tests for the get_mime_type function."""
-
-    def test_get_mime_type_from_extension_png(self):
-        """Test MIME type detection from .png extension."""
-        mime_type = attachment_handler.get_mime_type("image.png")
-        assert mime_type == "image/png"
-
-    def test_get_mime_type_from_extension_pdf(self):
-        """Test MIME type detection from .pdf extension."""
-        mime_type = attachment_handler.get_mime_type("document.pdf")
-        assert mime_type == "application/pdf"
-
-    def test_get_mime_type_from_extension_jpeg(self):
-        """Test MIME type detection from .jpeg extension."""
-        mime_type = attachment_handler.get_mime_type("photo.jpeg")
-        assert mime_type == "image/jpeg"
-
-    def test_get_mime_type_from_extension_mp4(self):
-        """Test MIME type detection from .mp4 extension."""
-        mime_type = attachment_handler.get_mime_type("video.mp4")
-        assert mime_type == "video/mp4"
-
-    def test_get_mime_type_no_extension_no_bytes(self):
-        """Test MIME type detection fails without extension or bytes."""
-        mime_type = attachment_handler.get_mime_type("file_without_extension")
-        assert mime_type is None
-
-    @patch("common.attachment_handler.magic")
-    def test_get_mime_type_using_magic(self, mock_magic):
-        """Test MIME type detection from file using python-magic."""
-        mock_magic.from_file.return_value = "image/png"
-
-        mime_type = attachment_handler.get_mime_type("file_without_extension")
-
-        mock_magic.from_file.assert_called_once_with("file_without_extension", mime=True)
-        assert mime_type == "image/png"
 
 
 class TestShouldSkipAttachment:
@@ -139,74 +100,57 @@ class TestIsSupportedMimeType:
         assert attachment_handler.is_supported_mime_type(None) is False
 
 
-class TestFetchAllAttachments:
-    """Tests for the fetch_all_attachments function."""
+def _tool_return(*contents) -> ModelRequest:
+    """A message shaped like the one a download tool leaves in the run's history."""
+    return ModelRequest(
+        parts=[
+            ToolReturnPart(
+                tool_name="jira_download_attachments",
+                tool_call_id="call-1",
+                content=[{"success": True}, *contents],
+            )
+        ]
+    )
 
-    @patch.object(attachment_handler, "_fetch_file_bytes")
-    @patch.object(attachment_handler.config, "JIRA_ATTACHMENT_SKIP_POSTFIX", "_SKIP")
-    def test_fetch_valid_attachments(self, mock_fetch_bytes):
-        """Test fetching valid attachments returns BinaryContent list."""
-        mock_fetch_bytes.return_value = (b"fake image data", "image.png")
 
-        result = attachment_handler.fetch_all_attachments(["path/to/image.png"])
+class TestResolveAttachments:
+    """Tests for collecting the attachments a run has already downloaded."""
 
-        assert len(result) == 1
-        assert "image.png" in result
-        assert isinstance(result["image.png"], BinaryContent)
-        assert result["image.png"].media_type == "image/png"
-        assert result["image.png"].identifier == "image.png"
+    def _png(self, identifier: str = "d6cf91") -> BinaryContent:
+        return BinaryContent(data=b"png-bytes", media_type="image/png", identifier=identifier)
 
-    @patch.object(attachment_handler, "_fetch_file_bytes")
-    @patch.object(attachment_handler.config, "JIRA_ATTACHMENT_SKIP_POSTFIX", "_SKIP")
-    def test_skip_files_with_postfix(self, mock_fetch_bytes):
-        """Test files with skip postfix are not included."""
-        mock_fetch_bytes.return_value = (b"fake data", "image_SKIP.png")
+    def test_resolves_attachment_returned_by_a_tool(self):
+        png = self._png()
+        assert attachment_handler.resolve_attachments([_tool_return(png)]) == {"d6cf91": png}
 
-        result = attachment_handler.fetch_all_attachments(["path/to/image_SKIP.png"])
+    def test_resolves_attachment_carried_by_a_user_message(self):
+        png = self._png("earlier")
+        messages = [ModelRequest(parts=[UserPromptPart(content=["Here it is", png])])]
+        assert attachment_handler.resolve_attachments(messages) == {"earlier": png}
 
-        assert len(result) == 0
-        mock_fetch_bytes.assert_not_called()
+    def test_takes_every_downloaded_attachment(self):
+        first, second = self._png("aaa111"), self._png("bbb222")
+        resolved = attachment_handler.resolve_attachments([_tool_return(first, second)])
+        assert sorted(resolved) == ["aaa111", "bbb222"]
 
-    @patch.object(attachment_handler, "_fetch_file_bytes")
-    @patch.object(attachment_handler.config, "JIRA_ATTACHMENT_SKIP_POSTFIX", "_SKIP")
-    def test_skip_unsupported_mime_types(self, mock_fetch_bytes):
-        """Test files with unsupported MIME types are not included."""
-        mock_fetch_bytes.return_value = (b"fake zip data", "archive.zip")
+    def test_returns_nothing_without_attachments(self):
+        assert attachment_handler.resolve_attachments([_tool_return()]) == {}
 
-        result = attachment_handler.fetch_all_attachments(["path/to/archive.zip"])
+    def test_json_attachment_is_delivered_as_text(self):
+        payload = BinaryContent(data=b'{"id": 1}', media_type="application/json", identifier="c38bf7")
+        resolved = attachment_handler.resolve_attachments([_tool_return(payload)])
+        assert list(resolved) == ["c38bf7"]
+        assert resolved["c38bf7"].media_type == "text/plain"
+        assert resolved["c38bf7"].data == b'{"id": 1}'
 
-        assert len(result) == 0
+    def test_unsupported_media_type_is_dropped(self):
+        archive = BinaryContent(data=b"zip", media_type="application/zip", identifier="a1b2c3")
+        assert attachment_handler.resolve_attachments([_tool_return(archive)]) == {}
 
-    @patch.object(attachment_handler, "_fetch_file_bytes")
-    @patch.object(attachment_handler.config, "JIRA_ATTACHMENT_SKIP_POSTFIX", "_SKIP")
-    def test_mixed_valid_and_invalid_attachments(self, mock_fetch_bytes):
-        """Test mixed valid and invalid attachments returns only valid ones."""
+    def test_skip_postfix_applies_when_the_identifier_is_a_file_name(self):
+        skipped = BinaryContent(data=b"png", media_type="image/png", identifier="diagram_SKIP.png")
+        assert attachment_handler.resolve_attachments([_tool_return(skipped)]) == {}
 
-        def side_effect(path):
-            filename = Path(path).name
-            return (b"fake data", filename)
-
-        mock_fetch_bytes.side_effect = side_effect
-
-        paths = ["path/to/image.png", "path/to/mockup_SKIP.jpg", "path/to/archive.zip", "path/to/document.pdf"]
-
-        result = attachment_handler.fetch_all_attachments(paths)
-
-        assert len(result) == 2
-        assert "image.png" in result
-        assert "document.pdf" in result
-
-    @patch.object(attachment_handler, "_fetch_file_bytes")
-    @patch.object(attachment_handler.config, "JIRA_ATTACHMENT_SKIP_POSTFIX", "_SKIP")
-    def test_handle_fetch_errors_gracefully(self, mock_fetch_bytes):
-        """Test errors during fetch are handled gracefully."""
-        mock_fetch_bytes.side_effect = RuntimeError("File not found")
-
-        result = attachment_handler.fetch_all_attachments(["path/to/missing.png"])
-
-        assert len(result) == 0
-
-    def test_empty_attachment_list(self):
-        """Test empty attachment list returns empty result."""
-        result = attachment_handler.fetch_all_attachments([])
-        assert result == {}
+    def test_ignores_messages_without_attachments(self):
+        messages = [ModelResponse(parts=[TextPart(content="thinking out loud")]), _tool_return(self._png())]
+        assert attachment_handler.resolve_attachments(messages) == {"d6cf91": self._png()}

@@ -199,6 +199,8 @@ async def recorded() -> dict:
             {
                 "key": tc["key"],
                 "name": tc.get("name", ""),
+                "objective": tc.get("objective", ""),
+                "precondition": tc.get("precondition") or "",
                 "steps": tc.get("steps", []),
                 "labels": tc.get("labels", []),
                 "status": _resolve_status(tc.get("status", {})),
