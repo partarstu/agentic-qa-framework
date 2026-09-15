@@ -39,23 +39,36 @@ class VectorDbService:
         """Closes the shared HTTP client. Call this during application shutdown."""
         await self._http_client.aclose()
 
-    async def _get_embedding(self, text: str) -> list[float] | None:
+    async def _embed_texts(self, texts: list[str], query: bool = False):
+        """Embeds texts through the embedding service, returning (dense, sparse) per text.
+
+        Uses the document-text endpoint (no query instruction) unless ``query`` is set.
+        Retries transient transport failures with backoff, honouring the configured caps.
+
+        Returns:
+            A list of (dense vector, sparse indices, sparse values) tuples, one per input text.
+        """
         if not self.embedding_service_url:
             raise ValueError("EMBEDDING_SERVICE_URL is not configured.")
 
+        endpoint = "/embed-query-text" if query else "/embed-document-text"
         max_retries = self._embedding_max_retries
-        logger.info(f"Calling embedding service (text length: {len(text)} chars)...")
+        logger.info(f"Calling embedding service{endpoint} ({len(texts)} text(s))...")
         start = time.monotonic()
 
         for attempt in range(max_retries):
             try:
                 headers = {"X-API-Key": config.INTERNAL_SERVICE_API_KEY} if config.INTERNAL_SERVICE_API_KEY else None
                 response = await self._http_client.post(
-                    f"{self.embedding_service_url}/embed", json={"text": text}, headers=headers
+                    f"{self.embedding_service_url}{endpoint}", json={"texts": texts}, headers=headers
                 )
                 response.raise_for_status()
+                embeddings = [
+                    (item["dense"], item["sparse"]["indices"], item["sparse"]["values"])
+                    for item in response.json()["embeddings"]
+                ]
                 logger.info(f"Embedding service call completed in {time.monotonic() - start:.3f}s")
-                return response.json()["embedding"]
+                return embeddings
             except (httpx.TimeoutException, httpx.ConnectError) as e:
                 if attempt == max_retries - 1:
                     logger.exception(
@@ -74,6 +87,11 @@ class VectorDbService:
                 logger.exception("Error calling embedding service")
                 raise
         return None
+
+    async def _get_embedding(self, text: str) -> list[float]:
+        """Dense embedding of one text, for call sites that don't use the sparse vector yet."""
+        dense, _, _ = (await self._embed_texts([text]))[0]
+        return dense
 
     async def _collection_exists(self) -> bool:
         """Checks collection existence by listing all collections to avoid the /exists endpoint's empty-body issue."""

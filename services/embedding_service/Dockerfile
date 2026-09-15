@@ -9,6 +9,8 @@ WORKDIR ${WORK_DIR}
 # Install service-specific (ML) dependencies on top of the shared base. The
 # pyproject.toml and uv.lock are already present from the base image, so this
 # heavy layer is cached independently of the service source code below.
+ARG EMBEDDING_TEXT_MODEL=BAAI/bge-m3
+ENV EMBEDDING_TEXT_MODEL=${EMBEDDING_TEXT_MODEL}
 RUN uv sync --frozen --no-dev --extra embedding-service
 
 COPY services/embedding_service/ ${WORK_DIR}/embedding_service
@@ -18,5 +20,9 @@ COPY scripts/download_embedding_model.py ${WORK_DIR}/scripts/download_embedding_
 
 # Download model
 RUN python ${WORK_DIR}/scripts/download_embedding_model.py
+
+# Fail the build when the model didn't land locally (runtime downloads are disabled).
+RUN python -c "import config, os, sys; sys.exit(0 if os.listdir(config.EmbeddingServiceConfig.TEXT_MODEL_PATH) else 1)" \
+    || (echo 'embedding model files missing after download' && exit 1)
 
 CMD gunicorn -w 1 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT embedding_service.main:app

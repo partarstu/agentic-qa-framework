@@ -11,9 +11,10 @@ here; the incident-creation agent's duplicate search probes the collection list
 and, when the collection exists, queries it (always answered with no hits, so the
 "no duplicates -> create a fresh bug" path is taken deterministically).
 
-``POST /embed`` stands in for the embedding service — ``VectorDbService`` embeds
-every text before storing or querying, and the vector values themselves are
-irrelevant here — so the whole flow stays hermetic and LLM-free.
+``POST /embed-document-text`` and ``POST /embed-query-text`` stand in for the
+embedding service — ``VectorDbService`` embeds every text before storing or
+querying, and the vector values themselves are irrelevant here — so the whole
+flow stays hermetic and LLM-free.
 
 ``GET /`` answers the qdrant-client's version-compatibility probe, and everything
 recorded is exposed at ``GET /__recorded`` for the smoke assertions.
@@ -33,6 +34,7 @@ _recorded: dict = {
     "upserted_points": [],
     "queries": [],
     "deleted_point_ids": [],
+    "embedding_calls": [],
 }
 
 _UPDATE_RESULT = {"result": {"operation_id": 0, "status": "completed"}, "status": "ok", "time": 0.0}
@@ -44,11 +46,24 @@ async def root() -> dict:
     return {"title": "qdrant - vector search engine", "version": "1.16.2", "commit": "smoke-mock"}
 
 
-@app.post("/embed")
-async def embed(request: Request) -> dict:
+@app.post("/embed-document-text")
+async def embed_document_text(request: Request) -> dict:
     """Deterministic stand-in for the embedding service; only the dimension matters."""
-    await request.json()
-    return {"embedding": [0.1] * _EMBEDDING_DIM}
+    payload = await request.json()
+    _recorded["embedding_calls"].append({"endpoint": "/embed-document-text", "texts": payload.get("texts", [])})
+    return {"embeddings": [_fake_embedding() for _ in payload.get("texts", [])]}
+
+
+@app.post("/embed-query-text")
+async def embed_query_text(request: Request) -> dict:
+    """Deterministic stand-in for the embedding service; only the dimension matters."""
+    payload = await request.json()
+    _recorded["embedding_calls"].append({"endpoint": "/embed-query-text", "texts": payload.get("texts", [])})
+    return {"embeddings": [_fake_embedding() for _ in payload.get("texts", [])]}
+
+
+def _fake_embedding() -> dict:
+    return {"dense": [0.1] * _EMBEDDING_DIM, "sparse": {"indices": [1], "values": [0.5]}}
 
 
 @app.get("/collections")

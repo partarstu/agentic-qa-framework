@@ -43,7 +43,11 @@ Watch a demo of QuAIA™ in action:
 * **Orchestration Layer:** A central orchestrator manages agent registration, task routing, and workflow execution.
 * **Integration with External Systems:** Supports integration with Jira by utilizing its MCP server.
 * **Vector Database Integration:** Uses Qdrant for semantic search capabilities, enabling intelligent duplicate detection and RAG-based features.
-* **Embedding Service:** Dedicated microservice for generating text embeddings using SentenceTransformer models.
+* **Embedding Service:** Dedicated microservice for generating dense and learned-sparse text
+  embeddings in one pass, using a multilingual model (BGE-M3 family). Endpoints:
+  `POST /embed-document-text` and `POST /embed-query-text` (batches, guarded by
+  `INTERNAL_SERVICE_API_KEY`), `GET /health` (liveness) and `GET /ready` (readiness after
+  model warm-up).
 * **Test Management System Integration:** Integrates with Zephyr and Xray for operations related to test case management.
 * **Test Reporting:** Generates detailed Allure reports for test execution results.
 * **Extensible:** Designed for easy addition of new agents, tools, and integrations.
@@ -331,6 +335,12 @@ EMBEDDING_SERVICE_RETRY_BACKOFF_CAP_SECONDS=32.0 # Default: 32.0. Upper bound fo
 JIRA_VALID_STATUSES=To Do,In Review,Ready for Development,In Progress,Done # Default shown. Comma-separated Jira
                                  # statuses eligible to be synced into the RAG vector DB.
 
+# Embedding Service Configuration
+EMBEDDING_BACKENDS=text # Default: text. Comma-separated enabled backends ("text", "visual").
+EMBEDDING_TEXT_MODEL=BAAI/bge-m3 # Default: BAAI/bge-m3. Multilingual model producing dense and learned-sparse output in one pass.
+EMBEDDING_MAX_BATCH_SIZE=32 # Default: 32. Maximum number of texts per embedding request.
+EMBEDDING_MAX_TEXT_LENGTH=50000 # Default: 50000. Maximum text length (characters) per input.
+
 # Incident Creation Agent Configuration
 INCIDENT_AGENT_MIN_SIMILARITY_SCORE=0.7 # Default: 0.7. Minimum score for duplicate detection.
 ISSUE_PRIORITY_FIELD_ID=priority # Default: priority. Jira field ID for issue priority.
@@ -410,8 +420,10 @@ To run the Jira MCP server, you will need Docker installed.
 2. **Start the Embedding Service (optional):**
    If you want to use a dedicated embedding service instead of loading the model in each agent:
    ```bash
-   python services/embedding_service/main.py
+   uv run --extra embedding-service python services/embedding_service/main.py
    ```
+   The text model loads in the background at startup; `GET /ready` answers once warm-up
+   completes. Install the extra once with `uv sync --extra embedding-service`.
 
 3. **Start the Prompt Guard Service (optional):**
    Required if prompt injection checks are enabled.

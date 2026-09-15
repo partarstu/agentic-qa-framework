@@ -116,27 +116,28 @@ def test_prompt_override_marker_reaches_jira_comment(
     )
 
 
-def test_agent_requested_the_configured_additional_fields(
-    requirements_review_response: httpx.Response, http_client: httpx.Client
+def test_agents_requested_the_configured_additional_fields(
+    requirements_review_response: httpx.Response,
+    test_case_flow_response: httpx.Response,
+    http_client: httpx.Client,
 ) -> None:
-    """With JIRA_ADDITIONAL_FIELD_IDS configured, the review agent must ask for those field IDs."""
+    """With JIRA_ADDITIONAL_FIELD_IDS configured, the review and generation flows must both ask
+    for those field IDs when fetching the story (three agents fetch it, so at least two
+    field-aware calls must exist)."""
     configured_field_ids = ("customfield_10101", "customfield_10202")
 
-    def _fetched_with_all_configured_fields(data: dict[str, dict]) -> bool:
-        calls = data.get("get_issue", [])
-        return any(
-            call.get("issue_key") == SEEDED_ISSUE_KEY and all(field_id in call.get("fields", "") for field_id in configured_field_ids)
-            for call in calls
+    def _requested(call: dict) -> bool:
+        return call.get("issue_key") == SEEDED_ISSUE_KEY and all(
+            field_id in call.get("fields", "") for field_id in configured_field_ids
         )
 
-    data = wait_for_recorded(http_client, JIRA_MCP_RECORDED_URL, _fetched_with_all_configured_fields)
-    matching = [
-        call
-        for call in data.get("get_issue", [])
-        if call.get("issue_key") == SEEDED_ISSUE_KEY and all(field_id in call.get("fields", "") for field_id in configured_field_ids)
-    ]
-    assert matching, (
-        f"No jira_get_issue call requested all configured additional field IDs {configured_field_ids}. "
+    data = wait_for_recorded(
+        http_client, JIRA_MCP_RECORDED_URL, lambda d: sum(_requested(c) for c in d.get("get_issue", [])) >= 2
+    )
+    matching = [call for call in data.get("get_issue", []) if _requested(call)]
+    assert len(matching) >= 2, (
+        f"Fewer than two jira_get_issue calls requested all configured additional field IDs "
+        f"{configured_field_ids}, so not both the review and generation flows forwarded them. "
         f"Recorded: {data.get('get_issue')}"
     )
     # The pitfall: restricting to the additional IDs must not drop the standard content fields.

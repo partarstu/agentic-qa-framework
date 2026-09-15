@@ -331,3 +331,24 @@ class QdrantConfig:
         "JIRA_VALID_STATUSES", "To Do,In Review,Ready for Development,In Progress,Done"
     ).split(",")
     BUG_ISSUE_TYPE = os.environ.get("JIRA_BUG_ISSUE_TYPE", "Bug")
+
+
+class EmbeddingServiceConfig:
+    """Configuration of the embedding service's backends (WS6).
+
+    The text backend is always available; the visual backend is opt-in and fully
+    independent of the text path (it is implemented in a later phase).
+    """
+
+    # Comma-separated enabled backends, e.g. "text" or "text,visual".
+    BACKENDS = tuple(
+        entry.strip() for entry in os.environ.get("EMBEDDING_BACKENDS", "text").split(",") if entry.strip()
+    )
+    # One multilingual model producing dense and learned-sparse output in a single pass.
+    TEXT_MODEL_NAME = os.environ.get("EMBEDDING_TEXT_MODEL", "BAAI/bge-m3")
+    TEXT_MODEL_PATH = os.path.join(LOCAL_MODELS_PATH, "embedding_model")
+    VISUAL_MODEL_NAME = os.environ.get("EMBEDDING_VISUAL_MODEL")
+    VISUAL_MODEL_PATH = os.path.join(LOCAL_MODELS_PATH, "visual_model")
+    # Input limits guarding against memory exhaustion.
+    MAX_BATCH_SIZE = int(os.environ.get("EMBEDDING_MAX_BATCH_SIZE", "32"))
+    MAX_TEXT_LENGTH = int(os.environ.get("EMBEDDING_MAX_TEXT_LENGTH", "50000"))

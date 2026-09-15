@@ -37,10 +37,18 @@ def mock_httpx_client():
         mock_client = AsyncMock()
         mock_client_cls.return_value = mock_client
 
-        mock_response = MagicMock()
-        mock_response.json.return_value = {"embedding": [0.1, 0.2, 0.3]}
-        mock_response.raise_for_status.return_value = None
-        mock_client.post = AsyncMock(return_value=mock_response)
+        def _respond_to_post(url, json=None, headers=None):
+            mock_response = MagicMock()
+            mock_response.raise_for_status.return_value = None
+            mock_response.json.return_value = {
+                "embeddings": [
+                    {"dense": [0.1, 0.2, 0.3], "sparse": {"indices": [1, 2], "values": [0.5, 0.6]}}
+                    for _ in (json or {}).get("texts", [])
+                ]
+            }
+            return mock_response
+
+        mock_client.post = AsyncMock(side_effect=_respond_to_post)
 
         yield mock_client
 
@@ -145,3 +153,26 @@ async def test_upsert(vector_db_service, mock_qdrant_client, mock_httpx_client):
 async def test_delete(vector_db_service, mock_qdrant_client):
     await vector_db_service.delete(["1", "2"])
     mock_qdrant_client.delete.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_embed_texts_returns_dense_and_sparse_per_text(vector_db_service, mock_httpx_client):
+    embeddings = await vector_db_service._embed_texts(["one", "two"])
+    assert len(embeddings) == 2
+    assert embeddings[0] == ([0.1, 0.2, 0.3], [1, 2], [0.5, 0.6])
+    called_url = mock_httpx_client.post.call_args.args[0]
+    assert called_url.endswith("/embed-document-text")
+    assert mock_httpx_client.post.call_args.kwargs["json"] == {"texts": ["one", "two"]}
+
+
+@pytest.mark.asyncio
+async def test_embed_texts_query_uses_query_endpoint(vector_db_service, mock_httpx_client):
+    await vector_db_service._embed_texts(["query"], query=True)
+    called_url = mock_httpx_client.post.call_args.args[0]
+    assert called_url.endswith("/embed-query-text")
+
+
+@pytest.mark.asyncio
+async def test_get_embedding_returns_dense_only(vector_db_service, mock_httpx_client):
+    dense = await vector_db_service._get_embedding("text")
+    assert dense == [0.1, 0.2, 0.3]
