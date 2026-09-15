@@ -82,13 +82,15 @@ mcp = FastMCP(
 
 
 @mcp.tool()
-async def jira_get_issue(issue_key: str) -> str:
+async def jira_get_issue(issue_key: str, fields: str = "") -> str:
     """Get the complete details of a Jira issue by its key (e.g. 'PROJ-123').
 
     Returns the issue as JSON, including its project, summary, description and
     acceptance criteria. Always call this first to read a Jira issue's content.
+    Optionally restrict the response to the given fields (a comma-separated list of
+    field names or custom field IDs); omitting it returns all fields.
     """
-    _recorded["get_issue"].append(issue_key)
+    _recorded["get_issue"].append({"issue_key": issue_key, "fields": fields})
     return json.dumps(_SEEDED_STORY)
 
 

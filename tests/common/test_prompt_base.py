@@ -79,9 +79,11 @@ def test_missing_override_falls_back_to_bundled(override_dir):
 
 
 def test_missing_override_dir_fails_fast(override_dir):
-    with patch.object(config, "PROMPT_OVERRIDES_DIR", str(override_dir / "does-not-exist")):
-        with pytest.raises(NotADirectoryError, match="PROMPT_OVERRIDES_DIR"):
-            RealBundledPrompt("routing_instruction_template.txt")
+    with (
+        patch.object(config, "PROMPT_OVERRIDES_DIR", str(override_dir / "does-not-exist")),
+        pytest.raises(NotADirectoryError, match="PROMPT_OVERRIDES_DIR"),
+    ):
+        RealBundledPrompt("routing_instruction_template.txt")
 
 
 def test_override_with_differing_placeholders_fails_fast(override_dir):

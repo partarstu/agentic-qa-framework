@@ -112,6 +112,11 @@ services:
     environment:
       <<: *agent-env
       AGENT_BASE_URL: "http://requirements_review"
+      # WS3: proves prompt overrides reach the agent - the override file under
+      # tests/smoke/overrides/ replaces the bundled main prompt template.
+      PROMPT_OVERRIDES_DIR: "/prompt-overrides"
+    volumes:
+      - ./tests/smoke/overrides:/prompt-overrides:ro
     depends_on: *mock-dependencies
     healthcheck: *agent-healthcheck
 
@@ -197,6 +202,9 @@ services:
       DASHBOARD_JWT_SECRET: "smoke-jwt-secret"
       PROMPT_INJECTION_CHECK_ENABLED: "false"
       GOOGLE_API_KEY: "${GOOGLE_API_KEY}"
+      # WS4: proves the additional Jira custom fields instruction reaches the agents:
+      # the Jira MCP mock records that jira_get_issue was asked for these field IDs.
+      JIRA_ADDITIONAL_FIELD_IDS: "customfield_10101,customfield_10202"
       # The /execute-tests flow makes the orchestrator a test-management client.
       TEST_MANAGEMENT_SYSTEM: "zephyr"
       ZEPHYR_BASE_URL: "http://zephyr_mock:8090"

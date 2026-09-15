@@ -226,6 +226,15 @@ LOG_TO_FILE=True # Default: True. When enabled, each service also writes its log
                                  # (e.g. orchestrator.log, requirements_review.log).
 LOG_DIR=logs # Default: a "logs" directory next to config.py. Directory for the rotating per-service log files.
 
+# Prompt Overrides
+PROMPT_OVERRIDES_DIR= # Optional. Directory holding prompt template overrides. When set, a file in this directory
+                                 # replaces the bundled template at the same repository-relative path (e.g.
+                                 # agents/requirements_review/system_prompts/main_prompt_template.txt or
+                                 # prompts/routing_instruction_template.txt). Startup fails fast when the directory is
+                                 # missing or when an override's named placeholders differ from the bundled template's.
+                                 # Every container that loads prompts (orchestrator and agents) needs the directory,
+                                 # e.g. as a Cloud Run volume mount.
+
 # Orchestrator
 ORCHESTRATOR_HOST=localhost # Default: localhost. The host where the orchestrator runs.
 ORCHESTRATOR_PORT=8000 # Default: 8000. The port the orchestrator listens on.
@@ -236,6 +245,12 @@ ORCHESTRATOR_API_KEY=YOUR_ORCHESTRATOR_API_KEY # Required. Authenticates the orc
                                  # This corresponds to OrchestratorConfig.API_KEY.
 JIRA_WEBHOOK_SECRET= # Optional but recommended. When set, Jira webhook requests must carry a valid
                                  # 'X-Hub-Signature' HMAC-SHA256 of the raw body; invalid/missing signatures are rejected.
+JIRA_ADDITIONAL_FIELD_IDS= # Optional. Comma-separated Jira custom field IDs (e.g. customfield_10101,customfield_10202)
+                                 # whose values are handed to agents as part of the issue content in the requirements
+                                 # review, test case generation and test case review tasks. Entries are trimmed, empty
+                                 # entries and duplicates are dropped, and every entry must match the Jira custom field
+                                 # ID format ('customfield_' followed by digits) - anything else fails startup. Unset
+                                 # means the task texts are unchanged.
 JIRA_MCP_SERVER_URL=http://localhost:9000/sse # Default: http://localhost:9000/sse. The URL of the Jira MCP server.
 JIRA_URL=YOUR_JIRA_INSTANCE_URL # Required for the orchestrator's RAG DB sync and for Xray. The base URL of your Jira
                                  # instance (e.g. https://your-company.atlassian.net). Also used by the separate Jira

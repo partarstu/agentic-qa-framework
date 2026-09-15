@@ -234,19 +234,18 @@ async def test_each_run_gets_a_fresh_mcp_toolset_whose_session_the_run_owns():
 
 def test_skill_is_required_at_construction():
     """An agent without a declared skill must fail instead of falling back to a generic one."""
-    with patch("common.agent_base.Agent"):
-        with pytest.raises(TypeError):
-            TestAgent(
-                agent_name="test-agent",
-                base_url="http://localhost",
-                protocol="http",
-                port=8000,
-                external_port=8000,
-                model_name="openai:test-model",
-                version="2.5",
-                output_type=MockOutput,
-                instructions="test instructions",
-            )
+    with patch("common.agent_base.Agent"), pytest.raises(TypeError):
+        TestAgent(
+            agent_name="test-agent",
+            base_url="http://localhost",
+            protocol="http",
+            port=8000,
+            external_port=8000,
+            model_name="openai:test-model",
+            version="2.5",
+            output_type=MockOutput,
+            instructions="test instructions",
+        )
 
 
 def test_card_description_composes_model_version_and_skill():

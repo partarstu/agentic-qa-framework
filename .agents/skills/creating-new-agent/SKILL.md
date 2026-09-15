@@ -43,6 +43,9 @@ Add a class to `config.py` from [resources/config_template.py](resources/config_
 - `VERSION`: read from `<AGENT_NAME>_AGENT_VERSION`; document that variable in the README *Environment Variables*
   block next to the other agent versions.
 - `MAX_REQUESTS_PER_TASK`: the tool-call budget per task.
+- `SKILL_ID`, `SKILL_NAME`, `SKILL_DESCRIPTION`: the declared skill every agent must have. `AgentBase` requires it
+  (there is no generic fallback) and builds the agent card description from model, version and skill name, which the
+  orchestrator's routing uses. Keep `SKILL_ID` stable and lower-kebab-case.
 
 ## 2. Output model
 
@@ -68,6 +71,8 @@ Create `agents/<agent_name>/main.py` from [resources/agent_template.py](resource
   `async with build_jira_mcp_server_toolset() as toolset: await sub_agent.run(prompt, toolsets=[toolset])`.
 - Custom tools are methods passed via `tools=[...]`. The LLM sees their signature and docstring, so the docstring is
   the tool specification.
+- Pass the declared skill via `skill=AgentSkillDeclaration(...)` (required): it becomes the agent card's skill and
+  feeds the composed card description.
 - Prompt-injection screening, agent registration and activity streaming are handled by `AgentBase`; do not
   reimplement them.
 - Module-level `app = agent.a2a_server` is what gunicorn serves.

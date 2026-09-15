@@ -15,7 +15,7 @@ import config
 from agents.<agent_name>.prompt import <AgentName>SystemPrompt
 from common import utils
 from common.agent_base import AgentBase
-from common.models import <DepsModel>, <OutputModel>
+from common.models import AgentSkillDeclaration, <DepsModel>, <OutputModel>
 from common.services.jira_mcp import build_jira_mcp_server_toolset
 
 logger = utils.get_logger("<agent_name>_agent")
@@ -40,7 +40,11 @@ class <AgentName>Agent(AgentBase):
             mcp_toolset_factories=[build_jira_mcp_server_toolset],
             # Optional: drop if the agent needs no typed dependencies.
             deps_type=<DepsModel>,
-            description="<Brief description used by the orchestrator to select this agent>",
+            skill=AgentSkillDeclaration(
+                id=config.<AgentName>AgentConfig.SKILL_ID,
+                name=config.<AgentName>AgentConfig.SKILL_NAME,
+                description=config.<AgentName>AgentConfig.SKILL_DESCRIPTION,
+            ),
             tools=[self.<custom_tool>],
             # vector_db_collection_name="<collection>",  # only for RAG-enabled agents
         )

@@ -11,6 +11,8 @@ boundary, read back from its ``/__recorded`` endpoint:
 * Requirements review   -> a non-empty comment reached Jira (REST or MCP) on the seeded story.
 * Requirements review   -> the agent first fetched the source story via the Jira MCP.
 * Requirements review   -> the story's attachment was pulled over the protocol, by issue key alone.
+* Requirements review   -> with JIRA_ADDITIONAL_FIELD_IDS configured, the agent requests those custom
+                           field IDs (together with the standard content fields) when fetching the story.
 * Test-case generation  -> real test cases (name + steps) reached Zephyr.
 * Test-case generation  -> the created test cases were linked to the seeded story's numeric id.
 * Test-case classification -> labels reached Zephyr.
@@ -56,6 +58,8 @@ from tests.smoke.recordings import wait_for_any_recorded, wait_for_recorded
 
 pytestmark = pytest.mark.smoke
 
+PROMPT_OVERRIDE_MARKER = "OVERRIDE-7f3d-active"
+
 
 # --- Requirements review flow ----------------------------------------------------------
 
@@ -90,6 +94,60 @@ def test_review_comment_reached_jira(
     )
 
 
+def test_prompt_override_marker_reaches_jira_comment(
+    requirements_review_response: httpx.Response, http_client: httpx.Client
+) -> None:
+    """The mounted prompt override must drive the agent: its marker token ends up in the Jira comment."""
+
+    def _comment_texts(data: dict[str, dict]) -> list[str]:
+        rest = [c.get("body", "") for c in data.get("rest", {}).get("comments", [])]
+        mcp = [c.get("comment", "") for c in data.get("mcp", {}).get("comments", [])]
+        return [text for text in rest + mcp if text.strip()]
+
+    data = wait_for_any_recorded(
+        http_client,
+        {"rest": JIRA_REST_RECORDED_URL, "mcp": JIRA_MCP_RECORDED_URL},
+        lambda d: any(PROMPT_OVERRIDE_MARKER in text for text in _comment_texts(d)),
+    )
+    comments = _comment_texts(data)
+    assert any(PROMPT_OVERRIDE_MARKER in text for text in comments), (
+        f"The prompt override marker '{PROMPT_OVERRIDE_MARKER}' never reached the Jira comment, "
+        f"so the override was not applied. Comments seen: {comments}"
+    )
+
+
+def test_agent_requested_the_configured_additional_fields(
+    requirements_review_response: httpx.Response, http_client: httpx.Client
+) -> None:
+    """With JIRA_ADDITIONAL_FIELD_IDS configured, the review agent must ask for those field IDs."""
+    configured_field_ids = ("customfield_10101", "customfield_10202")
+
+    def _fetched_with_all_configured_fields(data: dict[str, dict]) -> bool:
+        calls = data.get("get_issue", [])
+        return any(
+            call.get("issue_key") == SEEDED_ISSUE_KEY and all(field_id in call.get("fields", "") for field_id in configured_field_ids)
+            for call in calls
+        )
+
+    data = wait_for_recorded(http_client, JIRA_MCP_RECORDED_URL, _fetched_with_all_configured_fields)
+    matching = [
+        call
+        for call in data.get("get_issue", [])
+        if call.get("issue_key") == SEEDED_ISSUE_KEY and all(field_id in call.get("fields", "") for field_id in configured_field_ids)
+    ]
+    assert matching, (
+        f"No jira_get_issue call requested all configured additional field IDs {configured_field_ids}. "
+        f"Recorded: {data.get('get_issue')}"
+    )
+    # The pitfall: restricting to the additional IDs must not drop the standard content fields.
+    for call in matching:
+        fields = call.get("fields", "")
+        assert "summary" in fields or "*all" in fields, (
+            f"The fields parameter {fields!r} lists only the custom field IDs, so the agent would lose "
+            f"the standard issue content. Recorded: {call}"
+        )
+
+
 def test_agent_downloaded_the_story_attachment(
     requirements_review_response: httpx.Response, http_client: httpx.Client
 ) -> None:
@@ -107,9 +165,11 @@ def test_agent_read_source_story_from_jira(
 ) -> None:
     """The review must be grounded in the real story: the agent must fetch it via the Jira MCP first."""
     data = wait_for_recorded(
-        http_client, JIRA_MCP_RECORDED_URL, lambda d: SEEDED_ISSUE_KEY in d.get("get_issue", [])
+        http_client,
+        JIRA_MCP_RECORDED_URL,
+        lambda d: SEEDED_ISSUE_KEY in [c.get("issue_key") for c in d.get("get_issue", [])],
     )
-    assert SEEDED_ISSUE_KEY in data.get("get_issue", []), (
+    assert SEEDED_ISSUE_KEY in [c.get("issue_key") for c in data.get("get_issue", [])], (
         f"Agent never fetched the source story {SEEDED_ISSUE_KEY} via Jira MCP. Recorded: {data}"
     )
 

@@ -6,6 +6,7 @@
 
 from pathlib import Path
 
+import config
 from common import utils
 from common.prompt_base import PromptBase
 
@@ -41,3 +42,17 @@ def _load_instruction(template_file_name: str) -> str:
 ROUTING_INSTRUCTION = _load_instruction("routing_instruction_template.txt")
 MULTI_ROUTING_INSTRUCTION = _load_instruction("multi_routing_instruction_template.txt")
 RESULTS_EXTRACTOR_INSTRUCTION = _load_instruction("results_extractor_instruction_template.txt")
+ADDITIONAL_FIELDS_INSTRUCTION_TEMPLATE = OrchestratorPrompt("additional_fields_instruction_template.txt")
+
+
+def build_additional_fields_instruction() -> str:
+    """Renders the additional Jira fields instruction, or an empty string when none are configured.
+
+    The template is loaded through PromptBase, so PROMPT_OVERRIDES_DIR overrides this instruction
+    too. Rendering happens at call time over the already-validated JIRA_ADDITIONAL_FIELD_IDS.
+    """
+    if not config.JIRA_ADDITIONAL_FIELD_IDS:
+        return ""
+    return ADDITIONAL_FIELDS_INSTRUCTION_TEMPLATE.template.format(
+        additional_field_ids=", ".join(config.JIRA_ADDITIONAL_FIELD_IDS)
+    )

@@ -7,6 +7,7 @@ Centralized configuration for the application.
 """
 
 import os
+import re
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -53,6 +54,33 @@ XRAY_BASE_URL = os.environ.get("XRAY_BASE_URL")
 XRAY_CLIENT_ID = os.environ.get("XRAY_CLIENT_ID")
 XRAY_CLIENT_SECRET = os.environ.get("XRAY_CLIENT_SECRET")
 XRAY_PRECONDITIONS_FIELD_ID = os.environ.get("XRAY_PRECONDITIONS_FIELD_ID", "Pre-conditions")
+
+# Additional Jira custom fields handed to agents. Comma-separated custom field IDs; entries are trimmed,
+# empty entries and duplicates are dropped. Every entry must match the Jira custom field ID format
+# (customfield_ followed by digits) - anything else fails startup, which also keeps free text out of
+# LLM tasks. Empty/unset means no additional fields and unchanged task texts.
+_ADDITIONAL_FIELD_PATTERN = re.compile(r"^customfield_\d+$")
+
+
+def _parse_additional_field_ids(raw: str | None) -> tuple[str, ...]:
+    """Parses JIRA_ADDITIONAL_FIELD_IDS, dropping blanks/duplicates and validating the ID format."""
+    if not raw:
+        return ()
+    ids: list[str] = []
+    for entry in raw.split(","):
+        field_id = entry.strip()
+        if not field_id or field_id in ids:
+            continue
+        if not _ADDITIONAL_FIELD_PATTERN.fullmatch(field_id):
+            raise ValueError(
+                f"JIRA_ADDITIONAL_FIELD_IDS entry '{field_id}' is not a valid Jira custom field ID "
+                "(expected 'customfield_' followed by digits)."
+            )
+        ids.append(field_id)
+    return tuple(ids)
+
+
+JIRA_ADDITIONAL_FIELD_IDS: tuple[str, ...] = _parse_additional_field_ids(os.environ.get("JIRA_ADDITIONAL_FIELD_IDS"))
 
 # Agent
 AGENT_BASE_URL = os.environ.get("AGENT_BASE_URL", "http://localhost")

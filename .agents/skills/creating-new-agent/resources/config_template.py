@@ -14,6 +14,9 @@ class <AgentName>AgentConfig:
     THINKING_LEVEL: ThinkingLevel = "medium"
     VERSION = os.environ.get("<AGENT_NAME>_AGENT_VERSION", "1.0")
     OWN_NAME = "<Human-Readable Agent Name>"
+    SKILL_ID = "<agent-name>"  # stable, lower-kebab-case
+    SKILL_NAME = "<Human-Readable Skill Name>"
+    SKILL_DESCRIPTION = "<One sentence: what capability this agent provides>"
     PORT = int(os.environ.get("PORT", "<unique_port>"))
     EXTERNAL_PORT = int(os.environ.get("EXTERNAL_PORT", PORT))
     PROTOCOL = "http"

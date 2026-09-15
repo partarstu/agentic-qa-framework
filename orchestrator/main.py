@@ -94,6 +94,7 @@ from orchestrator.prompt import (
     MULTI_ROUTING_INSTRUCTION,
     RESULTS_EXTRACTOR_INSTRUCTION,
     ROUTING_INSTRUCTION,
+    build_additional_fields_instruction,
 )
 from orchestrator.streaming_hub import _Subscriber, streaming_hub
 
@@ -507,6 +508,19 @@ def _get_agent_host(card: AgentCard | None) -> str:
     if not card or not card.supported_interfaces:
         return "unknown"
     return urlparse(card.supported_interfaces[0].url).hostname or "unknown"
+
+
+def _build_jira_issue_task_text(issue_key: str) -> str:
+    """Builds the task text for every task that hands a Jira issue to an agent.
+
+    When JIRA_ADDITIONAL_FIELD_IDS is configured, an instruction is appended that tells the agent to
+    fetch those custom fields together with the issue and to treat their values as issue content.
+    """
+    task_text = f"Jira user story with key {issue_key}"
+    additional_fields_instruction = build_additional_fields_instruction()
+    if additional_fields_instruction:
+        task_text = f"{task_text}\n\n{additional_fields_instruction}"
+    return task_text
 
 
 def _build_agent_auth_headers() -> dict[str, str]:
@@ -1202,7 +1216,7 @@ async def _request_test_cases_classification(test_cases: list[TestCase], user_st
 async def _request_test_cases_review(test_cases: list[TestCase], user_story_id: str) -> list[Artifact]:
     task_description = f"Review test cases for Jira user story {user_story_id}"
     completed_task = await _send_task_to_agent(
-        f"Test cases:\n{test_cases}\nUser Story ID: {user_story_id}", task_description
+        f"Test cases:\n{test_cases}\n{_build_jira_issue_task_text(user_story_id)}", task_description
     )
     return _get_artifacts_from_task(completed_task, "Review of test cases")
 
