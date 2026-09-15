@@ -8,7 +8,7 @@ import config
 from agents.test_case_classification.prompt import TestCaseClassificationSystemPrompt
 from common import utils
 from common.agent_base import AgentBase
-from common.models import ClassifiedTestCases, TestCaseKeys
+from common.models import AgentSkillDeclaration, ClassifiedTestCases, TestCaseKeys
 from common.services.jira_mcp import build_jira_mcp_server_toolset
 from common.services.test_management_system_client_provider import get_test_management_client
 
@@ -32,7 +32,11 @@ class TestCaseClassificationAgent(AgentBase):
             instructions=instruction_prompt.get_prompt(),
             mcp_toolset_factories=[build_jira_mcp_server_toolset],
             deps_type=TestCaseKeys,
-            description="Agent which classifies test cases based on their content",
+            skill=AgentSkillDeclaration(
+                id=config.TestCaseClassificationAgentConfig.SKILL_ID,
+                name=config.TestCaseClassificationAgentConfig.SKILL_NAME,
+                description=config.TestCaseClassificationAgentConfig.SKILL_DESCRIPTION,
+            ),
             tools=[self.add_labels_to_test_case],
         )
 

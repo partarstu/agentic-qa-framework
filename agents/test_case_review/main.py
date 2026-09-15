@@ -13,7 +13,13 @@ from agents.test_case_review.prompt import TestCaseReviewSystemPrompt, TestCaseR
 from common import utils
 from common.agent_base import AgentBase
 from common.custom_llm_wrapper import CustomLlmWrapper
-from common.models import TestCase, TestCaseReviewFeedback, TestCaseReviewFeedbacks, TestCaseReviewRequest
+from common.models import (
+    AgentSkillDeclaration,
+    TestCase,
+    TestCaseReviewFeedback,
+    TestCaseReviewFeedbacks,
+    TestCaseReviewRequest,
+)
 from common.services.jira_mcp import build_jira_mcp_server_toolset
 from common.services.test_management_system_client_provider import get_test_management_client
 
@@ -49,7 +55,11 @@ class TestCaseReviewAgent(AgentBase):
             output_type=TestCaseReviewFeedbacks,
             instructions=instruction_prompt.get_prompt(),
             mcp_toolset_factories=[build_jira_mcp_server_toolset],
-            description="Agent which reviews generated test cases for coherence, redundancy, and effectiveness.",
+            skill=AgentSkillDeclaration(
+                id=config.TestCaseReviewAgentConfig.SKILL_ID,
+                name=config.TestCaseReviewAgentConfig.SKILL_NAME,
+                description=config.TestCaseReviewAgentConfig.SKILL_DESCRIPTION,
+            ),
             tools=[
                 # These two tools both do a full read-modify-write PUT on the same Jira/Zephyr
                 # test case. Marking them sequential forces pydantic-ai to run the whole turn one

@@ -32,7 +32,12 @@ import config
 from common import utils
 from common.agent_executor import DefaultAgentExecutor
 from common.custom_llm_wrapper import CustomLlmWrapper
-from common.models import AgentExecutionError, AgentRuntimeError, JsonSerializableModel
+from common.models import (
+    AgentExecutionError,
+    AgentRuntimeError,
+    AgentSkillDeclaration,
+    JsonSerializableModel,
+)
 from common.services.vector_db_service import VectorDbService
 from common.streaming import compute_activity_budget
 from common.token_usage import TokenUsage
@@ -64,11 +69,11 @@ class AgentBase(ABC):
         external_port: int,
         model_name: str,
         version: str,
+        skill: AgentSkillDeclaration,
         output_type: type[BaseModel],
         instructions: str,
         mcp_toolset_factories: Sequence[Callable[[], AbstractToolset]] = (),
         deps_type: type[BaseModel] | None = None,
-        description: str = "",
         tools: Sequence[Tool[AgentDepsT] | ToolFuncEither[AgentDepsT, ...]] = (),
         vector_db_collection_name: str | None = None,
     ):
@@ -86,10 +91,10 @@ class AgentBase(ABC):
         self.url = f"{self.base_url}:{self.external_port}"
         self.model_name = model_name
         self.version = version
+        self.skill = skill
         self.output_type = output_type
         self.instructions = instructions
         self.deps_type = deps_type
-        self.description = description
         # Factories rather than live connections: a fresh MCP session is built for each agent run.
         self.mcp_toolset_factories = list(mcp_toolset_factories)
         self._activity_queue: asyncio.Queue[str] = asyncio.Queue(maxsize=_ACTIVITY_QUEUE_MAXSIZE)
@@ -316,16 +321,24 @@ class AgentBase(ABC):
 
         return resolve_attachments(ctx.messages)
 
+    def _compose_card_description(self) -> str:
+        """Compose the agent card description from model, version and skill name.
+
+        Rendered by the dashboard tile as sanitized HTML clamped to two lines, so the
+        parts are separated with explicit line breaks.
+        """
+        return f"Model: {self.model_name}<br>Version: {self.version}<br>Skill: {self.skill.name}"
+
     def _get_server(self) -> FastAPI:
         primary_skill = AgentSkill(
-            id=f"{self.agent_name.lower().replace(' ', '-')}-skill",
-            name="Primary skill",
-            description=self.description,
-            tags=["qa"],
+            id=self.skill.id,
+            name=self.skill.name,
+            description=self.skill.description,
+            tags=self.skill.tags,
         )
         agent_card = AgentCard(
             name=self.agent_name,
-            description=f"Model: {self.model_name}",
+            description=self._compose_card_description(),
             version=self.version,
             default_input_modes=["text"],
             default_output_modes=["text", "image"],

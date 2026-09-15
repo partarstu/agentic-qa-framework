@@ -12,7 +12,7 @@ from agents.requirements_review.prompt import RequirementsReviewSystemPrompt, Re
 from common import utils
 from common.agent_base import AgentBase
 from common.custom_llm_wrapper import CustomLlmWrapper
-from common.models import JiraUserStory, RequirementsReviewFeedback
+from common.models import AgentSkillDeclaration, JiraUserStory, RequirementsReviewFeedback
 from common.services.jira_mcp import build_jira_mcp_server_toolset
 
 if TYPE_CHECKING:
@@ -45,7 +45,11 @@ class RequirementsReviewAgent(AgentBase):
             instructions=instruction_prompt.get_prompt(),
             mcp_toolset_factories=[build_jira_mcp_server_toolset],
             deps_type=JiraUserStory,
-            description="Agent which does the review of requirements including Jira user stories",
+            skill=AgentSkillDeclaration(
+                id=config.RequirementsReviewAgentConfig.SKILL_ID,
+                name=config.RequirementsReviewAgentConfig.SKILL_NAME,
+                description=config.RequirementsReviewAgentConfig.SKILL_DESCRIPTION,
+            ),
             tools=[self._review_with_attachments, self.add_jira_comment],
         )
 

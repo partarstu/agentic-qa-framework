@@ -22,6 +22,9 @@ def mock_config():
         mock_conf.TestCaseGenerationAgentConfig.PROTOCOL = "http"
         mock_conf.TestCaseGenerationAgentConfig.MODEL_NAME = "test"
         mock_conf.TestCaseGenerationAgentConfig.VERSION = "2.5"
+        mock_conf.TestCaseGenerationAgentConfig.SKILL_ID = "test-case-generation"
+        mock_conf.TestCaseGenerationAgentConfig.SKILL_NAME = "Test Case Generation"
+        mock_conf.TestCaseGenerationAgentConfig.SKILL_DESCRIPTION = "Generates test cases"
         mock_conf.TestCaseGenerationAgentConfig.THINKING_LEVEL = "MEDIUM"
         mock_conf.TestCaseGenerationAgentConfig.MAX_REQUESTS_PER_TASK = 10
         mock_conf.JIRA_MCP_SERVER_URL = "http://jira-mcp"
@@ -83,9 +86,7 @@ async def test_generate_test_cases_flow(agent):
     jira_toolset.__aexit__ = AsyncMock(return_value=None)
 
     run_context = MagicMock()
-    with patch(
-        "agents.test_case_generation.main.build_jira_mcp_server_toolset", return_value=jira_toolset
-    ):
+    with patch("agents.test_case_generation.main.build_jira_mcp_server_toolset", return_value=jira_toolset):
         result = await agent._generate_test_cases(run_context, "Jira Content")
 
     assert isinstance(result, GeneratedTestCases)

@@ -22,6 +22,10 @@ GOOGLE_CLOUD_LOGGING_ENABLED = os.environ.get("GOOGLE_CLOUD_LOGGING_ENABLED", "F
 LOG_TO_FILE = os.environ.get("LOG_TO_FILE", "True").lower() in ("true", "1", "t")
 LOG_DIR = os.environ.get("LOG_DIR", str(Path(__file__).resolve().parent / "logs"))
 
+# Prompt overrides. When set, a file in this directory replaces the bundled template at the
+# same repository-relative path (see common/prompt_base.py). Unset means bundled prompts only.
+PROMPT_OVERRIDES_DIR = os.environ.get("PROMPT_OVERRIDES_DIR")
+
 # URLs
 ORCHESTRATOR_HOST = os.environ.get("ORCHESTRATOR_HOST", "localhost")
 ORCHESTRATOR_PORT = int(os.environ.get("ORCHESTRATOR_PORT", "8000"))
@@ -131,6 +135,7 @@ class BudgetConfig:
         "google-gla:gemini-3.5-flash": {"input": 0.30, "output": 2.50},
     }
 
+
 # Prompt injection detection config
 PROMPT_INJECTION_CHECK_ENABLED = os.environ.get("PROMPT_INJECTION_CHECK_ENABLED", "False").lower() in ("true", "1", "t")
 PROMPT_GUARD_PROVIDER = os.environ.get("PROMPT_GUARD_PROVIDER", "protect_ai")
@@ -182,6 +187,9 @@ class RequirementsReviewAgentConfig:
     THINKING_LEVEL: ThinkingLevel = "medium"
     VERSION = os.environ.get("REQUIREMENTS_REVIEW_AGENT_VERSION", "1.0")
     OWN_NAME = "Jira Requirements Reviewer"
+    SKILL_ID = "jira-requirements-review"
+    SKILL_NAME = "Jira Requirements Review"
+    SKILL_DESCRIPTION = "Review of requirements including Jira user stories, with attachments"
     PORT = int(os.environ.get("PORT", "8001"))
     EXTERNAL_PORT = int(os.environ.get("EXTERNAL_PORT", PORT))
     PROTOCOL = "http"
@@ -194,6 +202,9 @@ class TestCaseClassificationAgentConfig:
     THINKING_LEVEL: ThinkingLevel = "minimal"
     VERSION = os.environ.get("TEST_CASE_CLASSIFICATION_AGENT_VERSION", "1.0")
     OWN_NAME = "Test Case Classification Agent"
+    SKILL_ID = "test-case-classification"
+    SKILL_NAME = "Test Case Classification"
+    SKILL_DESCRIPTION = "Classification of test cases by type and automation capability"
     PORT = int(os.environ.get("PORT", "8003"))
     EXTERNAL_PORT = int(os.environ.get("EXTERNAL_PORT", PORT))
     PROTOCOL = "http"
@@ -206,6 +217,9 @@ class TestCaseGenerationAgentConfig:
     THINKING_LEVEL: ThinkingLevel = "minimal"
     VERSION = os.environ.get("TEST_CASE_GENERATION_AGENT_VERSION", "1.0")
     OWN_NAME = "Test Case Generation Agent"
+    SKILL_ID = "test-case-generation"
+    SKILL_NAME = "Test Case Generation"
+    SKILL_DESCRIPTION = "Generation of test cases based on Jira user stories and their acceptance criteria"
     PORT = int(os.environ.get("PORT", "8002"))
     EXTERNAL_PORT = int(os.environ.get("EXTERNAL_PORT", PORT))
     PROTOCOL = "http"
@@ -219,6 +233,9 @@ class TestCaseReviewAgentConfig:
     VERSION = os.environ.get("TEST_CASE_REVIEW_AGENT_VERSION", "1.0")
     REVIEW_COMPLETE_STATUS_NAME = "Review Complete"
     OWN_NAME = "Test Case Review Agent"
+    SKILL_ID = "test-case-review"
+    SKILL_NAME = "Test Case Review"
+    SKILL_DESCRIPTION = "Review of generated test cases for coherence, redundancy, and effectiveness"
     PORT = int(os.environ.get("PORT", "8004"))
     EXTERNAL_PORT = int(os.environ.get("EXTERNAL_PORT", PORT))
     PROTOCOL = "http"
@@ -231,6 +248,9 @@ class IncidentCreationAgentConfig:
     THINKING_LEVEL: ThinkingLevel = "medium"
     VERSION = os.environ.get("INCIDENT_CREATION_AGENT_VERSION", "1.0")
     OWN_NAME = "Incident Creation Agent"
+    SKILL_ID = "incident-creation"
+    SKILL_NAME = "Incident Creation"
+    SKILL_DESCRIPTION = "Creation of detailed incident reports in Jira based on test execution results"
     PORT = int(os.environ.get("PORT", "8007"))
     EXTERNAL_PORT = int(os.environ.get("EXTERNAL_PORT", PORT))
     PROTOCOL = "http"

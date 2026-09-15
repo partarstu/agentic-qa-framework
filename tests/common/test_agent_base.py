@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 import config
 from common.agent_base import AgentBase
 from common.agent_log_capture import AgentLogCaptureHandler
-from common.models import JsonSerializableModel
+from common.models import AgentSkillDeclaration, JsonSerializableModel
 from common.streaming import reset_current_log_handler, set_current_log_handler
 
 
@@ -48,6 +48,11 @@ def test_agent_instance():
             external_port=8000,
             model_name="openai:test-model",
             version="2.5",
+            skill=AgentSkillDeclaration(
+                id="test-skill",
+                name="Test Skill",
+                description="Skill used by the unit-test agent",
+            ),
             output_type=MockOutput,
             instructions="test instructions",
         )
@@ -76,6 +81,11 @@ def test_no_extra_tools_added_beyond_report_activity():
             external_port=8000,
             model_name="openai:test-model",
             version="2.5",
+            skill=AgentSkillDeclaration(
+                id="test-skill",
+                name="Test Skill",
+                description="Skill used by the unit-test agent",
+            ),
             output_type=MockOutput,
             instructions="instructions",
             tools=(),
@@ -183,6 +193,11 @@ async def test_each_run_gets_a_fresh_mcp_toolset_whose_session_the_run_owns():
             external_port=8000,
             model_name="openai:test-model",
             version="2.5",
+            skill=AgentSkillDeclaration(
+                id="test-skill",
+                name="Test Skill",
+                description="Skill used by the unit-test agent",
+            ),
             output_type=MockOutput,
             instructions="test instructions",
             mcp_toolset_factories=[build_toolset],
@@ -215,3 +230,46 @@ async def test_each_run_gets_a_fresh_mcp_toolset_whose_session_the_run_owns():
         # Entering it here as well would make the session count 2 and stop it from ever being torn
         # down mid-run, which is exactly what the self-healing reconnect needs to be able to do.
         toolset.__aenter__.assert_not_awaited()
+
+
+def test_skill_is_required_at_construction():
+    """An agent without a declared skill must fail instead of falling back to a generic one."""
+    with patch("common.agent_base.Agent"):
+        with pytest.raises(TypeError):
+            TestAgent(
+                agent_name="test-agent",
+                base_url="http://localhost",
+                protocol="http",
+                port=8000,
+                external_port=8000,
+                model_name="openai:test-model",
+                version="2.5",
+                output_type=MockOutput,
+                instructions="test instructions",
+            )
+
+
+def test_card_description_composes_model_version_and_skill():
+    """The card description carries model, version and skill name, line-separated."""
+    with patch("common.agent_base.Agent"):
+        agent = TestAgent(
+            agent_name="test-agent",
+            base_url="http://localhost",
+            protocol="http",
+            port=8000,
+            external_port=8000,
+            model_name="openai:test-model",
+            version="2.5",
+            skill=AgentSkillDeclaration(
+                id="test-skill",
+                name="Test Skill",
+                description="Skill used by the unit-test agent",
+            ),
+            output_type=MockOutput,
+            instructions="test instructions",
+        )
+    description = agent._compose_card_description()
+    assert "openai:test-model" in description
+    assert "2.5" in description
+    assert "Test Skill" in description
+    assert "<br>" in description

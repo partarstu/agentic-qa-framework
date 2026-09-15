@@ -36,6 +36,9 @@ def mock_config():
         mock_conf.IncidentCreationAgentConfig.PROTOCOL = "http"
         mock_conf.IncidentCreationAgentConfig.MODEL_NAME = "test"
         mock_conf.IncidentCreationAgentConfig.VERSION = "2.5"
+        mock_conf.IncidentCreationAgentConfig.SKILL_ID = "incident-creation"
+        mock_conf.IncidentCreationAgentConfig.SKILL_NAME = "Incident Creation"
+        mock_conf.IncidentCreationAgentConfig.SKILL_DESCRIPTION = "Creates incidents"
         mock_conf.IncidentCreationAgentConfig.THINKING_LEVEL = "HIGH"
         mock_conf.JIRA_MCP_SERVER_URL = "http://jira-mcp"
         mock_conf.MCP_SERVER_TIMEOUT_SECONDS = 30

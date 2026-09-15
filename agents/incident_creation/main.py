@@ -16,6 +16,7 @@ from common import utils
 from common.agent_base import AgentBase
 from common.custom_llm_wrapper import CustomLlmWrapper
 from common.models import (
+    AgentSkillDeclaration,
     DuplicateCandidate,
     DuplicateDetectionResult,
     IncidentCreationInput,
@@ -64,7 +65,11 @@ class IncidentCreationAgent(AgentBase):
             instructions=self.main_prompt.get_prompt(),
             mcp_toolset_factories=[build_jira_mcp_server_toolset],
             deps_type=IncidentCreationInput,
-            description="Agent which creates detailed incident reports in Jira based on test execution results.",
+            skill=AgentSkillDeclaration(
+                id=config.IncidentCreationAgentConfig.SKILL_ID,
+                name=config.IncidentCreationAgentConfig.SKILL_NAME,
+                description=config.IncidentCreationAgentConfig.SKILL_DESCRIPTION,
+            ),
             tools=[
                 self._search_duplicate_candidates_in_rag,
                 self._get_linked_issues,

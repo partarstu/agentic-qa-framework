@@ -22,6 +22,9 @@ def mock_config():
         mock_conf.TestCaseReviewAgentConfig.PROTOCOL = "http"
         mock_conf.TestCaseReviewAgentConfig.MODEL_NAME = "test"
         mock_conf.TestCaseReviewAgentConfig.VERSION = "2.5"
+        mock_conf.TestCaseReviewAgentConfig.SKILL_ID = "test-case-review"
+        mock_conf.TestCaseReviewAgentConfig.SKILL_NAME = "Test Case Review"
+        mock_conf.TestCaseReviewAgentConfig.SKILL_DESCRIPTION = "Reviews test cases"
         mock_conf.TestCaseReviewAgentConfig.THINKING_LEVEL = "LOW"
         mock_conf.TestCaseReviewAgentConfig.MAX_REQUESTS_PER_TASK = 8
         mock_conf.TestCaseReviewAgentConfig.REVIEW_COMPLETE_STATUS_NAME = "Review Complete"

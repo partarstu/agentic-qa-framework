@@ -18,6 +18,7 @@ from common.agent_base import AgentBase
 from common.custom_llm_wrapper import CustomLlmWrapper
 from common.models import (
     AcceptanceCriteriaList,
+    AgentSkillDeclaration,
     GeneratedTestCases,
     JiraUserStory,
     TestStepsSequenceList,
@@ -78,7 +79,11 @@ class TestCaseGenerationAgent(AgentBase):
             instructions=instruction_prompt.get_prompt(),
             mcp_toolset_factories=[build_jira_mcp_server_toolset],
             deps_type=JiraUserStory,
-            description="Agent which generates test cases based on Jira user stories.",
+            skill=AgentSkillDeclaration(
+                id=config.TestCaseGenerationAgentConfig.SKILL_ID,
+                name=config.TestCaseGenerationAgentConfig.SKILL_NAME,
+                description=config.TestCaseGenerationAgentConfig.SKILL_DESCRIPTION,
+            ),
             tools=[self._upload_test_cases_into_test_management_system, self._generate_test_cases],
         )
 
@@ -88,9 +93,7 @@ class TestCaseGenerationAgent(AgentBase):
     def get_max_requests_per_task(self) -> int:
         return config.TestCaseGenerationAgentConfig.MAX_REQUESTS_PER_TASK
 
-    async def _generate_test_cases(
-        self, ctx: RunContext[JiraUserStory], jira_issue_content: str
-    ) -> GeneratedTestCases:
+    async def _generate_test_cases(self, ctx: RunContext[JiraUserStory], jira_issue_content: str) -> GeneratedTestCases:
         """
         Generates test cases based on the Jira issue content and attachments.
 
