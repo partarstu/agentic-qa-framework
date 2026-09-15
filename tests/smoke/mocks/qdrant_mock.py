@@ -35,6 +35,7 @@ _recorded: dict = {
     "queries": [],
     "deleted_point_ids": [],
     "embedding_calls": [],
+    "hybrid_queries": [],
 }
 
 _UPDATE_RESULT = {"result": {"operation_id": 0, "status": "completed"}, "status": "ok", "time": 0.0}
@@ -50,20 +51,27 @@ async def root() -> dict:
 async def embed_document_text(request: Request) -> dict:
     """Deterministic stand-in for the embedding service; only the dimension matters."""
     payload = await request.json()
-    _recorded["embedding_calls"].append({"endpoint": "/embed-document-text", "texts": payload.get("texts", [])})
-    return {"embeddings": [_fake_embedding() for _ in payload.get("texts", [])]}
+    texts = payload.get("texts", [])
+    _recorded["embedding_calls"].append({"endpoint": "/embed-document-text", "texts": texts})
+    return _embeddings_response(texts)
 
 
 @app.post("/embed-query-text")
 async def embed_query_text(request: Request) -> dict:
     """Deterministic stand-in for the embedding service; only the dimension matters."""
     payload = await request.json()
-    _recorded["embedding_calls"].append({"endpoint": "/embed-query-text", "texts": payload.get("texts", [])})
-    return {"embeddings": [_fake_embedding() for _ in payload.get("texts", [])]}
+    texts = payload.get("texts", [])
+    _recorded["embedding_calls"].append({"endpoint": "/embed-query-text", "texts": texts})
+    return _embeddings_response(texts)
 
 
 def _fake_embedding() -> dict:
     return {"dense": [0.1] * _EMBEDDING_DIM, "sparse": {"indices": [1], "values": [0.5]}}
+
+
+def _embeddings_response(texts: list) -> dict:
+    """The embedding service response shape, including the model identity field."""
+    return {"model": "mock-model", "embeddings": [_fake_embedding() for _ in texts]}
 
 
 @app.get("/collections")
@@ -125,9 +133,31 @@ async def delete_points(name: str, request: Request) -> dict:
 
 @app.post("/collections/{name}/points/query")
 async def query_points(name: str, request: Request) -> dict:
-    """Always report no hits, so the duplicate search deterministically finds no duplicates."""
+    """Always report no hits, so the duplicate search deterministically finds no duplicates.
+
+    Hybrid queries (named-vector prefetches fused with RRF) are recorded so the smoke
+    suite can assert the incident flow issues a hybrid search.
+    """
     payload = await request.json()
     _recorded["queries"].append({"collection": name, "filter": payload.get("filter")})
+    prefetches = payload.get("prefetch") or []
+    if prefetches:
+        _recorded["hybrid_queries"].append(
+            {
+                "collection": name,
+                "prefetches": [
+                    {
+                        "using": p.get("using"),
+                        "limit": p.get("limit"),
+                        "score_threshold": p.get("score_threshold"),
+                    }
+                    for p in prefetches
+                ],
+                "fusion": (payload.get("query") or {}).get("fusion"),
+                "limit": payload.get("limit"),
+                "filter": payload.get("filter"),
+            }
+        )
     return {"result": {"points": []}, "status": "ok", "time": 0.0}
 
 

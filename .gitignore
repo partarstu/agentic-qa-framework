@@ -19,3 +19,4 @@ coverage.xml
 test-results.xml
 .editorconfig
 /logs
+IMPLEMENTATION_PLAN.md

@@ -30,6 +30,7 @@ drift away from the system without the build failing.
 | `prompt-injection-guard` | every agent node | Prompt-injection screening (`PROMPT_INJECTION_CHECK_ENABLED`) |
 | `internal-service-api-key` | `embedding-service`, `prompt-guard-service` | Shared `X-API-Key` (`INTERNAL_SERVICE_API_KEY`) |
 | `execution-agent-bearer-token` | `rel-orchestrator-routes-execution-tasks` | `Authorization: Bearer` on the execution agents' main A2A endpoint (`REMOTE_EXECUTION_AGENT_AUTH_TOKEN`) |
+| `vector-db-api-key` | `rel-incident-agent-qdrant`, `rel-orchestrator-qdrant` | Shared API key on every call into Qdrant (`QDRANT_API_KEY`, sent by all clients when configured) |
 
 ## Running validation locally
 

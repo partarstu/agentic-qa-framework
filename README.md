@@ -318,8 +318,7 @@ TEST_MANAGEMENT_SYSTEM=zephyr # Default: zephyr. Specifies the test management s
 TEST_REPORTER=allure # Default: allure. Specifies the test reporting tool.
 
 # Qdrant Vector Database (for RAG and semantic search)
-QDRANT_URL=http://localhost # Default: http://localhost. URL of the Qdrant server.
-QDRANT_PORT=6333 # Default: 6333. Port of the Qdrant server.
+QDRANT_URL=http://localhost:6333 # Default: http://localhost:6333. URL of the Qdrant server, including the port.
 QDRANT_API_KEY= # Optional. API key for Qdrant authentication.
 QDRANT_TIMEOUT_SECONDS=30 # Default: 30. Request timeout for the Qdrant client.
 QDRANT_COLLECTION_NAME=jira_issues # Default: jira_issues. Name of the main collection for Jira issues.
@@ -332,6 +331,7 @@ EMBEDDING_SERVICE_URL= # Required for agents using Vector DB. URL of the embeddi
 EMBEDDING_SERVICE_TIMEOUT_SECONDS=120.0 # Default: 120.0. Timeout for embedding service requests.
 EMBEDDING_SERVICE_MAX_RETRIES=6 # Default: 6. Connect/timeout retry attempts (with backoff) while the embedding service starts (e.g. Cloud Run cold start).
 EMBEDDING_SERVICE_RETRY_BACKOFF_CAP_SECONDS=32.0 # Default: 32.0. Upper bound for the exponential backoff between embedding service retries.
+QDRANT_UPSERT_BATCH_SIZE=64 # Default: 64. Number of points per batched vector upsert.
 JIRA_VALID_STATUSES=To Do,In Review,Ready for Development,In Progress,Done # Default shown. Comma-separated Jira
                                  # statuses eligible to be synced into the RAG vector DB.
 

@@ -388,23 +388,57 @@
         }
       }
     },
-    {
-      "unique-id": "rel-incident-agent-qdrant",
-      "description": "Incident Creation Agent queries Qdrant for duplicate detection.",
-      "protocol": "HTTPS",
-      "relationship-type": {
-        "connects": {
+  {
+    "unique-id": "rel-incident-agent-qdrant",
+    "description": "Incident Creation Agent queries Qdrant for duplicate detection.",
+    "protocol": "HTTPS",
+    "controls": {
+      "vector-db-api-key": {
+        "description": "Calls to Qdrant carry the shared QDRANT_API_KEY when one is configured.",
+        "requirements": [
+          {
+            "requirement-url": "https://quaia.finos.calm/controls/authentication.requirement.json",
+            "config": {
+              "control-id": "quaia-qdrant-api-key",
+              "name": "Qdrant API Key",
+              "description": "Every client into the vector database authenticates with the shared QDRANT_API_KEY when one is configured.",
+              "auth-method": "api-key",
+              "enforced": false
+            }
+          }
+        ]
+      }
+    },
+    "relationship-type": {
+      "connects": {
           "source": { "node": "incident-creation-agent" },
           "destination": { "node": "qdrant" }
         }
       }
     },
-    {
-      "unique-id": "rel-orchestrator-qdrant",
-      "description": "Orchestrator writes Jira issue embeddings to Qdrant during the RAG sync.",
-      "protocol": "HTTPS",
-      "relationship-type": {
-        "connects": {
+  {
+    "unique-id": "rel-orchestrator-qdrant",
+    "description": "Orchestrator writes Jira issue embeddings to Qdrant during the RAG sync.",
+    "protocol": "HTTPS",
+    "controls": {
+      "vector-db-api-key": {
+        "description": "Calls to Qdrant carry the shared QDRANT_API_KEY when one is configured.",
+        "requirements": [
+          {
+            "requirement-url": "https://quaia.finos.calm/controls/authentication.requirement.json",
+            "config": {
+              "control-id": "quaia-qdrant-api-key",
+              "name": "Qdrant API Key",
+              "description": "Every client into the vector database authenticates with the shared QDRANT_API_KEY when one is configured.",
+              "auth-method": "api-key",
+              "enforced": false
+            }
+          }
+        ]
+      }
+    },
+    "relationship-type": {
+      "connects": {
           "source": { "node": "orchestrator" },
           "destination": { "node": "qdrant" }
         }

@@ -310,10 +310,11 @@ class RetryConfig:
 
 
 class QdrantConfig:
-    URL = os.environ.get("QDRANT_URL", "http://localhost")
+    # QDRANT_URL is authoritative and includes the port (or relies on the scheme default);
+    # there is no separate port setting (WS7).
+    URL = os.environ.get("QDRANT_URL", "http://localhost:6333")
     API_KEY = os.environ.get("QDRANT_API_KEY")
     TIMEOUT_SECONDS = int(os.environ.get("QDRANT_TIMEOUT_SECONDS", "30"))
-    PORT = int(os.environ.get("QDRANT_PORT", "6333"))
     COLLECTION_NAME = os.environ.get("QDRANT_COLLECTION_NAME", "jira_issues")
     TICKETS_COLLECTION_NAME = os.environ.get("QDRANT_TICKETS_COLLECTION_NAME", "jira_issues")
     METADATA_COLLECTION_NAME = os.environ.get("QDRANT_METADATA_COLLECTION_NAME", "rag_metadata")
@@ -331,6 +332,8 @@ class QdrantConfig:
         "JIRA_VALID_STATUSES", "To Do,In Review,Ready for Development,In Progress,Done"
     ).split(",")
     BUG_ISSUE_TYPE = os.environ.get("JIRA_BUG_ISSUE_TYPE", "Bug")
+    # Batch size for vector upserts, keeping requests within the size limit.
+    UPSERT_BATCH_SIZE = int(os.environ.get("QDRANT_UPSERT_BATCH_SIZE", "64"))
 
 
 class EmbeddingServiceConfig:

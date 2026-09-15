@@ -2,7 +2,6 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
-
 import asyncio
 import time
 
@@ -15,13 +14,19 @@ from common.models import VectorizableBaseModel
 
 logger = utils.get_logger("vector_db_service")
 
+# Named vectors on every collection this service manages: dense + learned-sparse.
+DENSE_VECTOR_NAME = "dense"
+SPARSE_VECTOR_NAME = "sparse"
+
 
 class VectorDbService:
-    def __init__(self, collection_name: str):
+    def __init__(self, collection_name: str, metadata_collection_name: str | None = None):
         self.collection_name = collection_name
+        # QDRANT_URL is authoritative and includes the port (or relies on the scheme default).
+        # port=None keeps the client from appending its own default (qdrant-client#394).
         self.client = AsyncQdrantClient(
-            url=getattr(config.QdrantConfig, "URL", "http://localhost"),
-            port=getattr(config.QdrantConfig, "PORT", 6333),
+            url=getattr(config.QdrantConfig, "URL", "http://localhost:6333"),
+            port=None,
             api_key=getattr(config.QdrantConfig, "API_KEY", None),
             timeout=getattr(config.QdrantConfig, "TIMEOUT_SECONDS", 30),
         )
@@ -34,19 +39,30 @@ class VectorDbService:
         self._embedding_retry_backoff_cap = getattr(
             config.QdrantConfig, "EMBEDDING_SERVICE_RETRY_BACKOFF_CAP_SECONDS", 32.0
         )
+        # Collections whose writes must not go through the embedding service (locks, sync state,
+        # fingerprints, model identity): records are stored without vectors.
+        self._metadata_collection_name = metadata_collection_name
+        self._metadata_db = (
+            VectorDbService(metadata_collection_name) if metadata_collection_name and metadata_collection_name != collection_name else None
+        )
+        self._upsert_batch_size = int(getattr(config.QdrantConfig, "UPSERT_BATCH_SIZE", 64))
 
     async def close(self):
         """Closes the shared HTTP client. Call this during application shutdown."""
         await self._http_client.aclose()
+        if self._metadata_db is not None:
+            await self._metadata_db.close()
 
     async def _embed_texts(self, texts: list[str], query: bool = False):
-        """Embeds texts through the embedding service, returning (dense, sparse) per text.
+        """Embeds texts through the embedding service.
 
         Uses the document-text endpoint (no query instruction) unless ``query`` is set.
         Retries transient transport failures with backoff, honouring the configured caps.
 
         Returns:
-            A list of (dense vector, sparse indices, sparse values) tuples, one per input text.
+            A tuple (embeddings, model): embeddings is a list of
+            (dense vector, sparse indices, sparse values) tuples, one per input text;
+            model is the identity of the model that produced them.
         """
         if not self.embedding_service_url:
             raise ValueError("EMBEDDING_SERVICE_URL is not configured.")
@@ -63,12 +79,13 @@ class VectorDbService:
                     f"{self.embedding_service_url}{endpoint}", json={"texts": texts}, headers=headers
                 )
                 response.raise_for_status()
+                body = response.json()
                 embeddings = [
                     (item["dense"], item["sparse"]["indices"], item["sparse"]["values"])
-                    for item in response.json()["embeddings"]
+                    for item in body["embeddings"]
                 ]
                 logger.info(f"Embedding service call completed in {time.monotonic() - start:.3f}s")
-                return embeddings
+                return embeddings, body.get("model")
             except (httpx.TimeoutException, httpx.ConnectError) as e:
                 if attempt == max_retries - 1:
                     logger.exception(
@@ -90,8 +107,8 @@ class VectorDbService:
 
     async def _get_embedding(self, text: str) -> list[float]:
         """Dense embedding of one text, for call sites that don't use the sparse vector yet."""
-        dense, _, _ = (await self._embed_texts([text]))[0]
-        return dense
+        embeddings, _ = await self._embed_texts([text])
+        return embeddings[0][0]
 
     async def _collection_exists(self) -> bool:
         """Checks collection existence by listing all collections to avoid the /exists endpoint's empty-body issue."""
@@ -99,22 +116,144 @@ class VectorDbService:
         return any(c.name == self.collection_name for c in collections.collections)
 
     async def ensure_collection(self):
-        if not await self._collection_exists():
-            # Dynamically detect the vector size by embedding a dummy string
-            dummy_vec = await self._get_embedding("test")
-            vector_size = len(dummy_vec)
+        """Creates the collection with the hybrid schema (named dense + sparse vectors).
 
-            try:
-                await self.client.create_collection(
-                    collection_name=self.collection_name,
-                    vectors_config=models.VectorParams(size=vector_size, distance=models.Distance.COSINE),
+        The dense size is detected from the embedding service. The model that produced
+        the vectors is recorded in the metadata collection, and later writes/queries
+        refuse to run with a different model.
+        """
+        if await self._collection_exists():
+            return
+        embeddings, model = await self._embed_texts(["test"])
+        vector_size = len(embeddings[0][0])
+
+        try:
+            await self.client.create_collection(
+                collection_name=self.collection_name,
+                vectors_config={
+                    DENSE_VECTOR_NAME: models.VectorParams(size=vector_size, distance=models.Distance.COSINE)
+                },
+                sparse_vectors_config={
+                    SPARSE_VECTOR_NAME: models.SparseVectorParams(modifier=models.Modifier.IDF)
+                },
+            )
+            logger.info(f"Created collection {self.collection_name} with named dense({vector_size}) + sparse vectors.")
+        except Exception as e:
+            # Handle race condition where collection is created concurrently
+            if "already exists" in str(e).lower() or "conflict" in str(e).lower():
+                logger.info(f"Collection {self.collection_name} already exists (race condition handled).")
+            else:
+                raise e
+
+        if self._metadata_db is not None:
+            await self._metadata_db._store_model_identity(self.collection_name, model)
+
+    async def _verify_model_identity(self, model: str) -> None:
+        """Fails with a clear error when the collection's vectors come from a different model.
+
+        Without this check, switching the embedding model would silently mix vector
+        spaces in one collection. Collections created before this check existed are
+        treated as unclaimed and claimed by the first writer.
+        """
+        if self._metadata_db is None:
+            return
+        stored = await self._metadata_db._get_model_identity(self.collection_name)
+        if stored is not None and stored != model:
+            raise RuntimeError(
+                f"Collection '{self.collection_name}' holds vectors from model '{stored}', "
+                f"but the embedding service now uses '{model}'. Recreate the collection and "
+                f"reset its sync state to re-ingest."
+            )
+        if stored is None:
+            await self._metadata_db._store_model_identity(self.collection_name, model)
+
+    def _model_identity_id(self, collection_name: str) -> str:
+        return f"model-identity-{collection_name}"
+
+    async def _store_model_identity(self, collection_name: str, model: str) -> None:
+        """Record which model produced a collection's vectors (part of the metadata collection)."""
+        await self.client.upsert(
+            collection_name=self.collection_name,
+            points=[
+                models.PointStruct(
+                    id=self._model_identity_id(collection_name),
+                    vector={},
+                    payload={"kind": "model-identity", "collection": collection_name, "model": model},
                 )
-            except Exception as e:
-                # Handle race condition where collection is created concurrently
-                if "already exists" in str(e).lower() or "conflict" in str(e).lower():
-                    logger.info(f"Collection {self.collection_name} already exists (race condition handled).")
-                else:
-                    raise e
+            ],
+        )
+
+    async def _get_model_identity(self, collection_name: str) -> str | None:
+        """Read the recorded model for a collection, or None when it isn't recorded."""
+        points = await self.client.retrieve(
+            collection_name=self.collection_name,
+            ids=[self._model_identity_id(collection_name)],
+        )
+        if points and points[0].payload:
+            return points[0].payload.get("model")
+        return None
+
+    async def hybrid_search(
+        self,
+        query_text: str,
+        limit: int = 5,
+        score_threshold: float | None = None,
+        query_filter: models.Filter | None = None,
+        with_payload: bool | dict | models.PayloadSelector | None = True,
+    ) -> list[models.ScoredPoint]:
+        """Hybrid (dense + learned-sparse) search fused with RRF.
+
+        1. The query is embedded once (dense + sparse).
+        2. One prefetch per named vector runs with the same filter; each prefetch limit
+           covers the final limit.
+        3. The similarity threshold applies to the dense prefetch only: fused RRF scores
+           are rank-based, so the configured thresholds keep their meaning on the dense
+           branch (see the plan, WS7).
+        4. Prefetches are fused with RRF.
+
+        Args:
+            query_text: The text to embed and search for.
+            limit: Maximum number of fused results.
+            score_threshold: Minimum similarity applied to the dense prefetch only.
+            query_filter: Optional payload filter applied to every prefetch.
+            with_payload: Payload selector; excludes heavy fields when needed.
+
+        Returns:
+            Fused scored points.
+        """
+        logger.info(f"Starting hybrid search in '{self.collection_name}' (limit {limit})...")
+        try:
+            if not await self._collection_exists():
+                logger.warning(f"Collection {self.collection_name} doesn't exist yet in DB")
+                return []
+            embeddings, model = await self._embed_texts([query_text], query=True)
+            dense, sparse_indices, sparse_values = embeddings[0]
+            await self._verify_model_identity(model)
+
+            dense_prefetch = models.Prefetch(
+                query=dense,
+                using=DENSE_VECTOR_NAME,
+                limit=limit,
+                filter=query_filter,
+                score_threshold=score_threshold,
+            )
+            sparse_prefetch = models.Prefetch(
+                query=models.SparseVector(indices=sparse_indices, values=sparse_values),
+                using=SPARSE_VECTOR_NAME,
+                limit=limit,
+                filter=query_filter,
+            )
+            response = await self.client.query_points(
+                collection_name=self.collection_name,
+                prefetch=[dense_prefetch, sparse_prefetch],
+                query=models.FusionQuery(fusion=models.Fusion.RRF),
+                limit=limit,
+                with_payload=with_payload,
+            )
+            return response.points
+        except Exception:
+            logger.exception("Error querying Vector DB")
+            raise
 
     async def search(
         self,
@@ -123,17 +262,7 @@ class VectorDbService:
         score_threshold: float = 0.7,
         query_filter: models.Filter | None = None,
     ) -> list[models.ScoredPoint]:
-        """Search for similar vectors in the collection.
-
-        Args:
-            query_text: The text to embed and search for.
-            limit: Maximum number of results to return.
-            score_threshold: Minimum similarity score threshold.
-            query_filter: Optional Qdrant Filter object for payload-based filtering.
-
-        Returns:
-            List of scored points matching the query and filter conditions.
-        """
+        """Backward-compatible dense-only search. New callers should prefer hybrid_search."""
         logger.info(f"Starting vector DB similarity search in '{self.collection_name}'...")
         try:
             if not await self._collection_exists():
@@ -153,6 +282,7 @@ class VectorDbService:
             raise
 
     async def upsert(self, data: VectorizableBaseModel, ensure: bool = True):
+        """Upserts one record with named dense + sparse vectors produced in one embedding pass."""
         try:
             if ensure:
                 await self.ensure_collection()
@@ -160,21 +290,71 @@ class VectorDbService:
             payload = data.model_dump()
             point_id = data.get_vector_id()
 
-            embedding = await self._get_embedding(text)
+            embeddings, model = await self._embed_texts([text])
+            await self._verify_model_identity(model)
+            dense, sparse_indices, sparse_values = embeddings[0]
             await self.client.upsert(
                 collection_name=self.collection_name,
-                points=[models.PointStruct(id=point_id, vector=embedding, payload=payload)],
+                points=[
+                    models.PointStruct(
+                        id=point_id,
+                        vector={
+                            DENSE_VECTOR_NAME: dense,
+                            SPARSE_VECTOR_NAME: models.SparseVector(indices=sparse_indices, values=sparse_values),
+                        },
+                        payload=payload,
+                    )
+                ],
             )
             logger.info(f"Upserted document with ID {point_id} to collection {self.collection_name}")
         except Exception:
             logger.exception("Error upserting to Vector DB")
             raise
 
-    async def retrieve(self, point_ids: list[int | str]) -> list[models.Record]:
+    async def upsert_batch(self, data: list[VectorizableBaseModel], ensure: bool = True):
+        """Upserts many records in batches, one embedding call per batch.
+
+        Batches respect the request size limit; the embedding service is called once per
+        batch so a large sync run stays within its input limits.
+        """
+        try:
+            if not data:
+                return
+            if ensure:
+                await self.ensure_collection()
+            for start in range(0, len(data), self._upsert_batch_size):
+                batch = data[start : start + self._upsert_batch_size]
+                texts = [item.get_embedding_content() for item in batch]
+                embeddings, model = await self._embed_texts(texts)
+                await self._verify_model_identity(model)
+                points = []
+                for item, (dense, sparse_indices, sparse_values) in zip(batch, embeddings, strict=True):
+                    points.append(
+                        models.PointStruct(
+                            id=item.get_vector_id(),
+                            vector={
+                                DENSE_VECTOR_NAME: dense,
+                                SPARSE_VECTOR_NAME: models.SparseVector(indices=sparse_indices, values=sparse_values),
+                            },
+                            payload=item.model_dump(),
+                        )
+                    )
+                await self.client.upsert(collection_name=self.collection_name, points=points)
+                logger.info(f"Upserted batch of {len(points)} point(s) to collection {self.collection_name}")
+        except Exception:
+            logger.exception("Error batch-upserting to Vector DB")
+            raise
+
+    async def retrieve(
+        self,
+        point_ids: list[int | str],
+        with_payload: bool | dict | models.PayloadSelector | None = True,
+    ) -> list[models.Record]:
         """Retrieve points by their IDs from the collection.
 
         Args:
             point_ids: List of point IDs to retrieve (64-bit unsigned integers or UUID strings).
+            with_payload: Payload selector, so heavy fields can be excluded from reads.
 
         Returns:
             List of Record objects containing point data.
@@ -187,6 +367,7 @@ class VectorDbService:
             return await self.client.retrieve(
                 collection_name=self.collection_name,
                 ids=point_ids,
+                with_payload=with_payload,
             )
         except Exception:
             logger.exception("Error retrieving from Vector DB")
@@ -194,9 +375,6 @@ class VectorDbService:
 
     async def delete(self, point_ids: list[int | str]):
         """Delete points by their IDs from the collection.
-
-        Args:
-            point_ids: List of point IDs to delete (64-bit unsigned integers or UUID strings).
 
         Raises:
             Exception: If deletion from Vector DB fails.
@@ -208,6 +386,35 @@ class VectorDbService:
             logger.info(f"Deleted documents with IDs {point_ids} from collection {self.collection_name}")
         except Exception:
             logger.exception("Error deleting from Vector DB")
+            raise
+
+    async def delete_by_filter(self, scope_filter: models.Filter):
+        """Delete every point matching the filter (reconciliation of removed items)."""
+        try:
+            await self.client.delete(
+                collection_name=self.collection_name, points_selector=models.FilterSelector(filter=scope_filter)
+            )
+            logger.info(f"Deleted points matching filter from collection {self.collection_name}")
+        except Exception:
+            logger.exception("Error deleting by filter from Vector DB")
+            raise
+
+    async def set_payload(self, payload: dict, point_ids: list[int | str] | None = None, scope_filter: models.Filter | None = None):
+        """Payload-only update for metadata changes without re-embedding."""
+        try:
+            selector = (
+                models.PointIdsList(points=point_ids)
+                if point_ids is not None
+                else models.FilterSelector(filter=scope_filter)
+            )
+            await self.client.set_payload(
+                collection_name=self.collection_name,
+                payload=payload,
+                points=selector,
+            )
+            logger.info(f"Updated payload on {len(point_ids) if point_ids else 'filtered'} point(s) in {self.collection_name}")
+        except Exception:
+            logger.exception("Error updating payload in Vector DB")
             raise
 
     async def scroll_all_ids_by_project(self, project_key: str) -> list[int]:

@@ -368,9 +368,14 @@ def test_created_bug_linked_to_test_execution(
 def test_incident_creation_consulted_vector_db(
     execute_tests_response: httpx.Response, http_client: httpx.Client
 ) -> None:
-    """The duplicate search must consult the vector DB (at least the collection-list probe)."""
-    data = wait_for_recorded(http_client, QDRANT_RECORDED_URL, lambda d: d.get("collections_probes", 0) > 0)
-    assert data.get("collections_probes", 0) > 0, f"The vector DB was never consulted. Recorded: {data}"
+    """The duplicate search must run a hybrid (dense + sparse, RRF-fused) query."""
+    data = wait_for_recorded(http_client, QDRANT_RECORDED_URL, lambda d: bool(d.get("hybrid_queries")))
+    hybrid_queries = data.get("hybrid_queries", [])
+    assert hybrid_queries, f"No hybrid query reached the vector DB. Recorded: {data}"
+    query = hybrid_queries[0]
+    using_names = {p.get("using") for p in query.get("prefetches", [])}
+    assert using_names == {"dense", "sparse"}, f"Expected dense + sparse prefetches, got {using_names}"
+    assert query.get("fusion") == "rrf", f"Expected RRF fusion, got {query.get('fusion')}"
 
 
 # --- RAG vector DB update flow ----------------------------------------------------------

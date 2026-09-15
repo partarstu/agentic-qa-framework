@@ -118,7 +118,7 @@ class IncidentCreationAgent(AgentBase):
             else [],
         )
 
-        hits = await self.vector_db_service.search(
+        hits = await self.vector_db_service.hybrid_search(
             incident_description,
             limit=config.QdrantConfig.MAX_RESULTS,
             score_threshold=RAG_MIN_SIMILARITY,

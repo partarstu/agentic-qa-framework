@@ -36,6 +36,8 @@
         { "contains": { "properties": { "unique-id": { "const": "rel-orchestrator-routes-tasks" } }, "required": ["unique-id"] } },
         { "contains": { "properties": { "unique-id": { "const": "rel-orchestrator-routes-execution-tasks" }, "controls": { "required": ["execution-agent-bearer-token"] } }, "required": ["controls"] } },
         { "contains": { "properties": { "unique-id": { "const": "rel-jira-webhook-orchestrator" }, "controls": { "required": ["jira-webhook-hmac"] } }, "required": ["controls"] } },
+        { "contains": { "properties": { "unique-id": { "const": "rel-incident-agent-qdrant" }, "controls": { "required": ["vector-db-api-key"] } }, "required": ["controls"] } },
+        { "contains": { "properties": { "unique-id": { "const": "rel-orchestrator-qdrant" }, "controls": { "required": ["vector-db-api-key"] } }, "required": ["controls"] } },
         { "contains": { "properties": { "unique-id": { "const": "rel-deployed-in-cloud-run" } }, "required": ["unique-id"] } }
       ]
     }

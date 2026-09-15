@@ -157,8 +157,7 @@ services:
     environment:
       <<: *agent-env
       AGENT_BASE_URL: "http://incident_creation"
-      QDRANT_URL: "http://qdrant_mock"
-      QDRANT_PORT: "6333"
+      QDRANT_URL: "http://qdrant_mock:6333"
       # The duplicate search embeds its query once the tickets collection exists
       # (the concurrently running RAG sync creates it).
       EMBEDDING_SERVICE_URL: "http://qdrant_mock:6333"
@@ -213,8 +212,7 @@ services:
       JIRA_URL: "http://jira_rest_mock:8080"
       JIRA_USERNAME: "smoke"
       JIRA_API_TOKEN: "smoke-token"
-      QDRANT_URL: "http://qdrant_mock"
-      QDRANT_PORT: "6333"
+      QDRANT_URL: "http://qdrant_mock:6333"
       EMBEDDING_SERVICE_URL: "http://qdrant_mock:6333"
     ports:
       - "8000:8000"

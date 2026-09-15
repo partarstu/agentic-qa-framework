@@ -80,6 +80,7 @@ class TextEmbeddingResponse(BaseModel):
 
 class TextEmbeddingsResponse(BaseModel):
     embeddings: list[TextEmbeddingResponse]
+    model: str
 
 
 @app.get("/health")
@@ -125,19 +126,22 @@ async def _embed_texts(texts: list[str], query: bool):
     if not _registry.is_enabled("text"):
         raise HTTPException(status_code=404, detail="Backend 'text' is not enabled.")
     backend = await _registry.get_loaded("text")
+    model = backend.model_name()
     encode = backend.embed_query_texts if query else backend.embed_document_texts
-    return await asyncio.to_thread(encode, texts)
+    embeddings = await asyncio.to_thread(encode, texts)
+    return embeddings, model
 
 
-def _to_response(embeddings) -> TextEmbeddingsResponse:
+def _to_response(embeddings, model: str) -> TextEmbeddingsResponse:
     return TextEmbeddingsResponse(
+        model=model,
         embeddings=[
             TextEmbeddingResponse(
                 dense=embedding.dense,
                 sparse=SparseVectorResponse(indices=embedding.sparse.indices, values=embedding.sparse.values),
             )
             for embedding in embeddings
-        ]
+        ],
     )
 
 
@@ -146,8 +150,8 @@ async def embed_document_texts(
     request: TextEmbeddingRequest, _: None = Depends(_require_service_auth)
 ) -> TextEmbeddingsResponse:
     """Embed document content texts; returns a dense vector and sparse weights per input."""
-    embeddings = await _embed_texts(request.texts, query=False)
-    return _to_response(embeddings)
+    embeddings, model = await _embed_texts(request.texts, query=False)
+    return _to_response(embeddings, model)
 
 
 @app.post("/embed-query-text", response_model=TextEmbeddingsResponse)
@@ -155,8 +159,8 @@ async def embed_query_texts(
     request: TextEmbeddingRequest, _: None = Depends(_require_service_auth)
 ) -> TextEmbeddingsResponse:
     """Embed query texts, applying the model's query instruction when it has one."""
-    embeddings = await _embed_texts(request.texts, query=True)
-    return _to_response(embeddings)
+    embeddings, model = await _embed_texts(request.texts, query=True)
+    return _to_response(embeddings, model)
 
 
 if __name__ == "__main__":

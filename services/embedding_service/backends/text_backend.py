@@ -41,6 +41,9 @@ class BgeM3TextBackend(EmbeddingBackend):
     def is_loaded(self) -> bool:
         return self._model is not None
 
+    def model_name(self) -> str:
+        return _configured_model_name()
+
     def embed_document_texts(self, texts: list[str]) -> list[TextEmbedding]:
         return self._encode(texts)
 

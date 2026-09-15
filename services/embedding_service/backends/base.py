@@ -40,6 +40,10 @@ class EmbeddingBackend:
         """Whether ``load`` has completed successfully."""
         raise NotImplementedError
 
+    def model_name(self) -> str:
+        """Identity of the model producing this backend's vectors, recorded by clients."""
+        raise NotImplementedError
+
     def embed_document_texts(self, texts: list[str]) -> list[TextEmbedding]:
         """Embed content texts (no query instruction)."""
         raise NotImplementedError
