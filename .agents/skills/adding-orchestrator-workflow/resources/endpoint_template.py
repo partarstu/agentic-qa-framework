@@ -3,73 +3,31 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 
 """
-Basic endpoint function template for orchestrator workflows.
+Workflow endpoint template.
 
-Add this to orchestrator/main.py.
-Replace placeholders with your workflow-specific values.
+Paste into orchestrator/main.py, where every name used below is already defined or imported.
+Replace the <placeholders>. For a Jira webhook, take `request: Request` instead of a model and start the `try`
+block with `await _verify_jira_webhook_signature(request)`.
 """
-
-from fastapi import Depends
-
-from common.models import AgentExecutionError
-from orchestrator.main import (
-    _get_artifacts_from_task,
-    _get_model_from_artifacts,
-    _handle_exception,
-    _send_task_to_agent,
-    _validate_api_key,
-    _validate_task_status,
-    logger,
-    orchestrator_app,
-)
 
 
 # noinspection PyUnusedLocal
 @orchestrator_app.post("/<endpoint-path>")
 async def <endpoint_function_name>(request: <RequestModel>, api_key: str = Depends(_validate_api_key)):
     """
-    Brief description of what this endpoint does.
-    
-    Args:
-        request: The request payload.
-        api_key: API key for authentication (automatically validated).
-        
-    Returns:
-        Dictionary with status message and any relevant data.
+    <What the workflow does and who triggers it>.
     """
-    logger.info(f"Received request for <workflow description>: {request}")
-    
     try:
-        # 1. Extract data from request
-        data = request.field_name
-        
-        # 2. Send task to agent
-        task_description = "<Description for agent selection>"
-        completed_task = await _send_task_to_agent(
-            f"<Task payload for agent>",  # What the agent should process
-            task_description              # Used for agent selection
-        )
-        
-        # 3. Validate and extract results
-        _validate_task_status(completed_task, task_description)
-        received_artifacts = _get_artifacts_from_task(completed_task, task_description)
-        
-        # 4. Parse results based on expected format
-        # Option A: Get raw text
-        # text_parts = _get_text_content_from_artifacts(received_artifacts, task_description)
-        
-        # Option B: Parse as model
-        result = _get_model_from_artifacts(received_artifacts, task_description, <ResultModel>)
-        
-        # 5. Handle AgentExecutionError if using _get_model_from_artifacts
+        logger.info(f"Received a request for <workflow description>: {request}")
+        task_description = f"<Description the orchestrator uses to select the agent>"
+        completed_task = await _send_task_to_agent(request.model_dump_json(), task_description)
+        artifacts = _get_artifacts_from_task(completed_task, task_description)
+        result = _get_model_from_artifacts(artifacts, task_description, <ResultModel>)
         if isinstance(result, AgentExecutionError):
-            _handle_exception(f"Workflow failed: {result.error_message}")
-        
-        # 6. Optionally trigger follow-up workflows
-        # await _some_follow_up_workflow(result)
-        
-        logger.info(f"<Workflow name> completed successfully")
-        return {"message": "Workflow completed successfully", "result": result}
-        
+            _handle_exception(f"<Workflow name> failed: {result.error_message}")
+        logger.info("<Workflow name> completed.")
+        return {"message": "<Workflow name> completed.", "result": result.model_dump()}
+    except HTTPException:
+        raise
     except Exception as e:
         _handle_exception(f"<Workflow name> failed: {e}")

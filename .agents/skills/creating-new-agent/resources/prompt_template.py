@@ -5,8 +5,8 @@
 """
 Prompt class template for a new agent.
 
-Replace <agent_name> with your agent's folder name (e.g., requirements_review).
-Replace <AgentName> with your agent's class name (e.g., RequirementsReview).
+Replace <agent_name> with the folder name (e.g. requirements_review) and <AgentName> with the class prefix
+(e.g. RequirementsReview).
 """
 
 from pathlib import Path
@@ -14,7 +14,7 @@ from pathlib import Path
 from common import utils
 from common.prompt_base import PromptBase
 
-logger = utils.get_logger("<agent_name>.agent")
+logger = utils.get_logger("<agent_name>_agent")
 PROMPTS_ROOT = "system_prompts"
 
 
@@ -23,31 +23,19 @@ def _get_prompts_root() -> Path:
 
 
 class <AgentName>SystemPrompt(PromptBase):
-    """
-    Loads the main system prompt template for <Agent Name>.
-    """
+    """Loads the main system prompt template of the <Agent Name> agent."""
+
+    def __init__(self, template_file_name: str = "main_prompt_template.txt"):
+        super().__init__(template_file_name)
 
     def get_script_dir(self) -> Path:
         return _get_prompts_root()
 
-    def __init__(
-        self,
-        # Add any template variables as constructor parameters
-        template_file_name: str = "main_prompt_template.txt"
-    ):
-        """
-        Initializes the prompt instance.
-
-        Args:
-            template_file_name: The name of the prompt template file.
-        """
-        super().__init__(template_file_name)
-        # Store template variables for formatting
-
     def get_prompt(self) -> str:
-        """Returns the formatted prompt as a string."""
+        """Returns the system prompt.
+
+        If the template has placeholders, return `self.template.format(...)` instead and escape
+        literal braces in the template as `{{` and `}}`.
+        """
         logger.info("Generating <agent_name> system prompt")
-        # Return template with variables substituted
-        return self.template.format(
-            # variable_name=self.variable_name
-        )
+        return self.template

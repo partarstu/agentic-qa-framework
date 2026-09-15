@@ -5,17 +5,12 @@
 """
 Output model template for a new agent.
 
-Add this to common/models.py.
-Replace <AgentOutput> and <Agent Name> with appropriate names.
+Paste into common/models.py, which already imports `Field` and defines `BaseAgentResult`.
+Replace <AgentOutput> and <Agent Name>.
 """
-
-from pydantic import Field
-
-from common.models import BaseAgentResult
 
 
 class <AgentOutput>(BaseAgentResult):
-    """Result from <Agent Name> agent."""
-    
-    field_name: str = Field(description="Description of this field")
-    # Add other fields as needed
+    """Result of the <Agent Name> agent."""
+
+    field_name: str = Field(description="<Description the LLM uses to fill this field>")

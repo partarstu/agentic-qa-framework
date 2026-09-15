@@ -1,228 +1,67 @@
 ---
 name: writing-unit-tests
-description: Writes unit tests for agents, orchestrator logic, and common utilities in the QuAIA framework using pytest. Use when adding tests for new or existing components.
+description: Writes pytest unit tests for QuAIA agents, orchestrator endpoints and logic, and common utilities, following the project's existing test patterns and mocking conventions. Use when adding or updating tests for new or changed code.
 ---
-
-// turbo-all
 
 # Writing Unit Tests
 
-This skill provides a comprehensive guide for writing unit tests for the QuAIA™ framework, covering agents, orchestrator logic, and common utilities.
+## Setup facts
 
-## Overview
+- `pytest.ini` sets `pythonpath = .`, `testpaths = tests`, `asyncio_mode = auto` (async tests need no marker; match
+  the style of the file you edit) and deselects the `smoke` marker.
+- `tests/conftest.py` sets dummy API keys and auth env vars, disables prompt-injection checks and stubs
+  `sentence_transformers` in `sys.modules`. Put new collection-time requirements there.
+- Tests mirror the source tree: `tests/agents/`, `tests/orchestrator/` (shared stubs in its `conftest.py`),
+  `tests/common/`, `tests/scripts/`. `tests/smoke/` is the separate end-to-end suite.
+- New test files are named `test_<module>.py` and start with the SPDX header used by every other file.
 
-The QuAIA test suite uses:
-- **pytest** as the test framework
-- **pytest-asyncio** for async test support
-- **unittest.mock** for mocking dependencies
-- **monkeypatch** (pytest fixture) for configuration overrides
+## Follow the existing tests
 
-Tests are organized in the `tests/` directory:
-```
-tests/
-├── conftest.py          # Shared fixtures and test setup
-├── agents/              # Agent-specific tests
-├── orchestrator/        # Orchestrator logic tests
-├── common/              # Common utilities tests
-└── scripts/             # Script tests
-```
+Read the closest existing test before writing a new one, and reuse its fixtures and helpers instead of copying them:
 
-> **Unit tests do not replace the smoke suite.** The hermetic smoke suite under `tests/smoke/` is a separate, mandatory
-> layer (see *Hermetic smoke suite* in `AGENTS.md`). When your change adds a new end-to-end capability or extends an
-> existing flow, you **must** also extend `tests/smoke/` so the behaviour is asserted end-to-end — adding unit tests
-> alone is not sufficient.
+| Testing                                   | Model on                                        |
+|-------------------------------------------|-------------------------------------------------|
+| Agent construction and configuration      | `tests/agents/test_requirements_review.py`      |
+| Agent custom tools and sub-agents         | `tests/agents/test_test_case_review.py`         |
+| Orchestrator endpoints                    | `tests/orchestrator/test_endpoints.py`          |
+| Artifact parsing helpers                  | `tests/orchestrator/test_parsing_logic.py`      |
+| Agent discovery, selection and registry   | `tests/orchestrator/test_orchestrator_logic.py` |
+| `AgentBase` and the A2A server            | `tests/common/test_agent_base.py`               |
 
-## ⚡ Auto-Run Policy
+## Project conventions and pitfalls
 
-This skill is designed to run with minimal interruption.
+1. **a2a-sdk types** follow the current 1.x API with snake_case fields:
+   `Artifact(name=..., parts=[Part(text=...)])`, `Part(raw=b"...", media_type="text/plain", filename=...)`,
+   `TaskStatus(state=TaskState.TASK_STATE_COMPLETED)`,
+   `AgentCard(..., supported_interfaces=[AgentInterface(protocol_binding="JSONRPC", url=...)])`.
+2. **Endpoint auth**: override the dependency with `orchestrator_app.dependency_overrides[_validate_api_key]`.
+   Patching `orchestrator.main._validate_api_key` does nothing, because `Depends` already holds the original function.
+3. **Error recording**: `_handle_exception` and `_record_error` schedule `error_history.add` on the running loop. Tests
+   reaching them must be `async def` and patch `orchestrator.main.error_history`.
+4. **Patch where a name is used** (`agents.<agent_name>.main.config`, `orchestrator.main._send_task_to_agent`), and use
+   `AsyncMock` for coroutines.
+5. **Configuration**: override values with `monkeypatch.setattr(config.<Name>Config, "FIELD", value)` or by patching the
+   module's `config`; never assign to config globals directly.
+6. **Module-global state** such as the agent registry must be reset by a fixture, as `clear_registry` does in
+   `tests/orchestrator/test_orchestrator_logic.py`.
+7. **No real I/O**: mock every boundary — LLM models, MCP toolsets, Jira, Qdrant, test management clients, `httpx`.
 
-- **Always set `SafeToAutoRun: true`** for all `run_command` calls.
-- **Exceptions:** Only set `SafeToAutoRun: false` if a step specifically instructs you to "Ask" the user, "Wait" for approval, or "Verify" a destructive action before proceeding.
-- **Restricted Symbols:** Never use the redirection operator (`>`) or `2>` in commands. Use alternatives (e.g., `Set-Content`, `Out-File`, or ignoring errors explicitly).
+## What to cover
 
-## Test Configuration
+- The success path and every failure path the code handles explicitly (raised `HTTPException` status, returned
+  `AgentExecutionError`, logged-and-continued errors).
+- Edge cases the code branches on: `None`, empty collections, missing fields.
+- Use `pytest.mark.parametrize` when the same assertion runs over several inputs.
 
-### conftest.py Setup
+Unit tests do not replace the hermetic smoke suite: when a change adds or extends an end-to-end flow, `tests/smoke/`
+must be updated too (see *Hermetic smoke suite* in `AGENTS.md`).
 
-The root `tests/conftest.py` sets up global test configuration:
+## Verify
 
-📄 **Template:** [resources/conftest_template.py](resources/conftest_template.py)
-
-## Writing Agent Tests
-
-### Basic Agent Test Structure
-
-Agent tests verify:
-1. Agent initialization with correct configuration
-2. Custom tools work as expected
-3. Thinking budget and request limits are properly returned
-
-📄 **Example:** [examples/test_agent_example.py](examples/test_agent_example.py)
-
-## Writing Orchestrator Tests
-
-### Testing Orchestrator Logic Functions
-
-📄 **Example:** [examples/test_orchestrator_logic.py](examples/test_orchestrator_logic.py)
-
-### Testing Artifact Parsing Functions
-
-📄 **Example:** [examples/test_parsing_logic.py](examples/test_parsing_logic.py)
-
-### Testing Endpoint Functions
-
-📄 **Example:** [examples/test_endpoints.py](examples/test_endpoints.py)
-
-## Testing Patterns
-
-### Mocking External Services
-
-When testing components that interact with external services:
-
-```python
-@pytest.fixture
-def mock_jira_client():
-    """Mock JIRA client for tests."""
-    with patch("common.services.jira_client.JIRA") as mock:
-        mock_instance = MagicMock()
-        mock.return_value = mock_instance
-        yield mock_instance
-
-
-@pytest.fixture
-def mock_vector_db():
-    """Mock vector database service."""
-    with patch("common.services.vector_db_service.VectorDbService") as mock:
-        mock_instance = MagicMock()
-        mock.return_value = mock_instance
-        mock_instance.search = AsyncMock(return_value=[])
-        yield mock_instance
+```bash
+uv run pytest tests/<path>/test_<module>.py -v
+uv run ruff check tests/<path>/test_<module>.py
+uv run pytest
 ```
 
-### Testing Async Code
-
-For async functions, use `pytest.mark.asyncio`:
-
-```python
-@pytest.mark.asyncio
-async def test_async_function():
-    """Test an async function."""
-    result = await some_async_function()
-    assert result is not None
-
-
-@pytest.mark.asyncio
-async def test_async_with_mock():
-    """Test async function with mocked dependencies."""
-    with patch("module.dependency", new_callable=AsyncMock) as mock_dep:
-        mock_dep.return_value = "mocked result"
-        
-        result = await async_function_using_dependency()
-        
-        assert result == "mocked result"
-        mock_dep.assert_called_once()
-```
-
-### Testing Exception Handling
-
-```python
-@pytest.mark.asyncio
-async def test_handles_exception_gracefully(mock_error_history):
-    """Test function handles exceptions properly."""
-    from fastapi import HTTPException
-
-    with patch("module.dependency") as mock_dep:
-        mock_dep.side_effect = Exception("Unexpected error")
-        
-        with pytest.raises(HTTPException) as exc_info:
-            await function_that_should_catch_and_rethrow()
-        
-        assert exc_info.value.status_code == 500
-        assert "error" in exc_info.value.detail.lower()
-```
-
-### Using Parametrized Tests
-
-For testing multiple scenarios:
-
-```python
-@pytest.mark.parametrize("input_value,expected_output", [
-    ("valid_input", "expected_result"),
-    ("another_input", "another_result"),
-    ("edge_case", "edge_result"),
-])
-def test_multiple_scenarios(input_value, expected_output):
-    """Test multiple input/output combinations."""
-    result = function_under_test(input_value)
-    assert result == expected_output
-
-
-@pytest.mark.parametrize("status,should_succeed", [
-    ("AVAILABLE", True),
-    ("BUSY", False),
-    ("BROKEN", False),
-])
-@pytest.mark.asyncio
-async def test_status_handling(status, should_succeed, clear_registry):
-    """Test handling of different agent statuses."""
-    # Setup agent with given status
-    # Run test
-    # Assert based on should_succeed
-```
-
-## Test Helper Utilities
-
-Use the provided helper utilities for creating mock objects:
-
-📄 **Template:** [resources/test_helpers.py](resources/test_helpers.py)
-
-## Verification Checklist
-
-After writing tests, verify:
-
-- [ ] All test files follow naming convention `test_<module_name>.py`
-- [ ] Test classes are named `Test<FeatureName>` 
-- [ ] Test methods are named `test_<what_is_being_tested>`
-- [ ] Fixtures are used for setup/teardown
-- [ ] Async tests use `@pytest.mark.asyncio`
-- [ ] External dependencies are properly mocked
-- [ ] Both success and failure paths are tested
-- [ ] Edge cases are covered
-- [ ] Tests pass locally: `pytest tests/<test_file>.py -v`
-- [ ] Coverage is adequate: `pytest --cov=<module> tests/<test_file>.py`
-- [ ] If the change adds or extends an end-to-end flow, `tests/smoke/` was extended to assert the new behaviour (see *Hermetic smoke suite* in `AGENTS.md`)
-
-## Common Issues and Solutions
-
-### AsyncIO Event Loop Issues
-
-If you see "There is no current event loop" errors:
-
-```python
-@pytest.fixture
-def mock_error_history():
-    """Mock async components to prevent event loop issues."""
-    with patch("orchestrator.main.error_history") as mock:
-        mock.add = AsyncMock()
-        yield mock
-```
-
-### Module Import Issues
-
-If imports fail during test collection, mock heavy dependencies in `conftest.py`:
-
-```python
-# Mock sentence_transformers before any imports
-mock_sentence_transformers = MagicMock()
-sys.modules["sentence_transformers"] = mock_sentence_transformers
-```
-
-### Configuration Issues
-
-Always mock config values in fixtures rather than modifying global state:
-
-```python
-@pytest.fixture
-def mock_config(monkeypatch):
-    monkeypatch.setattr(config.SomeConfig, "VALUE", "test_value")
-```
+All three must pass. If anything fails, continue with the `running-unit-tests` skill.

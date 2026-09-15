@@ -5,19 +5,17 @@
 """
 Configuration class template for a new agent.
 
-Replace <AgentName> with your agent's name (e.g., RequirementsReview).
-Replace <unique_port> with a unique port number (e.g., 8008).
+Paste into config.py, which already imports `os` and `ThinkingLevel` and defines `DEFAULT_MODEL_NAME`.
+Replace <AgentName>, <AGENT_NAME> and <unique_port>.
 """
-
-import os
 
 
 class <AgentName>AgentConfig:
-    THINKING_LEVEL = "MEDIUM"  # Token budget for thinking (0 to disable)
-    VERSION = os.environ.get("<AGENT_NAME>_AGENT_VERSION", "1.0")  # Reported in the A2A agent card
+    THINKING_LEVEL: ThinkingLevel = "medium"
+    VERSION = os.environ.get("<AGENT_NAME>_AGENT_VERSION", "1.0")
     OWN_NAME = "<Human-Readable Agent Name>"
-    PORT = int(os.environ.get("PORT", "<unique_port>"))  # e.g., 8008
+    PORT = int(os.environ.get("PORT", "<unique_port>"))
     EXTERNAL_PORT = int(os.environ.get("EXTERNAL_PORT", PORT))
     PROTOCOL = "http"
-    MODEL_NAME = "google-gla:gemini-3-flash-preview"
-    MAX_REQUESTS_PER_TASK = 30  # Maximum tool calls per task
+    MODEL_NAME = DEFAULT_MODEL_NAME
+    MAX_REQUESTS_PER_TASK = 30
