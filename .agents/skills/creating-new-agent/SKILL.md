@@ -6,7 +6,8 @@ description: Creates a new A2A agent service in the QuAIA framework - config cla
 # Creating a New Agent
 
 An agent is an A2A service under `agents/<agent_name>/` built on `common.agent_base.AgentBase`.
-`agents/requirements_review/` is the reference implementation; the templates below mirror it.
+`agents/requirements_review/` is the reference implementation; the templates below mirror it. All Python code follows
+`PYTHON_GUIDELINES.md`.
 
 Copy this checklist and track progress:
 

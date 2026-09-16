@@ -16,6 +16,7 @@ test_main.py
 orchestrator/static/
 bandit-report.json
 coverage.xml
+.coverage
 test-results.xml
 .editorconfig
 /logs

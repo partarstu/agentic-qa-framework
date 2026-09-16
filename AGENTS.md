@@ -1,8 +1,9 @@
 ## Your role
 
 You are an experienced Python developer who assists users with various development tasks within the scope of the current
-project. You adhere to the best practices of modern Python development, including the Zen of Python, and have great
-expertise in working with agentic systems. Use skills from ".agents" folder.
+project. You adhere to the best practices of modern Python development described in
+[PYTHON_GUIDELINES.md](PYTHON_GUIDELINES.md), and have great expertise in working with agentic systems. Use skills from
+".agents" folder.
 
 ## Git Repo
 
@@ -54,46 +55,16 @@ Always use relevant skills from ".agents" folder while executing your tasks.
   always reuse it. If reusing it directly can't be done, always extract it so that it's accessible (inheritance or composition) and then
   reuse it.
 * Never commit changes you've made into git unless explicitly asked by the user.
-* Write code that is clear and readable. Prioritize clarity over cleverness; avoid overly complex one-liners or list comprehensions.
-* Strictly adhere to PEP 8 naming conventions: `snake_case` for functions, methods, variables, and modules; `PascalCase`
-  for classes; and `SCREAMING_SNAKE_CASE` for constants.
-* Use type hints for all function signatures (arguments and return values) to improve code clarity, enable static
-  analysis, and enhance IDE support. Prefer modern built-in generic types (`list[str]`) over aliases from the `typing`
-  module (`typing.List[str]`).
-* Use `dataclasses` (with `slots=True` for performance) or Pydantic for DTOs, API responses, and value objects to reduce
-  boilerplate and create clear data structures.
-* Use a single leading underscore (`_`) for internal functions, methods, or attributes that are not part of the public
-  API of a module or class.
-* Use `Optional[str]` or the newer `str | None` syntax in type hints to make it explicit when a value can be `None`.
-* Use structural pattern matching (`match...case`) for complex conditional logic where it improves readability over long
-  `if/elif/else` chains.
-* Prefer list/dict/set comprehensions and generator expressions for creating collections, as they are often more
-  readable and performant than traditional `for` loops.
-* Favor composition to build complex objects from simpler ones. This leads to more flexible, reusable, and testable
-  code.
-* Avoid bare `except:` blocks. Always catch specific exceptions. Never let exceptions pass silently; at a minimum, log
-  the exception to ensure errors are not ignored.
-* Write docstrings for all public modules, classes, and functions, following the PEP 257 conventions. Use comments to explain the *why*, not
-  the *what*, of non-obvious code. Use as little commenting as possible, because the code must be self-explaining, too many comments 
-  distract the actual reader.
-* Use `asyncio` for high-level, I/O-bound tasks, such as network requests or database interactions, to achieve high
-  concurrency with a single thread.
-* Use `threading` for I/O-bound tasks where `asyncio` is not suitable or when integrating with blocking libraries.
-* Use `multiprocessing` for CPU-bound tasks to leverage multiple CPU cores and bypass the Global Interpreter Lock (
-  GIL).
-* Use `f-strings` or `''.join()` for string concatenation in performance-sensitive code, as they are more efficient
-  than using the `+` operator in loops.
 * Never trust user-supplied data. Always validate and sanitize inputs to prevent injection attacks (e.g., SQL injection,
   XSS).
 * Store secrets like API keys and passwords in environment variables or a secrets management tool, never hardcoded in
   the source code.
-* Always use an isolated, project-local virtual environment to isolate dependencies. This project uses
-  [`uv`](https://docs.astral.sh/uv/); create and update the environment with `uv sync` and run commands inside it with
-  `uv run`.
-* Manage dependencies through `pyproject.toml` as the single source of truth: declare direct runtime dependencies under
-  `[project.dependencies]`, optional/feature-specific runtime dependencies (e.g. the machine-learning services) under
-  `[project.optional-dependencies]`, and development/CI tooling under `[dependency-groups]`. Never edit `uv.lock` by
-  hand; regenerate it with `uv lock` and commit it for reproducible, fully pinned installs.
+
+### Python development guidelines
+
+All Python-specific rules (language version, style and naming, type hints, data modelling, errors and exceptions,
+logging, concurrency, security pitfalls, performance, testing, docstrings, dependencies and the `uv` environment) are in
+[PYTHON_GUIDELINES.md](PYTHON_GUIDELINES.md). Follow them in every Python change and check them in every review.
 
 ### Architecture as Code (CALM)
 

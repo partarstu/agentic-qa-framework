@@ -128,19 +128,6 @@ async def test_ensure_collection_race_condition(vector_db_service, mock_qdrant_c
 
 
 @pytest.mark.asyncio
-async def test_search(vector_db_service, mock_qdrant_client, mock_httpx_client):
-    _mock_collections_exist(mock_qdrant_client, "test_collection", exists=True)
-    mock_response = MagicMock()
-    mock_response.points = [models.ScoredPoint(id="1", version=1, score=0.9, payload={}, vector=None)]
-    mock_qdrant_client.query_points.return_value = mock_response
-
-    results = await vector_db_service.search("query")
-    assert len(results) == 1
-    mock_qdrant_client.query_points.assert_called_once()
-    mock_httpx_client.post.assert_called()
-
-
-@pytest.mark.asyncio
 async def test_upsert(vector_db_service, mock_qdrant_client, mock_httpx_client):
     _mock_collections_exist(mock_qdrant_client, "test_collection", exists=True)
     data = DummyModel(id="123", content="text")

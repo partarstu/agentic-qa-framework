@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
-"""Confluence document ingestion into the documents collection (WS9).
+"""Confluence page-body and attachment ingestion into the documents collection.
 
 Run algorithm (the fingerprints decide what gets skipped; the cursor is recorded
 but doesn't drive skipping, because CQL lastmodified depends on the lagging search
@@ -27,10 +27,9 @@ index and misses attachment uploads):
    and doesn't update its fingerprint, so the next run retries it. The run reports
    completed-with-errors and the cursor isn't advanced.
 
-This phase (WS9a) ingests page bodies; attachments ship with WS9b, so the
-attachment parts of the algorithm are prepared but empty by default.
 """
 
+import base64
 import time
 
 import config
@@ -38,7 +37,8 @@ from common import utils
 from common.models import DocumentPagePart, RagUpdateResult
 from common.services.sync_lock_store import SyncLockStore, SyncStateStore, scope_key
 from common.services.vector_db_service import VectorDbService
-from rag_sync.chunking import chunk_page_body
+from rag_sync.attachment_extraction import ExtractedDocument, extract_attachment_async, skip_reason
+from rag_sync.chunking import chunk_page_body, split_text_by_budget
 from rag_sync.confluence_client import ConfluenceApiError, ConfluenceClient
 from rag_sync.normalization import normalize_page_body
 from rag_sync.sync_state import INGESTION_SCHEMA_VERSION, FingerprintStore, content_hash
@@ -46,6 +46,14 @@ from rag_sync.sync_state import INGESTION_SCHEMA_VERSION, FingerprintStore, cont
 logger = utils.get_logger("confluence_sync")
 
 CONFLUENCE_SCOPE = "confluence"
+
+
+class AttachmentSkippedError(Exception):
+    """An attachment is deliberately not ingested (unsupported format or over the size cap).
+
+    Unlike a failure, a skip doesn't mark the run completed-with-errors: retrying
+    can't succeed until the attachment itself changes.
+    """
 
 
 class ConfluenceRagSyncRunner:
@@ -126,41 +134,85 @@ class ConfluenceRagSyncRunner:
         run_started = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         client = ConfluenceClient()
         processed = 0
+        skipped = 0
         failed = 0
         try:
             space_id = await client.get_space_id_by_key(space_key)
             listing_complete, pages = await self._list_pages(client, space_key, space_id, page_id)
+            attachments_complete, page_attachments = await self._list_attachments(client, pages)
+            listing_complete = listing_complete and attachments_complete
             if not listing_complete:
                 logger.warning(f"Listing for scope {scope} was incomplete; nothing is deleted this run.")
             stored = await self._fingerprints.load_scope(scope)
+            if page_id is not None:
+                # Page-scoped run: removal candidates are restricted to the scoped
+                # page's items (its body and its attachments); the rest of the space
+                # is never touched (WS9 reconciliation table).
+                stored = {
+                    key: payload
+                    for key, payload in stored.items()
+                    if key == f"page:{page_id}"
+                    or (key.startswith("attachment:") and str(payload.get("page_id")) == page_id)
+                }
 
-            # Classification. Attachments enter the listing with WS9b; until then the
-            # expected items are the page bodies only.
-            expected: dict[str, dict] = {
-                f"page:{page['id']}": page for page in pages
-            }
+            pattern = utils.compile_name_pattern(attachment_name_pattern) if attachment_name_pattern else None
+            page_by_id = {str(page["id"]): page for page in pages}
+            expected: dict[str, dict] = {f"page:{page['id']}": page for page in pages}
+            attachment_pages: dict[str, dict] = {}
+            existing_item_keys = set(expected)
+            for page_id_, attachments in page_attachments.items():
+                for attachment in attachments:
+                    item_key = f"attachment:{attachment['id']}"
+                    existing_item_keys.add(item_key)
+                    if pattern is None or pattern.search(attachment.get("title", "")):
+                        expected[item_key] = attachment
+                        attachment_pages[item_key] = page_by_id[page_id_]
 
-            removed_keys = self._removed_items(stored, expected, listing_complete, scope)
+            removed_keys = self._removed_items(
+                stored, expected, listing_complete, scope, existing_item_keys
+            )
 
             await self._verify_holder_or_abort(scope, lock_token)
             for item_key, removed_payload in removed_keys.items():
                 await self._delete_item(scope, item_key, removed_payload, lock_token)
                 processed += 1
 
-            for item_key, page in expected.items():
-                if skip_page_body and item_key.startswith("page:"):
-                    continue
+            for item_key, item in expected.items():
+                is_attachment = item_key.startswith("attachment:")
                 try:
                     await self._verify_holder_or_abort(scope, lock_token)
-                    if await self._sync_page_body(client, space_key, scope, item_key, page, stored):
+                    if is_attachment:
+                        # Attachments are never skipped by the skip_page_body flag; the
+                        # name pattern already narrowed the expected set.
+                        if await self._sync_attachment(
+                            client,
+                            space_key,
+                            scope,
+                            item_key,
+                            item,
+                            attachment_pages[item_key],
+                            stored,
+                            lock_token,
+                        ):
+                            processed += 1
+                    elif not skip_page_body and await self._sync_page_body(
+                        client, space_key, scope, item_key, item, stored, lock_token
+                    ):
                         processed += 1
                 except PermissionError:
                     raise
+                except AttachmentSkippedError as skip:
+                    skipped += 1
+                    logger.warning(f"Skipping Confluence item {item_key} in {space_key}: {skip}")
                 except Exception as e:
                     failed += 1
                     logger.exception(f"Failed to sync Confluence item {item_key} in {space_key}: {e}")
 
             status = "completed-with-errors" if failed or not listing_complete else "completed"
+            logger.info(
+                f"Confluence sync of {scope} finished ({status}): "
+                f"{processed} processed, {skipped} skipped, {failed} failed."
+            )
             if failed == 0 and listing_complete:
                 # The cursor records the last successful run; Confluence doesn't use it
                 # for skipping (versions + hashes decide), but the operating model
@@ -172,6 +224,25 @@ class ConfluenceRagSyncRunner:
             return RagUpdateResult(status=status, processed_count=processed)
         finally:
             await client.close()
+
+    async def _list_attachments(
+        self, client: ConfluenceClient, pages: list[dict]
+    ) -> tuple[bool, dict[str, list[dict]]]:
+        """Lists every page's attachments, metadata only.
+
+        Filtering happens after this complete listing is retained, so an existing
+        non-matching attachment is left untouched while a genuinely removed one is
+        still reconciled.
+        """
+        per_page: dict[str, list[dict]] = {}
+        for page in pages:
+            try:
+                attachments = await client.list_page_attachments(page["id"])
+            except Exception:
+                logger.exception(f"Listing attachments of page {page['id']} failed; the run will delete nothing.")
+                return False, per_page
+            per_page[str(page["id"])] = attachments
+        return True, per_page
 
     async def _list_pages(
         self, client: ConfluenceClient, space_key: str, space_id: str, page_id: str | None
@@ -197,7 +268,11 @@ class ConfluenceRagSyncRunner:
 
     @staticmethod
     def _removed_items(
-        stored: dict[str, dict], expected: dict[str, dict], listing_complete: bool, scope: str
+        stored: dict[str, dict],
+        expected: dict[str, dict],
+        listing_complete: bool,
+        scope: str,
+        existing_item_keys: set[str] | None = None,
     ) -> dict[str, dict]:
         """Stored items missing from the listing, keyed by item key.
 
@@ -209,22 +284,35 @@ class ConfluenceRagSyncRunner:
         """
         if not listing_complete:
             return {}
-        removed = {key: payload for key, payload in stored.items() if key not in expected}
+        existing = existing_item_keys if existing_item_keys is not None else set(expected)
+        removed = {key: payload for key, payload in stored.items() if key not in existing}
         for key in removed:
             logger.info(f"Item {key} of scope {scope} no longer exists; scheduling removal.")
         return removed
 
     async def _sync_page_body(
-        self, client: ConfluenceClient, space_key: str, scope: str, item_key: str, page: dict, stored: dict
+        self,
+        client: ConfluenceClient,
+        space_key: str,
+        scope: str,
+        item_key: str,
+        page: dict,
+        stored: dict,
+        lock_token: str,
     ) -> bool:
         """Syncs one page body. Returns True when the item was processed (changed or new)."""
         stored_fingerprint = stored.get(item_key)
         version = page.get("version", {}).get("number")
 
         if stored_fingerprint:
-            if stored_fingerprint.get("version") == version:
+            if (
+                stored_fingerprint.get("version") == version
+                and stored_fingerprint.get("schema_version") == INGESTION_SCHEMA_VERSION
+            ):
                 if self._metadata_changed(stored_fingerprint, page):
-                    await self._update_metadata_only(scope, item_key, page, stored_fingerprint)
+                    await self._update_metadata_only(
+                        scope, item_key, page, stored_fingerprint, lock_token
+                    )
                     return True
                 logger.debug(f"Skipping {item_key} in {space_key}: version unchanged ({version}).")
                 return False
@@ -241,18 +329,24 @@ class ConfluenceRagSyncRunner:
 
         if stored_fingerprint and stored_fingerprint.get("content_hash") == hash_value:
             # Equal hash: only the stored version is updated, without re-processing.
-            await self._fingerprints.save(scope, item_key, self._fingerprint(page_with_body, hash_value))
+            await self._verify_holder_or_abort(scope, lock_token)
+            fingerprint = self._fingerprint(page_with_body, hash_value)
+            fingerprint["point_ids"] = stored_fingerprint.get("point_ids", [])
+            await self._fingerprints.save(scope, item_key, fingerprint)
             return True
 
         parts = self._build_page_parts(space_key, page_with_body, raw_body)
         # Crash-safe order: upsert the new points first, then delete the previous
         # version's leftovers (fewer chunks), then save the fingerprint last.
         if parts:
+            await self._verify_holder_or_abort(scope, lock_token)
             await self._documents_db.upsert_batch(parts, ensure=True)
         previous = stored_fingerprint.get("point_ids", []) if stored_fingerprint else []
         stale_ids = [pid for pid in previous if pid not in {p.get_vector_id() for p in parts}]
         if stale_ids:
+            await self._verify_holder_or_abort(scope, lock_token)
             await self._documents_db.delete(stale_ids)
+        await self._verify_holder_or_abort(scope, lock_token)
         await self._fingerprints.save(scope, item_key, self._fingerprint(page_with_body, hash_value, parts))
         logger.info(f"Ingested {len(parts)} chunk(s) of {item_key} in space {space_key}.")
         return True
@@ -265,7 +359,12 @@ class ConfluenceRagSyncRunner:
         )
 
     async def _update_metadata_only(
-        self, scope: str, item_key: str, page: dict, stored_fingerprint: dict
+        self,
+        scope: str,
+        item_key: str,
+        page: dict,
+        stored_fingerprint: dict,
+        lock_token: str,
     ) -> None:
         """A metadata-only change (e.g. the page was renamed) updates the stored
         payload without re-embedding."""
@@ -273,6 +372,7 @@ class ConfluenceRagSyncRunner:
         webui = page.get("_links", {}).get("webui")
         point_ids = stored_fingerprint.get("point_ids", [])
         if point_ids:
+            await self._verify_holder_or_abort(scope, lock_token)
             await self._documents_db.set_payload(
                 {"page_title": title, "page_url": webui, "document_name": title},
                 point_ids=point_ids,
@@ -282,6 +382,7 @@ class ConfluenceRagSyncRunner:
             "title": title,
             "webui": webui,
         }
+        await self._verify_holder_or_abort(scope, lock_token)
         await self._fingerprints.save(scope, item_key, fingerprint)
         logger.info(f"Updated metadata of {item_key} in {scope} without re-embedding.")
 
@@ -320,6 +421,225 @@ class ConfluenceRagSyncRunner:
             )
             for chunk in chunks
         ]
+
+    async def _sync_attachment(
+        self,
+        client: ConfluenceClient,
+        space_key: str,
+        scope: str,
+        item_key: str,
+        attachment: dict,
+        parent_page: dict,
+        stored: dict,
+        lock_token: str,
+    ) -> bool:
+        """Synchronizes one attachment and returns whether it was processed."""
+        stored_fingerprint = stored.get(item_key)
+        version = attachment.get("version", {}).get("number")
+        if stored_fingerprint:
+            if (
+                stored_fingerprint.get("version") == version
+                and stored_fingerprint.get("schema_version") == INGESTION_SCHEMA_VERSION
+            ):
+                if self._attachment_metadata_changed(
+                    stored_fingerprint, attachment, parent_page
+                ):
+                    await self._update_attachment_metadata_only(
+                        scope,
+                        item_key,
+                        attachment,
+                        parent_page,
+                        stored_fingerprint,
+                        lock_token,
+                    )
+                    return True
+                logger.debug(f"Skipping {item_key} in {space_key}: version unchanged ({version}).")
+                return False
+            logger.info(
+                f"Version or ingestion schema changed for {item_key} in {space_key}: "
+                f"{stored_fingerprint.get('version')} -> {version}."
+            )
+
+        format_skip_reason = skip_reason(attachment.get("title", ""))
+        if format_skip_reason:
+            raise AttachmentSkippedError(format_skip_reason)
+        listed_size = int(attachment.get("fileSize") or 0)
+        if listed_size > config.DocumentRagConfig.MAX_ATTACHMENT_BYTES:
+            raise AttachmentSkippedError(
+                f"it is {listed_size} bytes, exceeding the {config.DocumentRagConfig.MAX_ATTACHMENT_BYTES}-byte limit"
+            )
+        download_link = attachment.get("downloadLink")
+        if not download_link:
+            raise ValueError(f"Attachment {attachment.get('id')} has no download link.")
+        content = await client.download_attachment(download_link)
+        if len(content) > config.DocumentRagConfig.MAX_ATTACHMENT_BYTES:
+            raise ValueError(
+                f"Attachment '{attachment.get('title', '')}' exceeded the size limit while downloading."
+            )
+        hash_value = content_hash(content, str(INGESTION_SCHEMA_VERSION))
+
+        if stored_fingerprint and stored_fingerprint.get("content_hash") == hash_value:
+            if self._attachment_metadata_changed(stored_fingerprint, attachment, parent_page):
+                await self._set_attachment_payload_metadata(
+                    scope, attachment, parent_page, stored_fingerprint, lock_token
+                )
+            fingerprint = self._attachment_fingerprint(
+                attachment,
+                parent_page,
+                hash_value,
+                point_ids=stored_fingerprint.get("point_ids", []),
+            )
+            await self._verify_holder_or_abort(scope, lock_token)
+            await self._fingerprints.save(scope, item_key, fingerprint)
+            return True
+
+        extracted = await extract_attachment_async(attachment.get("title", ""), content)
+        parts = self._build_attachment_parts(space_key, parent_page, attachment, extracted)
+        if parts:
+            await self._verify_holder_or_abort(scope, lock_token)
+            await self._documents_db.upsert_batch(parts, ensure=True)
+        previous_ids = stored_fingerprint.get("point_ids", []) if stored_fingerprint else []
+        current_ids = {part.get_vector_id() for part in parts}
+        stale_ids = [point_id for point_id in previous_ids if point_id not in current_ids]
+        if stale_ids:
+            await self._verify_holder_or_abort(scope, lock_token)
+            await self._documents_db.delete(stale_ids)
+        await self._verify_holder_or_abort(scope, lock_token)
+        await self._fingerprints.save(
+            scope,
+            item_key,
+            self._attachment_fingerprint(
+                attachment,
+                parent_page,
+                hash_value,
+                point_ids=[part.get_vector_id() for part in parts],
+            ),
+        )
+        logger.info(f"Ingested {len(parts)} part(s) of {item_key} in space {space_key}.")
+        return True
+
+    @staticmethod
+    def _attachment_metadata_changed(
+        stored_fingerprint: dict, attachment: dict, parent_page: dict
+    ) -> bool:
+        return (
+            stored_fingerprint.get("page_id") != parent_page.get("id")
+            or stored_fingerprint.get("title") != parent_page.get("title")
+            or stored_fingerprint.get("webui")
+            != parent_page.get("_links", {}).get("webui")
+            or stored_fingerprint.get("attachment_name") != attachment.get("title")
+            or stored_fingerprint.get("media_type") != attachment.get("mediaType")
+        )
+
+    async def _update_attachment_metadata_only(
+        self,
+        scope: str,
+        item_key: str,
+        attachment: dict,
+        parent_page: dict,
+        stored_fingerprint: dict,
+        lock_token: str,
+    ) -> None:
+        await self._set_attachment_payload_metadata(
+            scope, attachment, parent_page, stored_fingerprint, lock_token
+        )
+        fingerprint = self._attachment_fingerprint(
+            attachment,
+            parent_page,
+            stored_fingerprint.get("content_hash", ""),
+            point_ids=stored_fingerprint.get("point_ids", []),
+        )
+        await self._verify_holder_or_abort(scope, lock_token)
+        await self._fingerprints.save(scope, item_key, fingerprint)
+        logger.info(f"Updated metadata of {item_key} in {scope} without re-embedding.")
+
+    async def _set_attachment_payload_metadata(
+        self,
+        scope: str,
+        attachment: dict,
+        parent_page: dict,
+        stored_fingerprint: dict,
+        lock_token: str,
+    ) -> None:
+        point_ids = stored_fingerprint.get("point_ids", [])
+        if not point_ids:
+            return
+        await self._verify_holder_or_abort(scope, lock_token)
+        await self._documents_db.set_payload(
+            {
+                "page_id": parent_page.get("id"),
+                "page_title": parent_page.get("title", ""),
+                "page_url": parent_page.get("_links", {}).get("webui"),
+                "attachment_name": attachment.get("title", ""),
+                "document_name": attachment.get("title", ""),
+                "media_type": attachment.get("mediaType"),
+            },
+            point_ids=point_ids,
+        )
+
+    @staticmethod
+    def _attachment_fingerprint(
+        attachment: dict,
+        parent_page: dict,
+        hash_value: str,
+        point_ids: list[str],
+    ) -> dict:
+        return {
+            "version": attachment.get("version", {}).get("number"),
+            "content_hash": hash_value,
+            "schema_version": INGESTION_SCHEMA_VERSION,
+            "page_id": parent_page.get("id"),
+            "title": parent_page.get("title", ""),
+            "webui": parent_page.get("_links", {}).get("webui"),
+            "attachment_id": attachment.get("id"),
+            "attachment_name": attachment.get("title", ""),
+            "media_type": attachment.get("mediaType"),
+            "item_kind": "attachment",
+            "point_ids": point_ids,
+        }
+
+    @staticmethod
+    def _build_attachment_parts(
+        space_key: str,
+        parent_page: dict,
+        attachment: dict,
+        extracted: ExtractedDocument,
+    ) -> list[DocumentPagePart]:
+        page_title = parent_page.get("title", "")
+        attachment_name = attachment.get("title", "")
+        page_url = parent_page.get("_links", {}).get("webui")
+        parts: list[DocumentPagePart] = []
+        for page_number, page in enumerate(extracted.pages, start=1):
+            breadcrumb = (
+                f"{page_title} > {attachment_name} > page {page_number} "
+                f"of {extracted.total_page_count}"
+            )
+            text_parts = split_text_by_budget(page.text, breadcrumb) or [""]
+            for part_index, text_part in enumerate(text_parts):
+                text = f"{breadcrumb}\n\n{text_part}" if text_part else breadcrumb
+                image = None
+                if part_index == 0 and page.image is not None:
+                    image = base64.b64encode(page.image).decode("ascii")
+                parts.append(
+                    DocumentPagePart(
+                        space_key=space_key,
+                        page_id=str(parent_page.get("id")),
+                        page_title=page_title,
+                        page_url=page_url,
+                        attachment_id=str(attachment.get("id")),
+                        attachment_name=attachment_name,
+                        media_type=attachment.get("mediaType"),
+                        content_kind="attachment",
+                        document_name=attachment_name,
+                        breadcrumb=breadcrumb,
+                        text=text,
+                        page_number=page_number,
+                        page_count=extracted.total_page_count,
+                        part_index=part_index,
+                        image=image,
+                    )
+                )
+        return parts
 
     async def _delete_item(self, scope: str, item_key: str, fingerprint: dict, lock_token: str) -> None:
         """Deletes a removed item's points and fingerprint; a removed page takes its

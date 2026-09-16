@@ -92,7 +92,7 @@ async def test_review_with_attachments_runs_once_per_test_case(agent):
         ]
     )
 
-    with patch.object(agent, "_resolve_attachments", return_value={}):
+    with patch("common.services.jira_attachments.download_issue_attachments", return_value={}):
         feedbacks = await agent._review_test_cases_with_attachments(MagicMock(), "Jira issue content", test_cases)
 
     assert agent.review_agent.run.await_count == 3
@@ -117,7 +117,7 @@ async def test_review_with_attachments_shares_one_token_budget_across_the_runs(a
         ]
     )
 
-    with patch.object(agent, "_resolve_attachments", return_value={}):
+    with patch("common.services.jira_attachments.download_issue_attachments", return_value={}):
         await agent._review_test_cases_with_attachments(MagicMock(), "Jira issue content", test_cases)
 
     usages = {id(call.kwargs["usage"]) for call in agent.review_agent.run.await_args_list}

@@ -165,16 +165,16 @@ class JiraRagSyncRunner:
             return cursor.get("last_update", DEFAULT_LAST_UPDATE)
         # Backwards compatibility: fall back to the legacy ProjectMetadata record.
         legacy_id = ProjectMetadata(project_key=project_key, last_update=DEFAULT_LAST_UPDATE).get_vector_id()
-        points = await self._metadata_db.retrieve(point_ids=[legacy_id])
-        if points and points[0].payload:
-            return points[0].payload.get("last_update", DEFAULT_LAST_UPDATE)
+        record = await self._metadata_db.get_payload_record_if_exists(legacy_id)
+        if record:
+            return record.get("last_update", DEFAULT_LAST_UPDATE)
         return DEFAULT_LAST_UPDATE
 
     @staticmethod
     def _create_jira_client() -> JIRA:
-        if not config.JIRA_BASE_URL or not config.JIRA_USER or not config.JIRA_TOKEN:
-            raise RuntimeError("Jira configuration is missing (JIRA_URL, JIRA_USERNAME, or JIRA_API_TOKEN).")
-        return JIRA(server=config.JIRA_BASE_URL, basic_auth=(config.JIRA_USER, config.JIRA_TOKEN))
+        from common.services.jira_client import build_jira_client
+
+        return build_jira_client()
 
     @staticmethod
     def _fetch_all_issue_ids(jira_client: JIRA, project_key: str) -> list[int]:

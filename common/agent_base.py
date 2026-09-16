@@ -17,14 +17,13 @@ from a2a.server.routes import create_agent_card_routes, create_jsonrpc_routes
 from a2a.server.tasks import InMemoryTaskStore
 from a2a.types import AgentCapabilities, AgentCard, AgentInterface, AgentSkill, Message
 from fastapi import FastAPI
-from jira import JIRA
 from pydantic import BaseModel
 from pydantic_ai import Agent, Tool
 from pydantic_ai.agent import AgentRunResult
 from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.messages import BinaryContent, UserContent
 from pydantic_ai.settings import ThinkingLevel
-from pydantic_ai.tools import AgentDepsT, RunContext, ToolFuncEither
+from pydantic_ai.tools import AgentDepsT, ToolFuncEither
 from pydantic_ai.toolsets import AbstractToolset
 from pydantic_ai.usage import UsageLimits
 
@@ -307,20 +306,6 @@ class AgentBase(ABC):
             await self.vector_db_service.close()
         logger.info("Shutting down.")
 
-    @staticmethod
-    def _resolve_attachments(ctx: RunContext[Any]) -> dict[str, BinaryContent]:
-        """Resolves the attachments downloaded in this run, as binary content for multimodal processing.
-
-        Args:
-            ctx: The run context of the calling tool, carrying the messages of the current run.
-
-        Returns:
-            Dictionary mapping identifier to BinaryContent for valid, supported attachments.
-        """
-        from common.attachment_handler import resolve_attachments
-
-        return resolve_attachments(ctx.messages)
-
     def _compose_card_description(self) -> str:
         """Compose the agent card description from model, version and skill name.
 
@@ -426,7 +411,9 @@ class AgentBase(ABC):
         if not config.JIRA_BASE_URL or not config.JIRA_USER or not config.JIRA_TOKEN:
             logger.error("Jira configuration is missing (JIRA_URL, JIRA_USERNAME, or JIRA_API_TOKEN).")
             raise RuntimeError("Jira configuration is missing (JIRA_URL, JIRA_USERNAME, or JIRA_API_TOKEN).")
-        jira = JIRA(server=config.JIRA_BASE_URL, basic_auth=(config.JIRA_USER, config.JIRA_TOKEN))
+        from common.services.jira_client import build_jira_client
+
+        jira = build_jira_client()
 
         try:
             created_comment = jira.add_comment(issue_key, comment)

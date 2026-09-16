@@ -23,6 +23,7 @@ from pydantic_ai.settings import ThinkingLevel
 
 import config
 from common.agent_base import AgentBase
+from common.models import AgentSkillDeclaration
 
 EXECUTION_AGENT_NAME = "Smoke API Test Executor"
 
@@ -82,9 +83,13 @@ class MockExecutionAgent(AgentBase):
             version=os.environ.get("EXECUTION_AGENT_VERSION", "1.0"),
             output_type=_ExecutionOutput,
             instructions="Unused: this mock returns a fixed result without calling the model.",
-            description=(
-                "Executes automated API and integration test cases against the system under test "
-                "and reports detailed pass/fail execution results."
+            skill=AgentSkillDeclaration(
+                id="smoke-api-test-execution",
+                name="API Test Execution",
+                description=(
+                    "Executes automated API and integration test cases against the system under test "
+                    "and reports detailed pass/fail execution results."
+                ),
             ),
         )
 

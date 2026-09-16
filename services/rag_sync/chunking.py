@@ -53,11 +53,20 @@ def chunk_page_body(markdown: str, page_title: str) -> list[PageChunk]:
         if not text:
             continue
         full_breadcrumb = f"{page_title} > {breadcrumb}" if breadcrumb else page_title
-        # The budget includes the breadcrumb (plus the separating blank line).
-        text_budget = max(budget - len(full_breadcrumb) - 2, 1)
-        for piece in _split_by_budget(text, text_budget):
+        for piece in split_text_by_budget(text, full_breadcrumb, budget):
             chunks.append(PageChunk(breadcrumb=full_breadcrumb, text=piece, index=len(chunks)))
     return chunks
+
+
+def split_text_by_budget(text: str, breadcrumb: str, budget: int | None = None) -> list[str]:
+    """Splits text so each breadcrumb-prefixed piece fits the configured budget."""
+    if not text:
+        return []
+    character_budget = budget or (
+        config.DocumentRagConfig.CHUNK_MAX_TOKENS * config.DocumentRagConfig.CHARACTERS_PER_TOKEN
+    )
+    text_budget = max(character_budget - len(breadcrumb) - 2, 1)
+    return _split_by_budget(text, text_budget)
 
 
 def _split_sections(markdown: str) -> list[tuple[str, str]]:

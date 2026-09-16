@@ -187,7 +187,7 @@ class TestTriggerModes:
             trigger = RagSyncTrigger(metadata_db)
             yield trigger, lock_store
 
-    async def test_local_mode_forwards_to_service(self, trigger, monkeypatch):
+    async def test_local_mode_forwards_to_service_with_lock_token(self, trigger, monkeypatch):
         trigger_obj, lock_store = trigger
         state = MagicMock()
         state.acquired = True
@@ -210,7 +210,7 @@ class TestTriggerModes:
 
         assert result["status_code"] == 200
         http.post.assert_awaited_once_with(
-            "http://local-sync:8080/sync/jira", json={"project_key": "PROJ"}, headers={}
+            "http://local-sync:8080/sync/jira", json={"project_key": "PROJ", "lock_token": "tok"}, headers={}
         )
 
     async def test_neither_mode_configured_raises(self, trigger, monkeypatch):
@@ -232,4 +232,53 @@ class TestTriggerModes:
 
         with pytest.raises(SyncTriggerError, match="already running"):
             await trigger_obj.trigger("jira", "PROJ", ["--project-key", "PROJ"])
+        main.config.RagSyncConfig.JOB_NAME = None
+
+    async def test_definite_job_failure_releases_the_lock(self, trigger):
+        from google.api_core.exceptions import PermissionDenied
+
+        trigger_obj, lock_store = trigger
+        main.config.RagSyncConfig.JOB_NAME = "projects/p/locations/us-central1/jobs/rag-sync"
+        main.config.RagSyncConfig.SERVICE_URL = None
+        state = MagicMock()
+        state.acquired = True
+        state.lock_info = {"holder_token": "tok"}
+        lock_store.acquire.return_value = state
+        trigger_obj._metadata_db.get_payload_record = AsyncMock(return_value={"holder_token": "tok"})
+        lock_store.release = AsyncMock(return_value=True)
+
+        with (
+            patch(
+                "orchestrator.rag_sync_trigger.RagSyncTrigger._start_job",
+                side_effect=PermissionDenied("denied"),
+            ),
+            pytest.raises(SyncTriggerError) as exc_info,
+        ):
+            await trigger_obj.trigger("jira", "PROJ", ["--project-key", "PROJ"])
+
+        assert exc_info.value.start_confirmed is True
+        trigger_obj._metadata_db.get_payload_record.assert_awaited_with("sync-lock-jira:PROJ")
+        lock_store.release.assert_called_once()
+        main.config.RagSyncConfig.JOB_NAME = None
+
+    async def test_unconfirmed_job_failure_keeps_the_lock(self, trigger):
+        trigger_obj, lock_store = trigger
+        main.config.RagSyncConfig.JOB_NAME = "projects/p/locations/us-central1/jobs/rag-sync"
+        main.config.RagSyncConfig.SERVICE_URL = None
+        state = MagicMock()
+        state.acquired = True
+        state.lock_info = {"holder_token": "tok"}
+        lock_store.acquire.return_value = state
+
+        with (
+            patch(
+                "orchestrator.rag_sync_trigger.RagSyncTrigger._start_job",
+                side_effect=TimeoutError("the Admin API call timed out"),
+            ),
+            pytest.raises(SyncTriggerError) as exc_info,
+        ):
+            await trigger_obj.trigger("jira", "PROJ", ["--project-key", "PROJ"])
+
+        assert exc_info.value.start_confirmed is False
+        lock_store.release.assert_not_called()
         main.config.RagSyncConfig.JOB_NAME = None

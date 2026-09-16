@@ -94,7 +94,9 @@ class TestCaseReviewAgent(AgentBase):
             Test case review feedbacks with improvement suggestions for each test case.
         """
 
-        attachments_content = self._resolve_attachments(ctx)
+        from common.services.jira_attachments import download_issue_attachments
+
+        attachments_content = download_issue_attachments(ctx.deps.key)
         attachment_parts: list[str | BinaryContent] = []
         for filename, binary_content in (attachments_content or {}).items():
             attachment_parts.append(f"Attachment: {filename}")

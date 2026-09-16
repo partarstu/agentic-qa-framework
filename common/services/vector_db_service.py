@@ -20,6 +20,26 @@ DENSE_VECTOR_NAME = "dense"
 SPARSE_VECTOR_NAME = "sparse"
 
 
+# Payload fields indexed per collection kind after creation (WS7 plan table):
+# matching is by collection name from configuration.
+_DOCUMENTS_INDEXED_FIELDS = {
+    "space_key": models.PayloadSchemaType.KEYWORD,
+    "page_id": models.PayloadSchemaType.KEYWORD,
+    "attachment_id": models.PayloadSchemaType.KEYWORD,
+    "document_name": models.PayloadSchemaType.KEYWORD,
+    "content_kind": models.PayloadSchemaType.KEYWORD,
+}
+_JIRA_INDEXED_FIELDS = {
+    "project_key": models.PayloadSchemaType.KEYWORD,
+    "issue_type": models.PayloadSchemaType.KEYWORD,
+    "status": models.PayloadSchemaType.KEYWORD,
+}
+_METADATA_INDEXED_FIELDS = {
+    "scope": models.PayloadSchemaType.KEYWORD,
+    "kind": models.PayloadSchemaType.KEYWORD,
+}
+
+
 def _record_uuid(record_id: str) -> str:
     """Deterministic UUID for a metadata record, derived from its ID.
 
@@ -154,8 +174,37 @@ class VectorDbService:
             else:
                 raise e
 
+        await self._ensure_payload_indexes()
+
         if self._metadata_db is not None:
             await self._metadata_db._store_model_identity(self.collection_name, model)
+
+    def _indexed_fields(self) -> dict[str, models.PayloadSchemaType]:
+        """The payload fields this collection should have indexes on (WS7)."""
+        if self._metadata_collection_name:
+            return _JIRA_INDEXED_FIELDS if self.collection_name != self._metadata_collection_name else _METADATA_INDEXED_FIELDS
+        if self.collection_name == config.DocumentRagConfig.DOCUMENTS_COLLECTION_NAME:
+            return _DOCUMENTS_INDEXED_FIELDS
+        return {}
+
+    async def _ensure_payload_indexes(self) -> None:
+        """Creates the plan's payload indexes for this collection; idempotent.
+
+        A concurrent creation raises an 'already exists' error, which is tolerated.
+        """
+        for field_name, field_type in self._indexed_fields().items():
+            try:
+                await self.client.create_payload_index(
+                    collection_name=self.collection_name,
+                    field_name=field_name,
+                    field_schema=field_type,
+                )
+                logger.info(f"Created payload index on {field_name} in {self.collection_name}.")
+            except Exception as e:
+                if "already exists" in str(e).lower():
+                    logger.info(f"Payload index on {field_name} in {self.collection_name} already exists.")
+                else:
+                    raise
 
     async def _verify_model_identity(self, model: str) -> None:
         """Fails with a clear error when the collection's vectors come from a different model.
@@ -258,32 +307,6 @@ class VectorDbService:
                 query=models.FusionQuery(fusion=models.Fusion.RRF),
                 limit=limit,
                 with_payload=with_payload,
-            )
-            return response.points
-        except Exception:
-            logger.exception("Error querying Vector DB")
-            raise
-
-    async def search(
-        self,
-        query_text: str,
-        limit: int = 5,
-        score_threshold: float = 0.7,
-        query_filter: models.Filter | None = None,
-    ) -> list[models.ScoredPoint]:
-        """Backward-compatible dense-only search. New callers should prefer hybrid_search."""
-        logger.info(f"Starting vector DB similarity search in '{self.collection_name}'...")
-        try:
-            if not await self._collection_exists():
-                logger.warning(f"Collection {self.collection_name} doesn't exist yet in DB")
-                return []
-            embedding = await self._get_embedding(query_text)
-            response = await self.client.query_points(
-                collection_name=self.collection_name,
-                query=embedding,
-                limit=limit,
-                score_threshold=score_threshold,
-                query_filter=query_filter,
             )
             return response.points
         except Exception:
@@ -491,6 +514,16 @@ class VectorDbService:
             logger.exception(f"Error reading record {record_id} from {self.collection_name}")
             raise
 
+    async def get_payload_record_if_exists(self, record_id: str) -> dict | None:
+        """Read one record's payload without creating the collection.
+
+        Returns None when the collection doesn't exist yet, so legacy-format reads
+        never materialize a collection with the wrong (vector) schema (A7).
+        """
+        if not await self._collection_exists():
+            return None
+        return await self.get_payload_record(record_id)
+
     async def scroll_payload_records(self, filter_by: dict) -> list[dict]:
         """Scrolls every payload record whose fields match ``filter_by`` exactly.
 
@@ -540,6 +573,7 @@ class VectorDbService:
                 collection_name=self.collection_name,
                 vectors_config={},
             )
+            await self._ensure_payload_indexes()
             logger.info(f"Created vectorless metadata collection {self.collection_name}.")
         except Exception as e:
             if "already exists" in str(e).lower() or "conflict" in str(e).lower():

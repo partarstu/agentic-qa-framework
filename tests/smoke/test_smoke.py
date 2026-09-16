@@ -418,7 +418,7 @@ def test_rag_sync_upserted_seeded_story_into_vector_db(
     )
 
 
-# --- Confluence documents ingestion (WS9a: local mode via the sync service) ---------------
+# --- Confluence documents ingestion (WS9: local mode via the sync service) ----------------
 
 
 def test_update_confluence_db_webhook_accepted(update_confluence_db_response: httpx.Response) -> None:
@@ -427,7 +427,7 @@ def test_update_confluence_db_webhook_accepted(update_confluence_db_response: ht
         f"{update_confluence_db_response.status_code} {update_confluence_db_response.text}"
     )
     details = update_confluence_db_response.json().get("details", {})
-    assert details.get("processed_count", 0) >= 1, f"The Confluence sync processed no pages: {details}"
+    assert details.get("processed_count", 0) >= 3, f"The Confluence sync processed too few items: {details}"
     assert details.get("status") == "completed", f"The Confluence sync did not complete cleanly: {details}"
 
 
@@ -460,8 +460,14 @@ def test_confluence_page_chunks_reached_vector_db_with_breadcrumbs(
     assert "Password Reset Requirements" in first_payload.get("breadcrumb", ""), (
         f"The chunk carries no breadcrumb prefix: {first_payload}"
     )
-    assert "reset link" in first_payload.get("text", "").lower(), (
-        f"The chunk text doesn't carry the page content: {first_payload}"
+    section_payloads = [
+        p["payload"]
+        for p in chunk_upserts
+        if p["payload"].get("breadcrumb") == "Password Reset Requirements > Reset Link Policy"
+    ]
+    assert section_payloads, f"No chunk carries the section breadcrumb: {[p['payload'] for p in chunk_upserts]}"
+    assert "reset link stays valid for 60 minutes" in section_payloads[0].get("text", "").lower(), (
+        f"The section chunk doesn't carry the section content: {section_payloads[0]}"
     )
     assert DOCUMENTS_COLLECTION_NAME in data.get("created_collections", []), (
         f"The documents collection was never created. Recorded: {data}"
@@ -475,11 +481,54 @@ def test_confluence_page_chunks_reached_vector_db_with_breadcrumbs(
     assert confluence.get("page_fetches"), "The sync never fetched the page body."
 
 
+def test_confluence_attachment_pages_reached_vector_db_with_chain_and_image(
+    update_confluence_db_response: httpx.Response, http_client: httpx.Client
+) -> None:
+    """The seeded PDF and PNG must be downloaded and stored as attachment page records."""
+    data = wait_for_recorded(
+        http_client,
+        QDRANT_RECORDED_URL,
+        lambda d: len(
+            {
+                p.get("payload", {}).get("attachment_name")
+                for p in d.get("upserted_points", [])
+                if p.get("collection") == DOCUMENTS_COLLECTION_NAME
+                and p.get("payload", {}).get("content_kind") == "attachment"
+            }
+        )
+        >= 2,
+    )
+    attachment_payloads = [
+        point["payload"]
+        for point in data.get("upserted_points", [])
+        if point.get("collection") == DOCUMENTS_COLLECTION_NAME
+        and point.get("payload", {}).get("content_kind") == "attachment"
+    ]
+    by_name = {payload["attachment_name"]: payload for payload in attachment_payloads}
+    assert {"reset-policy.pdf", "flow-diagram.png"}.issubset(by_name), (
+        f"Both seeded attachments did not reach the vector DB: {attachment_payloads}"
+    )
+    pdf = by_name["reset-policy.pdf"]
+    assert pdf.get("page_number") == 1 and pdf.get("page_count") == 1, pdf
+    assert "Password Reset Requirements > reset-policy.pdf > page 1 of 1" in pdf.get("text", ""), pdf
+    assert "links expire after 60 minutes" in pdf.get("text", ""), pdf
+    assert pdf.get("image"), f"The rendered PDF page image is missing: {pdf}"
+    image = by_name["flow-diagram.png"]
+    assert image.get("page_number") == 1 and image.get("page_count") == 1, image
+    assert image.get("image"), f"The normalized PNG page image is missing: {image}"
+
+    confluence = http_client.get(CONFLUENCE_RECORDED_URL).json()
+    downloaded = {item.get("filename") for item in confluence.get("attachment_downloads", [])}
+    assert {"reset-policy.pdf", "flow-diagram.png"}.issubset(downloaded), (
+        f"The sync did not download both attachments: {confluence}"
+    )
+
+
 def test_second_confluence_sync_reembeds_nothing(
     update_confluence_db_response: httpx.Response, http_client: httpx.Client, webhook_headers: dict[str, str]
 ) -> None:
     """A second sync of the unchanged space must skip on the version check: no new
-    embedding calls, and the response reports zero processed pages."""
+    embedding calls, and the response reports zero processed items."""
     before = wait_for_recorded(
         http_client,
         QDRANT_RECORDED_URL,
@@ -499,11 +548,11 @@ def test_second_confluence_sync_reembeds_nothing(
     )
     assert response.status_code == 200, f"The second sync failed: {response.status_code} {response.text}"
     details = response.json().get("details", {})
-    assert details.get("processed_count", 0) == 0, f"The second sync re-processed pages: {details}"
+    assert details.get("processed_count", 0) == 0, f"The second sync re-processed items: {details}"
 
     after = http_client.get(QDRANT_RECORDED_URL).json()
     assert len(after.get("embedding_calls", [])) == embedding_calls_before, (
-        "The second sync re-embedded the unchanged page: "
+        "The second sync re-embedded unchanged Confluence items: "
         f"{len(after.get('embedding_calls', []))} vs {embedding_calls_before} calls"
     )
 

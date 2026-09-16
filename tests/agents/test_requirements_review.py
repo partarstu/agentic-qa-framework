@@ -22,6 +22,7 @@ def mock_config(monkeypatch):
     monkeypatch.setattr(config, "AGENT_BASE_URL", "http://localhost")
     monkeypatch.setattr(config, "JIRA_MCP_SERVER_URL", "http://jira")
     monkeypatch.setattr(config, "MCP_SERVER_TIMEOUT_SECONDS", 30)
+    monkeypatch.setattr(config.QdrantConfig, "EMBEDDING_SERVICE_URL", "")
 
 
 @patch("agents.requirements_review.main.RequirementsReviewSystemPrompt")

@@ -91,6 +91,11 @@ class RagSyncTrigger:
         except SyncTriggerError:
             raise
         except Exception as e:
+            if _is_definite_start_failure(e):
+                # The Admin API rejected the request, so no execution exists: the lock
+                # is released immediately instead of waiting out the start allowance.
+                await self.release_on_definite_failure(source, scope_id)
+                raise SyncTriggerError(f"Failed to start the RAG sync for scope {scope}: {e}", start_confirmed=True) from e
             # The start failed; whether an execution exists is unconfirmed. The lock is
             # kept so the start allowance can expire before a takeover.
             raise SyncTriggerError(f"Failed to start the RAG sync for scope {scope}: {e}", start_confirmed=False) from e
@@ -124,7 +129,9 @@ class RagSyncTrigger:
 
     async def _run_locally(self, source: str, runner_args: list[str], token: str):
         """Forwards the request to the local sync service and awaits the result."""
-        payload = self._local_payload(source, runner_args)
+        # The lock is already held by this request, so the runner must continue under its token
+        # instead of trying (and failing) to acquire the same lock again.
+        payload = {**self._local_payload(source, runner_args), "lock_token": token}
         headers = {}
         if config.INTERNAL_SERVICE_API_KEY:
             headers["X-API-Key"] = config.INTERNAL_SERVICE_API_KEY
@@ -167,3 +174,16 @@ class RagSyncTrigger:
         lock = await self._metadata_db.get_payload_record(f"sync-lock-{scope}")
         if lock and lock.get("holder_token"):
             await self._lock_store.release(scope, lock["holder_token"])
+
+
+def _is_definite_start_failure(error: Exception) -> bool:
+    """True when the Cloud Run Admin API itself rejected the start (4xx class).
+
+    Permission denied, job not found and invalid-argument errors mean no execution
+    was created. Timeouts, dropped connections and 5xx responses stay unconfirmed.
+    """
+    try:
+        from google.api_core.exceptions import GoogleAPICallError  # type: ignore[import-untyped]
+    except ImportError:
+        return False
+    return isinstance(error, GoogleAPICallError) and 400 <= error.code < 500

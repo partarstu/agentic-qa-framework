@@ -404,3 +404,23 @@ class DocumentRagConfig:
     # Chunk token budget for page bodies, breadcrumb included; 1 token ~ 4 characters.
     CHUNK_MAX_TOKENS = int(os.environ.get("RAG_CHUNK_MAX_TOKENS", "512"))
     CHARACTERS_PER_TOKEN = 4
+
+    # --- Attachment ingestion (WS9b) ---
+    # Checked against the listed size before any download. The default matches the
+    # current Gemini API inline-data limit.
+    MAX_ATTACHMENT_BYTES = int(os.environ.get("RAG_MAX_ATTACHMENT_BYTES", str(100 * 1024 * 1024)))
+    # Hard cap on rendered/ingested pages per document; pages beyond it are skipped
+    # and the true total page count is still recorded.
+    MAX_PAGES_PER_DOCUMENT = int(os.environ.get("RAG_MAX_PAGES_PER_DOCUMENT", "200"))
+    # Render resolution for PDF page rasterization.
+    RENDER_DPI = int(os.environ.get("RAG_RENDER_DPI", "150"))
+    # Maximum pixel dimension of a normalized page image (decompression-bomb guard).
+    MAX_IMAGE_PIXELS = int(os.environ.get("RAG_MAX_IMAGE_PIXELS", "4096"))
+    # Headless LibreOffice conversion of office formats to PDF. When disabled or the
+    # binary is missing, formats that need conversion are skipped with a warning.
+    OFFICE_CONVERSION_ENABLED = os.environ.get("RAG_OFFICE_CONVERSION_ENABLED", "true").lower() in ("true", "1", "t")
+    OFFICE_CONVERSION_TIMEOUT_SECONDS = int(os.environ.get("RAG_OFFICE_CONVERSION_TIMEOUT_SECONDS", "120"))
+    # Bounded concurrent LibreOffice invocations (it dislikes parallel profiles).
+    OFFICE_CONVERSION_CONCURRENCY = int(os.environ.get("RAG_OFFICE_CONVERSION_CONCURRENCY", "1"))
+    # A page with native text below this many characters counts as image-only (full-page OCR).
+    OCR_TEXT_THRESHOLD_CHARACTERS = int(os.environ.get("RAG_OCR_TEXT_THRESHOLD_CHARACTERS", "20"))

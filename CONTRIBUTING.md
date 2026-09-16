@@ -7,6 +7,8 @@ the comment to the PR.
 Pycharm's default Code Formatter is currently being used in this project. The corresponding config has been exported into 
 [this XML](code_style/pycharm.xml) for IntelliJ users.
 
+Python code must follow the [Python Development Guidelines](PYTHON_GUIDELINES.md).
+
 Commits should be small and compilable.
 
 In order to start any contribution work, first you need to create a custom branch from the main branch. After your changes are completed, 

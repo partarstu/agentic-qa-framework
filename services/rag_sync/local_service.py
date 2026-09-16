@@ -46,6 +46,7 @@ def _require_service_auth(x_api_key: str | None = Header(default=None)) -> None:
 
 class JiraSyncRequest(BaseModel):
     project_key: str = Field(min_length=1, description="The Jira project key to synchronize.")
+    lock_token: str | None = Field(default=None, description="Holder token issued by the orchestrator, if any.")
 
 
 class ConfluenceSyncRequest(BaseModel):
@@ -63,7 +64,7 @@ async def sync_jira(request: JiraSyncRequest, _: None = Depends(_require_service
     """Runs the Jira sync inline and returns the result."""
     from rag_sync.jira_sync import JiraRagSyncRunner
 
-    result = await JiraRagSyncRunner().sync_project(request.project_key)
+    result = await JiraRagSyncRunner().sync_project(request.project_key, lock_token=request.lock_token)
     return {"message": "Jira sync completed.", "details": result.model_dump()}
 
 
@@ -80,6 +81,7 @@ async def sync_confluence(request: ConfluenceSyncRequest, _: None = Depends(_req
             page_id=str(request.page_id) if request.page_id else None,
             attachment_name_pattern=request.attachment_name_pattern,
             skip_page_body=request.skip_page_body,
+            lock_token=request.lock_token,
         )
     except RuntimeError as e:
         raise HTTPException(status_code=409, detail=str(e)) from e

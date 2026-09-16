@@ -50,9 +50,9 @@ Decide and justify each point that applies:
   service, or an A/B baseline refresh when agent output changes intentionally). Otherwise state that none is needed.
 - **Security**: external input validated with Pydantic, secrets only from env vars, new endpoints behind
   `_validate_api_key`, untrusted text reaching an LLM screened by the prompt-injection guard.
-- **Dependencies**: prefer the standard library and existing dependencies. A new package must be maintained,
-  compatible with AGPL-3.0-only and clean under `uv audit`; it goes in the correct `pyproject.toml` table, followed by
-  `uv lock`.
+- **Python design**: data models, error handling and the concurrency model follow `PYTHON_GUIDELINES.md` (§ 5, § 7,
+  § 9).
+- **Dependencies**: a new package must meet `PYTHON_GUIDELINES.md` § 15.
 - **Configuration**: new settings go in `config.py`, read from SCREAMING_SNAKE_CASE env vars, and are documented in the
   README *Environment Variables* block.
 
@@ -70,6 +70,7 @@ security-sensitive choices. Do not start implementing before the user approves.
 
 | Change                               | Continue with                                 |
 |--------------------------------------|-----------------------------------------------|
+| Implement with review and test loops | `implementing-changes`                        |
 | New agent                            | `creating-new-agent`                          |
 | New or extended orchestrator workflow | `adding-orchestrator-workflow`               |
 | Tests                                | `writing-unit-tests`, `running-unit-tests`    |

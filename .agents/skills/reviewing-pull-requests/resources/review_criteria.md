@@ -4,6 +4,7 @@
 
 - Severity levels
 - Correctness and design
+- Python guidelines (PYTHON_GUIDELINES.md)
 - Project rules (AGENTS.md)
 - QuAIA-specific checks
 - Architecture as code (CALM)
@@ -11,35 +12,38 @@
 
 ## Severity levels
 
-| Prefix         | Use for                                                                                      |
-|----------------|----------------------------------------------------------------------------------------------|
-| `[CRITICAL]`   | Must fix before merge: security hole, data loss, broken behaviour, failing CI gate           |
-| `[MAJOR]`      | Should fix: bug risk, missing tests, missing CALM or smoke update, AGENTS.md violation        |
-| `[MINOR]`      | Naming, style or small clarity issues                                                        |
-| `[SUGGESTION]` | Optional improvement or alternative approach                                                 |
-| `[QUESTION]`   | Intent is unclear; ask the author                                                            |
+| Prefix       | Use for                                                                                                    |
+|--------------|------------------------------------------------------------------------------------------------------------|
+| `[CRITICAL]` | Security hole, data loss, broken behaviour, failing CI gate                                                |
+| `[HIGH]`     | Bug risk or unhandled edge case, missing tests, missing CALM or smoke update                               |
+| `[MEDIUM]`   | AGENTS.md or PYTHON_GUIDELINES.md violation, duplicated logic, code the change does not need               |
+| `[LOW]`      | Naming, style or small clarity issues, optional improvement or alternative approach                        |
+
+CRITICAL, HIGH and MEDIUM findings must be fixed before merge; LOW findings are optional. When the intent of the code is
+unclear, rate the finding by the risk it carries if the code is wrong.
 
 ## Correctness and design
 
 Review these first; they matter more than style.
 
 - Logic errors and unhandled edge cases: `None`, empty collections, timeouts, partial failures.
-- Async pitfalls: un-awaited coroutines, blocking calls inside `async def`, shared state mutated without a lock,
-  fire-and-forget tasks whose exceptions are lost.
-- Exceptions: no bare `except:`, nothing swallowed silently, `except HTTPException: raise` before a generic
-  `except Exception` in endpoints.
+- Concurrency and exception-handling defects (`PYTHON_GUIDELINES.md` § 7 and § 9).
+- `except HTTPException: raise` before a generic `except Exception` in endpoints.
 - Logic duplicated from `common/` or `orchestrator/` instead of reused.
 - Abstractions, options or code beyond what the change needs.
+
+## Python guidelines (PYTHON_GUIDELINES.md)
+
+Check every changed Python line, tests included, against `PYTHON_GUIDELINES.md` and cite the section in the comment
+(e.g. "`PYTHON_GUIDELINES.md` § 4") instead of restating the rule.
 
 ## Project rules (AGENTS.md)
 
 Check the changed code against the coding guidelines in `AGENTS.md` and cite the rule in the comment instead of
 restating it. The most frequent findings:
 
-- Missing type hints or docstrings on public functions and classes.
 - Unrelated reformatting or refactoring mixed into the diff.
 - Secrets in code, or external input used without validation.
-- Dependencies in the wrong `pyproject.toml` table, or `uv.lock` not regenerated.
 - New `.py` files without the SPDX header used by existing files.
 - Config keys not in snake_case, environment variables not in SCREAMING_SNAKE_CASE.
 
@@ -65,7 +69,7 @@ component topology, check that:
 - A new or changed security control (authentication, prompt-injection protection) appears as a `controls` block on the
   relevant node or relationship.
 
-A PR that adds an agent or integration without the CALM update is incomplete: `[MAJOR]`.
+A PR that adds an agent or integration without the CALM update is incomplete: `[HIGH]`.
 
 ## Hermetic smoke suite
 
@@ -78,5 +82,5 @@ behaviour, check that:
 - An intentional change to agent output comes with a refreshed baseline under `tests/smoke/baselines/`, not loosened
   checks.
 
-A PR that adds or extends an end-to-end flow without smoke coverage is incomplete: `[MAJOR]`. A pure internal refactor
+A PR that adds or extends an end-to-end flow without smoke coverage is incomplete: `[HIGH]`. A pure internal refactor
 is exempt; confirm that it really is one.

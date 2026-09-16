@@ -1,6 +1,6 @@
 ---
 name: reviewing-pull-requests
-description: Reviews a GitHub pull request of the QuAIA repository against AGENTS.md and the project review criteria, then posts the findings as a single GitHub review with inline comments once the user approves. Use when the user asks to review a PR, either by number or the PR of the current branch.
+description: Reviews a GitHub pull request of the QuAIA repository against AGENTS.md, PYTHON_GUIDELINES.md and the project review criteria, then posts the findings as a single GitHub review with inline comments once the user approves. Use when the user asks to review a PR, either by number or the PR of the current branch.
 ---
 
 # Reviewing Pull Requests
@@ -62,10 +62,10 @@ Write the review as JSON to a temporary file outside the repository:
 {
   "commit_id": "<headRefOid>",
   "event": "COMMENT",
-  "body": "## Review summary\n\nFiles reviewed: <n> | Critical: <n> | Major: <n> | Minor: <n> | Suggestions: <n>\n\n<Key findings and issues outside the diff>",
+  "body": "## Review summary\n\nFiles reviewed: <n> | Critical: <n> | High: <n> | Medium: <n> | Low: <n>\n\n<Key findings and issues outside the diff>",
   "comments": [
-    {"path": "agents/foo/main.py", "line": 25, "side": "RIGHT", "body": "[MAJOR] <problem>\n\nSuggested fix: <fix>"},
-    {"path": "common/models.py", "start_line": 10, "start_side": "RIGHT", "line": 14, "side": "RIGHT", "body": "[MINOR] <problem>"}
+    {"path": "agents/foo/main.py", "line": 25, "side": "RIGHT", "body": "[HIGH] <problem>\n\nSuggested fix: <fix>"},
+    {"path": "common/models.py", "start_line": 10, "start_side": "RIGHT", "line": 14, "side": "RIGHT", "body": "[LOW] <problem>"}
   ]
 }
 ```

@@ -63,7 +63,7 @@ jobs:
           sudo apt-get install -y libmagic1
 
       - name: Install dependencies
-        run: uv sync --frozen --python ${{ matrix.python-version }}
+        run: uv sync --frozen --python ${{ matrix.python-version }} --extra rag-sync
 
       - name: Run tests with coverage
         run: |

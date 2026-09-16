@@ -107,12 +107,27 @@ class ConfluenceClient:
                 return None
             raise
 
+    async def list_page_attachments(self, page_id: str) -> list[dict]:
+        """Lists one page's attachments, metadata only (id, title, media type, size,
+        version, download link). Filtered to current status; the name pattern is
+        applied by the caller, which also knows the skip flags."""
+        return await self._get_paginated(
+            f"/pages/{page_id}/attachments",
+            {
+                "limit": config.DocumentRagConfig.LIST_PAGE_SIZE,
+                "status": ["current"],
+                "sort": "created",
+            },
+        )
+
     async def download_attachment(self, download_link: str) -> bytes:
-        """Downloads an attachment's bytes through its absolute download link."""
+        """Downloads an attachment's bytes through its listed download link, which is
+        relative to the site's ``/wiki`` context path (not to the API base URL)."""
+        download_url = f"{self._base_url}/wiki{download_link}"
         max_retries = config.DocumentRagConfig.CONFLUENCE_MAX_RETRIES
         for attempt in range(max_retries):
             try:
-                response = await self._client.get(download_link)
+                response = await self._client.get(download_url)
             except httpx.TimeoutException as e:
                 if attempt == max_retries - 1:
                     raise ConfluenceApiError(f"Attachment download timed out: {e}") from e

@@ -5,7 +5,8 @@ description: Adds a workflow endpoint to the QuAIA orchestrator that receives a 
 
 # Adding an Orchestrator Workflow
 
-Workflow endpoints live in `orchestrator/main.py`. Model new ones on the closest existing endpoint:
+Workflow endpoints live in `orchestrator/main.py`. All Python code follows `PYTHON_GUIDELINES.md`. Model new endpoints
+on the closest existing one:
 
 | Pattern                                         | Reference                                                                 |
 |-------------------------------------------------|---------------------------------------------------------------------------|
@@ -40,8 +41,7 @@ Start from [resources/endpoint_template.py](resources/endpoint_template.py). Rul
 - Put `except HTTPException: raise` before `except Exception`. Otherwise the 4xx raised by `_handle_exception` becomes
   a 500 and the error is recorded twice.
 - Workflows that must not overlap run inside `async with execution_lock:`.
-- Fan out to agents with `asyncio.gather`; pass `return_exceptions=True` when one failed item must not abort the rest,
-  and log each failure.
+- Fan out to agents concurrently as `PYTHON_GUIDELINES.md` § 9 describes.
 - If Jira calls the endpoint, add a `<NAME>_WEBHOOK_URL` constant next to the existing ones in `config.py`.
 
 Helpers available in `orchestrator/main.py`:

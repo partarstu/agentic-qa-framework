@@ -5,6 +5,8 @@ description: Writes pytest unit tests for QuAIA agents, orchestrator endpoints a
 
 # Writing Unit Tests
 
+Tests follow `PYTHON_GUIDELINES.md`, in particular § 13 Testing. This skill adds the project's setup and conventions.
+
 ## Setup facts
 
 - `pytest.ini` sets `pythonpath = .`, `testpaths = tests`, `asyncio_mode = auto` (async tests need no marker; match
@@ -38,20 +40,18 @@ Read the closest existing test before writing a new one, and reuse its fixtures 
    Patching `orchestrator.main._validate_api_key` does nothing, because `Depends` already holds the original function.
 3. **Error recording**: `_handle_exception` and `_record_error` schedule `error_history.add` on the running loop. Tests
    reaching them must be `async def` and patch `orchestrator.main.error_history`.
-4. **Patch where a name is used** (`agents.<agent_name>.main.config`, `orchestrator.main._send_task_to_agent`), and use
-   `AsyncMock` for coroutines.
+4. **Patch targets** are the modules that use a name: `agents.<agent_name>.main.config`,
+   `orchestrator.main._send_task_to_agent`.
 5. **Configuration**: override values with `monkeypatch.setattr(config.<Name>Config, "FIELD", value)` or by patching the
    module's `config`; never assign to config globals directly.
 6. **Module-global state** such as the agent registry must be reset by a fixture, as `clear_registry` does in
    `tests/orchestrator/test_orchestrator_logic.py`.
-7. **No real I/O**: mock every boundary — LLM models, MCP toolsets, Jira, Qdrant, test management clients, `httpx`.
+7. **Boundaries to mock**: LLM models, MCP toolsets, Jira, Qdrant, test management clients, `httpx`.
 
 ## What to cover
 
-- The success path and every failure path the code handles explicitly (raised `HTTPException` status, returned
-  `AgentExecutionError`, logged-and-continued errors).
-- Edge cases the code branches on: `None`, empty collections, missing fields.
-- Use `pytest.mark.parametrize` when the same assertion runs over several inputs.
+Cover what `PYTHON_GUIDELINES.md` § 13 requires. The failure paths this project's code handles explicitly are usually a
+raised `HTTPException` status, a returned `AgentExecutionError` and logged-and-continued errors.
 
 Unit tests do not replace the hermetic smoke suite: when a change adds or extends an end-to-end flow, `tests/smoke/`
 must be updated too (see *Hermetic smoke suite* in `AGENTS.md`).

@@ -1,6 +1,6 @@
 ---
 name: preparing-pull-requests
-description: Prepares the current branch of the QuAIA repository for a pull request by running the CI checks locally (ruff, pytest, bandit, uv audit, CALM validation), checking license headers, documentation and smoke-suite coverage, then committing, pushing and opening the PR once the user approves. Use when the user wants to open a PR or get a branch ready for review.
+description: Prepares the current branch of the QuAIA repository for a pull request by running the CI checks locally (ruff, pytest, bandit, uv audit, CALM validation), checking compliance with PYTHON_GUIDELINES.md, license headers, documentation and smoke-suite coverage, then committing, pushing and opening the PR once the user approves. Use when the user wants to open a PR or get a branch ready for review.
 ---
 
 # Preparing Pull Requests
@@ -14,7 +14,7 @@ Copy this checklist and track progress:
 
 ```
 - [ ] 1. Determine the scope
-- [ ] 2. Lint and format
+- [ ] 2. Lint, format and Python guidelines
 - [ ] 3. License headers
 - [ ] 4. Unit tests
 - [ ] 5. Security and dependency checks
@@ -37,7 +37,7 @@ git ls-files --others --exclude-standard
 The union of both lists (committed, uncommitted and untracked changes) is the scope of every following step. Ask the
 user about untracked files that look unrelated to the change.
 
-## 2. Lint and format
+## 2. Lint, format and Python guidelines
 
 ```bash
 uv run ruff check --fix <changed .py files>
@@ -48,6 +48,9 @@ uv run ruff check .
 Fix and format only files in scope; formatting the whole repository rewrites code this change does not touch. The
 final `ruff check .` is the CI gate and must pass. Fix remaining findings by hand and ask the user only when a fix
 would change behaviour.
+
+ruff enforces only part of `PYTHON_GUIDELINES.md`. Read the changed Python code against the whole document and fix
+violations in the lines this change touches; report the ones whose fix would change behaviour to the user.
 
 ## 3. License headers
 

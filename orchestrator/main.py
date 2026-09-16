@@ -747,7 +747,7 @@ async def review_jira_requirements(request: Request, api_key: str = Depends(_val
         logger.info("Received an event from Jira, requesting requirements review from an agent.")
         user_story_id = await _get_jira_issue_key_from_request(request)
         task_description = f"Review the Jira user story {user_story_id}"
-        completed_task = await _send_task_to_agent(f"Jira user story with key {user_story_id}", task_description)
+        completed_task = await _send_task_to_agent(_build_jira_issue_task_text(user_story_id), task_description)
         _validate_task_status(completed_task, f"Review of the user story {user_story_id}")
         logger.info("Received response from an agent, requirements review seems to be complete.")
         return {"message": f"Review of the requirements for Jira user story {user_story_id} completed."}
@@ -1256,7 +1256,7 @@ async def _request_test_cases_generation(user_story_id) -> GeneratedTestCases:
         HTTPException: If an AgentExecutionError is returned by the agent.
     """
     task_description = f"Generate test cases for Jira user story {user_story_id}"
-    completed_task = await _send_task_to_agent(f"Jira user story with key {user_story_id}", task_description)
+    completed_task = await _send_task_to_agent(_build_jira_issue_task_text(user_story_id), task_description)
     task_description = f"Generation of test cases for the user story {user_story_id}"
     received_artifacts = _get_artifacts_from_task(completed_task, task_description)
     result = _get_model_from_artifacts(received_artifacts, task_description, GeneratedTestCases)
@@ -1878,6 +1878,13 @@ The list of all registered with you agents:
         # Verify agent exists AND is currently available
         if agent_id in await agent_registry.get_available_agents():
             valid_agent_ids.append(agent_id)
+
+    if not valid_agent_ids or len(valid_agent_ids) < len(selected_agent_ids):
+        # WS1: the justification explains why the selection came up empty or partial.
+        logger.warning(
+            f"Routing decision for task '{task_description}': selected {len(valid_agent_ids)} of "
+            f"{len(selected_agent_ids)} agent(s); justification: {result.output.justification}"
+        )
 
     for agent_id in valid_agent_ids:
         agent_name = await agent_registry.get_name(agent_id)

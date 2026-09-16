@@ -39,7 +39,7 @@ Copy this checklist and track progress:
 2. **Decide what is wrong.** Check recent changes to the code under test (`git diff`, `git log -p -- <file>`). If an
    intentional change altered the behaviour, update the test; otherwise fix the code. If the intended behaviour is
    unclear, ask the user instead of making the test match the code.
-3. **Fix the root cause.** Never skip, xfail, delete or loosen an assertion just to get a green run.
+3. **Fix the root cause**, following `PYTHON_GUIDELINES.md` (§ 13 for test code).
 4. **Verify** the single test, then the full suite, so the fix introduces no regression.
 
 ## Project-specific failure causes
@@ -50,7 +50,7 @@ Copy this checklist and track progress:
 | `401`/`503` from an orchestrator endpoint test                          | Auth not overridden. Use `orchestrator_app.dependency_overrides[_validate_api_key]`; patching `_validate_api_key` has no effect on `Depends`. |
 | `TypeError`/`AttributeError` on a2a types (`root`, `artifactId`, `mimeType`) | The test uses the old a2a-sdk 0.x API. Use the current one: `Part(text=...)`, `Part(raw=..., media_type=...)`, snake_case fields.       |
 | Passes alone, fails in the full run                                     | Leaked module state: agent registry, `dependency_overrides`, or `sys.modules` stubs. Reset it in a fixture.                                  |
-| Slow test or real network call                                          | A boundary is not mocked (LLM, MCP, Jira, Qdrant, `httpx`). Patch it where it is used, with `AsyncMock` for coroutines.                     |
+| Slow test or real network call                                          | A boundary is not mocked (LLM, MCP, Jira, Qdrant, `httpx`). Mock it as `PYTHON_GUIDELINES.md` § 13 describes.                                |
 | Missing environment variable or settings error at import               | `tests/conftest.py` provides test env vars; add newly required ones there.                                                                   |
 
 ## Done when

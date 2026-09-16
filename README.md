@@ -24,7 +24,7 @@ Watch a demo of QuAIA™ in action:
     * UI & API Test Execution (separate project)    
     * Incident Report Creation
 * **Jira RAG Sync:** Keeps the Qdrant vector store in sync with a project's Jira issues programmatically (triggered via the orchestrator's `/update-jira-db` endpoint, executed by the sync job or the local sync service), without invoking an LLM agent.
-* **Confluence Document RAG:** Ingests Confluence page bodies into a dedicated documents collection (triggered via `/update-confluence-db`): version/hash-based change detection skips unchanged pages, storage-format bodies are normalized to markdown and chunked along headings with breadcrumbs, and removed pages are reconciled out of the vector store. Attachment ingestion ships with the next phase.
+* **Confluence Document RAG:** Ingests Confluence page bodies into a dedicated documents collection (triggered via `/update-confluence-db`): version/hash-based change detection skips unchanged pages, storage-format bodies are normalized to markdown and chunked along headings with breadcrumbs, and removed pages are reconciled out of the vector store. Attachments (PDF, images, office documents, spreadsheets, text) are extracted page by page with a rendered page image, offline OCR for scanned content and headless LibreOffice conversion for office formats.
 * **Dedicated Prompt Guard Service:** A dedicated microservice for detecting prompt injection attacks using the ProtectAI model.
 * **Web UI Monitoring Dashboard:** Real-time monitoring interface for:
     * Agent status visualization (AVAILABLE, BUSY, BROKEN states)
@@ -353,6 +353,14 @@ RAG_CONFLUENCE_LIST_PAGE_SIZE=50 # Default: 50. Page size for Confluence listing
 RAG_CONFLUENCE_MAX_RETRIES=5 # Default: 5. Retries for Confluence 429/5xx responses, honouring Retry-After.
 RAG_CONFLUENCE_TIMEOUT_SECONDS=30 # Default: 30. Request timeout for Confluence REST calls.
 RAG_CHUNK_MAX_TOKENS=512 # Default: 512. Chunk token budget for page bodies, breadcrumb included (1 token ~ 4 characters).
+RAG_MAX_ATTACHMENT_BYTES=104857600 # Default: 100 MiB. Listed attachment size cap checked before download.
+RAG_MAX_PAGES_PER_DOCUMENT=200 # Default: 200. Maximum pages or image frames ingested; the true count is retained.
+RAG_RENDER_DPI=150 # Default: 150. PDF page rendering resolution.
+RAG_MAX_IMAGE_PIXELS=4096 # Default: 4096. Maximum width or height of a normalized page image.
+RAG_OFFICE_CONVERSION_ENABLED=true # Default: true. Convert office formats to PDF with headless LibreOffice.
+RAG_OFFICE_CONVERSION_TIMEOUT_SECONDS=120 # Default: 120. Maximum duration of one LibreOffice conversion.
+RAG_OFFICE_CONVERSION_CONCURRENCY=1 # Default: 1. Maximum concurrent LibreOffice processes per sync runtime.
+RAG_OCR_TEXT_THRESHOLD_CHARACTERS=20 # Default: 20. Pages below this native-text length receive full-page OCR.
 
 # Embedding Service Configuration
 EMBEDDING_BACKENDS=text # Default: text. Comma-separated enabled backends ("text", "visual").
@@ -818,14 +826,36 @@ lock TTL.
   Page bodies are ingested: the storage-format body is normalized to markdown
   (headings, lists, tables, code and content macros kept; navigation/dynamic macros
   dropped), chunked along headings with `Page title > Section` breadcrumbs, and
-  upserted as dense + sparse vectors into the documents collection. Attachment
-  ingestion ships with the next phase; the endpoint already carries the options
-  through. The run is idempotent: unchanged page versions are skipped without any
-  fetch, and a re-run after a crash re-ingests only the pages whose fingerprint
-  was never saved.
+  upserted as dense + sparse vectors into the documents collection. The run is
+  idempotent: unchanged page and attachment versions are skipped without any fetch,
+  and a re-run after a crash re-ingests only the items whose fingerprint was never
+  saved.
   ```json
   {"space_key": "DEV", "page_id": 12345, "attachment_name_pattern": "^report.*\\.pdf$", "skip_page_body": false}
   ```
+  Attachments matching the name pattern are stored one record per document page. Each
+  record carries the page text, the page image (when the format has one) and the
+  reconciliation chain (Confluence page, attachment, page `n` of `m`); its embedded text
+  starts with `Page title > attachment name > page n of m`, so pages are found by
+  document name as well as by content.
+
+  | Format                                   | Page text                                                             | Page image      |
+  |------------------------------------------|-----------------------------------------------------------------------|-----------------|
+  | PDF                                      | Native text; OCR for image-only pages and for embedded images         | Rendered page   |
+  | PNG, JPEG, GIF, WebP, BMP, TIFF          | OCR (one page per frame)                                              | Normalized PNG  |
+  | DOCX, PPTX                               | Converted PDF; native text-only reader if conversion is off or fails  | Rendered page   |
+  | DOC, PPT, ODT, ODP, RTF                  | Converted PDF                                                         | Rendered page   |
+  | XLS, ODS                                 | Converted PDF                                                         | None            |
+  | XLSX                                     | Native reader, one page per sheet                                     | None            |
+  | CSV / TXT, MD                            | Whole file (TXT and MD verbatim)                                      | None            |
+
+  OCR uses the multilingual RapidOCR PP-OCRv6 models packaged with the `rapidocr` wheel
+  (English, German and other Latin-script languages), so it never downloads a model.
+  Other formats, conversion-only formats while conversion is unavailable, and files over
+  `RAG_MAX_ATTACHMENT_BYTES` are skipped before download and logged; they don't mark the
+  run as failed. Pages beyond `RAG_MAX_PAGES_PER_DOCUMENT` are not ingested, but the true
+  page count is kept. Running the sync runtime outside its image needs
+  `uv sync --extra rag-sync` and, for office formats, LibreOffice (`soffice`) on the `PATH`.
 
 The command-line runner executes one sync for one scope to completion and is what the
 Cloud Run Job invokes:

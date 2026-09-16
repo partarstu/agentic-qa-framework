@@ -14,6 +14,7 @@ import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
 # The Docker image copies services/rag_sync/ to /app/rag_sync (flat layout); mirror it
@@ -22,7 +23,9 @@ SERVICES_DIR = Path(__file__).resolve().parents[2] / "services"
 if str(SERVICES_DIR) not in sys.path:
     sys.path.insert(0, str(SERVICES_DIR))
 
+from rag_sync.attachment_extraction import ExtractedDocument, PageContent  # noqa: E402
 from rag_sync.chunking import chunk_page_body  # noqa: E402
+from rag_sync.confluence_client import ConfluenceClient  # noqa: E402
 from rag_sync.normalization import normalize_page_body  # noqa: E402
 from rag_sync.sync_state import content_hash  # noqa: E402
 
@@ -160,6 +163,33 @@ class TestContentHash:
         assert content_hash("body") == content_hash(b"body")
 
 
+# --- Confluence client ---------------------------------------------------------------------
+
+
+class TestConfluenceClient:
+    async def test_download_link_resolves_against_the_wiki_context_path(self, monkeypatch):
+        monkeypatch.setattr("config.CONFLUENCE_URL", "https://example.atlassian.net/")
+        monkeypatch.setattr("config.CONFLUENCE_USERNAME", "user")
+        monkeypatch.setattr("config.CONFLUENCE_API_TOKEN", "token")
+        requested_urls = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requested_urls.append(str(request.url))
+            return httpx.Response(200, content=b"file bytes")
+
+        client = ConfluenceClient()
+        client._client = httpx.AsyncClient(
+            base_url="https://example.atlassian.net/wiki/api/v2", transport=httpx.MockTransport(handler)
+        )
+        try:
+            content = await client.download_attachment("/download/attachments/111/guide.pdf?version=2")
+        finally:
+            await client.close()
+
+        assert content == b"file bytes"
+        assert requested_urls == ["https://example.atlassian.net/wiki/download/attachments/111/guide.pdf?version=2"]
+
+
 # --- The runner's classification and write order ------------------------------------------
 
 
@@ -185,6 +215,51 @@ def _fingerprint_payload(version, hash_value, point_ids=None, title="Home", item
         "item_kind": item_kind,
         "point_ids": point_ids or [],
     }
+
+
+def _attachment(
+    attachment_id="att-1",
+    title="guide.txt",
+    version=1,
+    file_size=5,
+    media_type="text/plain",
+):
+    return {
+        "id": attachment_id,
+        "title": title,
+        "version": {"number": version},
+        "fileSize": file_size,
+        "mediaType": media_type,
+        "downloadLink": f"/download/{title}",
+    }
+
+
+def _attachment_fingerprint(
+    version=1,
+    hash_value="hash",
+    point_ids=None,
+    attachment_id="att-1",
+    attachment_name="guide.txt",
+):
+    return {
+        "version": version,
+        "content_hash": hash_value,
+        "schema_version": 1,
+        "page_id": "111",
+        "title": "Home",
+        "webui": "/spaces/DEV/pages/111",
+        "attachment_id": attachment_id,
+        "attachment_name": attachment_name,
+        "media_type": "text/plain",
+        "item_kind": "attachment",
+        "point_ids": point_ids or [],
+    }
+
+
+def _client_mock():
+    client = MagicMock()
+    client.list_page_attachments = AsyncMock(return_value=[])
+    return client
 
 
 @pytest.fixture
@@ -240,7 +315,7 @@ class TestConfluenceSyncRunner:
     async def test_new_page_ingested_with_crash_safe_order(self, runner):
         runner_obj, documents_db, _, state_store, fingerprints = runner
         page = _page(body="<h2>S</h2><p>Alpha text.</p>")
-        client = MagicMock()
+        client = _client_mock()
         client.get_space_id_by_key = AsyncMock(return_value="555")
         client.list_pages_in_space = AsyncMock(return_value=[page])
         client.get_page = AsyncMock(return_value=page)
@@ -266,7 +341,7 @@ class TestConfluenceSyncRunner:
         fingerprints.load_scope = AsyncMock(
             return_value={"page:111": _fingerprint_payload(3, stored_hash)}
         )
-        client = MagicMock()
+        client = _client_mock()
         client.get_space_id_by_key = AsyncMock(return_value="555")
         client.list_pages_in_space = AsyncMock(return_value=[page])
         client.get_page = AsyncMock()
@@ -287,7 +362,7 @@ class TestConfluenceSyncRunner:
         fingerprints.load_scope = AsyncMock(
             return_value={"page:111": _fingerprint_payload(3, stored_hash, point_ids=["a"])}
         )
-        client = MagicMock()
+        client = _client_mock()
         client.get_space_id_by_key = AsyncMock(return_value="555")
         client.list_pages_in_space = AsyncMock(return_value=[page])
         client.get_page = AsyncMock(return_value=_page(version=5))
@@ -309,7 +384,7 @@ class TestConfluenceSyncRunner:
         fingerprints.load_scope = AsyncMock(
             return_value={"page:111": _fingerprint_payload(3, stored_hash, point_ids=["pt-1"])}
         )
-        client = MagicMock()
+        client = _client_mock()
         client.get_space_id_by_key = AsyncMock(return_value="555")
         client.list_pages_in_space = AsyncMock(return_value=[renamed])
         client.get_page = AsyncMock()
@@ -333,7 +408,7 @@ class TestConfluenceSyncRunner:
         fingerprints.load_scope = AsyncMock(
             return_value={"page:111": _fingerprint_payload(3, old_hash, point_ids=old_ids)}
         )
-        client = MagicMock()
+        client = _client_mock()
         client.get_space_id_by_key = AsyncMock(return_value="555")
         client.list_pages_in_space = AsyncMock(return_value=[page])
         client.get_page = AsyncMock(return_value=page)
@@ -359,7 +434,7 @@ class TestConfluenceSyncRunner:
         fingerprints.load_scope = AsyncMock(
             return_value={"page:111": _fingerprint_payload(3, stored_hash, point_ids=["p1", "p2"])}
         )
-        client = MagicMock()
+        client = _client_mock()
         client.get_space_id_by_key = AsyncMock(return_value="555")
         client.list_pages_in_space = AsyncMock(return_value=[])  # the page is gone
         client.close = AsyncMock()
@@ -374,7 +449,7 @@ class TestConfluenceSyncRunner:
 
     async def test_incomplete_listing_deletes_nothing_and_reports_errors(self, runner):
         runner_obj, documents_db, _, state_store, _ = runner
-        client = MagicMock()
+        client = _client_mock()
         client.get_space_id_by_key = AsyncMock(return_value="555")
         client.list_pages_in_space = AsyncMock(side_effect=RuntimeError("boom"))
         client.close = AsyncMock()
@@ -389,7 +464,7 @@ class TestConfluenceSyncRunner:
     async def test_failing_item_does_not_abort_and_cursor_not_saved(self, runner):
         runner_obj, _, _, state_store, fingerprints = runner
         page = _page()
-        client = MagicMock()
+        client = _client_mock()
         client.get_space_id_by_key = AsyncMock(return_value="555")
         client.list_pages_in_space = AsyncMock(return_value=[page])
         client.get_page = AsyncMock(side_effect=RuntimeError("fetch failed"))
@@ -405,7 +480,7 @@ class TestConfluenceSyncRunner:
     async def test_skip_page_body_leaves_page_bodies_untouched(self, runner):
         runner_obj, documents_db, _, _, _ = runner
         page = _page()
-        client = MagicMock()
+        client = _client_mock()
         client.get_space_id_by_key = AsyncMock(return_value="555")
         client.list_pages_in_space = AsyncMock(return_value=[page])
         client.get_page = AsyncMock()
@@ -421,7 +496,7 @@ class TestConfluenceSyncRunner:
     async def test_page_scope_verifies_space_and_syncs_one_page(self, runner):
         runner_obj, documents_db, _, _, _ = runner
         page = _page(body="<p>Scoped.</p>")
-        client = MagicMock()
+        client = _client_mock()
         client.get_space_id_by_key = AsyncMock(return_value="555")
         client.get_page = AsyncMock(return_value=page)
         client.close = AsyncMock()
@@ -438,7 +513,7 @@ class TestConfluenceSyncRunner:
 
     async def test_page_scope_rejects_page_of_another_space(self, runner):
         runner_obj, _, _, state_store, _ = runner
-        client = MagicMock()
+        client = _client_mock()
         client.get_space_id_by_key = AsyncMock(return_value="555")
         client.get_page = AsyncMock(return_value=_page(space_id="999"))
         client.close = AsyncMock()
@@ -451,6 +526,62 @@ class TestConfluenceSyncRunner:
         assert result.status == "completed-with-errors"
         state_store.save_cursor.assert_not_awaited()
 
+    async def test_page_scope_deletes_nothing_of_other_pages(self, runner):
+        runner_obj, documents_db, _, _, fingerprints = runner
+        page = _page(body="<p>Scoped.</p>")
+        # The space's stored fingerprints include two other pages; the scoped page
+        # itself is stored too (so it's just re-synced, not removed).
+        fingerprints.load_scope = AsyncMock(
+            return_value={
+                "page:111": _fingerprint_payload(3, "hash", point_ids=["p-111"]),
+                "page:222": _fingerprint_payload(4, "hash", point_ids=["p-222"]),
+                "page:333": _fingerprint_payload(1, "hash", point_ids=["p-333"]),
+            }
+        )
+        client = _client_mock()
+        client.get_space_id_by_key = AsyncMock(return_value="555")
+        client.get_page = AsyncMock(return_value=page)
+        client.close = AsyncMock()
+
+        with patch("rag_sync.confluence_sync.ConfluenceClient", return_value=client):
+            result = await runner_obj.sync_space("DEV", page_id="111")
+
+        assert result.status == "completed"
+        documents_db.delete.assert_not_called()
+        fingerprints.delete.assert_not_called()
+
+    async def test_page_scope_page_gone_deletes_only_that_page_and_its_attachments(self, runner):
+        runner_obj, documents_db, _, _, fingerprints = runner
+        # The scoped page is gone, but the space still holds other pages' fingerprints.
+        fingerprints.load_scope = AsyncMock(
+            return_value={
+                "page:111": _fingerprint_payload(3, "hash", point_ids=["p-111"]),
+                "attachment:att-9": _attachment_fingerprint(
+                    attachment_id="att-9", attachment_name="guide.txt", point_ids=["p-att-9"]
+                ),
+                "page:222": _fingerprint_payload(4, "hash", point_ids=["p-222"]),
+                "attachment:att-8": {
+                    **_attachment_fingerprint(
+                        attachment_id="att-8", attachment_name="other.txt", point_ids=["p-att-8"]
+                    ),
+                    "page_id": "222",
+                },
+            }
+        )
+        client = _client_mock()
+        client.get_space_id_by_key = AsyncMock(return_value="555")
+        client.get_page = AsyncMock(return_value=None)  # page is gone
+        client.close = AsyncMock()
+
+        with patch("rag_sync.confluence_sync.ConfluenceClient", return_value=client):
+            result = await runner_obj.sync_space("DEV", page_id="111")
+
+        assert result.status == "completed"
+        deleted_ids = {tuple(call.args[0]) for call in documents_db.delete.call_args_list}
+        assert deleted_ids == {("p-111",), ("p-att-9",)}  # page 222's items are untouched
+        deleted_keys = {call.args[1] for call in fingerprints.delete.call_args_list}
+        assert deleted_keys == {"page:111", "attachment:att-9"}
+
     async def test_taken_over_runner_aborts_before_writes(self, runner):
         runner_obj, documents_db, lock_store, _, _ = runner
         lock_store.mark_started = AsyncMock(return_value=False)
@@ -461,7 +592,7 @@ class TestConfluenceSyncRunner:
     async def test_holder_checked_between_item_writes(self, runner):
         runner_obj, documents_db, lock_store, _, _ = runner
         page_one, page_two = _page("111", "One"), _page("222", "Two")
-        client = MagicMock()
+        client = _client_mock()
         client.get_space_id_by_key = AsyncMock(return_value="555")
         client.list_pages_in_space = AsyncMock(return_value=[page_one, page_two])
         client.get_page = AsyncMock(return_value=page_one)
@@ -479,7 +610,7 @@ class TestConfluenceSyncRunner:
 
     async def test_clean_run_saves_cursor_on_failure_free_completion(self, runner):
         runner_obj, _, _, state_store, _ = runner
-        client = MagicMock()
+        client = _client_mock()
         client.get_space_id_by_key = AsyncMock(return_value="555")
         client.list_pages_in_space = AsyncMock(return_value=[])
         client.close = AsyncMock()
@@ -492,3 +623,176 @@ class TestConfluenceSyncRunner:
         cursor_scope, cursor = state_store.save_cursor.call_args[0]
         assert cursor_scope == "confluence:DEV"
         assert cursor["processed_count"] == 0
+
+    async def test_new_attachment_is_downloaded_extracted_and_fingerprinted(self, runner):
+        runner_obj, documents_db, _, state_store, fingerprints = runner
+        page = _page()
+        attachment = _attachment(file_size=11)
+        client = _client_mock()
+        client.get_space_id_by_key = AsyncMock(return_value="555")
+        client.list_pages_in_space = AsyncMock(return_value=[page])
+        client.list_page_attachments = AsyncMock(return_value=[attachment])
+        client.download_attachment = AsyncMock(return_value=b"guide text")
+        client.close = AsyncMock()
+
+        with patch("rag_sync.confluence_sync.ConfluenceClient", return_value=client):
+            result = await runner_obj.sync_space("DEV", skip_page_body=True)
+
+        assert result.status == "completed"
+        assert result.processed_count == 1
+        client.download_attachment.assert_awaited_once_with("/download/guide.txt")
+        parts = documents_db.upsert_batch.call_args.args[0]
+        assert len(parts) == 1
+        assert parts[0].breadcrumb == "Home > guide.txt > page 1 of 1"
+        assert parts[0].text.endswith("guide text")
+        assert parts[0].document_name == "guide.txt"
+        saved = fingerprints.save.call_args.args[2]
+        assert saved["attachment_id"] == "att-1"
+        assert saved["point_ids"] == [parts[0].get_vector_id()]
+        state_store.save_cursor.assert_awaited_once()
+
+    async def test_unchanged_attachment_skips_without_download(self, runner):
+        runner_obj, documents_db, _, _, fingerprints = runner
+        page = _page()
+        attachment = _attachment()
+        fingerprints.load_scope = AsyncMock(
+            return_value={"attachment:att-1": _attachment_fingerprint()}
+        )
+        client = _client_mock()
+        client.get_space_id_by_key = AsyncMock(return_value="555")
+        client.list_pages_in_space = AsyncMock(return_value=[page])
+        client.list_page_attachments = AsyncMock(return_value=[attachment])
+        client.download_attachment = AsyncMock()
+        client.close = AsyncMock()
+
+        with patch("rag_sync.confluence_sync.ConfluenceClient", return_value=client):
+            result = await runner_obj.sync_space("DEV", skip_page_body=True)
+
+        assert result.processed_count == 0
+        client.download_attachment.assert_not_awaited()
+        documents_db.upsert_batch.assert_not_called()
+
+    async def test_attachment_metadata_change_updates_payload_without_download(self, runner):
+        runner_obj, documents_db, _, _, fingerprints = runner
+        page = _page(title="Renamed Home")
+        attachment = _attachment(title="renamed.txt")
+        fingerprints.load_scope = AsyncMock(
+            return_value={
+                "attachment:att-1": _attachment_fingerprint(point_ids=["point-1"])
+            }
+        )
+        client = _client_mock()
+        client.get_space_id_by_key = AsyncMock(return_value="555")
+        client.list_pages_in_space = AsyncMock(return_value=[page])
+        client.list_page_attachments = AsyncMock(return_value=[attachment])
+        client.download_attachment = AsyncMock()
+        client.close = AsyncMock()
+
+        with patch("rag_sync.confluence_sync.ConfluenceClient", return_value=client):
+            result = await runner_obj.sync_space("DEV", skip_page_body=True)
+
+        assert result.processed_count == 1
+        client.download_attachment.assert_not_awaited()
+        payload = documents_db.set_payload.call_args.args[0]
+        assert payload["page_title"] == "Renamed Home"
+        assert payload["document_name"] == "renamed.txt"
+        saved = fingerprints.save.call_args.args[2]
+        assert saved["point_ids"] == ["point-1"]
+
+    @pytest.mark.parametrize(
+        ("attachment", "max_bytes"),
+        [
+            (_attachment(file_size=11), 10),
+            (_attachment(title="archive.zip", media_type="application/zip"), 100),
+        ],
+        ids=["over-size-cap", "unsupported-format"],
+    )
+    async def test_unprocessable_attachment_is_skipped_before_download_without_failing(
+        self, runner, attachment, max_bytes
+    ):
+        runner_obj, documents_db, _, state_store, fingerprints = runner
+        client = _client_mock()
+        client.get_space_id_by_key = AsyncMock(return_value="555")
+        client.list_pages_in_space = AsyncMock(return_value=[_page()])
+        client.list_page_attachments = AsyncMock(return_value=[attachment])
+        client.download_attachment = AsyncMock()
+        client.close = AsyncMock()
+
+        with (
+            patch("rag_sync.confluence_sync.ConfluenceClient", return_value=client),
+            patch("config.DocumentRagConfig.MAX_ATTACHMENT_BYTES", max_bytes),
+        ):
+            result = await runner_obj.sync_space("DEV", skip_page_body=True)
+
+        assert result.status == "completed"
+        assert result.processed_count == 0
+        client.download_attachment.assert_not_awaited()
+        documents_db.upsert_batch.assert_not_called()
+        fingerprints.save.assert_not_called()
+        state_store.save_cursor.assert_awaited_once()
+
+    async def test_pattern_keeps_existing_nonmatching_attachment_but_removes_missing_one(self, runner):
+        runner_obj, documents_db, _, _, fingerprints = runner
+        page = _page()
+        present = _attachment(attachment_id="present", title="notes.txt")
+        fingerprints.load_scope = AsyncMock(
+            return_value={
+                "attachment:present": _attachment_fingerprint(
+                    attachment_id="present", attachment_name="notes.txt", point_ids=["keep"]
+                ),
+                "attachment:gone": _attachment_fingerprint(
+                    attachment_id="gone", attachment_name="gone.txt", point_ids=["delete"]
+                ),
+            }
+        )
+        client = _client_mock()
+        client.get_space_id_by_key = AsyncMock(return_value="555")
+        client.list_pages_in_space = AsyncMock(return_value=[page])
+        client.list_page_attachments = AsyncMock(return_value=[present])
+        client.close = AsyncMock()
+
+        with patch("rag_sync.confluence_sync.ConfluenceClient", return_value=client):
+            result = await runner_obj.sync_space(
+                "DEV", attachment_name_pattern="wanted", skip_page_body=True
+            )
+
+        assert result.processed_count == 1
+        documents_db.delete.assert_awaited_once_with(["delete"])
+        fingerprints.delete.assert_awaited_once_with("confluence:DEV", "attachment:gone")
+
+    async def test_incomplete_attachment_listing_deletes_nothing(self, runner):
+        runner_obj, documents_db, _, state_store, fingerprints = runner
+        fingerprints.load_scope = AsyncMock(
+            return_value={"attachment:att-1": _attachment_fingerprint(point_ids=["point-1"])}
+        )
+        client = _client_mock()
+        client.get_space_id_by_key = AsyncMock(return_value="555")
+        client.list_pages_in_space = AsyncMock(return_value=[_page()])
+        client.list_page_attachments = AsyncMock(side_effect=RuntimeError("listing failed"))
+        client.close = AsyncMock()
+
+        with patch("rag_sync.confluence_sync.ConfluenceClient", return_value=client):
+            result = await runner_obj.sync_space("DEV", skip_page_body=True)
+
+        assert result.status == "completed-with-errors"
+        documents_db.delete.assert_not_called()
+        fingerprints.delete.assert_not_called()
+        state_store.save_cursor.assert_not_awaited()
+
+    def test_attachment_page_parts_split_text_and_keep_image_on_part_zero(self, runner):
+        runner_obj, *_ = runner
+        extracted = ExtractedDocument(
+            pages=[PageContent("word " * 100, b"png")],
+            total_page_count=3,
+        )
+
+        with patch("config.DocumentRagConfig.CHUNK_MAX_TOKENS", 20):
+            parts = runner_obj._build_attachment_parts(
+                "DEV", _page(), _attachment(title="guide.pdf"), extracted
+            )
+
+        assert len(parts) > 1
+        assert all(part.page_count == 3 for part in parts)
+        assert all(part.breadcrumb == "Home > guide.pdf > page 1 of 3" for part in parts)
+        assert parts[0].image is not None
+        assert all(part.image is None for part in parts[1:])

@@ -103,7 +103,9 @@ class TestCaseGenerationAgent(AgentBase):
         Returns:
             Generated test cases.
         """
-        attachments_content = self._resolve_attachments(ctx)
+        from common.services.jira_attachments import download_issue_attachments
+
+        attachments_content = download_issue_attachments(ctx.deps.key)
         extracted_acceptance_criteria = await self.extract_acceptance_criteria(attachments_content, jira_issue_content)
         test_steps_sequences = await self.generate_test_steps(extracted_acceptance_criteria)
         generated_test_cases = await self.create_test_cases_from_steps(

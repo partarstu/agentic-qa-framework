@@ -5,8 +5,9 @@
 """
 Utility module for handling Jira attachments for agent processing.
 
-Provides functionality to resolve and filter the attachments a tool has already returned, as
-BinaryContent for multimodal processing by Pydantic AI agents.
+Provides the predicates and helpers used when Jira attachments are downloaded over
+REST (WS5) and handed to the model as BinaryContent: which files to skip, which
+MIME types the models support, and media-type mapping for text-readable files.
 """
 
 from pathlib import Path
@@ -17,9 +18,6 @@ from pydantic_ai.messages import (
     BinaryContent,
     DocumentMediaType,
     ImageMediaType,
-    ModelMessage,
-    ToolReturnPart,
-    UserPromptPart,
     VideoMediaType,
 )
 
@@ -99,62 +97,3 @@ def is_supported_mime_type(mime_type: str | None) -> bool:
         return False
     return mime_type in SUPPORTED_MIME_TYPES
 
-
-def _iter_binary_contents(messages: list[ModelMessage]):
-    """Yield every attachment a tool has already returned or a user message already carries."""
-    for message in messages:
-        for part in message.parts:
-            if isinstance(part, ToolReturnPart):
-                yield from (file for file in part.files if isinstance(file, BinaryContent))
-            elif isinstance(part, UserPromptPart) and not isinstance(part.content, str):
-                yield from (item for item in part.content if isinstance(item, BinaryContent))
-
-
-def resolve_attachments(messages: list[ModelMessage], skip_postfix: str | None = None) -> dict[str, BinaryContent]:
-    """Collect the attachments already downloaded in this run, as binary content for the model.
-
-    The Jira MCP server returns attachments as embedded resources rather than writing them to a
-    filesystem, so pydantic-ai already carries them through the run and nothing is read from disk.
-    Everything downloaded is taken: which identifiers a model can actually see depends on how its
-    provider maps files in a tool result, so letting it name a subset loses attachments silently.
-
-    Args:
-        messages: The messages of the current run, as carried by the tool's run context.
-        skip_postfix: Optional override for the skip postfix.
-                     Defaults to config.JIRA_ATTACHMENT_SKIP_POSTFIX.
-
-    Returns:
-        Dictionary mapping identifier to BinaryContent for every supported attachment in the run.
-    """
-    if skip_postfix is None:
-        skip_postfix = config.JIRA_ATTACHMENT_SKIP_POSTFIX
-
-    attachments: dict[str, BinaryContent] = {}
-    skipped_count = 0
-    unsupported_count = 0
-
-    for downloaded in _iter_binary_contents(messages):
-        identifier = downloaded.identifier
-        # Only meaningful when the identifier is a file name; MCP-provided ones are opaque.
-        if should_skip_attachment(identifier, skip_postfix):
-            logger.info("Skipping attachment '%s' due to skip postfix '%s'", identifier, skip_postfix)
-            skipped_count += 1
-            continue
-
-        content = as_text_equivalent(downloaded)
-        if not is_supported_mime_type(content.media_type):
-            logger.info("Skipping attachment '%s' - unsupported MIME type: %s", identifier, content.media_type)
-            unsupported_count += 1
-            continue
-
-        attachments[identifier] = content
-        logger.debug("Resolved attachment '%s' with MIME type '%s'", identifier, content.media_type)
-
-    logger.info(
-        "Resolved %d attachments: %d valid, %d skipped (postfix), %d unsupported",
-        len(attachments) + skipped_count + unsupported_count,
-        len(attachments),
-        skipped_count,
-        unsupported_count,
-    )
-    return attachments
