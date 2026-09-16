@@ -34,17 +34,15 @@ def reset_trigger_singleton():
     main._rag_sync_lock = asyncio.Lock()
 
 
-def _mock_trigger(monkeypatch, acquired=True, lock_info=None, start_result=None, start_error=None):
-    """Patch the trigger singleton with a controllable fake."""
+def _mock_trigger(monkeypatch, acquire_result="lock-token", acquire_error=None, start_result=None, start_error=None):
+    """Patch the trigger singleton with a controllable fake.
+
+    The orchestrator acquires the scope lock under its in-process mutex and starts
+    the sync outside it, so the fake exposes the two split methods.
+    """
     trigger = MagicMock()
-    state = MagicMock()
-    state.acquired = acquired
-    state.lock_info = lock_info
-    trigger.trigger = AsyncMock(
-        return_value=start_result if start_error is None else None
-    )
-    if start_error is not None:
-        trigger.trigger = AsyncMock(side_effect=start_error)
+    trigger.acquire = AsyncMock(return_value=acquire_result, side_effect=acquire_error)
+    trigger.start = AsyncMock(return_value=start_result, side_effect=start_error)
     main._rag_sync_trigger = trigger
     return trigger
 
@@ -62,7 +60,9 @@ class TestUpdateJiraDb:
 
         assert response.status_code == 200
         assert response.json()["details"]["processed_count"] == 2
-        main._rag_sync_trigger.trigger.assert_awaited_once_with("jira", "PROJ", ["--project-key", "PROJ"])
+        trigger = main._rag_sync_trigger
+        trigger.acquire.assert_awaited_once_with("jira", "PROJ")
+        trigger.start.assert_awaited_once_with("jira", "PROJ", ["--project-key", "PROJ"], "lock-token")
 
     def test_job_mode_returns_202_with_execution(self, client, monkeypatch, reset_trigger_singleton):
         monkeypatch.setattr(main.config.RagSyncConfig, "JOB_NAME", "projects/p/locations/us-central1/jobs/rag-sync")
@@ -83,7 +83,7 @@ class TestUpdateJiraDb:
     def test_live_lock_conflicts_with_409(self, client, reset_trigger_singleton):
         _mock_trigger(
             None,
-            start_error=SyncTriggerError(
+            acquire_error=SyncTriggerError(
                 "A sync is already running for scope jira:PROJ (started at 1, lock expires at 2).",
                 start_confirmed=True,
             ),
@@ -99,7 +99,7 @@ class TestUpdateJiraDb:
         monkeypatch.setattr(main.config.RagSyncConfig, "SERVICE_URL", None)
         _mock_trigger(
             None,
-            start_error=SyncTriggerError(
+            acquire_error=SyncTriggerError(
                 "No RAG sync runtime is configured: set RAG_SYNC_JOB_NAME (job mode) or "
                 "RAG_SYNC_SERVICE_URL (local mode).",
                 start_confirmed=True,
@@ -126,7 +126,7 @@ class TestUpdateJiraDb:
 class TestUpdateConfluenceDb:
     def test_scope_options_forwarded_as_runner_args(self, client, monkeypatch, reset_trigger_singleton):
         monkeypatch.setattr(main.config.RagSyncConfig, "JOB_NAME", "projects/p/locations/us-central1/jobs/rag-sync")
-        trigger = _mock_trigger(
+        _mock_trigger(
             monkeypatch,
             start_result={"status_code": 202, "execution": "exec-1"},
         )
@@ -142,7 +142,7 @@ class TestUpdateConfluenceDb:
         )
 
         assert response.status_code == 202
-        trigger.trigger.assert_awaited_once_with(
+        main._rag_sync_trigger.start.assert_awaited_once_with(
             "confluence",
             "~dev",
             [
@@ -151,6 +151,7 @@ class TestUpdateConfluenceDb:
                 "--attachment-name-pattern", "^report.*\\.pdf$",
                 "--skip-page-body",
             ],
+            "lock-token",
         )
 
     def test_personal_space_key_accepted(self, client, reset_trigger_singleton):

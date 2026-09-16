@@ -6,18 +6,20 @@
 
 The ``jira`` Python client (``JIRA(server, basic_auth=...)``) probes ``myself`` and
 ``serverInfo`` on construction, then posts comments to
-``/rest/api/2/issue/{key}/comment`` (``add_jira_comment``) and runs JQL searches
-against ``/rest/api/2/search`` (the RAG sync). Every search answers with the same
-seeded story the Jira MCP mock serves; every recorded comment is exposed at
-``GET /__recorded`` for the smoke assertions.
+``/rest/api/2/issue/{key}/comment`` (``add_jira_comment``), runs JQL searches
+against ``/rest/api/2/search`` (the RAG sync) and, since WS5, serves the issue's
+attachment metadata and content downloads for the agents' REST attachment
+downloader. Every recorded comment and download is exposed at ``GET /__recorded``
+for the smoke assertions.
 """
 
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
 app = FastAPI()
 
 _recorded_comments: list[dict[str, str]] = []
+_recorded_attachment_downloads: list[dict[str, str]] = []
 
 # The same story the Jira MCP mock seeds (jira_mcp_mock._SEEDED_STORY), in the raw
 # shape the jira client's search API returns. Its status must be one of
@@ -38,6 +40,21 @@ _SEEDED_SEARCH_ISSUE = {
     },
 }
 
+# The seeded story's attachments, mirroring jira_mcp_mock's: a plain-text policy and a
+# JSON attachment (served under a text-equivalent media type by the downloader).
+_ATTACHMENTS = [
+    {"id": "10001", "filename": "reset-policy.txt", "mimeType": "text/plain", "size": 116},
+    {"id": "10002", "filename": "reset-request.json", "mimeType": "application/json", "size": 45},
+]
+_ATTACHMENT_CONTENT = {
+    "reset-policy.txt": (
+        b"Password reset policy\n"
+        b"- A reset link stays valid for 60 minutes.\n"
+        b"- At most 3 reset requests per account per hour.\n"
+    ),
+    "reset-request.json": b'{"email": "user@example.com", "locale": "en-GB"}',
+}
+
 
 @app.get("/rest/api/2/myself")
 async def myself() -> dict[str, str]:
@@ -52,6 +69,27 @@ async def server_info(request: Request) -> dict:
         "versionNumbers": [9, 4, 0],
         "deploymentType": "Server",
     }
+
+
+@app.get("/rest/api/2/issue/{issue_key}")
+async def get_issue(issue_key: str, request: Request) -> dict:
+    """Serves the issue with its attachment metadata (the WS5 REST downloader's read)."""
+    return {
+        "id": "10001",
+        "key": issue_key,
+        "self": f"{request.base_url}rest/api/2/issue/10001",
+        "fields": {"attachment": _ATTACHMENTS},
+    }
+
+
+@app.get("/rest/api/2/attachment/content/{attachment_id}")
+async def download_attachment(attachment_id: str) -> Response:
+    """Serves one attachment's bytes and records the download for the smoke assertions."""
+    attachment = next((a for a in _ATTACHMENTS if a["id"] == attachment_id), None)
+    if attachment is None:
+        return Response(status_code=404)
+    _recorded_attachment_downloads.append({"attachment_id": attachment_id, "filename": attachment["filename"]})
+    return Response(content=_ATTACHMENT_CONTENT[attachment["filename"]], media_type=attachment["mimeType"])
 
 
 @app.post("/rest/api/2/issue/{issue_key}/comment")
@@ -78,7 +116,7 @@ async def search_issues() -> dict:
 
 @app.get("/__recorded")
 async def recorded() -> dict:
-    return {"comments": _recorded_comments}
+    return {"comments": _recorded_comments, "attachment_downloads": _recorded_attachment_downloads}
 
 
 @app.get("/rest/api/2/{path:path}")

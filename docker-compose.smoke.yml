@@ -22,7 +22,7 @@
 x-agent-env: &agent-env
   PORT: "8001"
   EXTERNAL_PORT: "8001"
-  JIRA_MCP_SERVER_URL: "http://jira_mcp_mock:9000/sse"
+  ATLASSIAN_MCP_SERVER_URL: "http://jira_mcp_mock:9000/sse"
   JIRA_URL: "http://jira_rest_mock:8080"
   JIRA_USERNAME: "smoke"
   JIRA_API_TOKEN: "smoke-token"
@@ -164,9 +164,16 @@ services:
       # WS3: proves prompt overrides reach the agent - the override file under
       # tests/smoke/overrides/ replaces the bundled main prompt template.
       PROMPT_OVERRIDES_DIR: "/prompt-overrides"
+      # WS10: retrieval enabled - the review grounds itself in the documents the
+      # concurrently running Confluence sync ingests into the mocked vector DB.
+      QDRANT_URL: "http://qdrant_mock:6333"
+      EMBEDDING_SERVICE_URL: "http://qdrant_mock:6333"
     volumes:
       - ./tests/smoke/overrides:/prompt-overrides:ro
-    depends_on: *mock-dependencies
+    depends_on:
+      <<: *mock-dependencies
+      qdrant_mock:
+        condition: service_healthy
     healthcheck: *agent-healthcheck
 
   test_case_generation:

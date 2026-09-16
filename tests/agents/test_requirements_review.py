@@ -20,7 +20,7 @@ def mock_config(monkeypatch):
     monkeypatch.setattr(config.RequirementsReviewAgentConfig, "THINKING_LEVEL", "LOW")
     monkeypatch.setattr(config.RequirementsReviewAgentConfig, "MAX_REQUESTS_PER_TASK", 5)
     monkeypatch.setattr(config, "AGENT_BASE_URL", "http://localhost")
-    monkeypatch.setattr(config, "JIRA_MCP_SERVER_URL", "http://jira")
+    monkeypatch.setattr(config, "ATLASSIAN_MCP_SERVER_URL", "http://jira")
     monkeypatch.setattr(config, "MCP_SERVER_TIMEOUT_SECONDS", 30)
     monkeypatch.setattr(config.QdrantConfig, "EMBEDDING_SERVICE_URL", "")
 

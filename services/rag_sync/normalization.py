@@ -182,6 +182,9 @@ def _render_tag(tag: str, attrs: str, inner: str) -> str:
             return _render_image(attrs, inner)
         case "ac:link" | "ac:plain-text-link-body":
             return _render_fragment(inner)
+        case "ac:placeholder":
+            # Inline placeholders are editor scaffolding, never page content.
+            return ""
         case _:
             # Unknown tags keep their text content; wrapping structure tags (tbody
             # etc.) just pass through.

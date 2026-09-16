@@ -28,7 +28,7 @@ def mock_config():
         mock_conf.RequirementsReviewAgentConfig.SKILL_DESCRIPTION = "Reviews requirements"
         mock_conf.RequirementsReviewAgentConfig.THINKING_LEVEL = "LOW"
         mock_conf.RequirementsReviewAgentConfig.MAX_REQUESTS_PER_TASK = 5
-        mock_conf.JIRA_MCP_SERVER_URL = "http://jira-mcp"
+        mock_conf.ATLASSIAN_MCP_SERVER_URL = "http://jira-mcp"
         mock_conf.MCP_SERVER_TIMEOUT_SECONDS = 30
         mock_conf.QdrantConfig.EMBEDDING_SERVICE_URL = "http://embeddings"
         mock_conf.DocumentRagConfig.DOCUMENTS_COLLECTION_NAME = "documents"

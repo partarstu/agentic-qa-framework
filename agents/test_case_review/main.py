@@ -20,13 +20,18 @@ from common.models import (
     TestCaseReviewFeedbacks,
     TestCaseReviewRequest,
 )
-from common.services.jira_mcp import build_jira_mcp_server_toolset
+from common.services.atlassian_mcp import build_atlassian_mcp_server_toolset
 from common.services.test_management_system_client_provider import get_test_management_client
 
 if TYPE_CHECKING:
     from pydantic_ai.messages import BinaryContent
 
 logger = utils.get_logger("test_case_review_agent")
+
+# The Jira tools this agent actually uses (WS11 per-agent tool filtering): it reads the
+# issue; attachments arrive through the REST downloader and every write goes to the test
+# management system.
+_JIRA_TOOL_ALLOWLIST = ("jira_get_issue",)
 
 
 class TestCaseReviewAgent(AgentBase):
@@ -54,7 +59,7 @@ class TestCaseReviewAgent(AgentBase):
             deps_type=TestCaseReviewRequest,
             output_type=TestCaseReviewFeedbacks,
             instructions=instruction_prompt.get_prompt(),
-            mcp_toolset_factories=[build_jira_mcp_server_toolset],
+            mcp_toolset_factories=[lambda: build_atlassian_mcp_server_toolset(_JIRA_TOOL_ALLOWLIST)],
             skill=AgentSkillDeclaration(
                 id=config.TestCaseReviewAgentConfig.SKILL_ID,
                 name=config.TestCaseReviewAgentConfig.SKILL_NAME,

@@ -49,7 +49,12 @@ def _record_uuid(record_id: str) -> str:
     return str(uuid.uuid5(uuid.NAMESPACE_URL, f"quaia:{record_id}"))
 
 class VectorDbService:
-    def __init__(self, collection_name: str, metadata_collection_name: str | None = None):
+    def __init__(
+        self,
+        collection_name: str,
+        metadata_collection_name: str | None = None,
+        metadata_db: "VectorDbService | None" = None,
+    ):
         self.collection_name = collection_name
         # QDRANT_URL is authoritative and includes the port (or relies on the scheme default).
         # port=None keeps the client from appending its own default (qdrant-client#394).
@@ -69,12 +74,16 @@ class VectorDbService:
             config.QdrantConfig, "EMBEDDING_SERVICE_RETRY_BACKOFF_CAP_SECONDS", 32.0
         )
         # Collections whose writes must not go through the embedding service (locks, sync state,
-        # fingerprints, model identity): records are stored without vectors.
-        self._metadata_collection_name = metadata_collection_name
-        self._metadata_db = (
+        # fingerprints, model identity): records are stored without vectors. A shared instance
+        # can be passed in so callers that also hold their own metadata service don't duplicate
+        # clients against the same collection.
+        self._metadata_db = metadata_db or (
             VectorDbService(metadata_collection_name) if metadata_collection_name and metadata_collection_name != collection_name else None
         )
         self._upsert_batch_size = int(getattr(config.QdrantConfig, "UPSERT_BATCH_SIZE", 64))
+        # One ensure per collection per service instance is enough: index creation is
+        # idempotent, and re-listing collections on every upsert/query wastes a round trip.
+        self._ensured = False
 
     async def close(self):
         """Closes the shared HTTP client. Call this during application shutdown."""
@@ -149,9 +158,15 @@ class VectorDbService:
 
         The dense size is detected from the embedding service. The model that produced
         the vectors is recorded in the metadata collection, and later writes/queries
-        refuse to run with a different model.
+        refuse to run with a different model. Payload indexes are (re-)ensured
+        idempotently, so a collection created before its indexes existed still gets
+        them on the next ensure.
         """
+        if self._ensured:
+            return
         if await self._collection_exists():
+            await self._ensure_payload_indexes()
+            self._ensured = True
             return
         embeddings, model = await self._embed_texts(["test"])
         vector_size = len(embeddings[0][0])
@@ -178,11 +193,14 @@ class VectorDbService:
 
         if self._metadata_db is not None:
             await self._metadata_db._store_model_identity(self.collection_name, model)
+        self._ensured = True
 
     def _indexed_fields(self) -> dict[str, models.PayloadSchemaType]:
-        """The payload fields this collection should have indexes on (WS7)."""
-        if self._metadata_collection_name:
-            return _JIRA_INDEXED_FIELDS if self.collection_name != self._metadata_collection_name else _METADATA_INDEXED_FIELDS
+        """The payload fields this collection should have indexes on (WS7), by collection name."""
+        if self.collection_name == config.QdrantConfig.TICKETS_COLLECTION_NAME:
+            return _JIRA_INDEXED_FIELDS
+        if self.collection_name == config.QdrantConfig.METADATA_COLLECTION_NAME:
+            return _METADATA_INDEXED_FIELDS
         if self.collection_name == config.DocumentRagConfig.DOCUMENTS_COLLECTION_NAME:
             return _DOCUMENTS_INDEXED_FIELDS
         return {}
@@ -566,17 +584,22 @@ class VectorDbService:
     async def ensure_payload_collection(self) -> None:
         """Creates the metadata collection when missing. It holds no vectors, so no
         embedding call is needed; the vector params are minimal placeholders."""
+        if self._ensured:
+            return
         if await self._collection_exists():
+            await self._ensure_payload_indexes()
+            self._ensured = True
             return
         try:
             await self.client.create_collection(
                 collection_name=self.collection_name,
                 vectors_config={},
             )
-            await self._ensure_payload_indexes()
             logger.info(f"Created vectorless metadata collection {self.collection_name}.")
         except Exception as e:
             if "already exists" in str(e).lower() or "conflict" in str(e).lower():
                 logger.info(f"Collection {self.collection_name} already exists (race condition handled).")
             else:
                 raise e
+        await self._ensure_payload_indexes()
+        self._ensured = True

@@ -27,7 +27,7 @@ def mock_config():
         mock_conf.TestCaseGenerationAgentConfig.SKILL_DESCRIPTION = "Generates test cases"
         mock_conf.TestCaseGenerationAgentConfig.THINKING_LEVEL = "MEDIUM"
         mock_conf.TestCaseGenerationAgentConfig.MAX_REQUESTS_PER_TASK = 10
-        mock_conf.JIRA_MCP_SERVER_URL = "http://jira-mcp"
+        mock_conf.ATLASSIAN_MCP_SERVER_URL = "http://jira-mcp"
         mock_conf.MCP_SERVER_TIMEOUT_SECONDS = 30
         yield mock_conf
 
@@ -85,7 +85,7 @@ async def test_generate_test_cases_flow(agent):
         jira_toolset.__aexit__ = AsyncMock(return_value=None)
 
         run_context = MagicMock()
-        with patch("agents.test_case_generation.main.build_jira_mcp_server_toolset", return_value=jira_toolset):
+        with patch("agents.test_case_generation.main.build_atlassian_mcp_server_toolset", return_value=jira_toolset):
             result = await agent._generate_test_cases(run_context, "Jira Content")
 
     assert isinstance(result, GeneratedTestCases)

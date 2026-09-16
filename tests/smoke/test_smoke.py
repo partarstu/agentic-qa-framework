@@ -10,7 +10,10 @@ boundary, read back from its ``/__recorded`` endpoint:
 
 * Requirements review   -> a non-empty comment reached Jira (REST or MCP) on the seeded story.
 * Requirements review   -> the agent first fetched the source story via the Jira MCP.
-* Requirements review   -> the story's attachment was pulled over the protocol, by issue key alone.
+* Requirements review   -> the story's attachment was downloaded over the Jira REST API (WS5),
+                           with the MCP download tool left unused.
+* Requirements review   -> the flow issued a documents-collection hybrid query with a focused
+                           (shorter than the issue) query text (WS10).
 * Requirements review   -> with JIRA_ADDITIONAL_FIELD_IDS configured, the agent requests those custom
                            field IDs (together with the standard content fields) when fetching the story.
 * Test-case generation  -> real test cases (name + steps) reached Zephyr.
@@ -26,6 +29,9 @@ boundary, read back from its ``/__recorded`` endpoint:
 * Agent traceability    -> the version an agent is started with reaches the dashboard agents view,
                            the orchestrator's own version reaches the dashboard status view, and the
                            executing agent's name, version and environment reach the created bug.
+* Agent traceability    -> every framework agent's card description carries its model, version and
+                           skill name, and routing decisions with agent name and justification
+                           appear in the dashboard logs.
 * Negative paths        -> all four webhooks reject a bad API key (401), the issue-key webhooks
                            reject a missing issue_key (400), the project-key webhooks reject a
                            missing project_key (422), and the dashboard API rejects a missing
@@ -42,7 +48,9 @@ from tests.smoke.conftest import (
     DOCUMENTS_COLLECTION_NAME,
     EXECUTION_AGENT_NAME,
     EXECUTION_AGENT_VERSION,
+    EXPECTED_AGENT_NAMES,
     JIRA_MCP_RECORDED_URL,
+    JIRA_MCP_SEEDED_STORY_URL,
     JIRA_REST_RECORDED_URL,
     ORCHESTRATOR_URL,
     ORCHESTRATOR_VERSION,
@@ -152,15 +160,53 @@ def test_agents_requested_the_configured_additional_fields(
         )
 
 
-def test_agent_downloaded_the_story_attachment(
+def test_agent_downloaded_the_story_attachment_over_rest(
     requirements_review_response: httpx.Response, http_client: httpx.Client
 ) -> None:
-    """The attachment must reach the agent over the protocol, with no folder to download it to."""
-    data = wait_for_recorded(http_client, JIRA_MCP_RECORDED_URL, lambda d: bool(d.get("download_attachments")))
-    downloads = data.get("download_attachments", [])
-    assert downloads, f"Agent never downloaded the attachment of {SEEDED_ISSUE_KEY}. Recorded: {data}"
-    assert all(call == {"issue_key": SEEDED_ISSUE_KEY} for call in downloads), (
-        f"Attachments must be requested by issue key alone, with no target path. Recorded: {downloads}"
+    """WS5: the attachment must be downloaded from the Jira REST API by the review flow,
+    not handed through MCP tool-result messages."""
+    data = wait_for_recorded(
+        http_client,
+        JIRA_REST_RECORDED_URL,
+        lambda d: any(dl.get("filename") == "reset-policy.txt" for dl in d.get("attachment_downloads", [])),
+    )
+    downloaded = {dl.get("filename") for dl in data.get("attachment_downloads", [])}
+    assert "reset-policy.txt" in downloaded, (
+        f"The review flow never downloaded the story's attachment over REST. Downloaded: {downloaded}"
+    )
+    # The MCP download tool stays advertised by the mock, so the per-agent tool filtering
+    # (WS11) is what keeps the flow on the REST path.
+    mcp = http_client.get(JIRA_MCP_RECORDED_URL).json()
+    assert not mcp.get("download_attachments"), (
+        f"The MCP download_attachments tool was still used: {mcp.get('download_attachments')}"
+    )
+
+
+def test_review_flow_issued_a_documents_hybrid_query_with_a_focused_query_text(
+    requirements_review_response: httpx.Response, http_client: httpx.Client
+) -> None:
+    """WS10: with retrieval enabled, the review flow must run a hybrid (dense + sparse)
+    query against the documents collection, embedding a focused query text that is
+    shorter than the issue content itself."""
+    data = wait_for_recorded(
+        http_client,
+        QDRANT_RECORDED_URL,
+        lambda d: any(q.get("collection") == DOCUMENTS_COLLECTION_NAME for q in d.get("hybrid_queries", [])),
+    )
+    documents_queries = [q for q in data.get("hybrid_queries", []) if q.get("collection") == DOCUMENTS_COLLECTION_NAME]
+    assert documents_queries, f"No hybrid query reached the documents collection. Recorded: {data}"
+
+    story = http_client.get(JIRA_MCP_SEEDED_STORY_URL).json()
+    issue_content = story["fields"]["description"]
+    query_texts = [
+        text
+        for call in data.get("embedding_calls", [])
+        if call.get("endpoint") == "/embed-query-text"
+        for text in call.get("texts", [])
+    ]
+    assert any(text.strip() and len(text) < len(issue_content) for text in query_texts), (
+        f"No focused embed-query-text call (non-empty and shorter than the issue content) "
+        f"accompanied the documents query. Query texts: {query_texts}"
     )
 
 
@@ -667,4 +713,37 @@ def test_dashboard_reports_the_configured_orchestrator_version(
     reported_version = response.json().get("orchestrator_version")
     assert reported_version == ORCHESTRATOR_VERSION, (
         f"The dashboard reports orchestrator version {reported_version!r} instead of {ORCHESTRATOR_VERSION!r}."
+    )
+
+
+def test_dashboard_agents_carry_the_composed_description(
+    all_agents_ready: None, http_client: httpx.Client, auth_headers: dict[str, str]
+) -> None:
+    """Every framework agent's card description must be composed from its model, version
+    and declared skill name, so the dashboard tile identifies the agent end to end."""
+    response = http_client.get(f"{ORCHESTRATOR_URL}/api/dashboard/agents", headers=auth_headers)
+    assert response.status_code == 200, f"Could not read the agents view: {response.status_code} {response.text}"
+    agents_by_name = {agent.get("name"): agent for agent in response.json()}
+    for agent_name in EXPECTED_AGENT_NAMES:
+        agent = agents_by_name.get(agent_name)
+        assert agent, f"The agent '{agent_name}' is not listed in the agents view: {response.json()}"
+        description = agent.get("description") or ""
+        assert "Model:" in description, f"The description of '{agent_name}' lacks the model: {description!r}"
+        assert "Version:" in description, f"The description of '{agent_name}' lacks the version: {description!r}"
+        assert "Skill:" in description, f"The description of '{agent_name}' lacks the skill name: {description!r}"
+
+
+def test_routing_justifications_appear_in_dashboard_logs(
+    requirements_review_response: httpx.Response, http_client: httpx.Client, auth_headers: dict[str, str]
+) -> None:
+    """Every routing decision must be logged with the selected agent's name and a
+    justification, readable through the dashboard logs API."""
+    response = http_client.get(f"{ORCHESTRATOR_URL}/api/dashboard/logs", params={"limit": 1000}, headers=auth_headers)
+    assert response.status_code == 200, f"Could not read the dashboard logs: {response.status_code} {response.text}"
+    messages = [entry.get("message", "") for entry in response.json()]
+    decisions = [m for m in messages if "Routing decision" in m]
+    assert decisions, "No 'Routing decision' entry reached the dashboard logs."
+    justified = [m for m in decisions if "justification:" in m and "selected_agent_name=" in m]
+    assert justified, (
+        f"The routing decision log entries carry no justification or agent name. Entries: {decisions[:5]}"
     )

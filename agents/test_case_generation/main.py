@@ -23,10 +23,15 @@ from common.models import (
     JiraUserStory,
     TestStepsSequenceList,
 )
-from common.services.jira_mcp import build_jira_mcp_server_toolset
+from common.services.atlassian_mcp import build_atlassian_mcp_server_toolset
 from common.services.test_management_system_client_provider import get_test_management_client
 
 logger = utils.get_logger("test_case_generation_agent")
+
+# The Jira tools this agent actually uses (WS11 per-agent tool filtering): it only reads
+# the issue; attachments arrive through the REST downloader and uploads go to the test
+# management system.
+_JIRA_TOOL_ALLOWLIST = ("jira_get_issue",)
 
 
 class TestCaseGenerationAgent(AgentBase):
@@ -77,7 +82,7 @@ class TestCaseGenerationAgent(AgentBase):
             version=config.TestCaseGenerationAgentConfig.VERSION,
             output_type=GeneratedTestCases,
             instructions=instruction_prompt.get_prompt(),
-            mcp_toolset_factories=[build_jira_mcp_server_toolset],
+            mcp_toolset_factories=[lambda: build_atlassian_mcp_server_toolset(_JIRA_TOOL_ALLOWLIST)],
             deps_type=JiraUserStory,
             skill=AgentSkillDeclaration(
                 id=config.TestCaseGenerationAgentConfig.SKILL_ID,
@@ -160,7 +165,7 @@ Test Step Sequences:
 
         logger.info("Starting AC extraction with %d attachments", len(attachments_content))
         # Own, short-lived Jira MCP session for this sub-agent run, as for the main agent.
-        async with build_jira_mcp_server_toolset() as jira_toolset:
+        async with build_atlassian_mcp_server_toolset(_JIRA_TOOL_ALLOWLIST) as jira_toolset:
             result = await self.ac_extractor_agent.run(user_message_parts, toolsets=[jira_toolset])
         extracted_acceptance_criteria: AcceptanceCriteriaList = result.output
         logger.info(f"Extracted {len(extracted_acceptance_criteria.items)} ACs")

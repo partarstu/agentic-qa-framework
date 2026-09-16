@@ -23,10 +23,14 @@ from common.models import (
     IncidentCreationResult,
     JiraIssue,
 )
-from common.services.jira_mcp import build_jira_mcp_server_toolset
+from common.services.atlassian_mcp import build_atlassian_mcp_server_toolset
 from common.services.test_management_system_client_provider import get_test_management_client
 
 logger = utils.get_logger("incident_creation_agent")
+
+# The Jira tools this agent actually uses (WS11 per-agent tool filtering): it reads the
+# linked issues, files the bug and links/updates it through the issue tools.
+_JIRA_TOOL_ALLOWLIST = ("jira_get_issue", "jira_create_issue", "jira_update_issue")
 
 # Qdrant RAG Config
 QDRANT_COLLECTION_NAME = getattr(config.QdrantConfig, "TICKETS_COLLECTION_NAME", "jira_issues")
@@ -63,7 +67,7 @@ class IncidentCreationAgent(AgentBase):
             version=config.IncidentCreationAgentConfig.VERSION,
             output_type=IncidentCreationResult,
             instructions=self.main_prompt.get_prompt(),
-            mcp_toolset_factories=[build_jira_mcp_server_toolset],
+            mcp_toolset_factories=[lambda: build_atlassian_mcp_server_toolset(_JIRA_TOOL_ALLOWLIST)],
             deps_type=IncidentCreationInput,
             skill=AgentSkillDeclaration(
                 id=config.IncidentCreationAgentConfig.SKILL_ID,

@@ -256,7 +256,7 @@ JIRA_ADDITIONAL_FIELD_IDS= # Optional. Comma-separated Jira custom field IDs (e.
                                  # entries and duplicates are dropped, and every entry must match the Jira custom field
                                  # ID format ('customfield_' followed by digits) - anything else fails startup. Unset
                                  # means the task texts are unchanged.
-JIRA_MCP_SERVER_URL=http://localhost:9000/sse # Default: http://localhost:9000/sse. The URL of the Jira MCP server.
+ATLASSIAN_MCP_SERVER_URL=http://localhost:9000/sse # Default: http://localhost:9000/sse. The URL of the Atlassian (Jira + Confluence) MCP server.
 JIRA_URL=YOUR_JIRA_INSTANCE_URL # Required for the orchestrator's RAG DB sync and for Xray. The base URL of your Jira
                                  # instance (e.g. https://your-company.atlassian.net). Also used by the separate Jira
                                  # MCP server (see "Jira MCP Server Setup" below), which has its own .env file.
@@ -328,7 +328,6 @@ QDRANT_METADATA_COLLECTION_NAME=rag_metadata # Default: rag_metadata. Name of th
 QDRANT_DOCUMENTS_COLLECTION_NAME=confluence_documents # Default: confluence_documents. Name of the collection the Confluence sync writes document parts to.
 RAG_MIN_SIMILARITY_SCORE=0.7 # Default: 0.7. Minimum similarity score for vector search results.
 RAG_MAX_RESULTS=5 # Default: 5. Maximum number of results to return from vector search.
-RAG_EMBEDDING_MODEL=Qwen/Qwen3-Embedding-0.6B # Default: Qwen/Qwen3-Embedding-0.6B. SentenceTransformer model for embeddings.
 EMBEDDING_SERVICE_URL= # Required for agents using Vector DB. URL of the embedding service for remote embedding generation.
 EMBEDDING_SERVICE_TIMEOUT_SECONDS=120.0 # Default: 120.0. Timeout for embedding service requests.
 EMBEDDING_SERVICE_MAX_RETRIES=6 # Default: 6. Connect/timeout retry attempts (with backoff) while the embedding service starts (e.g. Cloud Run cold start).
@@ -601,7 +600,7 @@ you run any of the commands below.
     * `JIRA_URL`
     * `ZEPHYR_API_TOKEN`
     * `ZEPHYR_BASE_URL`
-    * `JIRA_MCP_SERVER_URL`
+    * `ATLASSIAN_MCP_SERVER_URL`
     * `ORCHESTRATOR_API_KEY`
     * `QDRANT_API_KEY`
     * `DASHBOARD_USERNAME`
@@ -993,6 +992,33 @@ captured URL (browser history, proxy logs) cannot be replayed once the stream ex
 
 The first frame on the global stream has `event: snapshot` and carries the current agent
 registry plus all running tasks with their latest activity text.
+
+---
+
+## Migration Notes / Breaking Changes
+
+The document RAG and routing rework introduced the following breaking changes. Update your deployment and
+schedulers before upgrading:
+
+1. **`/update-rag-db` is removed.** It is replaced by `POST /update-jira-db` (Jira project sync; job mode answers
+   `202 Accepted` with the execution name) and `POST /update-confluence-db` (Confluence space or single-page sync,
+   with optional page ID, attachment name pattern and skip-page-body flag). Point existing schedulers at the new
+   endpoints.
+2. **`JIRA_MCP_SERVER_URL` is renamed to `ATLASSIAN_MCP_SERVER_URL`**, and the MCP Cloud Run service is renamed to
+   `atlassian-mcp-server` (a combined Jira + Confluence server). Update the setting, the secret and any references
+   to the old service URL.
+3. **`QDRANT_PORT` is removed.** `QDRANT_URL` is authoritative and must carry the port (e.g.
+   `http://localhost:6333`).
+4. **The embedding service `/embed` endpoint is replaced** by the backend-specific batch endpoints (e.g.
+   `/embed-document-text`, `/embed-query-text`); readiness is reported by `/ready` (unauthenticated) separately
+   from liveness `/health`.
+5. **Collections must be recreated and sync state reset.** The vector schema moved to named dense + sparse vectors
+   and the embedding model changed. Recreate the Jira and documents collections (or delete their sync-state
+   records), then run a full `/update-jira-db` per project and `/update-confluence-db` per space before relying on
+   duplicate detection or retrieval again.
+6. **New cloud resources are required:** the RAG sync Cloud Run job, the IAM binding letting the orchestrator run
+   it with overrides (`run.jobs.runWithOverrides`), and the Confluence secrets (`CONFLUENCE_URL`,
+   `CONFLUENCE_USERNAME`, `CONFLUENCE_API_TOKEN`) on the sync job and the MCP server.
 
 ---
 

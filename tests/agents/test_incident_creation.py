@@ -40,7 +40,7 @@ def mock_config():
         mock_conf.IncidentCreationAgentConfig.SKILL_NAME = "Incident Creation"
         mock_conf.IncidentCreationAgentConfig.SKILL_DESCRIPTION = "Creates incidents"
         mock_conf.IncidentCreationAgentConfig.THINKING_LEVEL = "HIGH"
-        mock_conf.JIRA_MCP_SERVER_URL = "http://jira-mcp"
+        mock_conf.ATLASSIAN_MCP_SERVER_URL = "http://jira-mcp"
         mock_conf.MCP_SERVER_TIMEOUT_SECONDS = 30
         mock_conf.QdrantConfig.COLLECTION_NAME = "jira_issues"
         mock_conf.QdrantConfig.MIN_SIMILARITY_SCORE = 0.7

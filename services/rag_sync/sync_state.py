@@ -81,16 +81,6 @@ class FingerprintStore:
     async def delete(self, scope: str, item_key: str) -> None:
         await self._metadata_db.delete_payload_record(self.record_id(scope, item_key))
 
-    async def delete_scope(self, scope: str) -> None:
-        """Deletes every fingerprint of a scope (a removed page takes its attachments)."""
-        records = await self._metadata_db.scroll_payload_records(
-            filter_by={"kind": FINGERPRINT_RECORD_KIND, "scope": scope}
-        )
-        for payload in records:
-            await self._metadata_db.delete_payload_record(
-                self.record_id(scope, payload["item_key"])
-            )
-
 
 def to_json(value: dict) -> str:
     """Canonical JSON for hashing-adjacent storage; keys sorted for stability."""

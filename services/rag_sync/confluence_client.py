@@ -121,9 +121,14 @@ class ConfluenceClient:
         )
 
     async def download_attachment(self, download_link: str) -> bytes:
-        """Downloads an attachment's bytes through its listed download link, which is
-        relative to the site's ``/wiki`` context path (not to the API base URL)."""
-        download_url = f"{self._base_url}/wiki{download_link}"
+        """Downloads an attachment's bytes through its listed download link.
+
+        The link is relative to the site's ``/wiki`` context path (not to the API base
+        URL), but Confluence may already return it with the ``/wiki`` prefix, so the
+        prefix is only added when the link doesn't carry it.
+        """
+        prefixed = download_link if download_link.startswith("/wiki") else f"/wiki{download_link}"
+        download_url = f"{self._base_url}{prefixed}"
         max_retries = config.DocumentRagConfig.CONFLUENCE_MAX_RETRIES
         for attempt in range(max_retries):
             try:

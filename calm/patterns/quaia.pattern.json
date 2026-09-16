@@ -17,7 +17,7 @@
         { "contains": { "properties": { "unique-id": { "const": "prompt-guard-service" } }, "required": ["unique-id"] } },
         { "contains": { "properties": { "unique-id": { "const": "embedding-service" } }, "required": ["unique-id"] } },
         { "contains": { "properties": { "unique-id": { "const": "qdrant" } }, "required": ["unique-id"] } },
-        { "contains": { "properties": { "unique-id": { "const": "jira-mcp-server" } }, "required": ["unique-id"] } },
+        { "contains": { "properties": { "unique-id": { "const": "atlassian-mcp-server" } }, "required": ["unique-id"] } },
         { "contains": { "properties": { "unique-id": { "const": "execution-agents" } }, "required": ["unique-id"] } },
         { "contains": { "properties": { "unique-id": { "const": "rag-sync-job" } }, "required": ["unique-id"] } },
         { "contains": { "properties": { "unique-id": { "const": "confluence" } }, "required": ["unique-id"] } },

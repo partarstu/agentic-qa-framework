@@ -29,6 +29,7 @@ index and misses attachment uploads):
 
 """
 
+import asyncio
 import base64
 import time
 
@@ -47,6 +48,10 @@ logger = utils.get_logger("confluence_sync")
 
 CONFLUENCE_SCOPE = "confluence"
 
+# Bounded concurrency for per-page attachment listings: enough to hide per-request
+# latency, small enough to stay polite to the Confluence API.
+ATTACHMENT_LISTING_CONCURRENCY = 4
+
 
 class AttachmentSkippedError(Exception):
     """An attachment is deliberately not ingested (unsupported format or over the size cap).
@@ -60,11 +65,14 @@ class ConfluenceRagSyncRunner:
     """Runs one Confluence sync for one scope (a space, optionally one page)."""
 
     def __init__(self) -> None:
+        # One shared metadata service: the documents db records/checks the model identity
+        # of its vectors through it (WS6), and the lock/state/fingerprint stores write to
+        # the same collection.
+        self._metadata_db = VectorDbService(config.QdrantConfig.METADATA_COLLECTION_NAME)
         self._documents_db = VectorDbService(
             config.DocumentRagConfig.DOCUMENTS_COLLECTION_NAME,
-            metadata_collection_name=config.QdrantConfig.METADATA_COLLECTION_NAME,
+            metadata_db=self._metadata_db,
         )
-        self._metadata_db = VectorDbService(config.QdrantConfig.METADATA_COLLECTION_NAME)
         self._lock_store = SyncLockStore(
             self._metadata_db,
             ttl_seconds=config.RagSyncConfig.LOCK_TTL_SECONDS,
@@ -228,21 +236,32 @@ class ConfluenceRagSyncRunner:
     async def _list_attachments(
         self, client: ConfluenceClient, pages: list[dict]
     ) -> tuple[bool, dict[str, list[dict]]]:
-        """Lists every page's attachments, metadata only.
+        """Lists every page's attachments, metadata only, with bounded concurrency.
 
         Filtering happens after this complete listing is retained, so an existing
         non-matching attachment is left untouched while a genuinely removed one is
-        still reconciled.
+        still reconciled. ANY page's listing failure makes the listing incomplete
+        (nothing is deleted this run), while the successful pages' listings are kept.
         """
+        semaphore = asyncio.Semaphore(ATTACHMENT_LISTING_CONCURRENCY)
+
+        async def list_one(page: dict) -> tuple[str, list[dict] | None]:
+            async with semaphore:
+                try:
+                    return str(page["id"]), await client.list_page_attachments(page["id"])
+                except Exception:
+                    logger.exception(f"Listing attachments of page {page['id']} failed; the run will delete nothing.")
+                    return str(page["id"]), None
+
+        results = await asyncio.gather(*(list_one(page) for page in pages))
         per_page: dict[str, list[dict]] = {}
-        for page in pages:
-            try:
-                attachments = await client.list_page_attachments(page["id"])
-            except Exception:
-                logger.exception(f"Listing attachments of page {page['id']} failed; the run will delete nothing.")
-                return False, per_page
-            per_page[str(page["id"])] = attachments
-        return True, per_page
+        listing_complete = True
+        for page_id, attachments in results:
+            if attachments is None:
+                listing_complete = False
+            else:
+                per_page[page_id] = attachments
+        return listing_complete, per_page
 
     async def _list_pages(
         self, client: ConfluenceClient, space_key: str, space_id: str, page_id: str | None
@@ -318,8 +337,12 @@ class ConfluenceRagSyncRunner:
                 return False
             logger.info(f"Version changed for {item_key} in {space_key}: {stored_fingerprint.get('version')} -> {version}.")
 
-        # Check 2: raw-content hash, for new and version-changed items only.
-        page_with_body = await client.get_page(page["id"])
+        # Check 2: raw-content hash, for new and version-changed items only. A
+        # page-scoped run's listing already fetched the page WITH its body, so it is
+        # reused; a space-scoped listing carries no bodies and fetches here.
+        page_with_body = (
+            page if page.get("body", {}).get("storage", {}).get("value") is not None else await client.get_page(page["id"])
+        )
         if page_with_body is None:
             logger.info(f"Page {item_key} disappeared before its body was fetched; skipping.")
             return False

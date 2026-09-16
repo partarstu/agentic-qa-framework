@@ -16,7 +16,7 @@ from agents.<agent_name>.prompt import <AgentName>SystemPrompt
 from common import utils
 from common.agent_base import AgentBase
 from common.models import AgentSkillDeclaration, <DepsModel>, <OutputModel>
-from common.services.jira_mcp import build_jira_mcp_server_toolset
+from common.services.atlassian_mcp import build_atlassian_mcp_server_toolset
 
 logger = utils.get_logger("<agent_name>_agent")
 
@@ -37,7 +37,7 @@ class <AgentName>Agent(AgentBase):
             output_type=<OutputModel>,
             instructions=instruction_prompt.get_prompt(),
             # Drop if the agent needs no MCP tools.
-            mcp_toolset_factories=[build_jira_mcp_server_toolset],
+            mcp_toolset_factories=[build_atlassian_mcp_server_toolset],
             # Optional: drop if the agent needs no typed dependencies.
             deps_type=<DepsModel>,
             skill=AgentSkillDeclaration(

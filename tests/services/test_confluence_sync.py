@@ -82,6 +82,12 @@ class TestNormalization:
         assert "Children listing" not in markdown
         assert "Kept." in markdown
 
+    def test_placeholders_dropped(self):
+        raw = '<p>Before<ac:placeholder>Screenshot here</ac:placeholder>After.</p>'
+        markdown = normalize_page_body(raw, "T")
+        assert "Screenshot here" not in markdown
+        assert "BeforeAfter." in markdown
+
     def test_unknown_macro_with_rich_body_kept_without_body_dropped(self):
         with_body = (
             '<ac:structured-macro ac:name="mystery"><ac:rich-text-body>'
@@ -167,7 +173,15 @@ class TestContentHash:
 
 
 class TestConfluenceClient:
-    async def test_download_link_resolves_against_the_wiki_context_path(self, monkeypatch):
+    @pytest.mark.parametrize(
+        "download_link",
+        [
+            "/download/attachments/111/guide.pdf?version=2",
+            "/wiki/download/attachments/111/guide.pdf?version=2",
+        ],
+        ids=["relative_link", "already_wiki_prefixed_link"],
+    )
+    async def test_download_link_resolves_against_the_wiki_context_path(self, monkeypatch, download_link):
         monkeypatch.setattr("config.CONFLUENCE_URL", "https://example.atlassian.net/")
         monkeypatch.setattr("config.CONFLUENCE_USERNAME", "user")
         monkeypatch.setattr("config.CONFLUENCE_API_TOKEN", "token")
@@ -182,7 +196,7 @@ class TestConfluenceClient:
             base_url="https://example.atlassian.net/wiki/api/v2", transport=httpx.MockTransport(handler)
         )
         try:
-            content = await client.download_attachment("/download/attachments/111/guide.pdf?version=2")
+            content = await client.download_attachment(download_link)
         finally:
             await client.close()
 
@@ -463,7 +477,9 @@ class TestConfluenceSyncRunner:
 
     async def test_failing_item_does_not_abort_and_cursor_not_saved(self, runner):
         runner_obj, _, _, state_store, fingerprints = runner
-        page = _page()
+        # A space-scoped listing is metadata-only, so the body is fetched per item;
+        # that fetch fails for this item.
+        page = {**_page(), "body": {}}
         client = _client_mock()
         client.get_space_id_by_key = AsyncMock(return_value="555")
         client.list_pages_in_space = AsyncMock(return_value=[page])
@@ -504,8 +520,9 @@ class TestConfluenceSyncRunner:
         with patch("rag_sync.confluence_sync.ConfluenceClient", return_value=client):
             result = await runner_obj.sync_space("DEV", page_id="111")
 
-        # The listing check and the body fetch both ask for the page.
-        assert client.get_page.await_count == 2
+        # The page-scoped listing fetches the page WITH its body, which the body
+        # sync then reuses - the page is fetched exactly once.
+        assert client.get_page.await_count == 1
         client.get_page.assert_awaited_with("111")
         assert result.status == "completed"
         assert result.processed_count == 1

@@ -819,11 +819,17 @@ class ConfluenceSyncRequest(BaseModel):
 
 
 async def _trigger_rag_sync(source: str, scope_id: str, runner_args: list[str]) -> Any:
-    """Acquires the scope lock (serialized) and starts the sync in the configured mode."""
+    """Acquires the scope lock (serialized) and starts the sync in the configured mode.
+
+    The in-process mutex covers only the lock acquisition: the Qdrant lock record guards
+    the scope for the rest of the run, so a long inline local-mode sync must not hold the
+    process-wide lock (which would block every other scope's acquisition).
+    """
     trigger = _get_rag_sync_trigger()
     try:
         async with _rag_sync_lock:
-            return await trigger.trigger(source, scope_id, runner_args)
+            token = await trigger.acquire(source, scope_id)
+        return await trigger.start(source, scope_id, runner_args, token)
     except SyncTriggerError as e:
         if e.start_confirmed:
             _record_error(str(e))
@@ -1725,25 +1731,27 @@ async def reserve_agent_waiting_if_needed(
     last_justification = "no routing decision was made"
 
     while (time.time() - start_time) < max_wait_time:
-        # Try to atomically select and reserve an agent
+        # The routing model call runs OUTSIDE the lock: concurrent task routing must not
+        # serialize behind each other's model calls. Only the check-and-reserve step below
+        # is atomic under agent_selection_lock.
+        decision = await _route_task(task_description, task_id)
+        last_justification = decision.justification
+
+        if decision.outcome == RoutingOutcome.NONE_SUITABLE:
+            # Fail fast: no registered agent can execute the task, so waiting is pointless.
+            _record_error(
+                f"No registered agent can execute task '{task_description}'. "
+                f"Routing justification: {decision.justification}",
+                task_id=task_id,
+            )
+            _handle_exception(
+                f"No registered agent can execute task '{task_description}'. "
+                f"Routing justification: {decision.justification}",
+                404,
+                task_id=task_id,
+            )
+
         async with agent_selection_lock:
-            decision = await _route_task(task_description, task_id)
-            last_justification = decision.justification
-
-            if decision.outcome == RoutingOutcome.NONE_SUITABLE:
-                # Fail fast: no registered agent can execute the task, so waiting is pointless.
-                _record_error(
-                    f"No registered agent can execute task '{task_description}'. "
-                    f"Routing justification: {decision.justification}",
-                    task_id=task_id,
-                )
-                _handle_exception(
-                    f"No registered agent can execute task '{task_description}'. "
-                    f"Routing justification: {decision.justification}",
-                    404,
-                    task_id=task_id,
-                )
-
             available_agent_ids = await agent_registry.get_available_agents()
             agent_id = _selected_agent_if_available(decision, available_agent_ids, task_description, task_id)
             if agent_id:
@@ -1761,11 +1769,11 @@ async def reserve_agent_waiting_if_needed(
                             extra={"task_id": task_id, "agent_id": agent_id},
                         )
                         return agent_id, agent_card
-            # Anything else counts as "a suitable agent exists but none is available right now":
-            # an invalid or unavailable selection is treated like busy, so the wait-and-retry loop
-            # continues - the suitable agent might become available later.
+        # Anything else counts as "a suitable agent exists but none is available right now":
+        # an invalid or unavailable selection is treated like busy, so the wait-and-retry loop
+        # continues - the suitable agent might become available later.
 
-        # No agent was reserved - wait and retry (outside the lock)
+        # No agent was reserved - wait and retry
         await asyncio.sleep(10)
 
     # Timeout reached: a suitable agent existed but stayed busy the whole time.
@@ -1873,11 +1881,8 @@ The list of all registered with you agents:
 """
     result = await _run_agent_with_retry(lambda: multi_discovery_agent.run(user_prompt))
     selected_agent_ids = result.output.ids or []
-    valid_agent_ids = []
-    for agent_id in selected_agent_ids:
-        # Verify agent exists AND is currently available
-        if agent_id in await agent_registry.get_available_agents():
-            valid_agent_ids.append(agent_id)
+    available_agent_ids = await agent_registry.get_available_agents()
+    valid_agent_ids = [agent_id for agent_id in selected_agent_ids if agent_id in available_agent_ids]
 
     if not valid_agent_ids or len(valid_agent_ids) < len(selected_agent_ids):
         # WS1: the justification explains why the selection came up empty or partial.
@@ -1960,9 +1965,13 @@ The list of all registered with you agents:
 """
     result = await _run_agent_with_retry(lambda: discovery_agent.run(user_prompt))
     decision = result.output
+    selected_agent_name = (
+        await agent_registry.get_name(decision.selected_agent_id) if decision.selected_agent_id else "Unknown"
+    )
     logger.info(
         f"Routing decision for task '{task_description}': outcome={decision.outcome.value}, "
-        f"selected_agent_id={decision.selected_agent_id}, justification: {decision.justification}",
+        f"selected_agent_name={selected_agent_name}, selected_agent_id={decision.selected_agent_id}, "
+        f"justification: {decision.justification}",
         extra={"task_id": task_id},
     )
     return decision

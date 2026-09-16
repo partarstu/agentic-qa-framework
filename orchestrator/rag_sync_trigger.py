@@ -48,15 +48,13 @@ class RagSyncTrigger:
         source: str,
         scope_id: str,
         runner_args: list[str],
-        scope_lock_args: list[str] | None = None,
     ):
-        """Acquire the scope lock and start the sync.
+        """Acquire the scope lock, then start the sync.
 
         Args:
             source: The sync source, ``jira`` or ``confluence``.
             scope_id: The project key or space key identifying the scope.
             runner_args: The runner arguments AFTER the source (e.g. ["--project-key", "PROJ"]).
-            scope_lock_args: Extra scope options the lock message should mention.
 
         Returns:
             A dict: job mode - ``{"status_code": 202, "execution": <name>}``;
@@ -65,6 +63,22 @@ class RagSyncTrigger:
         Raises:
             SyncTriggerError: When no mode is configured, the lock is held, or the
                 start failed. ``start_confirmed`` False means the failure kept the lock.
+        """
+        token = await self.acquire(source, scope_id)
+        return await self.start(source, scope_id, runner_args, token)
+
+    async def acquire(self, source: str, scope_id: str) -> str:
+        """Verifies a sync mode is configured and acquires the scope lock.
+
+        Splitting this from :meth:`start` lets the caller hold its in-process mutex
+        only around the lock acquisition, not around the (potentially long) start.
+
+        Returns:
+            The holder token of the acquired lock.
+
+        Raises:
+            SyncTriggerError: With ``start_confirmed=True`` when no mode is configured
+                or the scope lock is already held.
         """
         if not config.RagSyncConfig.JOB_NAME and not config.RagSyncConfig.SERVICE_URL:
             raise SyncTriggerError(
@@ -82,12 +96,20 @@ class RagSyncTrigger:
                 f"{lock.get('acquired_at')}, lock expires at {lock.get('expires_at')}).",
                 start_confirmed=True,
             )
-        token = state.lock_info["holder_token"]
+        return state.lock_info["holder_token"]
 
+    async def start(self, source: str, scope_id: str, runner_args: list[str], token: str):
+        """Starts the sync in the configured mode, holding the given lock token.
+
+        Raises:
+            SyncTriggerError: When the start failed. ``start_confirmed`` False means an
+                execution may still exist, so the lock is kept for the start allowance.
+        """
+        scope = scope_key(source, scope_id)
         try:
             if config.RagSyncConfig.JOB_NAME:
                 return await self._start_job(source, runner_args, token)
-            return await self._run_locally(source, runner_args + (scope_lock_args or []), token)
+            return await self._run_locally(source, runner_args, token)
         except SyncTriggerError:
             raise
         except Exception as e:

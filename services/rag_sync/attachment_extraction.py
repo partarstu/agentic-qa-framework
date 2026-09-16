@@ -152,10 +152,27 @@ def _page_text_with_ocr(page: Any, native_text: str, page_image: bytes | None) -
 
 
 def _render_page(page: Any) -> bytes | None:
-    """Renders one PDF page to a normalized PNG within the configured pixel cap."""
+    """Renders one PDF page to a normalized PNG within the configured pixel cap.
+
+    The PIL image is built directly from the pixmap samples (encoding the pixmap to
+    PNG and re-decoding it with Pillow would do the pixel work twice).
+    """
+    from PIL import Image
+
     try:
         pixmap = page.get_pixmap(dpi=config.DocumentRagConfig.RENDER_DPI)
-        return _normalize_png(pixmap.tobytes("png"))
+        max_pixels = config.DocumentRagConfig.MAX_IMAGE_PIXELS
+        # Decompression-bomb guard on the raw raster, mirroring the decoder-side cap.
+        if pixmap.width * pixmap.height > max_pixels * max_pixels:
+            logger.warning(
+                "Rendered page exceeds the pixel cap (%dx%d); the page stays text-only.",
+                pixmap.width,
+                pixmap.height,
+            )
+            return None
+        mode = "RGBA" if pixmap.alpha else "RGB"
+        image = Image.frombytes(mode, (pixmap.width, pixmap.height), pixmap.samples)
+        return _image_to_png(image)
     except Exception:
         logger.warning("Page rendering failed; the page stays text-only.", exc_info=True)
         return None

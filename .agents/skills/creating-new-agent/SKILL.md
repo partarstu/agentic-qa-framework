@@ -65,11 +65,11 @@ It must inherit `BaseAgentResult`, which carries `llm_comments` for the model to
 
 Create `agents/<agent_name>/main.py` from [resources/agent_template.py](resources/agent_template.py):
 
-- Pass MCP tools as **factories** (`mcp_toolset_factories=[build_jira_mcp_server_toolset]`), never live toolsets:
+- Pass MCP tools as **factories** (`mcp_toolset_factories=[build_atlassian_mcp_server_toolset]`), never live toolsets:
   `AgentBase` opens a fresh MCP session for every run and closes it afterwards, so a stale session never breaks the
   next request. Omit the argument if the agent needs no MCP tools.
 - A sub-agent needing Jira tools opens its own session per run:
-  `async with build_jira_mcp_server_toolset() as toolset: await sub_agent.run(prompt, toolsets=[toolset])`.
+  `async with build_atlassian_mcp_server_toolset() as toolset: await sub_agent.run(prompt, toolsets=[toolset])`.
 - Custom tools are methods passed via `tools=[...]`. The LLM sees their signature and docstring, so the docstring is
   the tool specification.
 - Pass the declared skill via `skill=AgentSkillDeclaration(...)` (required): it becomes the agent card's skill and

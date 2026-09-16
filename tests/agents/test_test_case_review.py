@@ -28,7 +28,7 @@ def mock_config():
         mock_conf.TestCaseReviewAgentConfig.THINKING_LEVEL = "LOW"
         mock_conf.TestCaseReviewAgentConfig.MAX_REQUESTS_PER_TASK = 8
         mock_conf.TestCaseReviewAgentConfig.REVIEW_COMPLETE_STATUS_NAME = "Review Complete"
-        mock_conf.JIRA_MCP_SERVER_URL = "http://jira-mcp"
+        mock_conf.ATLASSIAN_MCP_SERVER_URL = "http://jira-mcp"
         mock_conf.MCP_SERVER_TIMEOUT_SECONDS = 30
         mock_conf.BudgetConfig.TOTAL_TOKENS_LIMIT_PER_TASK = 500_000
         yield mock_conf

@@ -18,19 +18,23 @@ from common import utils
 from common.agent_base import AgentBase
 from common.custom_llm_wrapper import CustomLlmWrapper
 from common.models import AgentSkillDeclaration, JiraUserStory, RequirementsReviewFeedback
+from common.services.atlassian_mcp import build_atlassian_mcp_server_toolset
 from common.services.document_retrieval import (
     RetrievalScope,
     assemble_retrieved_parts,
     retrieve_documents,
 )
 from common.services.jira_attachments import download_issue_attachments
-from common.services.jira_mcp import build_jira_mcp_server_toolset
 from common.services.vector_db_service import VectorDbService
 
 if TYPE_CHECKING:
     from pydantic_ai.messages import BinaryContent
 
 logger = utils.get_logger("reviewer_agent")
+
+# The Jira tools this agent actually uses (WS11 per-agent tool filtering): it reads the
+# issue through the MCP server and posts the review feedback as a comment.
+_JIRA_TOOL_ALLOWLIST = ("jira_get_issue", "jira_add_comment")
 
 _SCOPE_PARAM_LENGTH_CAP = 200
 
@@ -82,7 +86,7 @@ class RequirementsReviewAgent(AgentBase):
             version=config.RequirementsReviewAgentConfig.VERSION,
             output_type=RequirementsReviewFeedback,
             instructions=instructions,
-            mcp_toolset_factories=[build_jira_mcp_server_toolset],
+            mcp_toolset_factories=[lambda: build_atlassian_mcp_server_toolset(_JIRA_TOOL_ALLOWLIST)],
             deps_type=JiraUserStory,
             skill=AgentSkillDeclaration(
                 id=config.RequirementsReviewAgentConfig.SKILL_ID,

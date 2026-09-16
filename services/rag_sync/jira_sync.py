@@ -46,8 +46,13 @@ class JiraRagSyncRunner:
     """Runs one Jira sync for one project to completion, honouring the scope lock."""
 
     def __init__(self) -> None:
-        self._issues_db = VectorDbService(config.QdrantConfig.TICKETS_COLLECTION_NAME)
+        # One shared metadata service: the issues db records/checks the model identity of
+        # its vectors through it (WS6), and the lock/state stores write to the same collection.
         self._metadata_db = VectorDbService(config.QdrantConfig.METADATA_COLLECTION_NAME)
+        self._issues_db = VectorDbService(
+            config.QdrantConfig.TICKETS_COLLECTION_NAME,
+            metadata_db=self._metadata_db,
+        )
         self._lock_store = SyncLockStore(
             self._metadata_db,
             ttl_seconds=config.RagSyncConfig.LOCK_TTL_SECONDS,

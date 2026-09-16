@@ -9,10 +9,15 @@ from agents.test_case_classification.prompt import TestCaseClassificationSystemP
 from common import utils
 from common.agent_base import AgentBase
 from common.models import AgentSkillDeclaration, ClassifiedTestCases, TestCaseKeys
-from common.services.jira_mcp import build_jira_mcp_server_toolset
+from common.services.atlassian_mcp import build_atlassian_mcp_server_toolset
 from common.services.test_management_system_client_provider import get_test_management_client
 
 logger = utils.get_logger("test_case_classification_agent")
+
+# The classification agent works purely on the test cases handed to it and labels them
+# through the test management system, so it is filtered down to no Atlassian tools at
+# all (WS11 per-agent tool filtering).
+_JIRA_TOOL_ALLOWLIST: tuple[str, ...] = ()
 
 
 class TestCaseClassificationAgent(AgentBase):
@@ -30,7 +35,7 @@ class TestCaseClassificationAgent(AgentBase):
             version=config.TestCaseClassificationAgentConfig.VERSION,
             output_type=ClassifiedTestCases,
             instructions=instruction_prompt.get_prompt(),
-            mcp_toolset_factories=[build_jira_mcp_server_toolset],
+            mcp_toolset_factories=[lambda: build_atlassian_mcp_server_toolset(_JIRA_TOOL_ALLOWLIST)],
             deps_type=TestCaseKeys,
             skill=AgentSkillDeclaration(
                 id=config.TestCaseClassificationAgentConfig.SKILL_ID,

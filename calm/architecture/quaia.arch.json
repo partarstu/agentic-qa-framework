@@ -212,10 +212,10 @@
       "description": "Stores embeddings for semantic search and duplicate detection."
     },
     {
-      "unique-id": "jira-mcp-server",
+      "unique-id": "atlassian-mcp-server",
       "node-type": "service",
-      "name": "Jira MCP Server",
-      "description": "Model Context Protocol server bridging agents and Jira."
+      "name": "Atlassian MCP Server",
+      "description": "Model Context Protocol server bridging agents and Atlassian (Jira and Confluence)."
     },
     {
       "unique-id": "cloud-run",
@@ -390,8 +390,8 @@
       }
     },
     {
-      "unique-id": "rel-requirements-review-jira-mcp",
-      "description": "Requirements Review Agent reads Jira data through the Jira MCP server.",
+      "unique-id": "rel-requirements-review-atlassian-mcp",
+      "description": "Requirements Review Agent reads Jira data through the Atlassian MCP server.",
       "protocol": "HTTPS",
       "relationship-type": {
         "connects": {
@@ -399,22 +399,37 @@
             "node": "requirements-review-agent"
           },
           "destination": {
-            "node": "jira-mcp-server"
+            "node": "atlassian-mcp-server"
           }
         }
       }
     },
     {
-      "unique-id": "rel-jira-mcp-jira",
-      "description": "Jira MCP server communicates with the external Jira instance.",
+      "unique-id": "rel-atlassian-mcp-jira",
+      "description": "The Atlassian MCP server communicates with the external Jira instance.",
       "protocol": "HTTPS",
       "relationship-type": {
         "connects": {
           "source": {
-            "node": "jira-mcp-server"
+            "node": "atlassian-mcp-server"
           },
           "destination": {
             "node": "jira"
+          }
+        }
+      }
+    },
+    {
+      "unique-id": "rel-atlassian-mcp-confluence",
+      "description": "The Atlassian MCP server reads Confluence content over the Confluence REST API.",
+      "protocol": "HTTPS",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "atlassian-mcp-server"
+          },
+          "destination": {
+            "node": "confluence"
           }
         }
       }
@@ -435,13 +450,30 @@
       }
     },
     {
-      "unique-id": "rel-orchestrator-embedding",
-      "description": "Orchestrator requests embeddings from the embedding service while syncing Jira issues into the RAG store.",
+      "unique-id": "rel-requirements-review-embedding",
+      "description": "Requirements Review Agent requests embeddings of the focused retrieval query from the embedding service.",
       "protocol": "HTTPS",
+      "controls": {
+        "internal-service-api-key": {
+          "description": "Calls to the embedding service carry the shared internal X-API-Key.",
+          "requirements": [
+            {
+              "requirement-url": "https://quaia.finos.calm/controls/authentication.requirement.json",
+              "config": {
+                "control-id": "quaia-internal-api-key-embedding",
+                "name": "Internal Service API Key",
+                "description": "Calls to the embedding service carry the shared X-API-Key (INTERNAL_SERVICE_API_KEY).",
+                "auth-method": "api-key",
+                "enforced": false
+              }
+            }
+          ]
+        }
+      },
       "relationship-type": {
         "connects": {
           "source": {
-            "node": "orchestrator"
+            "node": "requirements-review-agent"
           },
           "destination": {
             "node": "embedding-service"
@@ -514,8 +546,55 @@
       }
     },
     {
+      "unique-id": "rel-requirements-review-qdrant",
+      "description": "Requirements Review Agent runs hybrid retrieval over the documents collection in Qdrant to ground the review in Confluence documentation.",
+      "protocol": "HTTPS",
+      "controls": {
+        "vector-db-api-key": {
+          "description": "Calls to Qdrant carry the shared QDRANT_API_KEY when one is configured.",
+          "requirements": [
+            {
+              "requirement-url": "https://quaia.finos.calm/controls/authentication.requirement.json",
+              "config": {
+                "control-id": "quaia-qdrant-api-key",
+                "name": "Qdrant API Key",
+                "description": "Every client into the vector database authenticates with the shared QDRANT_API_KEY when one is configured.",
+                "auth-method": "api-key",
+                "enforced": false
+              }
+            }
+          ]
+        }
+      },
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "requirements-review-agent"
+          },
+          "destination": {
+            "node": "qdrant"
+          }
+        }
+      }
+    },
+    {
+      "unique-id": "rel-requirements-review-jira",
+      "description": "Requirements Review Agent downloads the reviewed issue's attachments over the Jira REST API.",
+      "protocol": "HTTPS",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "requirements-review-agent"
+          },
+          "destination": {
+            "node": "jira"
+          }
+        }
+      }
+    },
+    {
       "unique-id": "rel-orchestrator-jira",
-      "description": "Orchestrator reads Jira issues over the Jira REST API to keep the RAG store in sync.",
+      "description": "Orchestrator reads test-management data from the Xray app over the Jira REST API when fetching automated test cases for execution.",
       "protocol": "HTTPS",
       "relationship-type": {
         "connects": {
@@ -544,7 +623,7 @@
             "prompt-guard-service",
             "embedding-service",
             "qdrant",
-            "jira-mcp-server",
+            "atlassian-mcp-server",
             "rag-sync-job"
           ]
         }

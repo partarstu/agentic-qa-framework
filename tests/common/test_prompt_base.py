@@ -117,3 +117,28 @@ def test_override_with_same_placeholders_loads(override_dir):
     )
     prompt = IncidentPrompt("prompt_template.txt")
     assert prompt.get_prompt() == "Custom incident prompt {PRIORITY_VALUES} and {TERMINAL_STATUSES}"
+
+
+def test_override_resolving_outside_the_override_dir_is_rejected(override_dir, tmp_path_factory):
+    """An override whose resolved path escapes the override directory (e.g. a symlink
+    pointing out of it) is rejected instead of loaded."""
+    prompts_dir = override_dir / "prompts"
+    prompts_dir.mkdir(exist_ok=True)
+    (prompts_dir / "routing_instruction_template.txt").write_text("ESCAPED", encoding="utf-8")
+    outside_file = tmp_path_factory.mktemp("outside") / "routing_instruction_template.txt"
+    outside_file.write_text("ESCAPED", encoding="utf-8")
+
+    real_resolve = Path.resolve
+    override_candidate = (Path(override_dir).resolve() / "prompts" / "routing_instruction_template.txt").resolve()
+
+    def resolve_escaping(self: Path, strict: bool = False) -> Path:
+        # Simulates the override file being a symlink to a location outside the dir.
+        if real_resolve(self) == override_candidate:
+            return outside_file
+        return real_resolve(self)
+
+    with (
+        patch.object(Path, "resolve", resolve_escaping),
+        pytest.raises(ValueError, match="escapes"),
+    ):
+        RealBundledPrompt("routing_instruction_template.txt")

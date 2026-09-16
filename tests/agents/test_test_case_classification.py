@@ -27,7 +27,7 @@ def mock_config():
         mock_conf.TestCaseClassificationAgentConfig.SKILL_DESCRIPTION = "Classifies test cases"
         mock_conf.TestCaseClassificationAgentConfig.THINKING_LEVEL = "LOW"
         mock_conf.TestCaseClassificationAgentConfig.MAX_REQUESTS_PER_TASK = 5
-        mock_conf.JIRA_MCP_SERVER_URL = "http://jira-mcp"
+        mock_conf.ATLASSIAN_MCP_SERVER_URL = "http://jira-mcp"
         mock_conf.MCP_SERVER_TIMEOUT_SECONDS = 30
         yield mock_conf
 

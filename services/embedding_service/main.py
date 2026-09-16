@@ -90,8 +90,12 @@ def health_check():
 
 
 @app.get("/ready")
-async def readiness_check(_: None = Depends(_require_service_auth)):
-    """Readiness: every enabled backend is loaded. The Cloud Run startup probe targets this."""
+async def readiness_check():
+    """Readiness: every enabled backend is loaded. The Cloud Run startup probe targets this.
+
+    Deliberately unauthenticated: the startup probe cannot send headers, so requiring the
+    internal API key here would break the deployment (liveness stays open the same way).
+    """
     missing = [name for name in _registry.enabled_names if not await _is_backend_ready(name)]
     if missing:
         raise HTTPException(status_code=503, detail=f"Backends not ready: {missing}")

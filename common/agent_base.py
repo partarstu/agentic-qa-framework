@@ -107,7 +107,12 @@ class AgentBase(ABC):
 
         self.vector_db_service = None
         if vector_db_collection_name:
-            self.vector_db_service = VectorDbService(vector_db_collection_name)
+            # The metadata collection makes the agent's reads/writes refuse to run against
+            # vectors produced by a different embedding model (WS6 model identity).
+            self.vector_db_service = VectorDbService(
+                vector_db_collection_name,
+                metadata_collection_name=config.QdrantConfig.METADATA_COLLECTION_NAME,
+            )
         self.latest_received_message: Message | None = None
         # Token usage of the most recent run; reset per task by the executor and read back
         # by it to emit the usage artifact. None until a run completes.
@@ -167,7 +172,7 @@ class AgentBase(ABC):
 
     def _get_mcp_server_description(self) -> str:
         """The MCP server the per-run toolsets connect to, or a marker when the agent uses none."""
-        return config.JIRA_MCP_SERVER_URL if self.mcp_toolset_factories else "none"
+        return config.ATLASSIAN_MCP_SERVER_URL if self.mcp_toolset_factories else "none"
 
     async def _get_agent_execution_result(self, received_request: list[UserContent]) -> AgentRunResult[Any] | None:
         usage_limits = UsageLimits(
@@ -188,7 +193,7 @@ class AgentBase(ABC):
                     if _contains_connect_error(eg) and self.mcp_toolset_factories:
                         raise ConnectionError(
                             f"MCP connection failed: could not connect to MCP server "
-                            f"{config.JIRA_MCP_SERVER_URL}. Ensure the MCP server is running and accessible."
+                            f"{config.ATLASSIAN_MCP_SERVER_URL}. Ensure the MCP server is running and accessible."
                         ) from eg
                     raise
             except (ModelHTTPError, httpx.TransportError) as e:

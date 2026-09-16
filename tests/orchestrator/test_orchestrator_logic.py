@@ -5,7 +5,16 @@
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from a2a.types import AgentCapabilities, AgentCard, AgentInterface, Artifact, Part, TaskArtifactUpdateEvent
+from a2a.types import (
+    AgentCapabilities,
+    AgentCard,
+    AgentInterface,
+    AgentSkill,
+    Artifact,
+    Part,
+    TaskArtifactUpdateEvent,
+)
+from fastapi import HTTPException
 
 import config
 from common.models import RoutingOutcome
@@ -16,6 +25,7 @@ from orchestrator.main import (
     _discover_agents,
     _fetch_agent_card,
     _finalize_task,
+    _get_agents_info,
     _handle_stream_chunk,
     _health_check_agents,
     _LogStreamState,
@@ -24,6 +34,7 @@ from orchestrator.main import (
     agent_registry,
     cancellation_queue,
     discovery_agent,
+    reserve_agent_waiting_if_needed,
 )
 from orchestrator.models import TaskStatus
 
@@ -116,6 +127,15 @@ def _routing_result(outcome: RoutingOutcome, selected_agent_id: str | None = Non
     return mock_result
 
 
+def _routing_decision(outcome: RoutingOutcome, selected_agent_id: str | None = None) -> MagicMock:
+    """Mocked routing decision as ``_route_task`` returns it (no ``output`` wrapper)."""
+    decision = MagicMock()
+    decision.outcome = outcome
+    decision.selected_agent_id = selected_agent_id
+    decision.justification = "Test justification."
+    return decision
+
+
 @pytest.mark.asyncio
 async def test_route_task_agent_selected(clear_registry, mock_agent_card):
     # Register an agent first
@@ -170,6 +190,127 @@ async def test_select_agent_none_found(clear_registry, mock_agent_card):
 
         agent_id = await _select_agent("some task", [])
         assert agent_id is None
+
+
+# =============================================================================
+# Agent reservation outcomes (WS1)
+# =============================================================================
+
+
+@pytest.fixture
+def mock_error_history():
+    """Mock error_history to prevent asyncio event loop issues."""
+    with patch("orchestrator.main.error_history") as mock:
+        mock.add = AsyncMock()
+        yield mock
+
+
+@pytest.fixture
+def single_retry_then_timeout(monkeypatch):
+    """One full wait-and-retry loop pass, then the wait budget is exhausted."""
+    fake_time = MagicMock()
+    fake_time.time.side_effect = [0, 0, config.OrchestratorConfig.TASK_EXECUTION_TIMEOUT + 1]
+    monkeypatch.setattr("orchestrator.main.time", fake_time)
+    monkeypatch.setattr("orchestrator.main.asyncio.sleep", AsyncMock())
+
+
+@pytest.mark.asyncio
+async def test_reserve_none_suitable_fails_fast_with_404_and_dashboard_error(
+    clear_registry, mock_agent_card, mock_error_history
+):
+    await agent_registry.register("test-id", mock_agent_card)
+
+    with (
+        patch(
+            "orchestrator.main._route_task",
+            new_callable=AsyncMock,
+            return_value=_routing_decision(RoutingOutcome.NONE_SUITABLE),
+        ),
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await reserve_agent_waiting_if_needed("some task", task_id="task-1")
+
+    assert exc_info.value.status_code == 404
+    assert "No registered agent can execute task" in exc_info.value.detail
+    assert "Test justification." in exc_info.value.detail
+    mock_error_history.add.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_reserve_busy_timeout_names_suitable_but_busy_with_last_justification(
+    clear_registry, mock_agent_card, mock_error_history, single_retry_then_timeout
+):
+    await agent_registry.register("test-id", mock_agent_card)
+
+    with (
+        patch(
+            "orchestrator.main._route_task",
+            new_callable=AsyncMock,
+            return_value=_routing_decision(RoutingOutcome.SUITABLE_BUT_BUSY),
+        ),
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await reserve_agent_waiting_if_needed("some task")
+
+    assert exc_info.value.status_code == 503
+    assert "A suitable agent exists but none of the suitable agents became available" in exc_info.value.detail
+    assert "Last routing justification: Test justification." in exc_info.value.detail
+
+
+@pytest.mark.asyncio
+async def test_reserve_invalid_selected_id_is_treated_like_busy(
+    clear_registry, mock_agent_card, mock_error_history, single_retry_then_timeout, caplog
+):
+    """An unavailable selected ID must not be reserved; the loop retries like the busy case."""
+    await agent_registry.register("test-id", mock_agent_card)
+    await agent_registry.update_status("test-id", AgentStatus.BUSY)
+
+    with (
+        patch(
+            "orchestrator.main._route_task",
+            new_callable=AsyncMock,
+            return_value=_routing_decision(RoutingOutcome.AGENT_SELECTED, "test-id"),
+        ),
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await reserve_agent_waiting_if_needed("some task")
+
+    assert exc_info.value.status_code == 503
+    assert "A suitable agent exists but none of the suitable agents became available" in exc_info.value.detail
+    assert "invalid or unavailable agent ID 'test-id'" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_get_agents_info_lists_skills_and_availability_for_every_agent(clear_registry, mock_agent_card):
+    reviewer_card = AgentCard(
+        name="Reviewer",
+        description="Reviews user stories",
+        version="1.2.0",
+        capabilities=AgentCapabilities(streaming=False),
+        skills=[
+            AgentSkill(
+                id="review-skill",
+                name="Jira Requirements Review",
+                description="Reviews user stories against requirements",
+                tags=["review"],
+            )
+        ],
+        default_input_modes=["text"],
+        default_output_modes=["text"],
+        supported_interfaces=[AgentInterface(protocol_binding="JSONRPC", url="http://localhost:8001")],
+    )
+    await agent_registry.register("reviewer-id", reviewer_card)
+    await agent_registry.register("worker-id", mock_agent_card)
+    await agent_registry.update_status("worker-id", AgentStatus.BUSY)
+
+    info = await _get_agents_info()
+
+    assert "ID: reviewer-id" in info
+    assert "ID: worker-id" in info  # busy agents are listed too
+    assert "Jira Requirements Review" in info
+    assert "Reviews user stories against requirements" in info
+    assert "Availability: available" in info
+    assert "not available (BUSY)" in info
 
 
 @pytest.mark.asyncio
