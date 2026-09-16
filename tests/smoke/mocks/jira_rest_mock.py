@@ -41,10 +41,23 @@ _SEEDED_SEARCH_ISSUE = {
 }
 
 # The seeded story's attachments, mirroring jira_mcp_mock's: a plain-text policy and a
-# JSON attachment (served under a text-equivalent media type by the downloader).
+# JSON attachment (served under a text-equivalent media type by the downloader). The
+# ``content`` field is the ABSOLUTE URL Jira Cloud returns (WS5 downloader uses it as-is).
 _ATTACHMENTS = [
-    {"id": "10001", "filename": "reset-policy.txt", "mimeType": "text/plain", "size": 116},
-    {"id": "10002", "filename": "reset-request.json", "mimeType": "application/json", "size": 45},
+    {
+        "id": "10001",
+        "filename": "reset-policy.txt",
+        "mimeType": "text/plain",
+        "size": 116,
+        "content": "http://jira_rest_mock:8080/rest/api/2/attachment/content/10001",
+    },
+    {
+        "id": "10002",
+        "filename": "reset-request.json",
+        "mimeType": "application/json",
+        "size": 45,
+        "content": "http://jira_rest_mock:8080/rest/api/2/attachment/content/10002",
+    },
 ]
 _ATTACHMENT_CONTENT = {
     "reset-policy.txt": (

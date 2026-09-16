@@ -14,6 +14,8 @@ boundary, read back from its ``/__recorded`` endpoint:
                            with the MCP download tool left unused.
 * Requirements review   -> the flow issued a documents-collection hybrid query with a focused
                            (shorter than the issue) query text (WS10).
+* Requirements review   -> in visual mode (opt-in, WS6) that hybrid query carries the third visual
+                           prefetch, and the query text is embedded through the visual endpoint too.
 * Requirements review   -> with JIRA_ADDITIONAL_FIELD_IDS configured, the agent requests those custom
                            field IDs (together with the standard content fields) when fetching the story.
 * Test-case generation  -> real test cases (name + steps) reached Zephyr.
@@ -26,6 +28,9 @@ boundary, read back from its ``/__recorded`` endpoint:
                            execution dates, and the created bug was linked to that execution.
 * Test execution        -> the incident-creation flow consulted the vector DB for duplicates.
 * RAG DB update         -> the sync pushed the seeded story into the vector DB.
+* RAG DB update         -> in visual mode (opt-in, WS6) the Confluence sync's base64 page images
+                           reach the visual endpoint, and the visual vectors land on the part-0
+                           attachment points only.
 * Agent traceability    -> the version an agent is started with reaches the dashboard agents view,
                            the orchestrator's own version reaches the dashboard status view, and the
                            executing agent's name, version and environment reach the created bug.
@@ -207,6 +212,59 @@ def test_review_flow_issued_a_documents_hybrid_query_with_a_focused_query_text(
     assert any(text.strip() and len(text) < len(issue_content) for text in query_texts), (
         f"No focused embed-query-text call (non-empty and shorter than the issue content) "
         f"accompanied the documents query. Query texts: {query_texts}"
+    )
+
+
+def test_review_flow_hybrid_query_carries_the_visual_prefetch(
+    requirements_review_response: httpx.Response, http_client: httpx.Client
+) -> None:
+    """WS6 visual mode (opt-in): the review flow's documents hybrid query must carry the
+    third visual prefetch (no score threshold, full limit), and the same focused query
+    text must have been embedded through the visual query endpoint as well."""
+    data = wait_for_recorded(
+        http_client,
+        QDRANT_RECORDED_URL,
+        lambda d: any(
+            q.get("collection") == DOCUMENTS_COLLECTION_NAME
+            and {p.get("using") for p in q.get("prefetches", [])} == {"dense", "sparse", "visual"}
+            for q in d.get("hybrid_queries", [])
+        ),
+    )
+    documents_queries = [q for q in data.get("hybrid_queries", []) if q.get("collection") == DOCUMENTS_COLLECTION_NAME]
+    visual_queries = [
+        q
+        for q in documents_queries
+        if {p.get("using") for p in q.get("prefetches", [])} == {"dense", "sparse", "visual"}
+    ]
+    assert visual_queries, (
+        f"No documents hybrid query carries the visual prefetch. Prefetch names: "
+        f"{[{p.get('using') for p in q.get('prefetches', [])} for q in documents_queries]}"
+    )
+    prefetches = {p["using"]: p for p in visual_queries[-1]["prefetches"]}
+    assert prefetches["visual"].get("score_threshold") is None, (
+        f"The visual prefetch must not carry the similarity threshold: {prefetches['visual']}"
+    )
+    assert prefetches["visual"].get("limit") == prefetches["dense"].get("limit"), (
+        f"The visual prefetch limit must cover the final limit: {prefetches}"
+    )
+
+    text_query_texts = {
+        text
+        for call in data.get("embedding_calls", [])
+        if call.get("endpoint") == "/embed-query-text"
+        for text in call.get("texts", [])
+        if text.strip()
+    }
+    visual_query_texts = {
+        text
+        for call in data.get("embedding_calls", [])
+        if call.get("endpoint") == "/embed-visual-query-text"
+        for text in call.get("texts", [])
+        if text.strip()
+    }
+    assert text_query_texts & visual_query_texts, (
+        f"The focused query text was not embedded through the visual endpoint. "
+        f"Text queries: {text_query_texts}, visual queries: {visual_query_texts}"
     )
 
 
@@ -417,10 +475,17 @@ def test_created_bug_linked_to_test_execution(
 def test_incident_creation_consulted_vector_db(
     execute_tests_response: httpx.Response, http_client: httpx.Client
 ) -> None:
-    """The duplicate search must run a hybrid (dense + sparse, RRF-fused) query."""
-    data = wait_for_recorded(http_client, QDRANT_RECORDED_URL, lambda d: bool(d.get("hybrid_queries")))
-    hybrid_queries = data.get("hybrid_queries", [])
-    assert hybrid_queries, f"No hybrid query reached the vector DB. Recorded: {data}"
+    """The duplicate search must run a hybrid (dense + sparse, RRF-fused) query against
+    the tickets collection — which stays two-prefetch even with visual mode enabled."""
+    data = wait_for_recorded(
+        http_client,
+        QDRANT_RECORDED_URL,
+        lambda d: any(q.get("collection") == TICKETS_COLLECTION_NAME for q in d.get("hybrid_queries", [])),
+    )
+    hybrid_queries = [
+        q for q in data.get("hybrid_queries", []) if q.get("collection") == TICKETS_COLLECTION_NAME
+    ]
+    assert hybrid_queries, f"No hybrid query reached the tickets collection. Recorded: {data}"
     query = hybrid_queries[0]
     using_names = {p.get("using") for p in query.get("prefetches", [])}
     assert using_names == {"dense", "sparse"}, f"Expected dense + sparse prefetches, got {using_names}"
@@ -567,6 +632,57 @@ def test_confluence_attachment_pages_reached_vector_db_with_chain_and_image(
     downloaded = {item.get("filename") for item in confluence.get("attachment_downloads", [])}
     assert {"reset-policy.pdf", "flow-diagram.png"}.issubset(downloaded), (
         f"The sync did not download both attachments: {confluence}"
+    )
+
+
+def test_page_images_reached_the_visual_embedding_endpoint(
+    update_confluence_db_response: httpx.Response, http_client: httpx.Client
+) -> None:
+    """WS6 visual mode (opt-in): embedding the attachment pages must send their base64
+    page images to the visual endpoint — one per image-bearing page, both attachments."""
+    data = wait_for_recorded(
+        http_client,
+        QDRANT_RECORDED_URL,
+        lambda d: any(c.get("endpoint") == "/embed-page-image" for c in d.get("embedding_calls", [])),
+    )
+    image_calls = [c for c in data.get("embedding_calls", []) if c.get("endpoint") == "/embed-page-image"]
+    total_images = sum(c.get("image_count", 0) for c in image_calls)
+    assert total_images >= 2, (
+        f"Expected the page images of both seeded attachments on /embed-page-image: {image_calls}"
+    )
+    assert all(length > 0 for c in image_calls for length in c.get("image_lengths", [])), (
+        f"The visual endpoint received empty image payloads: {image_calls}"
+    )
+
+
+def test_visual_vectors_landed_on_part_zero_attachment_points(
+    update_confluence_db_response: httpx.Response, http_client: httpx.Client
+) -> None:
+    """WS6 visual mode (opt-in): the visual vector must be attached to the part-0
+    attachment points only — the points that carry the page image."""
+    data = wait_for_recorded(
+        http_client,
+        QDRANT_RECORDED_URL,
+        lambda d: any(
+            p.get("collection") == DOCUMENTS_COLLECTION_NAME
+            and p.get("payload", {}).get("content_kind") == "attachment"
+            and p.get("payload", {}).get("part_index") == 0
+            and "visual" in (p.get("vector_names") or [])
+            for p in d.get("upserted_points", [])
+        ),
+    )
+    visual_points = [
+        p
+        for p in data.get("upserted_points", [])
+        if p.get("collection") == DOCUMENTS_COLLECTION_NAME and "visual" in (p.get("vector_names") or [])
+    ]
+    assert all(
+        p["payload"].get("content_kind") == "attachment" and p["payload"].get("part_index") == 0
+        for p in visual_points
+    ), f"A visual vector reached a point other than a part-0 attachment point: {visual_points}"
+    named = {p["payload"].get("attachment_name") for p in visual_points}
+    assert {"reset-policy.pdf", "flow-diagram.png"}.issubset(named), (
+        f"Not every seeded image-bearing attachment got a visual vector: {sorted(named)}"
     )
 
 

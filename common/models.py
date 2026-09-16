@@ -2,6 +2,7 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
+import base64
 import hashlib
 import uuid
 from abc import ABC, abstractmethod
@@ -75,6 +76,10 @@ class VectorizableBaseModel(JsonSerializableModel, ABC):
         """Returns the content to be embedded."""
         pass
 
+    def get_visual_image(self) -> bytes | None:
+        """Returns the raw page image this record carries for the visual backend, if any."""
+        return None
+
 
 class JiraUserStory(JsonSerializableModel):
     id: int
@@ -145,6 +150,10 @@ class DocumentPagePart(VectorizableBaseModel):
 
     def get_embedding_content(self) -> str:
         return self.text
+
+    def get_visual_image(self) -> bytes | None:
+        """The decoded page image; only part 0 of an attachment page carries one."""
+        return base64.b64decode(self.image) if self.image else None
 
 
 class ProjectMetadata(VectorizableBaseModel):

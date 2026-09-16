@@ -37,6 +37,12 @@ embedding-service = [
     "sentence-transformers==5.2.2",
     "einops==0.8.2",
 ]
+# Visual backend of the embedding service (opt-in): sentence-transformers already
+# provides the model runtime; Pillow is what sentence-transformers[image] adds for
+# image inputs (no torchvision needed for inference).
+embedding-visual = [
+    "pillow==12.3.0",
+]
 prompt-guard-service = [
     "transformers==4.57.3",
     "torch==2.9.1",

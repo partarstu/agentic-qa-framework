@@ -364,8 +364,11 @@ RAG_OCR_TEXT_THRESHOLD_CHARACTERS=20 # Default: 20. Pages below this native-text
 # Embedding Service Configuration
 EMBEDDING_BACKENDS=text # Default: text. Comma-separated enabled backends ("text", "visual").
 EMBEDDING_TEXT_MODEL=BAAI/bge-m3 # Default: BAAI/bge-m3. Multilingual model producing dense and learned-sparse output in one pass.
-EMBEDDING_MAX_BATCH_SIZE=32 # Default: 32. Maximum number of texts per embedding request.
+EMBEDDING_VISUAL_MODEL= # Unset by default. Visual model checkpoint, e.g. BAAI/BGE-VL-base. Required when EMBEDDING_BACKENDS includes "visual".
+EMBEDDING_MAX_BATCH_SIZE=32 # Default: 32. Maximum number of texts or images per embedding request.
 EMBEDDING_MAX_TEXT_LENGTH=50000 # Default: 50000. Maximum text length (characters) per input.
+EMBEDDING_MAX_IMAGE_BYTES=10485760 # Default: 10 MiB. Maximum decoded size per page image accepted by /embed-page-image.
+EMBEDDING_VISUAL_ENABLED=false # Default: false. Set true on the documents-collection clients (RAG sync job, requirements-review agent) to write and query the visual vector; see "Visual document retrieval".
 
 # Incident Creation Agent Configuration
 INCIDENT_AGENT_MIN_SIMILARITY_SCORE=0.7 # Default: 0.7. Minimum score for duplicate detection.
@@ -392,9 +395,46 @@ PROMPT_INJECTION_MODEL_NAME=ProtectAI/deberta-v3-base-prompt-injection-v2 # Defa
 **Note on Local Models:**
 If you are running the orchestrator or agents locally (not in a Docker container deployed to the cloud), you must manually download the necessary models:
 1. **Prompt Injection Detection Model:** Required if `PROMPT_INJECTION_CHECK_ENABLED` is set to `True`. Run `scripts/download_prompt_guard_model.py`.
-2. **Embedding Model:** Required for components using the Vector DB (the Incident Creation agent and the Orchestrator, which runs the Jira RAG sync). Run `scripts/download_embedding_model.py`.
+2. **Embedding Model:** Required for components using the Vector DB (the Incident Creation agent and the Orchestrator, which runs the Jira RAG sync). Run `scripts/download_embedding_model.py`. The optional visual model is downloaded as well when `EMBEDDING_DOWNLOAD_VISUAL_MODEL=true` and `EMBEDDING_VISUAL_MODEL` are set (see *Visual document retrieval*).
 
 When deploying to cloud environments via Docker, the model downloads are handled automatically as part of the Docker image build process.
+
+#### Visual document retrieval (opt-in)
+
+The embedding service can run an additional **visual backend** so that Confluence attachment page images become
+searchable alongside their text. The checkpoint is **`BAAI/BGE-VL-base`** (MIT licence), a 149M-parameter CLIP-style
+model (base: `openai/clip-vit-base-patch16`) that embeds page images and query texts into one shared 512-dimensional
+vector space. Unlike a ColPali-style late-interaction model it emits a single dense vector per page image, so the
+documents collection stores it as a third named vector `visual` on the image-bearing part-0 points. The sync embeds
+each page image through `/embed-page-image`; retrieval embeds the query once through `/embed-visual-query-text` and
+adds a third prefetch fused with the text prefetches. The `RAG_MIN_SIMILARITY_SCORE` threshold keeps applying to the
+dense-text branch only. With `EMBEDDING_VISUAL_ENABLED=false` (the default) nothing changes: no visual vectors are
+written and no visual queries run.
+
+To enable it:
+
+1. Build the embedding-service image with `_EMBEDDING_DOWNLOAD_VISUAL_MODEL=true` and
+   `_EMBEDDING_VISUAL_MODEL=BAAI/BGE-VL-base`. The model is downloaded into the image at build time; runtime
+   downloads stay disabled.
+2. Set `EMBEDDING_BACKENDS=text,visual` and `EMBEDDING_VISUAL_MODEL=BAAI/BGE-VL-base` on the embedding service.
+3. Set `EMBEDDING_VISUAL_ENABLED=true` on the clients of the documents collection: the RAG sync job (writes the
+   visual vectors) and the requirements-review agent (queries them).
+
+Notes and trade-offs:
+
+* **Sizing.** The visual model adds a second model (~0.6 GB checkpoint, 149M parameters) to the embedding service.
+  It is CPU-viable, but raise `_EMBEDDING_MEMORY` (e.g. `12Gi`) and `_EMBEDDING_CPU` (e.g. `4`) for visual
+  deployments.
+* **Migration.** Enabling visual mode on an *existing* documents collection requires recreating the collection and
+  resetting the scope's sync state (see *Migration Notes / Breaking Changes*), so the next sync re-ingests everything
+  with the new schema. Switching the visual model later has the same requirement: the collection records the visual
+  model identity separately from the text one and refuses to mix.
+* **Out-of-distribution caveat.** BGE-VL was trained on natural images (MegaPairs); rendered document page images are
+  out of distribution, so page-image retrieval quality may be noticeably weaker than text grounding. The visual
+  channel supplements the text path, it does not replace it.
+* **Dependency.** The visual backend runs on the already-pinned `sentence-transformers==5.2.2`; the new
+  `embedding-visual` extra adds only `pillow==12.3.0` (what `sentence-transformers[image]` resolves to; no
+  torchvision is needed for inference).
 
 ### Jira MCP Server Setup
 
@@ -638,6 +678,13 @@ gcloud builds submit --config 'path/to/your/cloudbuild.yaml' --substitutions "`^
   interact with.
 * `_PROMPT_GUARD_SERVICE_URL`: The URL of the deployed Prompt Guard Service.
 * `_EMBEDDING_SERVICE_URL`: The URL of the deployed Embedding Service.
+* `_EMBEDDING_MEMORY` / `_EMBEDDING_CPU`: Memory and CPU of the embedding service. Defaults: `8Gi` / `2`; visual mode
+  needs larger values (see *Visual document retrieval*).
+* `_EMBEDDING_BACKENDS` / `_EMBEDDING_TEXT_MODEL` / `_EMBEDDING_VISUAL_MODEL` / `_EMBEDDING_DOWNLOAD_VISUAL_MODEL`:
+  The embedding service's enabled backends and models. The visual model is downloaded into the image only when
+  `_EMBEDDING_DOWNLOAD_VISUAL_MODEL=true` (see *Visual document retrieval*).
+* `_EMBEDDING_VISUAL_ENABLED`: Set `true` to write and query visual vectors; it is wired to the RAG sync job and the
+  requirements-review agent.
 * `_QDRANT_URL`: The URL of the deployed Qdrant service.
 * `_QDRANT_STORAGE_FOLDER`: The subdirectory within `_BUCKET_NAME` mounted as Qdrant's storage volume. Default: `qdrant`.
 * `_TIMEZONE`: The `TZ` environment variable applied to every deployed service. Default: `Europe/Vienna`.

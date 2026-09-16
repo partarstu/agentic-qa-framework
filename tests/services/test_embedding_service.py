@@ -197,6 +197,23 @@ class TestWarmUp:
         from embedding_service.backends.registry import create_registry
 
         with pytest.raises(ValueError, match="Unknown embedding backend"):
+            create_registry(("bogus",))
+
+    def test_create_registry_accepts_visual_backend(self):
+        from embedding_service.backends.registry import create_registry
+
+        with patch("config.EmbeddingServiceConfig.VISUAL_MODEL_NAME", "BAAI/BGE-VL-base"):
+            registry = create_registry(("text", "visual"))
+
+        assert registry.enabled_names == ("text", "visual")
+
+    def test_create_registry_visual_requires_model_name(self):
+        from embedding_service.backends.registry import create_registry
+
+        with (
+            patch("config.EmbeddingServiceConfig.VISUAL_MODEL_NAME", None),
+            pytest.raises(ValueError, match="EMBEDDING_VISUAL_MODEL"),
+        ):
             create_registry(("visual",))
 
 
@@ -222,3 +239,251 @@ class TestModuleImport:
 
         _ = registry_module.create_registry  # module import alone is ML-free
         assert "FlagEmbedding" not in sys.modules
+
+    def test_visual_backend_import_and_construction_are_ml_free(self, monkeypatch):
+        """Constructing the visual backend (registry incl.) must not import its ML library."""
+        monkeypatch.delitem(sys.modules, "sentence_transformers", raising=False)
+        from embedding_service.backends import registry as registry_module
+
+        with patch("config.EmbeddingServiceConfig.VISUAL_MODEL_NAME", "BAAI/BGE-VL-base"):
+            registry_module.create_registry(("visual",))
+
+        assert "sentence_transformers" not in sys.modules
+
+
+def _tiny_png() -> bytes:
+    import io
+
+    from PIL import Image
+
+    buffer = io.BytesIO()
+    Image.new("RGB", (2, 2)).save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def test_base_backend_visual_methods_are_not_implemented():
+    from embedding_service.backends.base import EmbeddingBackend
+
+    backend = EmbeddingBackend()
+    with pytest.raises(NotImplementedError):
+        backend.embed_page_images([b"png"])
+    with pytest.raises(NotImplementedError):
+        backend.embed_visual_query_texts(["query"])
+
+
+def _tiny_png_b64() -> str:
+    import base64
+
+    return base64.b64encode(_tiny_png()).decode("ascii")
+
+
+class TestVisualBackend:
+    def _loaded_backend(self, local_model: bool):
+        # The conftest stub may have been popped by an earlier lazy-import test, so the
+        # fake sentence_transformers module is scoped to this test via patch.dict.
+        stub = MagicMock()
+        with patch.dict(sys.modules, {"sentence_transformers": stub}):
+            from embedding_service.backends.visual_backend import BgeVlVisualBackend
+
+            backend = BgeVlVisualBackend()
+            with (
+                patch("config.EmbeddingServiceConfig.VISUAL_MODEL_NAME", "BAAI/BGE-VL-base"),
+                patch("config.EmbeddingServiceConfig.VISUAL_MODEL_PATH", "/models/visual"),
+                patch("os.path.isdir", return_value=local_model),
+                patch("os.listdir", return_value=["model.safetensors"] if local_model else []),
+            ):
+                backend.load()
+        return backend, stub.SentenceTransformer
+
+    def test_load_uses_local_copy_when_present(self):
+        backend, sentence_transformer = self._loaded_backend(local_model=True)
+
+        sentence_transformer.assert_called_once_with("/models/visual", trust_remote_code=True)
+        assert backend.is_loaded()
+
+    def test_load_falls_back_to_the_configured_model_name(self):
+        with patch.dict(sys.modules, {"sentence_transformers": MagicMock()}):
+            from embedding_service.backends.visual_backend import BgeVlVisualBackend
+
+            backend = BgeVlVisualBackend()
+            with (
+                patch("config.EmbeddingServiceConfig.VISUAL_MODEL_NAME", "BAAI/BGE-VL-base"),
+                patch("config.EmbeddingServiceConfig.VISUAL_MODEL_PATH", "/models/visual"),
+                patch("os.path.isdir", return_value=False),
+            ):
+                backend.load()
+                sentence_transformer = sys.modules["sentence_transformers"].SentenceTransformer
+
+        sentence_transformer.assert_called_once_with("BAAI/BGE-VL-base", trust_remote_code=True)
+        assert backend.is_loaded()
+
+        with patch("config.EmbeddingServiceConfig.VISUAL_MODEL_NAME", "BAAI/BGE-VL-base"):
+            assert backend.model_name() == "BAAI/BGE-VL-base"
+
+    def test_embed_page_images_returns_one_vector_per_image(self):
+        backend, _ = self._loaded_backend(local_model=False)
+        vector = MagicMock()
+        vector.tolist.return_value = [0.5, 0.5]
+        backend._model.encode.return_value = [vector]
+
+        result = backend.embed_page_images([_tiny_png()])
+
+        assert result == [[0.5, 0.5]]
+        (pil_images,), _ = backend._model.encode.call_args
+        assert len(pil_images) == 1
+
+    def test_embed_visual_query_texts_returns_one_vector_per_text(self):
+        backend, _ = self._loaded_backend(local_model=False)
+        vector = MagicMock()
+        vector.tolist.return_value = [0.6, 0.6]
+        backend._model.encode.return_value = [vector]
+
+        result = backend.embed_visual_query_texts(["diagram of login flow"])
+
+        assert result == [[0.6, 0.6]]
+        backend._model.encode.assert_called_once_with(["diagram of login flow"])
+
+
+@pytest.fixture
+def mock_visual_backend():
+    backend = MagicMock()
+    backend.name = "visual"
+    backend.is_loaded.return_value = True
+    backend.model_name.return_value = "BAAI/BGE-VL-base"
+    backend.embed_page_images.return_value = [[0.5, 0.5]]
+    backend.embed_visual_query_texts.return_value = [[0.6, 0.6]]
+    return backend
+
+
+@pytest.fixture
+def visual_app_with_backends(mock_text_backend, mock_visual_backend):
+    """The service app with the registry mocked to the text and visual backends."""
+    backends = {"text": mock_text_backend, "visual": mock_visual_backend}
+
+    with patch("embedding_service.main._registry") as mock_registry:
+        mock_registry.enabled_names = ("text", "visual")
+        mock_registry.is_enabled.side_effect = lambda name: name in backends
+        mock_registry.get_loaded = AsyncMock(side_effect=lambda name: backends[name])
+        mock_registry.warm_up = AsyncMock()
+
+        from embedding_service import main as service_main
+
+        yield service_main, mock_registry, mock_visual_backend
+
+
+@pytest.fixture
+def visual_client(visual_app_with_backends):
+    service_main, _, _ = visual_app_with_backends
+    with TestClient(service_main.app) as test_client:
+        yield test_client
+
+
+class TestVisualEndpoints:
+    def test_embed_page_image_returns_vector_and_model(self, visual_client, mock_visual_backend):
+        response = visual_client.post("/embed-page-image", json={"images": [_tiny_png_b64()]})
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["vectors"] == [[0.5, 0.5]]
+        assert body["model"] == "BAAI/BGE-VL-base"
+        images = mock_visual_backend.embed_page_images.call_args.args[0]
+        assert images == [_tiny_png()]
+
+    def test_embed_page_image_accepts_batches(self, visual_client, mock_visual_backend):
+        mock_visual_backend.embed_page_images.return_value = [[0.5], [0.5]]
+
+        response = visual_client.post(
+            "/embed-page-image", json={"images": [_tiny_png_b64(), _tiny_png_b64()]}
+        )
+
+        assert response.status_code == 200
+        assert len(response.json()["vectors"]) == 2
+
+    def test_embed_page_image_rejects_oversized_image(self, visual_client):
+        with patch("embedding_service.main.config.EmbeddingServiceConfig") as mock_config:
+            mock_config.MAX_BATCH_SIZE = 10
+            mock_config.MAX_IMAGE_BYTES = 4
+            response = visual_client.post("/embed-page-image", json={"images": [_tiny_png_b64()]})
+
+        assert response.status_code == 422
+        assert "exceeds the limit of 4" in response.json()["detail"]
+
+    def test_embed_page_image_rejects_batch_over_limit(self, visual_client):
+        with patch("embedding_service.main.config.EmbeddingServiceConfig") as mock_config:
+            mock_config.MAX_BATCH_SIZE = 1
+            mock_config.MAX_IMAGE_BYTES = 10_000_000
+            response = visual_client.post(
+                "/embed-page-image", json={"images": [_tiny_png_b64(), _tiny_png_b64()]}
+            )
+
+        assert response.status_code == 422
+        assert "exceeds the limit of 1" in response.json()["detail"]
+
+    def test_embed_page_image_rejects_invalid_base64(self, visual_client):
+        response = visual_client.post("/embed-page-image", json={"images": ["not base64!!!"]})
+
+        assert response.status_code == 422
+        assert "not valid base64" in response.json()["detail"]
+
+    def test_embed_page_image_rejects_non_image_bytes(self, visual_client, mock_visual_backend):
+        from PIL import UnidentifiedImageError
+
+        mock_visual_backend.embed_page_images.side_effect = UnidentifiedImageError("not an image")
+
+        response = visual_client.post(
+            "/embed-page-image", json={"images": [_tiny_png_b64()]}
+        )
+
+        assert response.status_code == 422
+        assert "not a valid image" in response.json()["detail"]
+
+    def test_embed_visual_query_text_returns_vector_and_model(self, visual_client, mock_visual_backend):
+        response = visual_client.post("/embed-visual-query-text", json={"texts": ["login diagram"]})
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["vectors"] == [[0.6, 0.6]]
+        assert body["model"] == "BAAI/BGE-VL-base"
+        mock_visual_backend.embed_visual_query_texts.assert_called_once_with(["login diagram"])
+
+    def test_embed_visual_query_text_rejects_over_limit_batch(self, visual_client):
+        with patch("embedding_service.main.config.EmbeddingServiceConfig") as mock_config:
+            mock_config.MAX_BATCH_SIZE = 2
+            mock_config.MAX_TEXT_LENGTH = 1000
+            response = visual_client.post("/embed-visual-query-text", json={"texts": ["a", "b", "c"]})
+
+        assert response.status_code == 422
+        assert "exceeds the limit of 2" in response.json()["detail"]
+
+    def test_disabled_visual_backend_returns_clear_error(self, visual_app_with_backends):
+        service_main, mock_registry, _ = visual_app_with_backends
+        mock_registry.is_enabled.side_effect = lambda name: name == "text"
+        with TestClient(service_main.app) as client:
+            response = client.post("/embed-page-image", json={"images": [_tiny_png_b64()]})
+            assert response.status_code == 404
+            assert "Backend 'visual' is not enabled." in response.json()["detail"]
+
+            response = client.post("/embed-visual-query-text", json={"texts": ["login diagram"]})
+            assert response.status_code == 404
+            assert "Backend 'visual' is not enabled." in response.json()["detail"]
+
+    def test_visual_endpoints_auth_required_when_key_configured(self, visual_app_with_backends):
+        service_main, _, _ = visual_app_with_backends
+        with patch.object(service_main.config, "INTERNAL_SERVICE_API_KEY", "secret"):
+            test_client = TestClient(service_main.app)
+            assert test_client.post("/embed-page-image", json={"images": [_tiny_png_b64()]}).status_code == 401
+            assert test_client.post("/embed-visual-query-text", json={"texts": ["q"]}).status_code == 401
+
+            authorized = {"X-API-Key": "secret"}
+            assert (
+                test_client.post(
+                    "/embed-page-image", json={"images": [_tiny_png_b64()]}, headers=authorized
+                ).status_code
+                == 200
+            )
+            assert (
+                test_client.post(
+                    "/embed-visual-query-text", json={"texts": ["q"]}, headers=authorized
+                ).status_code
+                == 200
+            )

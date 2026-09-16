@@ -358,6 +358,8 @@ class EmbeddingServiceConfig:
     # Input limits guarding against memory exhaustion.
     MAX_BATCH_SIZE = int(os.environ.get("EMBEDDING_MAX_BATCH_SIZE", "32"))
     MAX_TEXT_LENGTH = int(os.environ.get("EMBEDDING_MAX_TEXT_LENGTH", "50000"))
+    # Decoded size cap per page image accepted by /embed-page-image.
+    MAX_IMAGE_BYTES = int(os.environ.get("EMBEDDING_MAX_IMAGE_BYTES", str(10 * 1024 * 1024)))
 
 
 class RagSyncConfig:
@@ -394,6 +396,12 @@ class DocumentRagConfig:
 
     # Documents collection holding page-body chunks and attachment page parts.
     DOCUMENTS_COLLECTION_NAME = os.environ.get("QDRANT_DOCUMENTS_COLLECTION_NAME", "confluence_documents")
+    # Visual mode (opt-in): when true, attachment page images are embedded through the
+    # embedding service's visual backend into a named 'visual' vector, and document
+    # queries add a visual prefetch. Requires the embedding service to run with the
+    # visual backend enabled and EMBEDDING_VISUAL_MODEL set. Enabling it on an existing
+    # documents collection requires recreating the collection and resetting sync state.
+    VISUAL_ENABLED = os.environ.get("EMBEDDING_VISUAL_ENABLED", "false").lower() in ("true", "1", "t")
     # Confluence REST v2 page size for listing calls.
     LIST_PAGE_SIZE = int(os.environ.get("RAG_CONFLUENCE_LIST_PAGE_SIZE", "50"))
     # Retries for Confluence 429/5xx responses, honouring Retry-After.

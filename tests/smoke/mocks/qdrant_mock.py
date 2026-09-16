@@ -11,10 +11,11 @@ here; the incident-creation agent's duplicate search probes the collection list
 and, when the collection exists, queries it (always answered with no hits, so the
 "no duplicates -> create a fresh bug" path is taken deterministically).
 
-``POST /embed-document-text`` and ``POST /embed-query-text`` stand in for the
-embedding service — ``VectorDbService`` embeds every text before storing or
-querying, and the vector values themselves are irrelevant here — so the whole
-flow stays hermetic and LLM-free.
+``POST /embed-document-text``, ``POST /embed-query-text``, ``POST /embed-page-image`` and
+``POST /embed-visual-query-text`` stand in for the embedding service —
+``VectorDbService`` embeds every text and (in visual mode) every attachment page
+image before storing or querying, and the vector values themselves are irrelevant
+here — so the whole flow stays hermetic and LLM-free.
 
 ``GET /`` answers the qdrant-client's version-compatibility probe, and everything
 recorded is exposed at ``GET /__recorded`` for the smoke assertions.
@@ -65,6 +66,34 @@ async def embed_query_text(request: Request) -> dict:
     return _embeddings_response(texts)
 
 
+@app.post("/embed-page-image")
+async def embed_page_image(request: Request) -> dict:
+    """Visual-mode stand-in for the embedding service's page-image endpoint.
+
+    Only the base64 images' lengths are recorded (the payloads themselves would bloat
+    the recording); the smoke assertions use them to prove real page images arrived.
+    """
+    payload = await request.json()
+    images = payload.get("images", [])
+    _recorded["embedding_calls"].append(
+        {
+            "endpoint": "/embed-page-image",
+            "image_count": len(images),
+            "image_lengths": [len(image) for image in images],
+        }
+    )
+    return _visual_response(len(images))
+
+
+@app.post("/embed-visual-query-text")
+async def embed_visual_query_text(request: Request) -> dict:
+    """Visual-mode stand-in for the embedding service's visual query endpoint."""
+    payload = await request.json()
+    texts = payload.get("texts", [])
+    _recorded["embedding_calls"].append({"endpoint": "/embed-visual-query-text", "texts": texts})
+    return _visual_response(len(texts))
+
+
 def _fake_embedding() -> dict:
     return {"dense": [0.1] * _EMBEDDING_DIM, "sparse": {"indices": [1], "values": [0.5]}}
 
@@ -72,6 +101,11 @@ def _fake_embedding() -> dict:
 def _embeddings_response(texts: list) -> dict:
     """The embedding service response shape, including the model identity field."""
     return {"model": "mock-model", "embeddings": [_fake_embedding() for _ in texts]}
+
+
+def _visual_response(count: int) -> dict:
+    """The visual endpoint response shape: one dense visual vector per input."""
+    return {"model": "mock-visual-model", "vectors": [[0.2] * _EMBEDDING_DIM for _ in range(count)]}
 
 
 @app.get("/collections")
@@ -95,8 +129,15 @@ async def upsert_points(name: str, request: Request) -> dict:
     points = _collections.setdefault(name, {})
     for point in payload.get("points", []):
         points[str(point["id"])] = point
+        vector = point.get("vector")
         _recorded["upserted_points"].append(
-            {"collection": name, "id": point["id"], "payload": point.get("payload", {})}
+            {
+                "collection": name,
+                "id": point["id"],
+                "payload": point.get("payload", {}),
+                # Named-vector names only; the values are irrelevant in the smoke flow.
+                "vector_names": sorted(vector) if isinstance(vector, dict) else [],
+            }
         )
     return _UPDATE_RESULT
 

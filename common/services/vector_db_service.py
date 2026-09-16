@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 
 import asyncio
+import base64
 import time
 import uuid
 
@@ -18,6 +19,8 @@ logger = utils.get_logger("vector_db_service")
 # Named vectors on every collection this service manages: dense + learned-sparse.
 DENSE_VECTOR_NAME = "dense"
 SPARSE_VECTOR_NAME = "sparse"
+# Opt-in visual vector on the documents collection (one dense vector per page image).
+VISUAL_VECTOR_NAME = "visual"
 
 
 # Payload fields indexed per collection kind after creation (WS7 plan table):
@@ -91,39 +94,31 @@ class VectorDbService:
         if self._metadata_db is not None:
             await self._metadata_db.close()
 
-    async def _embed_texts(self, texts: list[str], query: bool = False):
-        """Embeds texts through the embedding service.
+    async def _post_embeddings(self, endpoint: str, payload: dict, item_count: int) -> dict | None:
+        """POSTs one embedding request to the embedding service.
 
-        Uses the document-text endpoint (no query instruction) unless ``query`` is set.
         Retries transient transport failures with backoff, honouring the configured caps.
 
         Returns:
-            A tuple (embeddings, model): embeddings is a list of
-            (dense vector, sparse indices, sparse values) tuples, one per input text;
-            model is the identity of the model that produced them.
+            The parsed response body, carrying the model identity alongside the embeddings.
         """
         if not self.embedding_service_url:
             raise ValueError("EMBEDDING_SERVICE_URL is not configured.")
 
-        endpoint = "/embed-query-text" if query else "/embed-document-text"
         max_retries = self._embedding_max_retries
-        logger.info(f"Calling embedding service{endpoint} ({len(texts)} text(s))...")
+        logger.info(f"Calling embedding service{endpoint} ({item_count} item(s))...")
         start = time.monotonic()
 
         for attempt in range(max_retries):
             try:
                 headers = {"X-API-Key": config.INTERNAL_SERVICE_API_KEY} if config.INTERNAL_SERVICE_API_KEY else None
                 response = await self._http_client.post(
-                    f"{self.embedding_service_url}{endpoint}", json={"texts": texts}, headers=headers
+                    f"{self.embedding_service_url}{endpoint}", json=payload, headers=headers
                 )
                 response.raise_for_status()
                 body = response.json()
-                embeddings = [
-                    (item["dense"], item["sparse"]["indices"], item["sparse"]["values"])
-                    for item in body["embeddings"]
-                ]
                 logger.info(f"Embedding service call completed in {time.monotonic() - start:.3f}s")
-                return embeddings, body.get("model")
+                return body
             except (httpx.TimeoutException, httpx.ConnectError) as e:
                 if attempt == max_retries - 1:
                     logger.exception(
@@ -143,6 +138,49 @@ class VectorDbService:
                 raise
         return None
 
+    async def _embed_texts(self, texts: list[str], query: bool = False):
+        """Embeds texts through the embedding service.
+
+        Uses the document-text endpoint (no query instruction) unless ``query`` is set.
+
+        Returns:
+            A tuple (embeddings, model): embeddings is a list of
+            (dense vector, sparse indices, sparse values) tuples, one per input text;
+            model is the identity of the model that produced them.
+        """
+        endpoint = "/embed-query-text" if query else "/embed-document-text"
+        body = await self._post_embeddings(endpoint, {"texts": texts}, len(texts))
+        embeddings = [
+            (item["dense"], item["sparse"]["indices"], item["sparse"]["values"])
+            for item in body["embeddings"]
+        ]
+        return embeddings, body.get("model")
+
+    async def _embed_visual_query_texts(self, texts: list[str]) -> tuple[list[list[float]], str | None]:
+        """Embeds query texts through the visual backend (one dense vector per text)."""
+        body = await self._post_embeddings("/embed-visual-query-text", {"texts": texts}, len(texts))
+        return body["vectors"], body.get("model")
+
+    async def _embed_page_images(self, images: list[bytes]) -> tuple[list[list[float]], str | None]:
+        """Embeds page images through the visual backend, in batches respecting the
+        embedding service's batch limit (an upsert batch may hold more images than that)."""
+        batch_size = int(getattr(config.EmbeddingServiceConfig, "MAX_BATCH_SIZE", 32))
+        vectors: list[list[float]] = []
+        model = None
+        for start in range(0, len(images), batch_size):
+            chunk = images[start : start + batch_size]
+            encoded = [base64.b64encode(image).decode("ascii") for image in chunk]
+            body = await self._post_embeddings("/embed-page-image", {"images": encoded}, len(chunk))
+            vectors.extend(body["vectors"])
+            model = body.get("model")
+        return vectors, model
+
+    def _visual_enabled(self) -> bool:
+        """Whether this collection carries visual vectors (opt-in documents mode only)."""
+        return bool(getattr(config.DocumentRagConfig, "VISUAL_ENABLED", False)) and (
+            self.collection_name == config.DocumentRagConfig.DOCUMENTS_COLLECTION_NAME
+        )
+
     async def _get_embedding(self, text: str) -> list[float]:
         """Dense embedding of one text, for call sites that don't use the sparse vector yet."""
         embeddings, _ = await self._embed_texts([text])
@@ -156,9 +194,11 @@ class VectorDbService:
     async def ensure_collection(self):
         """Creates the collection with the hybrid schema (named dense + sparse vectors).
 
-        The dense size is detected from the embedding service. The model that produced
-        the vectors is recorded in the metadata collection, and later writes/queries
-        refuse to run with a different model. Payload indexes are (re-)ensured
+        The dense size is detected from the embedding service. In visual mode (opt-in,
+        documents collection only) creation adds the named ``visual`` dense vector, its
+        size detected from the visual backend the same way. The models that produced
+        the vectors are recorded in the metadata collection, and later writes/queries
+        refuse to run with different models. Payload indexes are (re-)ensured
         idempotently, so a collection created before its indexes existed still gets
         them on the next ensure.
         """
@@ -170,13 +210,20 @@ class VectorDbService:
             return
         embeddings, model = await self._embed_texts(["test"])
         vector_size = len(embeddings[0][0])
+        vectors_config = {
+            DENSE_VECTOR_NAME: models.VectorParams(size=vector_size, distance=models.Distance.COSINE)
+        }
+        visual_model = None
+        if self._visual_enabled():
+            visual_vectors, visual_model = await self._embed_visual_query_texts(["test"])
+            vectors_config[VISUAL_VECTOR_NAME] = models.VectorParams(
+                size=len(visual_vectors[0]), distance=models.Distance.COSINE
+            )
 
         try:
             await self.client.create_collection(
                 collection_name=self.collection_name,
-                vectors_config={
-                    DENSE_VECTOR_NAME: models.VectorParams(size=vector_size, distance=models.Distance.COSINE)
-                },
+                vectors_config=vectors_config,
                 sparse_vectors_config={
                     SPARSE_VECTOR_NAME: models.SparseVectorParams(modifier=models.Modifier.IDF)
                 },
@@ -193,6 +240,8 @@ class VectorDbService:
 
         if self._metadata_db is not None:
             await self._metadata_db._store_model_identity(self.collection_name, model)
+            if visual_model is not None:
+                await self._metadata_db._store_model_identity(self.collection_name, visual_model, visual=True)
         self._ensured = True
 
     def _indexed_fields(self) -> dict[str, models.PayloadSchemaType]:
@@ -224,46 +273,50 @@ class VectorDbService:
                 else:
                     raise
 
-    async def _verify_model_identity(self, model: str) -> None:
+    async def _verify_model_identity(self, model: str, *, visual: bool = False) -> None:
         """Fails with a clear error when the collection's vectors come from a different model.
 
         Without this check, switching the embedding model would silently mix vector
-        spaces in one collection. Collections created before this check existed are
-        treated as unclaimed and claimed by the first writer.
+        spaces in one collection. The text (dense) and visual spaces carry separate
+        identity records, so switching one refuses to mix without touching the other.
+        Collections created before this check existed are treated as unclaimed and
+        claimed by the first writer.
         """
         if self._metadata_db is None:
             return
-        stored = await self._metadata_db._get_model_identity(self.collection_name)
+        stored = await self._metadata_db._get_model_identity(self.collection_name, visual=visual)
         if stored is not None and stored != model:
+            vector_name = VISUAL_VECTOR_NAME if visual else DENSE_VECTOR_NAME
             raise RuntimeError(
-                f"Collection '{self.collection_name}' holds vectors from model '{stored}', "
-                f"but the embedding service now uses '{model}'. Recreate the collection and "
-                f"reset its sync state to re-ingest."
+                f"Collection '{self.collection_name}' holds {vector_name} vectors from model "
+                f"'{stored}', but the embedding service now uses '{model}'. Recreate the "
+                f"collection and reset its sync state to re-ingest."
             )
         if stored is None:
-            await self._metadata_db._store_model_identity(self.collection_name, model)
+            await self._metadata_db._store_model_identity(self.collection_name, model, visual=visual)
 
-    def _model_identity_id(self, collection_name: str) -> str:
-        return f"model-identity-{collection_name}"
+    def _model_identity_id(self, collection_name: str, *, visual: bool = False) -> str:
+        suffix = f"-{VISUAL_VECTOR_NAME}" if visual else ""
+        return f"model-identity{suffix}-{collection_name}"
 
-    async def _store_model_identity(self, collection_name: str, model: str) -> None:
+    async def _store_model_identity(self, collection_name: str, model: str, *, visual: bool = False) -> None:
         """Record which model produced a collection's vectors (part of the metadata collection)."""
         await self.client.upsert(
             collection_name=self.collection_name,
             points=[
                 models.PointStruct(
-                    id=self._model_identity_id(collection_name),
+                    id=self._model_identity_id(collection_name, visual=visual),
                     vector={},
                     payload={"kind": "model-identity", "collection": collection_name, "model": model},
                 )
             ],
         )
 
-    async def _get_model_identity(self, collection_name: str) -> str | None:
+    async def _get_model_identity(self, collection_name: str, *, visual: bool = False) -> str | None:
         """Read the recorded model for a collection, or None when it isn't recorded."""
         points = await self.client.retrieve(
             collection_name=self.collection_name,
-            ids=[self._model_identity_id(collection_name)],
+            ids=[self._model_identity_id(collection_name, visual=visual)],
         )
         if points and points[0].payload:
             return points[0].payload.get("model")
@@ -277,9 +330,10 @@ class VectorDbService:
         query_filter: models.Filter | None = None,
         with_payload: bool | dict | models.PayloadSelector | None = True,
     ) -> list[models.ScoredPoint]:
-        """Hybrid (dense + learned-sparse) search fused with RRF.
+        """Hybrid (dense + learned-sparse, plus visual when enabled) search fused with RRF.
 
-        1. The query is embedded once (dense + sparse).
+        1. The query is embedded once (dense + sparse; in visual mode one more call
+           embeds it through the visual backend into the page-image space).
         2. One prefetch per named vector runs with the same filter; each prefetch limit
            covers the final limit.
         3. The similarity threshold applies to the dense prefetch only: fused RRF scores
@@ -306,22 +360,35 @@ class VectorDbService:
             dense, sparse_indices, sparse_values = embeddings[0]
             await self._verify_model_identity(model)
 
-            dense_prefetch = models.Prefetch(
-                query=dense,
-                using=DENSE_VECTOR_NAME,
-                limit=limit,
-                filter=query_filter,
-                score_threshold=score_threshold,
-            )
-            sparse_prefetch = models.Prefetch(
-                query=models.SparseVector(indices=sparse_indices, values=sparse_values),
-                using=SPARSE_VECTOR_NAME,
-                limit=limit,
-                filter=query_filter,
-            )
+            prefetches = [
+                models.Prefetch(
+                    query=dense,
+                    using=DENSE_VECTOR_NAME,
+                    limit=limit,
+                    filter=query_filter,
+                    score_threshold=score_threshold,
+                ),
+                models.Prefetch(
+                    query=models.SparseVector(indices=sparse_indices, values=sparse_values),
+                    using=SPARSE_VECTOR_NAME,
+                    limit=limit,
+                    filter=query_filter,
+                ),
+            ]
+            if self._visual_enabled():
+                visual_vectors, visual_model = await self._embed_visual_query_texts([query_text])
+                await self._verify_model_identity(visual_model, visual=True)
+                prefetches.append(
+                    models.Prefetch(
+                        query=visual_vectors[0],
+                        using=VISUAL_VECTOR_NAME,
+                        limit=limit,
+                        filter=query_filter,
+                    )
+                )
             response = await self.client.query_points(
                 collection_name=self.collection_name,
-                prefetch=[dense_prefetch, sparse_prefetch],
+                prefetch=prefetches,
                 query=models.FusionQuery(fusion=models.Fusion.RRF),
                 limit=limit,
                 with_payload=with_payload,
@@ -365,7 +432,9 @@ class VectorDbService:
         """Upserts many records in batches, one embedding call per batch.
 
         Batches respect the request size limit; the embedding service is called once per
-        batch so a large sync run stays within its input limits.
+        batch so a large sync run stays within its input limits. In visual mode (opt-in,
+        documents collection only), records carrying a page image additionally get the
+        visual vector embedded from that image on their point.
         """
         try:
             if not data:
@@ -377,15 +446,21 @@ class VectorDbService:
                 texts = [item.get_embedding_content() for item in batch]
                 embeddings, model = await self._embed_texts(texts)
                 await self._verify_model_identity(model)
+                visual_vectors = await self._embed_batch_page_images(batch) if self._visual_enabled() else {}
                 points = []
-                for item, (dense, sparse_indices, sparse_values) in zip(batch, embeddings, strict=True):
+                for index, (item, (dense, sparse_indices, sparse_values)) in enumerate(
+                    zip(batch, embeddings, strict=True)
+                ):
+                    vector = {
+                        DENSE_VECTOR_NAME: dense,
+                        SPARSE_VECTOR_NAME: models.SparseVector(indices=sparse_indices, values=sparse_values),
+                    }
+                    if index in visual_vectors:
+                        vector[VISUAL_VECTOR_NAME] = visual_vectors[index]
                     points.append(
                         models.PointStruct(
                             id=item.get_vector_id(),
-                            vector={
-                                DENSE_VECTOR_NAME: dense,
-                                SPARSE_VECTOR_NAME: models.SparseVector(indices=sparse_indices, values=sparse_values),
-                            },
+                            vector=vector,
                             payload=item.model_dump(),
                         )
                     )
@@ -394,6 +469,24 @@ class VectorDbService:
         except Exception:
             logger.exception("Error batch-upserting to Vector DB")
             raise
+
+    async def _embed_batch_page_images(self, batch: list[VectorizableBaseModel]) -> dict[int, list[float]]:
+        """Embeds the page images carried by the batch's records (visual mode).
+
+        Returns:
+            A mapping of batch index to visual vector; only records whose
+            ``get_visual_image`` yields bytes (attachment part 0) get one.
+        """
+        image_items = []
+        for index, item in enumerate(batch):
+            image = item.get_visual_image()
+            if image is not None:
+                image_items.append((index, image))
+        if not image_items:
+            return {}
+        vectors, model = await self._embed_page_images([image for _, image in image_items])
+        await self._verify_model_identity(model, visual=True)
+        return {index: vector for (index, _), vector in zip(image_items, vectors, strict=True)}
 
     async def retrieve(
         self,

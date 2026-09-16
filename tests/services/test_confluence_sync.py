@@ -10,6 +10,7 @@ mocked; the tests assert the classification branches, the reconciliation scopes
 and the crash-safe write order.
 """
 
+import base64
 import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -813,3 +814,34 @@ class TestConfluenceSyncRunner:
         assert all(part.breadcrumb == "Home > guide.pdf > page 1 of 3" for part in parts)
         assert parts[0].image is not None
         assert all(part.image is None for part in parts[1:])
+
+    @pytest.mark.parametrize("visual_enabled", [True, False], ids=["visual_enabled", "visual_disabled"])
+    async def test_image_bearing_parts_reach_the_upsert_in_both_visual_modes(self, runner, visual_enabled):
+        """The visual vector itself is embedded and attached by the vector store's upsert
+        path; the sync's contract is mode-independent: part 0 carries the page image."""
+        runner_obj, documents_db, *_ = runner
+        extracted = ExtractedDocument(pages=[PageContent("ocr text", b"png-bytes")], total_page_count=1)
+        client = _client_mock()
+        client.get_space_id_by_key = AsyncMock(return_value="555")
+        client.list_pages_in_space = AsyncMock(return_value=[_page()])
+        client.list_page_attachments = AsyncMock(
+            return_value=[_attachment(attachment_id="img-1", title="shot.png", media_type="image/png")]
+        )
+        client.download_attachment = AsyncMock(return_value=b"png")
+        client.close = AsyncMock()
+
+        with (
+            patch("rag_sync.confluence_sync.ConfluenceClient", return_value=client),
+            patch(
+                "rag_sync.confluence_sync.extract_attachment_async",
+                AsyncMock(return_value=extracted),
+            ),
+            patch("config.DocumentRagConfig.VISUAL_ENABLED", visual_enabled),
+        ):
+            result = await runner_obj.sync_space("DEV", skip_page_body=True)
+
+        assert result.status == "completed"
+        parts = documents_db.upsert_batch.call_args.args[0]
+        assert len(parts) == 1
+        assert parts[0].image == base64.b64encode(b"png-bytes").decode("ascii")
+        documents_db.delete.assert_not_called()

@@ -11,7 +11,6 @@ supported MIME type, text-equivalent media types).
 """
 
 import httpx
-from jira import JIRA
 from pydantic_ai.messages import BinaryContent
 
 import config
@@ -22,10 +21,18 @@ from common.services.jira_client import build_jira_client
 logger = utils.get_logger("jira_attachments")
 
 
-def _download(jira: JIRA, attachment) -> bytes:
-    """Downloads one attachment's content with the Jira client's session auth."""
+def _download(attachment) -> bytes:
+    """Downloads one attachment's content with basic auth.
+
+    Jira Cloud returns the attachment's ``content`` field as an absolute URL, so it
+    is used as-is; a relative path (seen on Data Center setups) resolves against the
+    base URL.
+    """
+    content_url = attachment.content
+    if not content_url.startswith(("http://", "https://")):
+        content_url = f"{config.JIRA_BASE_URL}{content_url}"
     response = httpx.get(
-        f"{config.JIRA_BASE_URL}{attachment.content}",
+        content_url,
         auth=(config.JIRA_USER, config.JIRA_TOKEN),
         follow_redirects=True,
     )
@@ -50,7 +57,7 @@ def download_issue_attachments(issue_key: str) -> dict[str, BinaryContent]:
         if should_skip_attachment(filename):
             logger.info("Skipping attachment '%s' due to skip postfix.", filename)
             continue
-        content = _download(jira, attachment)
+        content = _download(attachment)
         binary = as_text_equivalent(BinaryContent(data=content, media_type=attachment.mimeType, identifier=filename))
         if not is_supported_mime_type(binary.media_type):
             logger.info("Skipping attachment '%s' - unsupported MIME type: %s", filename, attachment.mimeType)

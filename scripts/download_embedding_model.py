@@ -33,13 +33,21 @@ def _download_text_model() -> None:
 
 
 def _download_visual_model() -> None:
+    from sentence_transformers import SentenceTransformer
+
     from config import EmbeddingServiceConfig
 
     model_name = EmbeddingServiceConfig.VISUAL_MODEL_NAME
     if not model_name:
         print("EMBEDDING_VISUAL_MODEL is not set; skipping the visual model download.")
         return
-    raise NotImplementedError("The visual backend ships in a later phase.")
+    model_path = EmbeddingServiceConfig.VISUAL_MODEL_PATH
+
+    os.makedirs(model_path, exist_ok=True)
+    print(f"Downloading visual embedding model '{model_name}' to '{model_path}'...")
+    model = SentenceTransformer(model_name, trust_remote_code=True)
+    model.save(model_path)
+    print("Visual embedding model download complete.")
 
 
 if __name__ == "__main__":
