@@ -30,9 +30,17 @@ async def _run(args: argparse.Namespace) -> int:
         print(f"Jira sync completed: {result.model_dump()}")
         return 0
 
-    # The Confluence sync ships in the next phase; the endpoint validation exists already.
-    print("The Confluence sync is not implemented yet (ships with the document RAG ingestion).")
-    return 2
+    from rag_sync.confluence_sync import ConfluenceRagSyncRunner
+
+    result = await ConfluenceRagSyncRunner().sync_space(
+        space_key=args.space_key,
+        page_id=args.page_id,
+        attachment_name_pattern=args.attachment_name_pattern,
+        skip_page_body=args.skip_page_body,
+        lock_token=args.lock_token,
+    )
+    print(f"Confluence sync completed: {result.model_dump()}")
+    return 0 if result.status == "completed" else 2
 
 
 def main() -> int:

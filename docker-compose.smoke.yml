@@ -48,6 +48,14 @@ x-mock-dependencies: &mock-dependencies
   zephyr_mock:
     condition: service_healthy
 
+x-sync-dependencies: &sync-dependencies
+  jira_rest_mock:
+    condition: service_healthy
+  qdrant_mock:
+    condition: service_healthy
+  confluence_mock:
+    condition: service_healthy
+
 services:
   # The four recording mocks share one image; only jira_mcp_mock builds it, the
   # others reference the tag so it is built exactly once.
@@ -92,6 +100,19 @@ services:
       retries: 12
       start_period: 5s
 
+  confluence_mock:
+    image: smoke-mocks:latest
+    pull_policy: never
+    command: ["uvicorn", "mocks.confluence_mock:app", "--host", "0.0.0.0", "--port", "8095"]
+    ports:
+      - "8095:8095"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8095/__recorded')"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+
   qdrant_mock:
     image: smoke-mocks:latest
     pull_policy: never
@@ -105,8 +126,9 @@ services:
       retries: 12
       start_period: 5s
 
-  # WS8: the local RAG sync service. The orchestrator's /update-jira-db forwards to it
-  # (local mode), and it runs the Jira sync inline against the mocked Jira REST + Qdrant.
+  # WS8/WS9: the local RAG sync service. The orchestrator's /update-jira-db and
+  # /update-confluence-db forward to it (local mode); it runs the syncs inline
+  # against the mocked Jira REST, Confluence REST and Qdrant.
   rag_sync_local:
     build:
       context: .
@@ -119,13 +141,12 @@ services:
       JIRA_URL: "http://jira_rest_mock:8080"
       JIRA_USERNAME: "smoke"
       JIRA_API_TOKEN: "smoke-token"
+      CONFLUENCE_URL: "http://confluence_mock:8095"
+      CONFLUENCE_USERNAME: "smoke"
+      CONFLUENCE_API_TOKEN: "smoke-token"
       QDRANT_URL: "http://qdrant_mock:6333"
       EMBEDDING_SERVICE_URL: "http://qdrant_mock:6333"
-    depends_on:
-      jira_rest_mock:
-        condition: service_healthy
-      qdrant_mock:
-        condition: service_healthy
+    depends_on: *sync-dependencies
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8085/health')"]
       interval: 5s

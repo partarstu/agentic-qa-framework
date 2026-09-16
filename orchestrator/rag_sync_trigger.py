@@ -124,12 +124,7 @@ class RagSyncTrigger:
 
     async def _run_locally(self, source: str, runner_args: list[str], token: str):
         """Forwards the request to the local sync service and awaits the result."""
-        if source == "jira":
-            project_key = runner_args[runner_args.index("--project-key") + 1]
-            payload = {"project_key": project_key}
-        else:
-            raise SyncTriggerError("The Confluence sync is not implemented yet.", start_confirmed=True)
-
+        payload = self._local_payload(source, runner_args)
         headers = {}
         if config.INTERNAL_SERVICE_API_KEY:
             headers["X-API-Key"] = config.INTERNAL_SERVICE_API_KEY
@@ -140,6 +135,29 @@ class RagSyncTrigger:
                 f"The local sync service failed: {response.status_code} {response.text}", start_confirmed=False
             )
         return {"status_code": response.status_code, "response": response.json()}
+
+    @staticmethod
+    def _local_payload(source: str, runner_args: list[str]) -> dict:
+        """Rebuilds the local service's JSON payload from the runner arguments."""
+        payload: dict = {}
+
+        def arg(name: str) -> str | None:
+            return runner_args[runner_args.index(name) + 1] if name in runner_args else None
+
+        match source:
+            case "jira":
+                payload["project_key"] = arg("--project-key")
+            case "confluence":
+                payload["space_key"] = arg("--space-key")
+                if (page_id := arg("--page-id")) is not None:
+                    payload["page_id"] = int(page_id)
+                if (pattern := arg("--attachment-name-pattern")) is not None:
+                    payload["attachment_name_pattern"] = pattern
+                if "--skip-page-body" in runner_args:
+                    payload["skip_page_body"] = True
+            case _:
+                raise SyncTriggerError(f"Unknown sync source '{source}'.", start_confirmed=True)
+        return payload
 
     async def release_on_definite_failure(self, source: str, scope_id: str) -> None:
         """Releases the lock when the start definitely failed (the Admin API rejected it)."""

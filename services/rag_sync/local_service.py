@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field
 
 import config
 from common import utils
+from common.utils import compile_name_pattern
 
 logger = utils.get_logger("rag_sync_local_service")
 
@@ -68,12 +69,21 @@ async def sync_jira(request: JiraSyncRequest, _: None = Depends(_require_service
 
 @app.post("/sync/confluence")
 async def sync_confluence(request: ConfluenceSyncRequest, _: None = Depends(_require_service_auth)):
-    """Runs the Confluence sync inline (ships with the document RAG ingestion)."""
-    from common.utils import compile_name_pattern
+    """Runs the Confluence sync inline and returns the result."""
+    from rag_sync.confluence_sync import ConfluenceRagSyncRunner
 
-    if request.attachment_name_pattern:
-        compile_name_pattern(request.attachment_name_pattern)
-    raise HTTPException(status_code=501, detail="The Confluence sync is not implemented yet.")
+    try:
+        if request.attachment_name_pattern:
+            compile_name_pattern(request.attachment_name_pattern)
+        result = await ConfluenceRagSyncRunner().sync_space(
+            space_key=request.space_key,
+            page_id=str(request.page_id) if request.page_id else None,
+            attachment_name_pattern=request.attachment_name_pattern,
+            skip_page_body=request.skip_page_body,
+        )
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    return {"message": f"Confluence sync {result.status}.", "details": result.model_dump()}
 
 
 def main() -> None:

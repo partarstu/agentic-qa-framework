@@ -32,6 +32,7 @@ JIRA_MCP_RECORDED_URL = os.environ.get("SMOKE_JIRA_MCP_RECORDED_URL", "http://lo
 JIRA_MCP_SEEDED_STORY_URL = os.environ.get("SMOKE_JIRA_MCP_STORY_URL", "http://localhost:9000/__seeded_story")
 ZEPHYR_RECORDED_URL = os.environ.get("SMOKE_ZEPHYR_RECORDED_URL", "http://localhost:8090/__recorded")
 QDRANT_RECORDED_URL = os.environ.get("SMOKE_QDRANT_RECORDED_URL", "http://localhost:6333/__recorded")
+CONFLUENCE_RECORDED_URL = os.environ.get("SMOKE_CONFLUENCE_RECORDED_URL", "http://localhost:8095/__recorded")
 
 # Fixed test credentials, matching docker-compose.smoke.yml.
 ORCHESTRATOR_API_KEY = "smoke-api-key"
@@ -47,6 +48,10 @@ SEEDED_PROJECT_KEY = "SMOKE"
 SEEDED_EXECUTABLE_TC_KEY = "SMOKE-T100"
 # The collection the RAG sync stores Jira issues in; tracks config as the source of truth.
 TICKETS_COLLECTION_NAME = config.QdrantConfig.TICKETS_COLLECTION_NAME
+# The collection the Confluence sync stores document parts in; tracks config.
+DOCUMENTS_COLLECTION_NAME = config.DocumentRagConfig.DOCUMENTS_COLLECTION_NAME
+# The Confluence space seeded by the Confluence REST mock (confluence_mock.SEEDED_SPACE_KEY).
+SEEDED_SPACE_KEY = "SMOKEDOC"
 # Name the mock executor registers under; must match mocks/execution_agent.EXECUTION_AGENT_NAME.
 EXECUTION_AGENT_NAME = "Smoke API Test Executor"
 # Version the mock executor is started with; must match EXECUTION_AGENT_VERSION in docker-compose.smoke.yml.
@@ -154,6 +159,7 @@ _WEBHOOKS: dict[str, tuple[str, dict[str, str]]] = {
     "test_case_flow": ("/story-ready-for-test-case-generation", {"issue_key": SEEDED_ISSUE_KEY}),
     "execute_tests": ("/execute-tests", {"project_key": SEEDED_PROJECT_KEY}),
     "update_jira_db": ("/update-jira-db", {"project_key": SEEDED_PROJECT_KEY}),
+    "update_confluence_db": ("/update-confluence-db", {"space_key": SEEDED_SPACE_KEY}),
 }
 
 
@@ -190,3 +196,8 @@ def execute_tests_response(webhook_responses: dict[str, httpx.Response]) -> http
 @pytest.fixture(scope="session")
 def update_jira_db_response(webhook_responses: dict[str, httpx.Response]) -> httpx.Response:
     return webhook_responses["update_jira_db"]
+
+
+@pytest.fixture(scope="session")
+def update_confluence_db_response(webhook_responses: dict[str, httpx.Response]) -> httpx.Response:
+    return webhook_responses["update_confluence_db"]

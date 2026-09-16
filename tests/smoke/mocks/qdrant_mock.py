@@ -115,9 +115,20 @@ async def retrieve_points(name: str, request: Request) -> dict:
 
 @app.post("/collections/{name}/points/scroll")
 async def scroll_points(name: str, request: Request) -> dict:
-    """Return every stored point id; the suite only ever stores one project's issues."""
-    await request.json()
-    records = [{"id": point["id"], "payload": None, "vector": None} for point in _collections.get(name, {}).values()]
+    """Return stored points honouring top-level ``must`` payload filters.
+
+    The suite scrolls for reconciliation (issue IDs by project) and for the sync
+    state (fingerprints by kind + scope), so the payload has to be included and
+    the equality filters honoured.
+    """
+    payload = await request.json()
+    must = ((payload.get("filter") or {}).get("must")) or []
+    required = {c["key"]: c["match"]["value"] for c in must if "match" in c}
+    records = [
+        {"id": point["id"], "payload": point.get("payload"), "vector": None}
+        for point in _collections.get(name, {}).values()
+        if all(point.get("payload", {}).get(key) == value for key, value in required.items())
+    ]
     return {"result": {"points": records, "next_page_offset": None}, "status": "ok", "time": 0.0}
 
 

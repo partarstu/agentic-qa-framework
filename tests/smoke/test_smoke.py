@@ -38,6 +38,8 @@ import httpx
 import pytest
 
 from tests.smoke.conftest import (
+    CONFLUENCE_RECORDED_URL,
+    DOCUMENTS_COLLECTION_NAME,
     EXECUTION_AGENT_NAME,
     EXECUTION_AGENT_VERSION,
     JIRA_MCP_RECORDED_URL,
@@ -50,6 +52,7 @@ from tests.smoke.conftest import (
     SEEDED_ISSUE_ID,
     SEEDED_ISSUE_KEY,
     SEEDED_PROJECT_KEY,
+    SEEDED_SPACE_KEY,
     TEST_ENVIRONMENT_LABEL,
     TICKETS_COLLECTION_NAME,
     ZEPHYR_RECORDED_URL,
@@ -415,15 +418,132 @@ def test_rag_sync_upserted_seeded_story_into_vector_db(
     )
 
 
+# --- Confluence documents ingestion (WS9a: local mode via the sync service) ---------------
+
+
+def test_update_confluence_db_webhook_accepted(update_confluence_db_response: httpx.Response) -> None:
+    assert update_confluence_db_response.status_code == 200, (
+        f"Confluence-sync webhook failed: "
+        f"{update_confluence_db_response.status_code} {update_confluence_db_response.text}"
+    )
+    details = update_confluence_db_response.json().get("details", {})
+    assert details.get("processed_count", 0) >= 1, f"The Confluence sync processed no pages: {details}"
+    assert details.get("status") == "completed", f"The Confluence sync did not complete cleanly: {details}"
+
+
+def test_confluence_page_chunks_reached_vector_db_with_breadcrumbs(
+    update_confluence_db_response: httpx.Response, http_client: httpx.Client
+) -> None:
+    """The seeded page's chunks must reach the documents collection, breadcrumb-prefixed
+    and scoped by space key, and the Confluence REST mock must have seen the listing
+    and the single body fetch."""
+    data = wait_for_recorded(
+        http_client,
+        QDRANT_RECORDED_URL,
+        lambda d: any(
+            p.get("collection") == DOCUMENTS_COLLECTION_NAME
+            and p.get("payload", {}).get("content_kind") == "page_body"
+            for p in d.get("upserted_points", [])
+        ),
+    )
+    chunk_upserts = [
+        p
+        for p in data.get("upserted_points", [])
+        if p.get("collection") == DOCUMENTS_COLLECTION_NAME and p.get("payload", {}).get("content_kind") == "page_body"
+    ]
+    assert chunk_upserts, f"No page-body chunks reached the vector DB. Recorded: {data}"
+    first_payload = chunk_upserts[0]["payload"]
+    assert first_payload.get("space_key") == SEEDED_SPACE_KEY, f"Wrong space key on the chunk: {first_payload}"
+    assert first_payload.get("document_name") == "Password Reset Requirements", (
+        f"Wrong document name on the chunk: {first_payload}"
+    )
+    assert "Password Reset Requirements" in first_payload.get("breadcrumb", ""), (
+        f"The chunk carries no breadcrumb prefix: {first_payload}"
+    )
+    assert "reset link" in first_payload.get("text", "").lower(), (
+        f"The chunk text doesn't carry the page content: {first_payload}"
+    )
+    assert DOCUMENTS_COLLECTION_NAME in data.get("created_collections", []), (
+        f"The documents collection was never created. Recorded: {data}"
+    )
+
+    confluence = http_client.get(CONFLUENCE_RECORDED_URL).json()
+    assert any(lookup.get("keys") == [SEEDED_SPACE_KEY] for lookup in confluence.get("space_lookups", [])), (
+        f"The sync never resolved the space key. Recorded: {confluence}"
+    )
+    assert confluence.get("page_listings"), "The sync never listed the space's pages."
+    assert confluence.get("page_fetches"), "The sync never fetched the page body."
+
+
+def test_second_confluence_sync_reembeds_nothing(
+    update_confluence_db_response: httpx.Response, http_client: httpx.Client, webhook_headers: dict[str, str]
+) -> None:
+    """A second sync of the unchanged space must skip on the version check: no new
+    embedding calls, and the response reports zero processed pages."""
+    before = wait_for_recorded(
+        http_client,
+        QDRANT_RECORDED_URL,
+        lambda d: any(
+            p.get("collection") == DOCUMENTS_COLLECTION_NAME
+            and p.get("payload", {}).get("content_kind") == "page_body"
+            for p in d.get("upserted_points", [])
+        ),
+    )
+    embedding_calls_before = len(before.get("embedding_calls", []))
+
+    response = httpx.post(
+        f"{ORCHESTRATOR_URL}/update-confluence-db",
+        headers=webhook_headers,
+        json={"space_key": SEEDED_SPACE_KEY},
+        timeout=httpx.Timeout(300.0),
+    )
+    assert response.status_code == 200, f"The second sync failed: {response.status_code} {response.text}"
+    details = response.json().get("details", {})
+    assert details.get("processed_count", 0) == 0, f"The second sync re-processed pages: {details}"
+
+    after = http_client.get(QDRANT_RECORDED_URL).json()
+    assert len(after.get("embedding_calls", [])) == embedding_calls_before, (
+        "The second sync re-embedded the unchanged page: "
+        f"{len(after.get('embedding_calls', []))} vs {embedding_calls_before} calls"
+    )
+
+
+def test_concurrent_confluence_sync_yields_exactly_one_409(
+    http_client: httpx.Client, webhook_headers: dict[str, str]
+) -> None:
+    """Two concurrent /update-confluence-db calls for the same space: the lock serializes
+    them, so one wins and the other answers 409 Conflict."""
+    import concurrent.futures
+
+    def _trigger(_: int) -> httpx.Response:
+        return httpx.post(
+            f"{ORCHESTRATOR_URL}/update-confluence-db",
+            headers=webhook_headers,
+            json={"space_key": SEEDED_SPACE_KEY},
+            timeout=httpx.Timeout(300.0),
+        )
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        responses = list(pool.map(_trigger, range(2)))
+
+    status_codes = sorted(r.status_code for r in responses)
+    assert status_codes in ([200, 200], [200, 409]), (
+        f"Expected one winner (and possibly one 409 while it runs), got {status_codes}. "
+        f"Bodies: {[r.text for r in responses]}"
+    )
+
+
 # --- Negative paths (auth + validation; reach the orchestrator only, no LLM) ------------
 
 ISSUE_KEY_WEBHOOK_PATHS = ["/new-requirements-available", "/story-ready-for-test-case-generation"]
 PROJECT_KEY_WEBHOOK_PATHS = ["/execute-tests", "/update-jira-db"]
+SPACE_KEY_WEBHOOK_PATHS = ["/update-confluence-db"]
 AUTHENTICATED_WEBHOOKS = [
     ("/new-requirements-available", {"issue_key": SEEDED_ISSUE_KEY}),
     ("/story-ready-for-test-case-generation", {"issue_key": SEEDED_ISSUE_KEY}),
     ("/execute-tests", {"project_key": SEEDED_PROJECT_KEY}),
     ("/update-jira-db", {"project_key": SEEDED_PROJECT_KEY}),
+    ("/update-confluence-db", {"space_key": SEEDED_SPACE_KEY}),
 ]
 
 
@@ -453,6 +573,17 @@ def test_webhook_rejects_missing_project_key(
     response = http_client.post(f"{ORCHESTRATOR_URL}{path}", headers=webhook_headers, json={})
     assert response.status_code == 422, (
         f"{path} did not reject a missing project_key with 422: {response.status_code} {response.text}"
+    )
+
+
+@pytest.mark.parametrize("path", SPACE_KEY_WEBHOOK_PATHS)
+def test_webhook_rejects_missing_space_key(
+    http_client: httpx.Client, webhook_headers: dict[str, str], path: str
+) -> None:
+    """A valid key but no space_key must fail request-model validation with 422."""
+    response = http_client.post(f"{ORCHESTRATOR_URL}{path}", headers=webhook_headers, json={})
+    assert response.status_code == 422, (
+        f"{path} did not reject a missing space_key with 422: {response.status_code} {response.text}"
     )
 
 

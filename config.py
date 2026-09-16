@@ -55,6 +55,11 @@ XRAY_CLIENT_ID = os.environ.get("XRAY_CLIENT_ID")
 XRAY_CLIENT_SECRET = os.environ.get("XRAY_CLIENT_SECRET")
 XRAY_PRECONDITIONS_FIELD_ID = os.environ.get("XRAY_PRECONDITIONS_FIELD_ID", "Pre-conditions")
 
+# Confluence Cloud access for the RAG document sync (and, from WS11, the combined MCP server).
+CONFLUENCE_URL = os.environ.get("CONFLUENCE_URL")
+CONFLUENCE_USERNAME = os.environ.get("CONFLUENCE_USERNAME")
+CONFLUENCE_API_TOKEN = os.environ.get("CONFLUENCE_API_TOKEN")
+
 # Additional Jira custom fields handed to agents. Comma-separated custom field IDs; entries are trimmed,
 # empty entries and duplicates are dropped. Every entry must match the Jira custom field ID format
 # (customfield_ followed by digits) - anything else fails startup, which also keeps free text out of
@@ -379,3 +384,23 @@ class RagSyncConfig:
     )
     # How long an unconfirmed job start keeps the lock before the next request may take over.
     START_ALLOWANCE_SECONDS = int(os.environ.get("RAG_SYNC_START_ALLOWANCE_SECONDS", "300"))
+
+
+class DocumentRagConfig:
+    """Confluence document ingestion and the documents collection (WS9).
+
+    The chunk token budget uses a conservative character-based estimate (four
+    characters per token), which stays safe while the budget is far below the
+    embedding model's maximum input length.
+    """
+
+    # Documents collection holding page-body chunks and attachment page parts.
+    DOCUMENTS_COLLECTION_NAME = os.environ.get("QDRANT_DOCUMENTS_COLLECTION_NAME", "confluence_documents")
+    # Confluence REST v2 page size for listing calls.
+    LIST_PAGE_SIZE = int(os.environ.get("RAG_CONFLUENCE_LIST_PAGE_SIZE", "50"))
+    # Retries for Confluence 429/5xx responses, honouring Retry-After.
+    CONFLUENCE_MAX_RETRIES = int(os.environ.get("RAG_CONFLUENCE_MAX_RETRIES", "5"))
+    CONFLUENCE_TIMEOUT_SECONDS = float(os.environ.get("RAG_CONFLUENCE_TIMEOUT_SECONDS", "30"))
+    # Chunk token budget for page bodies, breadcrumb included; 1 token ~ 4 characters.
+    CHUNK_MAX_TOKENS = int(os.environ.get("RAG_CHUNK_MAX_TOKENS", "512"))
+    CHARACTERS_PER_TOKEN = 4

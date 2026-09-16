@@ -491,6 +491,34 @@ class VectorDbService:
             logger.exception(f"Error reading record {record_id} from {self.collection_name}")
             raise
 
+    async def scroll_payload_records(self, filter_by: dict) -> list[dict]:
+        """Scrolls every payload record whose fields match ``filter_by`` exactly.
+
+        Used by the sync state (WS9) to load one scope's fingerprints in one read.
+        Never calls the embedding service: metadata records carry no vectors.
+        """
+        try:
+            await self.ensure_payload_collection()
+            must = [models.FieldCondition(key=key, match=models.MatchValue(value=value)) for key, value in filter_by.items()]
+            records: list[dict] = []
+            offset = None
+            while True:
+                points, next_offset = await self.client.scroll(
+                    collection_name=self.collection_name,
+                    scroll_filter=models.Filter(must=must),
+                    limit=1000,
+                    offset=offset,
+                    with_payload=True,
+                    with_vectors=False,
+                )
+                records.extend(point.payload for point in points if point.payload)
+                if next_offset is None:
+                    return records
+                offset = next_offset
+        except Exception:
+            logger.exception(f"Error scrolling records matching {filter_by} in {self.collection_name}")
+            raise
+
     async def delete_payload_record(self, record_id: str) -> None:
         """Delete one metadata record by ID."""
         try:

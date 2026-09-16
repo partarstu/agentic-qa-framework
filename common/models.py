@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 
 import hashlib
+import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import StrEnum
@@ -103,6 +104,47 @@ class JiraIssue(VectorizableBaseModel):
 
     def get_embedding_content(self) -> str:
         return f"{self.summary}\n\n{self.description}"
+
+
+class DocumentPagePart(VectorizableBaseModel):
+    """One part of a Confluence document stored in the documents collection (WS9).
+
+    A page-body chunk is one part (``content_kind='page_body'``); an attachment
+    page is split into text parts sharing the page's reconciliation chain
+    (``content_kind='attachment'``), with the page image on part 0 only.
+    """
+
+    source: str = Field(default="confluence", description="Source system of the document")
+    space_key: str = Field(description="Key of the Confluence space")
+    page_id: str = Field(description="ID of the Confluence page")
+    page_title: str = Field(description="Title of the Confluence page")
+    page_url: str | None = Field(default=None, description="Web UI link of the page")
+    attachment_id: str | None = Field(default=None, description="ID of the attachment, for attachment pages")
+    attachment_name: str | None = Field(default=None, description="File name of the attachment")
+    media_type: str | None = Field(default=None, description="Media type of the attachment")
+    content_kind: str = Field(description="'page_body' for page-body chunks, 'attachment' for attachment pages")
+    document_name: str = Field(
+        description="The name retrieval matches document-name patterns against: the attachment file "
+        "name for attachments, the page title for page-body chunks"
+    )
+    breadcrumb: str = Field(description="The breadcrumb or reconciliation chain prefix of the text")
+    text: str = Field(description="The embedded text: breadcrumb plus content")
+    page_number: int | None = Field(default=None, description="1-based page number within the attachment")
+    page_count: int | None = Field(default=None, description="True total page count of the attachment")
+    part_index: int = Field(description="0-based index of this part within its page or chunk sequence")
+    image: str | None = Field(
+        default=None, description="Base64 PNG of the page image, stored on part 0 only"
+    )
+
+    def get_vector_id(self) -> str:
+        """Deterministic UUID derived from content identity: source, item, page and part index."""
+        item = self.attachment_id or self.page_id
+        scope = str(self.page_number) if self.attachment_id else "body"
+        identity = f"quaia:document:{self.source}:{item}:{scope}:{self.part_index}"
+        return str(uuid.uuid5(uuid.NAMESPACE_URL, identity))
+
+    def get_embedding_content(self) -> str:
+        return self.text
 
 
 class ProjectMetadata(VectorizableBaseModel):

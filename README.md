@@ -24,6 +24,7 @@ Watch a demo of QuAIA™ in action:
     * UI & API Test Execution (separate project)    
     * Incident Report Creation
 * **Jira RAG Sync:** Keeps the Qdrant vector store in sync with a project's Jira issues programmatically (triggered via the orchestrator's `/update-jira-db` endpoint, executed by the sync job or the local sync service), without invoking an LLM agent.
+* **Confluence Document RAG:** Ingests Confluence page bodies into a dedicated documents collection (triggered via `/update-confluence-db`): version/hash-based change detection skips unchanged pages, storage-format bodies are normalized to markdown and chunked along headings with breadcrumbs, and removed pages are reconciled out of the vector store. Attachment ingestion ships with the next phase.
 * **Dedicated Prompt Guard Service:** A dedicated microservice for detecting prompt injection attacks using the ProtectAI model.
 * **Web UI Monitoring Dashboard:** Real-time monitoring interface for:
     * Agent status visualization (AVAILABLE, BUSY, BROKEN states)
@@ -324,6 +325,7 @@ QDRANT_TIMEOUT_SECONDS=30 # Default: 30. Request timeout for the Qdrant client.
 QDRANT_COLLECTION_NAME=jira_issues # Default: jira_issues. Name of the main collection for Jira issues.
 QDRANT_TICKETS_COLLECTION_NAME=jira_issues # Default: jira_issues. Name of the collection the RAG DB sync writes Jira issues to.
 QDRANT_METADATA_COLLECTION_NAME=rag_metadata # Default: rag_metadata. Name of the collection for RAG metadata.
+QDRANT_DOCUMENTS_COLLECTION_NAME=confluence_documents # Default: confluence_documents. Name of the collection the Confluence sync writes document parts to.
 RAG_MIN_SIMILARITY_SCORE=0.7 # Default: 0.7. Minimum similarity score for vector search results.
 RAG_MAX_RESULTS=5 # Default: 5. Maximum number of results to return from vector search.
 RAG_EMBEDDING_MODEL=Qwen/Qwen3-Embedding-0.6B # Default: Qwen/Qwen3-Embedding-0.6B. SentenceTransformer model for embeddings.
@@ -342,6 +344,15 @@ RAG_SYNC_LOCK_TTL_SECONDS=3900 # Default: task timeout + 300. Lock expiry; a liv
 RAG_SYNC_START_ALLOWANCE_SECONDS=300 # Default: 300. How long an unconfirmed job start keeps the lock before takeover.
 JIRA_VALID_STATUSES=To Do,In Review,Ready for Development,In Progress,Done # Default shown. Comma-separated Jira
                                  # statuses eligible to be synced into the RAG vector DB.
+
+# Confluence Document Ingestion (WS9)
+CONFLUENCE_URL= # Required for document RAG. Base URL of the Confluence Cloud site (e.g. https://<tenant>.atlassian.net).
+CONFLUENCE_USERNAME= # Required for document RAG. Confluence user for basic auth.
+CONFLUENCE_API_TOKEN= # Required for document RAG. Confluence API token for basic auth.
+RAG_CONFLUENCE_LIST_PAGE_SIZE=50 # Default: 50. Page size for Confluence listing calls.
+RAG_CONFLUENCE_MAX_RETRIES=5 # Default: 5. Retries for Confluence 429/5xx responses, honouring Retry-After.
+RAG_CONFLUENCE_TIMEOUT_SECONDS=30 # Default: 30. Request timeout for Confluence REST calls.
+RAG_CHUNK_MAX_TOKENS=512 # Default: 512. Chunk token budget for page bodies, breadcrumb included (1 token ~ 4 characters).
 
 # Embedding Service Configuration
 EMBEDDING_BACKENDS=text # Default: text. Comma-separated enabled backends ("text", "visual").
@@ -641,7 +652,8 @@ once, then identify the assigned URL of each service, update the substitution va
 The smoke suite is a self-contained integration test, independent of any Cloud Run deployment. It runs the real
 orchestrator and the QA agents (requirements review, test-case generation, classification, review and incident creation)
 under `docker-compose.smoke.yml`, driven by a real Gemini model, with only the external boundaries replaced by mocks
-under `tests/smoke/mocks/` (Jira MCP, Jira REST, Zephyr and Qdrant). A mock test-execution agent stands in for the
+under `tests/smoke/mocks/` (Jira MCP, Jira REST, Zephyr, Qdrant + embedding, and
+Confluence REST). A mock test-execution agent stands in for the
 VM-hosted real executors. It drives the system through the orchestrator's public webhooks and asserts on what reaches
 each mocked boundary:
 
@@ -656,11 +668,14 @@ each mocked boundary:
   that execution, and the duplicate search consulted the vector DB.
 * **Jira DB update** (`POST /update-jira-db`) → the orchestrator forwards to the local sync service, which pushes the seeded Jira story into the mocked vector DB
   (collection creation + point upsert).
-* **Negative paths** → all four webhooks reject an invalid API key (401), a missing `issue_key` fails with 400, a
-  missing `project_key` fails with 422, and the dashboard API rejects a missing token (401) — all without dispatching
+* **Confluence DB update** (`POST /update-confluence-db`) → the local sync service ingests the seeded Confluence page
+  (space lookup, page listing, body fetch, breadcrumb-prefixed chunks upserted into the documents collection); a second
+  sync of the unchanged space re-embeds nothing, and a concurrent request for the same scope answers `409 Conflict`.
+* **Negative paths** → all five webhooks reject an invalid API key (401), a missing `issue_key` fails with 400, a
+  missing `project_key` or `space_key` fails with 422, and the dashboard API rejects a missing token (401) — all without dispatching
   to an agent.
 
-The four webhooks are fired once, concurrently (the flows are mutually independent), so the suite's wall time is the
+The five webhooks are fired once, concurrently (the flows are mutually independent), so the suite's wall time is the
 longest flow rather than the sum of all flows.
 
 It runs in GitHub Actions (the `smoke` job in `.github/workflows/ci.yml`) on pull requests and on manual
@@ -799,9 +814,15 @@ lock TTL.
 * **Update the documents collection (Confluence):**
   Send a POST request to `/update-confluence-db` with a JSON payload containing the
   `space_key` (personal spaces start with `~`), and optionally a `page_id`, an
-  `attachment_name_pattern` (case-insensitive regex) and a `skip_page_body` flag. The
-  page and attachment ingestion ships with the document RAG phase; the endpoint already
-  validates the scope options.
+  `attachment_name_pattern` (case-insensitive regex) and a `skip_page_body` flag.
+  Page bodies are ingested: the storage-format body is normalized to markdown
+  (headings, lists, tables, code and content macros kept; navigation/dynamic macros
+  dropped), chunked along headings with `Page title > Section` breadcrumbs, and
+  upserted as dense + sparse vectors into the documents collection. Attachment
+  ingestion ships with the next phase; the endpoint already carries the options
+  through. The run is idempotent: unchanged page versions are skipped without any
+  fetch, and a re-run after a crash re-ingests only the pages whose fingerprint
+  was never saved.
   ```json
   {"space_key": "DEV", "page_id": 12345, "attachment_name_pattern": "^report.*\\.pdf$", "skip_page_body": false}
   ```
