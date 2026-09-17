@@ -40,6 +40,18 @@ async def _run(args: argparse.Namespace) -> int:
         print(f"Jira sync completed: {result.model_dump()}")
         return 0
 
+    if args.source == "test-cases":
+        from rag_sync.test_case_sync import TestCaseRagSyncRunner
+
+        try:
+            result = await TestCaseRagSyncRunner().sync_project(args.project_key, lock_token=args.lock_token)
+        except Exception as exc:
+            await report_terminal_outcome("test_cases", args.project_key, error=exc)
+            raise
+        await report_terminal_outcome("test_cases", args.project_key, result=result)
+        print(f"Test-case sync completed: {result.model_dump()}")
+        return 0
+
     from rag_sync.confluence_sync import ConfluenceRagSyncRunner
 
     try:
@@ -62,6 +74,12 @@ def main() -> int:
     jira_parser = subparsers.add_parser("jira", help="Sync a Jira project's issues into the RAG vector DB.")
     jira_parser.add_argument("--project-key", required=True, help="The Jira project key to synchronize.")
     jira_parser.add_argument("--lock-token", help="Holder token issued by the orchestrator, if any.")
+
+    test_cases_parser = subparsers.add_parser(
+        "test-cases", help="Full-resync the test cases of a project into the RAG vector DB."
+    )
+    test_cases_parser.add_argument("--project-key", required=True, help="The Jira project key to synchronize.")
+    test_cases_parser.add_argument("--lock-token", help="Holder token issued by the orchestrator, if any.")
 
     confluence_parser = subparsers.add_parser("confluence", help="Sync a Confluence space into the documents collection.")
     confluence_parser.add_argument("--space-key", required=True, help="The Confluence space key (may start with '~').")

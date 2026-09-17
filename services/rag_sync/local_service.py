@@ -77,6 +77,21 @@ async def sync_jira(request: JiraSyncRequest, _: None = Depends(_require_service
     return {"message": "Jira sync completed.", "details": result.model_dump()}
 
 
+@app.post("/sync/test-cases")
+async def sync_test_cases(request: JiraSyncRequest, _: None = Depends(_require_service_auth)):
+    """Runs the test-case full resync inline and returns the result (WS17)."""
+    from rag_sync.outcome_reporting import report_terminal_outcome
+    from rag_sync.test_case_sync import TestCaseRagSyncRunner
+
+    try:
+        result = await TestCaseRagSyncRunner().sync_project(request.project_key, lock_token=request.lock_token)
+    except RuntimeError as e:
+        await report_terminal_outcome("test_cases", request.project_key, error=e)
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    await report_terminal_outcome("test_cases", request.project_key, result=result)
+    return {"message": f"Test-case sync {result.status}.", "details": result.model_dump()}
+
+
 @app.post("/sync/confluence")
 async def sync_confluence(request: ConfluenceSyncRequest, _: None = Depends(_require_service_auth)):
     """Runs the Confluence sync inline and returns the result."""

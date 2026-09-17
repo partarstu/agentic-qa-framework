@@ -33,6 +33,7 @@ class TestCaseClassificationAgent(AgentBase):
             protocol=config.TestCaseClassificationAgentConfig.PROTOCOL,
             model_name=config.TestCaseClassificationAgentConfig.MODEL_NAME,
             version=config.TestCaseClassificationAgentConfig.VERSION,
+            max_output_tokens=config.TestCaseClassificationAgentConfig.MAX_OUTPUT_TOKENS,
             output_type=ClassifiedTestCases,
             instructions=instruction_prompt.get_prompt(),
             mcp_toolset_factories=[lambda: build_atlassian_mcp_server_toolset(_JIRA_TOOL_ALLOWLIST)],

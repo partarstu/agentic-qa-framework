@@ -11,7 +11,7 @@ import httpx
 
 import config
 from common import utils
-from common.models import TestCase, TestExecutionResult, TestStep
+from common.models import ListedTestCase, TestCase, TestExecutionResult, TestStep
 from common.services.test_management_base import TestManagementClientBase
 
 TEST_FOR_EXECUTION_READY_STATUS_NAME = "Approved"
@@ -23,12 +23,26 @@ logger = utils.get_logger(__name__)
 
 
 class ZephyrClient(TestManagementClientBase):
-    def fetch_test_cases_by_project(self, project_key: str):
-        """List project test cases; sync callers retain their source-system statuses."""
-        raise NotImplementedError("Project-wide Zephyr test-case listing is not configured.")
     """
     A client for interacting with the Zephyr Scale Cloud API.
     """
+
+    def fetch_test_cases_by_project(self, project_key: str) -> list[ListedTestCase]:
+        """List every test case of the project with its current status (WS17 full resync)."""
+        search_url = f"{self.base_url}/testcases"
+        listed: list[ListedTestCase] = []
+        params: dict[str, Any] = {"projectKey": project_key, "maxResults": 100, "startAt": 0}
+        with httpx.Client() as client:
+            while True:
+                response = self._request(client.get, search_url, headers=self.headers, params=params)
+                data = response.json()
+                for tc in data.get("values", []):
+                    status = (tc.get("status") or {}).get("name", "")
+                    listed.append(ListedTestCase(test_case=self._parse_tc_json(client, None, tc), status=status))
+                if data.get("isLast", True):
+                    break
+                params["startAt"] += params["maxResults"]
+        return listed
 
     def __init__(self):
         """

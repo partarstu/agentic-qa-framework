@@ -7,6 +7,9 @@
 from unittest.mock import AsyncMock, MagicMock
 from urllib.parse import urlparse
 
+import logging
+from urllib.parse import urlparse
+
 import anyio
 import httpx
 import pytest
@@ -15,6 +18,7 @@ from mcp.types import ErrorData
 from pydantic_ai.exceptions import ModelRetry
 
 import config
+from common.services import atlassian_mcp as atlassian_mcp_module
 from common.services.atlassian_mcp import (
     SelfHealingAtlassianToolset,
     _is_recoverable,
@@ -78,35 +82,55 @@ def test_exception_groups_are_matched_member_wise():
     assert _is_recoverable(ExceptionGroup("g", [ValueError("x"), KeyError("y")])) is False
 
 
+@pytest.fixture
+def fresh_session_factory(monkeypatch):
+    """Patch the isolated-session builder so retries run against a stub, not the real server."""
+    sessions: list[MagicMock] = []
+
+    def _register(*side_effects) -> MagicMock:
+        session = _wrapped_server(*side_effects)
+        session.url = "http://fresh.test/mcp"
+        sessions.append(session)
+        monkeypatch.setattr(atlassian_mcp_module, "build_atlassian_mcp_server", lambda: session)
+        return session
+
+    _register.sessions = sessions
+    return _register
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("error", RECOVERABLE_ERRORS, ids=lambda e: type(e).__name__)
-async def test_call_tool_reconnects_once_and_retries(error):
+async def test_call_tool_retries_once_on_a_fresh_isolated_session(error, fresh_session_factory):
     server = _wrapped_server(error, "tool result")
+    fresh = fresh_session_factory("tool result")
     toolset = SelfHealingAtlassianToolset(server)
 
     result = await toolset.call_tool("jira_get_issue", {}, MagicMock(), _tool("jira_get_issue"))
 
     assert result == "tool result"
-    assert server.call_tool.await_count == 2
-    server.__aexit__.assert_awaited_once()
-    server.__aenter__.assert_awaited_once()
+    # The shared session is left untouched; the retry owns a session of its own.
+    assert server.call_tool.await_count == 1
+    server.__aexit__.assert_not_awaited()
+    fresh.__aenter__.assert_awaited_once()
+    fresh.call_tool.assert_awaited_once()
+    fresh.__aexit__.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_get_tools_reconnects_once_and_retries():
+async def test_get_tools_retries_once_on_a_fresh_isolated_session(fresh_session_factory):
     """Tool discovery must self-heal too, not only tool invocation."""
     server = _wrapped_server(anyio.ClosedResourceError(), {"jira_get_issue": MagicMock()})
+    fresh = fresh_session_factory({"jira_get_issue": MagicMock()})
     toolset = SelfHealingAtlassianToolset(server)
 
     tools = await toolset.get_tools(MagicMock())
-
     assert list(tools) == ["jira_get_issue"]
-    assert server.get_tools.await_count == 2
-    server.__aenter__.assert_awaited_once()
+    assert server.get_tools.await_count == 1
+    fresh.get_tools.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_non_recoverable_error_propagates_without_reconnect():
+async def test_non_recoverable_error_propagates_without_a_fresh_session(fresh_session_factory):
     server = _wrapped_server(ValueError("bad arguments"))
     toolset = SelfHealingAtlassianToolset(server)
 
@@ -114,21 +138,98 @@ async def test_non_recoverable_error_propagates_without_reconnect():
         await toolset.call_tool("jira_get_issue", {}, MagicMock(), _tool("jira_get_issue"))
 
     assert server.call_tool.await_count == 1
-    server.__aenter__.assert_not_awaited()
-    server.__aexit__.assert_not_awaited()
+    assert fresh_session_factory.sessions == []
 
 
 @pytest.mark.asyncio
-async def test_a_second_failure_after_the_reconnect_propagates():
-    """The budget is exactly one reconnect per operation."""
-    server = _wrapped_server(anyio.ClosedResourceError(), anyio.ClosedResourceError())
+async def test_a_second_failure_on_the_fresh_session_propagates(fresh_session_factory):
+    """The budget is exactly one retry per operation."""
+    server = _wrapped_server(anyio.ClosedResourceError())
+    fresh = fresh_session_factory(anyio.ClosedResourceError())
     toolset = SelfHealingAtlassianToolset(server)
 
     with pytest.raises(anyio.ClosedResourceError):
         await toolset.call_tool("jira_get_issue", {}, MagicMock(), _tool("jira_get_issue"))
 
-    assert server.call_tool.await_count == 2
-    server.__aenter__.assert_awaited_once()
+    assert fresh.call_tool.await_count == 1
+    fresh.__aexit__.assert_awaited_once()
+    server.__aexit__.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_concurrent_call_is_not_disturbed_by_another_calls_recovery(fresh_session_factory):
+    """The recovery of one tool call must not tear down the session another call still owns."""
+    server = _wrapped_server(anyio.ClosedResourceError())
+    fresh_session_factory("fresh result")
+    toolset = SelfHealingAtlassianToolset(server)
+
+    healthy = _wrapped_server("healthy result")
+    healthy_toolset = SelfHealingAtlassianToolset(healthy)
+
+    recovered = await toolset.call_tool("jira_get_issue", {}, MagicMock(), _tool("jira_get_issue"))
+    untouched = await healthy_toolset.call_tool("jira_get_issue", {}, MagicMock(), _tool("jira_get_issue"))
+
+    assert recovered == "fresh result"
+    assert untouched == "healthy result"
+    server.__aexit__.assert_not_awaited()
+    healthy.__aexit__.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_cancelled_task_does_not_retry(fresh_session_factory):
+    """The cancellation checkpoint runs before the retry, so a cancelled task stops."""
+    server = _wrapped_server(anyio.ClosedResourceError())
+    toolset = SelfHealingAtlassianToolset(server)
+
+    result = None
+    with anyio.CancelScope() as scope:
+        scope.cancel()
+        # The retry's cancellation checkpoint sees the pending cancellation and stops the task;
+        # the scope absorbs the delivered cancellation, so the call simply never returns a result.
+        result = await toolset.call_tool("jira_get_issue", {}, MagicMock(), _tool("jira_get_issue"))
+
+    assert result is None
+    assert server.call_tool.await_count == 1
+    assert fresh_session_factory.sessions == []
+
+
+@pytest.mark.asyncio
+async def test_a_fresh_session_set_up_timeout_surfaces_as_a_clear_error(
+    fresh_session_factory, monkeypatch
+):
+    server = _wrapped_server(anyio.ClosedResourceError())
+    fresh = fresh_session_factory("tool result")
+    async def slow_enter(*_):
+        await anyio.sleep(10)
+
+    fresh.__aenter__ = slow_enter
+    monkeypatch.setattr(config, "MCP_SESSION_LIFECYCLE_TIMEOUT_SECONDS", 0.05)
+    toolset = SelfHealingAtlassianToolset(server)
+
+    with pytest.raises(TimeoutError, match="session set-up"):
+        await toolset.call_tool("jira_get_issue", {}, MagicMock(), _tool("jira_get_issue"))
+
+    fresh.call_tool.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_fresh_session_tear_down_timeout_is_logged_but_never_masks_the_result(
+    fresh_session_factory, monkeypatch, caplog
+):
+    server = _wrapped_server(anyio.ClosedResourceError())
+    fresh = fresh_session_factory("tool result")
+    async def slow_exit(*_):
+        await anyio.sleep(10)
+
+    fresh.__aexit__ = slow_exit
+    monkeypatch.setattr(config, "MCP_SESSION_LIFECYCLE_TIMEOUT_SECONDS", 0.05)
+    toolset = SelfHealingAtlassianToolset(server)
+
+    with caplog.at_level(logging.WARNING, logger="atlassian_mcp"):
+        result = await toolset.call_tool("jira_get_issue", {}, MagicMock(), _tool("jira_get_issue"))
+
+    assert result == "tool result"
+    assert any("tear-down" in record.message for record in caplog.records)
 
 
 @pytest.mark.asyncio
@@ -141,7 +242,9 @@ async def test_a_second_failure_after_the_reconnect_propagates():
     ],
     ids=["unannotated_write", "unannotated_create", "annotated_as_a_write"],
 )
-async def test_a_write_is_not_repeated_after_the_reconnect(tool):
+
+
+async def test_a_write_is_not_repeated_after_the_failure(tool, fresh_session_factory):
     """Jira may already have applied the write, so repeating it would duplicate it."""
     server = _wrapped_server(anyio.ClosedResourceError(), "second call result")
     toolset = SelfHealingAtlassianToolset(server)
@@ -150,8 +253,8 @@ async def test_a_write_is_not_repeated_after_the_reconnect(tool):
         await toolset.call_tool(tool.tool_def.name, {}, MagicMock(), tool)
 
     assert server.call_tool.await_count == 1
-    # The session is still repaired, so the operations which follow in the same run can succeed.
-    server.__aenter__.assert_awaited_once()
+    # The failed operation propagates; no isolated session is even built for it.
+    assert fresh_session_factory.sessions == []
 
 
 @pytest.mark.asyncio
@@ -166,12 +269,14 @@ async def test_a_write_is_not_repeated_after_the_reconnect(tool):
     ],
     ids=["read_verb", "download_verb", "confluence_read_verb", "annotated_read_only", "annotated_idempotent"],
 )
-async def test_a_read_or_idempotent_tool_is_repeated_after_the_reconnect(tool):
+async def test_a_read_or_idempotent_tool_is_repeated_on_the_fresh_session(tool, fresh_session_factory):
     server = _wrapped_server(anyio.ClosedResourceError(), "tool result")
+    fresh = fresh_session_factory("tool result")
     toolset = SelfHealingAtlassianToolset(server)
 
     assert await toolset.call_tool(tool.tool_def.name, {}, MagicMock(), tool) == "tool result"
-    assert server.call_tool.await_count == 2
+    assert server.call_tool.await_count == 1
+    fresh.call_tool.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -180,7 +285,7 @@ async def test_a_read_or_idempotent_tool_is_repeated_after_the_reconnect(tool):
     ["confluence_create_page", "confluence_update_page"],
     ids=["confluence_create", "confluence_update"],
 )
-async def test_a_confluence_write_is_not_repeated_after_the_reconnect(tool_name):
+async def test_a_confluence_write_is_not_repeated_after_the_failure(tool_name, fresh_session_factory):
     """The read-only detection strips the confluence_ prefix too, so Confluence writes stay unrepeatable."""
     server = _wrapped_server(anyio.ClosedResourceError(), "second call result")
     toolset = SelfHealingAtlassianToolset(server)
@@ -192,19 +297,15 @@ async def test_a_confluence_write_is_not_repeated_after_the_reconnect(tool_name)
 
 
 @pytest.mark.asyncio
-async def test_closing_after_a_failed_reconnect_does_not_mask_the_failure():
-    """A reconnect which cannot re-open the session must not turn into a bogus close error."""
-    server = _wrapped_server(anyio.ClosedResourceError())
-    server.__aenter__ = AsyncMock(side_effect=httpx.ConnectError("connection refused"))
-    server.__aexit__ = AsyncMock(side_effect=lambda *_: setattr(server, "is_running", False))
+@pytest.mark.asyncio
+async def test_closing_a_toolset_whose_session_never_started_does_not_raise():
+    """A session that never came up has nothing to close, and closing must not raise over the run."""
+    server = _wrapped_server()
+    server.is_running = False
     toolset = SelfHealingAtlassianToolset(server)
 
-    with pytest.raises(httpx.ConnectError):
-        await toolset.call_tool("jira_get_issue", {}, MagicMock(), _tool("jira_get_issue"))
-
     assert await toolset.__aexit__(None, None, None) is None
-    server.__aexit__.assert_awaited_once()
-
+    server.__aexit__.assert_not_awaited()
 
 def test_each_factory_call_builds_a_separate_session():
     first, second = build_atlassian_mcp_server_toolset(), build_atlassian_mcp_server_toolset()

@@ -9,7 +9,7 @@ import httpx
 
 import config
 from common import utils
-from common.models import TestCase, TestExecutionResult, TestStep
+from common.models import ListedTestCase, TestCase, TestExecutionResult, TestStep
 from common.services.test_management_base import TestManagementClientBase
 
 logger = utils.get_logger(__name__)
@@ -18,12 +18,55 @@ PRECONDITIONS_FIELD_ID = config.XRAY_PRECONDITIONS_FIELD_ID
 
 
 class XrayClient(TestManagementClientBase):
-    def fetch_test_cases_by_project(self, project_key: str):
-        """List project test cases; sync callers retain their source-system statuses."""
-        raise NotImplementedError("Project-wide Xray test-case listing is not configured.")
     """
     A client for interacting with the Xray Cloud API.
     """
+
+    def fetch_test_cases_by_project(self, project_key: str) -> list[ListedTestCase]:
+        """List every test case of the project with its current status (WS17 full resync).
+
+        Xray offers no cheap "changed since" query, which is why the test-case sync is a full
+        resync; the listing runs as one JQL query over the GraphQL API.
+        """
+        query = f"""
+        query getTests($jql: String!, $limit: Int!) {{
+            getTests(jql: $jql, limit: $limit) {{
+                results {{
+                    issueId
+                    steps {{
+                        id
+                        action
+                        data
+                        result
+                    }}
+                    jira(fields: ["summary", "labels", "parent", "status", "{PRECONDITIONS_FIELD_ID}"])
+                }}
+            }}
+        }}
+        """
+        variables = {"jql": f"project = {project_key}", "limit": 1000}
+        response = self._execute_graphql_query(query, variables)
+        listed: list[ListedTestCase] = []
+        for result in response.get("data", {}).get("getTests", {}).get("results", []):
+            jira_fields = result.get("jira", {})
+            summary = jira_fields.get("summary", "")
+            steps = [
+                TestStep(action=step["action"], expected_results=step["result"], test_data=[step["data"]])
+                for step in result.get("steps", [])
+            ]
+            test_case = TestCase(
+                key=result["issueId"],
+                name=summary,
+                summary=summary,
+                preconditions=jira_fields.get(PRECONDITIONS_FIELD_ID, ""),
+                steps=steps,
+                parent_issue_key=jira_fields.get("parent", {}).get("key"),
+                labels=jira_fields.get("labels", []),
+                comment="",
+            )
+            status = (jira_fields.get("status") or {}).get("name", "")
+            listed.append(ListedTestCase(test_case=test_case, status=status))
+        return listed
 
     def __init__(self):
         """

@@ -49,6 +49,7 @@ class TestCaseGenerationAgent(AgentBase):
             output_type=AcceptanceCriteriaList,
             system_prompt=self.ac_extraction_prompt.get_prompt(),
             name="ac_extractor",
+            max_output_tokens=config.TestCaseGenerationAgentConfig.MAX_OUTPUT_TOKENS,
             thinking_level=config.TestCaseGenerationAgentConfig.THINKING_LEVEL,
         )
 
@@ -57,6 +58,7 @@ class TestCaseGenerationAgent(AgentBase):
             output_type=TestStepsSequenceList,
             system_prompt=self.steps_generation_prompt.get_prompt(),
             name="steps_generator",
+            max_output_tokens=config.TestCaseGenerationAgentConfig.MAX_OUTPUT_TOKENS,
             thinking_level=config.TestCaseGenerationAgentConfig.THINKING_LEVEL,
         )
 
@@ -65,6 +67,7 @@ class TestCaseGenerationAgent(AgentBase):
             output_type=GeneratedTestCases,
             system_prompt=self.test_case_creation_prompt.get_prompt(),
             name="test_case_creator",
+            max_output_tokens=config.TestCaseGenerationAgentConfig.MAX_OUTPUT_TOKENS,
             thinking_level=config.TestCaseGenerationAgentConfig.THINKING_LEVEL,
         )
 
@@ -78,6 +81,7 @@ class TestCaseGenerationAgent(AgentBase):
             protocol=config.TestCaseGenerationAgentConfig.PROTOCOL,
             model_name=config.TestCaseGenerationAgentConfig.MODEL_NAME,
             version=config.TestCaseGenerationAgentConfig.VERSION,
+            max_output_tokens=config.TestCaseGenerationAgentConfig.MAX_OUTPUT_TOKENS,
             output_type=GeneratedTestCases,
             instructions=instruction_prompt.get_prompt(),
             mcp_toolset_factories=[lambda: build_atlassian_mcp_server_toolset(_JIRA_TOOL_ALLOWLIST)],

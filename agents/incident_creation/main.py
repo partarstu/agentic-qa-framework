@@ -52,6 +52,7 @@ class IncidentCreationAgent(AgentBase):
             system_prompt=self.dup_detect_prompt.get_prompt(),
             name="duplicate_detector",
             thinking_level=config.IncidentCreationAgentConfig.THINKING_LEVEL,
+            max_output_tokens=config.IncidentCreationAgentConfig.MAX_OUTPUT_TOKENS,
         )
 
         self._saved_artifact_paths: list[str] = []
@@ -65,6 +66,7 @@ class IncidentCreationAgent(AgentBase):
             external_port=config.IncidentCreationAgentConfig.EXTERNAL_PORT,
             model_name=model_name,
             version=config.IncidentCreationAgentConfig.VERSION,
+            max_output_tokens=config.IncidentCreationAgentConfig.MAX_OUTPUT_TOKENS,
             output_type=IncidentCreationResult,
             instructions=self.main_prompt.get_prompt(),
             mcp_toolset_factories=[lambda: build_atlassian_mcp_server_toolset(_JIRA_TOOL_ALLOWLIST)],

@@ -181,6 +181,8 @@ class RagSyncTrigger:
         match source:
             case "jira":
                 payload["project_key"] = arg("--project-key")
+            case "test_cases":
+                payload["project_key"] = arg("--project-key")
             case "confluence":
                 payload["space_key"] = arg("--space-key")
                 if (page_id := arg("--page-id")) is not None:

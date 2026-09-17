@@ -17,7 +17,7 @@ from a2a.server.tasks import TaskUpdater
 from a2a.types import Part, TaskState
 
 import config
-from common import utils
+from common import telemetry, utils
 from common.a2a_contract import ArtifactName
 from common.agent_log_capture import AgentLogCaptureHandler
 from common.models import AgentRuntimeError
@@ -58,7 +58,8 @@ class DefaultAgentExecutor(AgentExecutor):
         root_logger = logging.getLogger()
         root_logger.addHandler(log_handler)
         handler_token = set_current_log_handler(log_handler)
-        meter_token = operation_meter.set(OperationMeter())
+        meter = OperationMeter()
+        meter_token = operation_meter.set(meter)
 
         logs_artifact_id = str(uuid4())  # stable id correlating every log chunk for this task
         sent_any_logs = False
@@ -193,6 +194,15 @@ class DefaultAgentExecutor(AgentExecutor):
             if not handler_detached:
                 reset_current_log_handler(handler_token)
                 root_logger.removeHandler(log_handler)
+            # The task is over: publish the accumulated per-operation counters as OTel metrics.
+            # Reporting only — a metrics failure must not affect the task's terminal status.
+            try:
+                telemetry.record_operation_usage(self._agent_name(), meter.entries())
+            except Exception:
+                logger.exception("Failed to record token-usage metrics for task %s.", task_id)
+
+    def _agent_name(self) -> str:
+        return getattr(self.agent, "agent_name", None) or getattr(self.agent, "name", "") or "agent"
 
     async def cancel(self, context: RequestContext, event_queue: EventQueue) -> None:
         task_id = context.task_id

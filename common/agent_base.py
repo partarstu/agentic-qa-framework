@@ -75,6 +75,7 @@ class AgentBase(ABC):
         deps_type: type[BaseModel] | None = None,
         tools: Sequence[Tool[AgentDepsT] | ToolFuncEither[AgentDepsT, ...]] = (),
         vector_db_collection_name: str | None = None,
+        max_output_tokens: int | None = None,
     ):
         """Initialise the agent and its underlying A2A server.
 
@@ -89,6 +90,7 @@ class AgentBase(ABC):
         self.protocol = protocol
         self.url = f"{self.base_url}:{self.external_port}"
         self.model_name = model_name
+        self.max_output_tokens = max_output_tokens
         self.version = version
         self.skill = skill
         self.output_type = output_type
@@ -168,6 +170,8 @@ class AgentBase(ABC):
             deps_type=self.deps_type,
             retries=config.RetryConfig.MAX_RETRIES,
             output_retries=config.RetryConfig.MAX_RETRIES,
+            max_output_tokens=self.max_output_tokens,
+            operation_name="main",
         )
 
     def _get_mcp_server_description(self) -> str:

@@ -614,6 +614,7 @@ discovery_agent = CustomLlmWrapper.create_agent(
     name="Discovery Agent",
     retries=config.RetryConfig.MAX_RETRIES,
     thinking_level=config.OrchestratorConfig.THINKING_LEVEL,
+    max_output_tokens=config.OrchestratorConfig.MAX_OUTPUT_TOKENS,
     output_retries=config.RetryConfig.MAX_RETRIES,
 )
 
@@ -625,6 +626,7 @@ multi_discovery_agent = CustomLlmWrapper.create_agent(
     name="Multi-Discovery Agent",
     retries=config.RetryConfig.MAX_RETRIES,
     thinking_level=config.OrchestratorConfig.THINKING_LEVEL,
+    max_output_tokens=config.OrchestratorConfig.MAX_OUTPUT_TOKENS,
     output_retries=config.RetryConfig.MAX_RETRIES,
 )
 
@@ -637,6 +639,7 @@ def _get_results_extractor_agent(output_type: type[JsonSerializableModel] | type
         instructions=RESULTS_EXTRACTOR_INSTRUCTION,
         name="Results Extractor Agent",
         thinking_level=config.OrchestratorConfig.THINKING_LEVEL,
+        max_output_tokens=config.OrchestratorConfig.MAX_OUTPUT_TOKENS,
         retries=config.RetryConfig.MAX_RETRIES,
         output_retries=config.RetryConfig.MAX_RETRIES,
     )
@@ -882,6 +885,15 @@ def _sync_response(result: Any) -> Any:
     if result["status_code"] == 202:
         return JSONResponse(status_code=202, content={"message": "RAG sync started.", "execution": result["execution"]})
     return result["response"]
+
+
+# noinspection PyUnusedLocal
+@orchestrator_app.post("/update-test-case-db")
+async def update_test_case_db(request: JiraSyncRequest, api_key: str = Depends(_validate_api_key)):
+    """Triggers the test-case full resync for the given project (WS17)."""
+    logger.info(f"Triggering test-case RAG sync for project {request.project_key}")
+    result = await _trigger_rag_sync("test_cases", request.project_key, ["--project-key", request.project_key])
+    return _sync_response(result)
 
 
 # noinspection PyUnusedLocal

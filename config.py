@@ -158,6 +158,10 @@ TEMPERATURE = 0.0
 # (e.g. "google-gla:gemini-3.5-flash") or "qwen:<model>" for the self-hosted Qwen endpoint below.
 DEFAULT_MODEL_NAME = os.environ.get("MODEL_NAME", "google-gla:gemini-3.5-flash")
 
+# Provider API keys, read by the provider SDKs when their model family is configured.
+GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
+
 # Self-hosted, OpenAI-compatible Qwen endpoint, used by model names prefixed with "qwen:". An endpoint
 # served by Cloud Run authenticates through an IAM identity token minted from the application default
 # credentials, so QWEN_API_KEY only applies to any other host.
@@ -176,11 +180,15 @@ class BudgetConfig:
     # because pydantic-ai enforces token limits, not monetary ones.
     TOTAL_TOKENS_LIMIT_PER_TASK = int(os.environ.get("TOTAL_TOKENS_LIMIT_PER_TASK", "1000000"))
 
-    # Indicative price in USD per 1,000,000 tokens, keyed by the pydantic-ai model name.
-    # Used only to estimate cost for oversight (logs + dashboard); keep these values current
-    # with the provider's published pricing. Models absent from this table report a null cost.
+    # Indicative price in USD per 1,000,000 tokens, keyed by the bare model id (without a
+    # provider prefix such as "google-gla:"). "cache_read"/"cache_write" rates are optional;
+    # when absent, cached tokens are priced at the input rate. Used only to estimate cost for
+    # oversight (logs + dashboard); keep these values current with the provider's published
+    # pricing. Models absent from this table report a null cost.
     MODEL_PRICING: dict[str, dict[str, float]] = {
-        "google-gla:gemini-3.5-flash": {"input": 0.30, "output": 2.50},
+        "gemini-3.5-flash": {"input": 0.30, "output": 2.50},
+        "claude-opus-5": {"input": 5.0, "output": 25.0, "cache_read": 0.5, "cache_write": 6.25},
+        "claude-sonnet-5": {"input": 2.0, "output": 10.0, "cache_read": 0.2, "cache_write": 2.5},
     }
 
 

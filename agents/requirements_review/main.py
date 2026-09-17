@@ -80,6 +80,7 @@ class RequirementsReviewAgent(AgentBase):
             ).get_prompt(),
             name="review_with_attachments",
             thinking_level=config.RequirementsReviewAgentConfig.THINKING_LEVEL,
+            max_output_tokens=config.RequirementsReviewAgentConfig.MAX_OUTPUT_TOKENS,
         )
 
         instruction_prompt = RequirementsReviewSystemPrompt()
@@ -95,6 +96,7 @@ class RequirementsReviewAgent(AgentBase):
             protocol=config.RequirementsReviewAgentConfig.PROTOCOL,
             model_name=config.RequirementsReviewAgentConfig.MODEL_NAME,
             version=config.RequirementsReviewAgentConfig.VERSION,
+            max_output_tokens=config.RequirementsReviewAgentConfig.MAX_OUTPUT_TOKENS,
             output_type=RequirementsReviewFeedback,
             instructions=instructions,
             mcp_toolset_factories=[lambda: build_atlassian_mcp_server_toolset(_JIRA_TOOL_ALLOWLIST)],

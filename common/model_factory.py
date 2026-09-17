@@ -10,22 +10,37 @@ from urllib.parse import urlparse
 
 import google.auth
 import httpx
+import httpx2
+from anthropic import AsyncAnthropic
 from google.auth import impersonated_credentials
 from google.auth.credentials import Credentials
 from google.auth.exceptions import DefaultCredentialsError
 from google.auth.transport.requests import Request as GoogleAuthRequest
+from google.genai import Client as GoogleGenaiClient
+from google.genai.types import HttpOptions, HttpRetryOptions
 from google.oauth2 import id_token
+from openai import AsyncOpenAI
 from openai.types.shared import ReasoningEffort
-from pydantic_ai.models import Model, create_async_http_client
-from pydantic_ai.models.anthropic import AnthropicModelSettings
+from pydantic_ai.models import Model
+from pydantic_ai.models.anthropic import AnthropicModel, AnthropicModelSettings
+from pydantic_ai.models.google import GoogleModel
 from pydantic_ai.models.openai import OpenAIChatModel, OpenAIChatModelSettings
 from pydantic_ai.profiles.qwen import qwen_model_profile
+from pydantic_ai.providers.anthropic import AnthropicProvider
+from pydantic_ai.providers.google import GoogleProvider
 from pydantic_ai.providers.openai import OpenAIProvider
+from pydantic_ai.retries import AsyncTenacityTransport, RetryConfig, wait_retry_after
 from pydantic_ai.settings import ThinkingLevel
+from tenacity import retry_if_exception_type, stop_after_attempt, wait_exponential
 
 import config
+from common import utils
+
+logger = utils.get_logger("model_factory")
 
 QWEN_MODEL_PREFIX = "qwen:"
+ANTHROPIC_PROVIDER_PREFIX = "anthropic:"
+GOOGLE_PROVIDER_PREFIX = "google-gla:"
 CLOUD_RUN_HOST_SUFFIX = ".run.app"
 # The OpenAI client requires a non-empty key even when the endpoint expects none, be it because it
 # authenticates through IAM or because it is a self-hosted server reachable only on a private network.
@@ -42,6 +57,12 @@ QWEN_REASONING_EFFORT_MAP: dict[ThinkingLevel, ReasoningEffort] = {
 }
 THINKING_DISABLED_BODY = {"chat_template_kwargs": {"enable_thinking": False}}
 CLAUDE_5_PREFIXES = ("claude-opus-5", "claude-sonnet-5", "claude-fable-5", "claude-mythos-5")
+# Models whose API rejects explicitly disabled thinking (WS12): they run adaptive at effort low instead.
+DISABLED_THINKING_UNSUPPORTED_PREFIXES = ("claude-fable-5", "claude-mythos-5")
+# HTTP statuses retried at the transport boundary (the model endpoints sit behind serverless front ends).
+RETRYABLE_STATUS_CODES = frozenset({429, 502, 503, 504})
+# Models whose disabled-thinking fallback has already been logged, so construction logs one WARNING only.
+_logged_thinking_fallbacks: set[str] = set()
 
 
 def is_claude_5(model_name: object) -> bool:
@@ -50,38 +71,142 @@ def is_claude_5(model_name: object) -> bool:
 
 
 def build_claude_5_settings(
-    thinking_level: ThinkingLevel | None, max_output_tokens: int | None
+    thinking_level: ThinkingLevel | None, max_output_tokens: int | None, model_name: str = ""
 ) -> AnthropicModelSettings:
-    """Build Claude 5 settings without unsupported sampling fields or token budgets."""
+    """Build Claude 5 settings without unsupported sampling fields or token budgets.
+
+    Models that reject disabled thinking fall back to adaptive thinking at effort ``low``; the
+    fallback is logged once per model.
+    """
     settings: AnthropicModelSettings = {}
     if max_output_tokens is not None:
         settings["max_tokens"] = max_output_tokens
+    if thinking_level is None:
+        return settings
     if thinking_level is False:
-        settings["anthropic_thinking"] = {"type": "disabled"}
+        if model_name.split(":")[-1].startswith(DISABLED_THINKING_UNSUPPORTED_PREFIXES):
+            if model_name not in _logged_thinking_fallbacks:
+                _logged_thinking_fallbacks.add(model_name)
+                logger.warning(
+                    f"Model '{model_name}' rejects disabled thinking; "
+                    f"falling back to adaptive thinking at effort 'low'."
+                )
+            settings["anthropic_thinking"] = {"type": "adaptive"}
+            settings["anthropic_effort"] = "low"
+        else:
+            settings["anthropic_thinking"] = {"type": "disabled"}
     elif thinking_level is True:
         settings["anthropic_thinking"] = {"type": "adaptive"}
-    elif isinstance(thinking_level, str):
-        effort = "low" if thinking_level == "minimal" else thinking_level
+    else:
+        effort = "low" if thinking_level == "minimal" else str(thinking_level)
         settings["anthropic_thinking"] = {"type": "adaptive"}
         settings["anthropic_effort"] = effort
     return settings
 
 
 def build_model(model_name: str | Model, thinking_level: ThinkingLevel | None = None) -> str | Model:
-    """Return the model to wrap: the self-hosted Qwen model for a "qwen:" name, the input otherwise.
+    """Return the model to wrap: the provider model built for a known provider, the input otherwise.
 
-    Any other name stays a plain string for pydantic-ai to infer the provider from.
+    Qwen is served by a self-hosted OpenAI-compatible endpoint; Claude and Gemini are built
+    explicitly so their HTTP clients carry the transport-level retry (WS12). Any other name stays
+    a plain string for pydantic-ai to infer the provider from.
     """
-    if not isinstance(model_name, str) or not model_name.startswith(QWEN_MODEL_PREFIX):
+    if not isinstance(model_name, str):
         return model_name
-    if not config.QWEN_ENDPOINT:
-        raise ValueError(f"QWEN_ENDPOINT must be set to use the model '{model_name}'.")
-    return OpenAIChatModel(
-        model_name.removeprefix(QWEN_MODEL_PREFIX),
-        provider=_build_qwen_provider(config.QWEN_ENDPOINT),
-        profile=qwen_model_profile,
-        settings=_build_qwen_settings(thinking_level),
+    if model_name.startswith(QWEN_MODEL_PREFIX):
+        if not config.QWEN_ENDPOINT:
+            raise ValueError(f"QWEN_ENDPOINT must be set to use the model '{model_name}'.")
+        return OpenAIChatModel(
+            model_name.removeprefix(QWEN_MODEL_PREFIX),
+            provider=_build_qwen_provider(config.QWEN_ENDPOINT, model_name),
+            profile=qwen_model_profile,
+            settings=_build_qwen_settings(thinking_level),
+        )
+    if model_name.startswith(ANTHROPIC_PROVIDER_PREFIX) or is_claude_5(model_name):
+        return _build_anthropic_model(model_name)
+    if model_name.startswith(GOOGLE_PROVIDER_PREFIX):
+        return _build_google_model(model_name)
+    return model_name
+
+
+def _build_anthropic_model(model_name: str) -> AnthropicModel:
+    """The Anthropic model with the SDK's own retries disabled in favour of the retry transport.
+
+    The Anthropic SDK speaks httpx2, so the retry transport wraps an httpx2 transport and the
+    client is an httpx2 client.
+    """
+    client = AsyncAnthropic(
+        api_key=config.ANTHROPIC_API_KEY,
+        max_retries=0,
+        http_client=_retry_http_client(model_name, httpx2, httpx2.AsyncHTTPTransport()),
     )
+    return AnthropicModel(
+        model_name.removeprefix(ANTHROPIC_PROVIDER_PREFIX),
+        provider=AnthropicProvider(anthropic_client=client),
+    )
+
+
+def _build_google_model(model_name: str) -> GoogleModel:
+    """The Gemini model with the SDK's own retries disabled in favour of the retry transport."""
+    client = GoogleGenaiClient(
+        vertexai=False,
+        api_key=config.GOOGLE_API_KEY,
+        http_options=HttpOptions(
+            httpx_async_client=_retry_http_client(model_name),
+            retry_options=HttpRetryOptions(attempts=1),
+        ),
+    )
+    return GoogleModel(model_name.removeprefix(GOOGLE_PROVIDER_PREFIX), provider=GoogleProvider(client=client))
+
+
+def _retry_http_client(model_name: str, httpx_module=httpx, wrapped_transport=None):
+    """An HTTP client whose transport retries transport errors and 429/502/503/504 (WS12).
+
+    The attempt budget and back-off are the existing agent-run retry budget; ``Retry-After``
+    headers take precedence over the exponential back-off, capped at its maximum. Each retry is
+    logged with the model, the attempt, the reason and the upcoming delay, so retries stay visible.
+    ``httpx_module`` selects the httpx or the httpx2 flavour (the Anthropic SDK requires httpx2).
+    """
+    transport = AsyncTenacityTransport(
+        wrapped=wrapped_transport,
+        config=RetryConfig(
+            stop=stop_after_attempt(config.RetryConfig.MAX_RETRIES),
+            wait=wait_retry_after(
+                fallback_strategy=wait_exponential(multiplier=config.RetryConfig.RETRY_BASE_DELAY_SECONDS),
+                max_wait=config.RetryConfig.RETRY_BASE_DELAY_SECONDS * (2 ** (config.RetryConfig.MAX_RETRIES - 1)),
+            ),
+            retry=retry_if_exception_type((httpx_module.TransportError, httpx_module.HTTPStatusError)),
+            before_sleep=_log_retry_attempt(model_name),
+            reraise=True,
+        ),
+        validate_response=_raise_if_retryable_status,
+    )
+    return httpx_module.AsyncClient(transport=transport)
+
+
+def _raise_if_retryable_status(response: httpx.Response) -> None:
+    """Raise (and so retry) only the statuses the transport level owns; every other response passes."""
+    if response.status_code in RETRYABLE_STATUS_CODES:
+        response.raise_for_status()
+
+
+def _log_retry_attempt(model_name: str):
+    """The ``before_sleep`` hook logging one line per transport-level retry attempt."""
+
+    def log_attempt(retry_state) -> None:
+        exception = retry_state.outcome.exception() if retry_state.outcome else None
+        if isinstance(exception, httpx.HTTPStatusError):
+            reason = f"HTTP {exception.response.status_code}"
+        else:
+            reason = type(exception).__name__ if exception is not None else "unknown"
+        delay = retry_state.next_action.sleep if retry_state.next_action else 0
+        logger.warning(
+            f"LLM provider request for '{model_name}' failed (attempt "
+            f"{retry_state.attempt_number}/{config.RetryConfig.MAX_RETRIES}, reason: {reason}); "
+            f"retrying in {delay:.1f}s"
+        )
+
+    return log_attempt
 
 
 def _build_qwen_settings(thinking_level: ThinkingLevel | None) -> OpenAIChatModelSettings:
@@ -98,14 +223,21 @@ def _build_qwen_settings(thinking_level: ThinkingLevel | None) -> OpenAIChatMode
     return OpenAIChatModelSettings(openai_reasoning_effort=QWEN_REASONING_EFFORT_MAP[thinking_level])
 
 
-def _build_qwen_provider(endpoint: str) -> OpenAIProvider:
+def _build_qwen_provider(endpoint: str, model_name: str) -> OpenAIProvider:
     """The OpenAI-compatible provider for the Qwen endpoint, authenticated the way that endpoint expects."""
     audience = _cloud_run_audience(endpoint)
     if audience is None:
-        return OpenAIProvider(base_url=endpoint, api_key=config.QWEN_API_KEY or API_KEY_PLACEHOLDER)
-    http_client = create_async_http_client()
+        client = AsyncOpenAI(
+            base_url=endpoint,
+            api_key=config.QWEN_API_KEY or API_KEY_PLACEHOLDER,
+            max_retries=0,
+            http_client=_retry_http_client(model_name),
+        )
+        return OpenAIProvider(openai_client=client)
+    http_client = _retry_http_client(model_name)
     http_client.auth = _CloudRunIdentityAuth(audience)
-    return OpenAIProvider(base_url=endpoint, api_key=API_KEY_PLACEHOLDER, http_client=http_client)
+    client = AsyncOpenAI(base_url=endpoint, api_key=API_KEY_PLACEHOLDER, max_retries=0, http_client=http_client)
+    return OpenAIProvider(openai_client=client)
 
 
 def _cloud_run_audience(endpoint: str) -> str | None:

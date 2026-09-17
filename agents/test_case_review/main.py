@@ -44,6 +44,7 @@ class TestCaseReviewAgent(AgentBase):
             system_prompt=TestCaseReviewWithAttachmentsPrompt().get_prompt(),
             name="review_test_cases_with_attachments",
             thinking_level=config.TestCaseReviewAgentConfig.THINKING_LEVEL,
+            max_output_tokens=config.TestCaseReviewAgentConfig.MAX_OUTPUT_TOKENS,
         )
 
         instruction_prompt = TestCaseReviewSystemPrompt()
@@ -55,6 +56,7 @@ class TestCaseReviewAgent(AgentBase):
             protocol=config.TestCaseReviewAgentConfig.PROTOCOL,
             model_name=config.TestCaseReviewAgentConfig.MODEL_NAME,
             version=config.TestCaseReviewAgentConfig.VERSION,
+            max_output_tokens=config.TestCaseReviewAgentConfig.MAX_OUTPUT_TOKENS,
             output_type=TestCaseReviewFeedbacks,
             instructions=instruction_prompt.get_prompt(),
             mcp_toolset_factories=[lambda: build_atlassian_mcp_server_toolset(_JIRA_TOOL_ALLOWLIST)],

@@ -30,12 +30,14 @@ from pydantic_ai.models import (
 )
 from pydantic_ai.models.wrapper import WrapperModel
 from pydantic_ai.settings import ThinkingLevel
+from pydantic_ai.usage import RunUsage
 
 import config
 from common import utils
 from common.model_factory import build_claude_5_settings, build_model, is_claude_5
 from common.models import JsonSerializableModel
 from common.prompt_injection.guard import GuardPrompt, PromptGuardFactory
+from common.token_usage import operation_meter
 
 LOG_SEPARATOR = "-" * 80
 
@@ -44,13 +46,20 @@ logger = utils.get_logger("llm_wrapper")
 
 class CustomLlmWrapper(WrapperModel):
     def __init__(
-        self, model_name: str, thinking_level: ThinkingLevel | None = None, max_output_tokens: int | None = None
+        self,
+        model_name: str,
+        thinking_level: ThinkingLevel | None = None,
+        max_output_tokens: int | None = None,
+        operation_name: str | None = None,
     ):
         super().__init__(build_model(model_name, thinking_level))
         self.wrapped_model_name: str = model_name
         self.latest_instructions: str | None = None
         self.thinking_level = thinking_level
         self.max_output_tokens = max_output_tokens if max_output_tokens is not None else config.MAX_OUTPUT_TOKENS
+        # Name under which this model's calls are metered per operation (WS13): "main" for the
+        # agent created by AgentBase, the sub-agent's own name otherwise.
+        self.operation_name = operation_name or "main"
 
     @classmethod
     def create_agent(
@@ -67,10 +76,16 @@ class CustomLlmWrapper(WrapperModel):
         retries: int = 3,
         output_retries: int = 3,
         max_output_tokens: int | None = None,
+        operation_name: str | None = None,
     ) -> Agent:
         """Creates a pydantic_ai Agent backed by a CustomLlmWrapper model."""
         return Agent(
-            model=cls(model_name=model_name, thinking_level=thinking_level, max_output_tokens=max_output_tokens),
+            model=cls(
+                model_name=model_name,
+                thinking_level=thinking_level,
+                max_output_tokens=max_output_tokens,
+                operation_name=operation_name or name or "main",
+            ),
             output_type=output_type,
             instructions=instructions,
             system_prompt=system_prompt or (),
@@ -86,11 +101,35 @@ class CustomLlmWrapper(WrapperModel):
         if provided_settings is not None:
             return provided_settings
         if is_claude_5(self.wrapped_model_name):
-            return build_claude_5_settings(self.thinking_level, self.max_output_tokens)
+            return build_claude_5_settings(self.thinking_level, self.max_output_tokens, self.wrapped_model_name)
         if self.thinking_level is None:
             return ModelSettings(top_p=config.TOP_P, temperature=config.TEMPERATURE)
         else:
             return ModelSettings(top_p=config.TOP_P, temperature=config.TEMPERATURE, thinking=self.thinking_level)
+
+    def _record_usage(self, response: ModelResponse) -> None:
+        """Add one completed LLM call's usage to the per-task operation meter (WS13).
+
+        A model outside an agent task (e.g. the orchestrator's routing calls) has no meter and is
+        not metered as an operation.
+        """
+        meter = operation_meter.get()
+        if meter is None:
+            return
+        tool_calls = sum(1 for part in response.parts if isinstance(part, ToolCallPart))
+        usage = response.usage
+        meter.add(
+            self.operation_name,
+            self.wrapped_model_name,
+            RunUsage(
+                requests=1,
+                tool_calls=tool_calls,
+                input_tokens=usage.input_tokens,
+                output_tokens=usage.output_tokens,
+                cache_read_tokens=usage.cache_read_tokens,
+                cache_write_tokens=usage.cache_write_tokens,
+            ),
+        )
 
     async def request(
         self,
@@ -109,6 +148,7 @@ class CustomLlmWrapper(WrapperModel):
         response = await self.wrapped.request(messages, actual_settings, model_request_parameters)
         duration = time.monotonic() - start_time
         logger.info(f"LLM request to '{self.wrapped_model_name}' completed in {duration:.3f}s")
+        self._record_usage(response)
         self._log_model_response(response)
         return response
 
@@ -131,6 +171,8 @@ class CustomLlmWrapper(WrapperModel):
             yield response_stream
         duration = time.monotonic() - start_time
         logger.info(f"LLM streaming request to '{self.wrapped_model_name}' completed in {duration:.3f}s")
+        # Streaming usage is only final once the stream is closed, which the context exit above ensures.
+        self._record_usage(response_stream.get())
 
     @staticmethod
     def _get_prompt_from_messages(messages: list[ModelMessage]) -> GuardPrompt | None:

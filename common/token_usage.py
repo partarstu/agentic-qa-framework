@@ -40,7 +40,13 @@ class TokenUsage(JsonSerializableModel):
             cache_read_tokens=usage.cache_read_tokens,
             requests=usage.requests,
             tool_calls=usage.tool_calls,
-            cost_usd=estimate_cost_usd(usage.input_tokens, usage.output_tokens, model_name),
+            cost_usd=estimate_cost_usd(
+                max(0, usage.input_tokens - usage.cache_read_tokens - usage.cache_write_tokens),
+                usage.output_tokens,
+                model_name,
+                cache_read_tokens=usage.cache_read_tokens,
+                cache_write_tokens=usage.cache_write_tokens,
+            ),
         )
 
     def summary_line(self) -> str:
@@ -83,9 +89,11 @@ class OperationMeter:
         entry.output_tokens += usage.output_tokens
         entry.tool_calls += usage.tool_calls
         entry.cost_usd = estimate_cost_usd(
-            entry.uncached_input_tokens + entry.cache_read_tokens + entry.cache_write_tokens,
+            entry.uncached_input_tokens,
             entry.output_tokens,
             model_name,
+            cache_read_tokens=entry.cache_read_tokens,
+            cache_write_tokens=entry.cache_write_tokens,
         )
 
     def entries(self) -> list[OperationUsage]:
@@ -96,9 +104,35 @@ class OperationMeter:
 operation_meter: ContextVar[OperationMeter | None] = ContextVar("operation_meter", default=None)
 
 
-def estimate_cost_usd(input_tokens: int, output_tokens: int, model_name: str) -> float | None:
-    """Estimate the USD cost of a run, or ``None`` when the model has no configured price."""
-    pricing = config.BudgetConfig.MODEL_PRICING.get(model_name)
+def _pricing(model_name: str) -> dict[str, float] | None:
+    """The price table entry of a model, matched on the bare model id without a provider prefix."""
+    if model_name in config.BudgetConfig.MODEL_PRICING:
+        return config.BudgetConfig.MODEL_PRICING[model_name]
+    return config.BudgetConfig.MODEL_PRICING.get(model_name.split(":", 1)[-1])
+
+
+def estimate_cost_usd(
+    uncached_input_tokens: int,
+    output_tokens: int,
+    model_name: str,
+    cache_read_tokens: int = 0,
+    cache_write_tokens: int = 0,
+) -> float | None:
+    """Estimate the USD cost of a run, or ``None`` when the model has no configured price.
+
+    Cached tokens are priced at their own rates when the price table has them, and at the input
+    rate otherwise.
+    """
+    pricing = _pricing(model_name)
     if pricing is None:
         return None
-    return (input_tokens * pricing["input"] + output_tokens * pricing["output"]) / 1_000_000
+    input_rate = pricing["input"]
+    cache_read_rate = pricing.get("cache_read", input_rate)
+    cache_write_rate = pricing.get("cache_write", input_rate)
+    total = (
+        uncached_input_tokens * input_rate
+        + cache_read_tokens * cache_read_rate
+        + cache_write_tokens * cache_write_rate
+        + output_tokens * pricing["output"]
+    )
+    return total / 1_000_000
