@@ -20,18 +20,7 @@ def _git(repository: Path, *args: str) -> str:
     ).stdout
 
 
-def _run_task_diff(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], *args: str) -> str:
-    monkeypatch.setattr(sys, "argv", ["task_diff.py", *args])
-    TASK_DIFF["main"]()
-    return capsys.readouterr().out
-
-
-@pytest.fixture
-def repository(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    repository = tmp_path / "repository"
-    repository.mkdir()
-    _git(repository, "init", "--quiet")
-    (repository / "calc.py").write_text("def add(a, b):\n    return a + b\n", encoding="utf-8")
+def _commit_all(repository: Path) -> None:
     _git(repository, "add", "--all")
     _git(
         repository,
@@ -43,9 +32,23 @@ def repository(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         "commit.gpgsign=false",
         "commit",
         "--quiet",
-        "--message=initial",
+        "--message=commit",
     )
-    monkeypatch.chdir(repository)
+
+
+def _run_task_diff(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], *args: str) -> str:
+    monkeypatch.setattr(sys, "argv", ["task_diff.py", *args])
+    TASK_DIFF["main"]()
+    return capsys.readouterr().out
+
+
+@pytest.fixture
+def repository(tmp_path: Path) -> Path:
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    _git(repository, "init", "--quiet")
+    (repository / "calc.py").write_text("def add(a, b):\n    return a + b\n", encoding="utf-8")
+    _commit_all(repository)
     return repository
 
 
@@ -56,12 +59,12 @@ def test_diff_contains_only_changes_made_after_the_snapshot(
     with (repository / "calc.py").open("a", encoding="utf-8") as calc:
         calc.write("\n\ndef sub(a, b):\n    return a - b\n")
     (repository / "notes.txt").write_text("existing work\n", encoding="utf-8")
-    base_tree = _run_task_diff(monkeypatch, capsys, run_directory).strip()
+    base_tree = _run_task_diff(monkeypatch, capsys, str(repository), run_directory).strip()
 
     with (repository / "calc.py").open("a", encoding="utf-8") as calc:
         calc.write("\n\ndef mul(a, b):\n    return a * b\n")
     (repository / "new_module.py").write_text("VALUE = 1\n", encoding="utf-8")
-    changed_paths = _run_task_diff(monkeypatch, capsys, run_directory, base_tree)
+    changed_paths = _run_task_diff(monkeypatch, capsys, str(repository), run_directory, base_tree)
 
     diff = (Path(run_directory) / "task.diff").read_text(encoding="utf-8")
     assert changed_paths.splitlines() == ["M\tcalc.py", "A\tnew_module.py"]
@@ -77,18 +80,65 @@ def test_snapshot_and_diff_leave_the_git_index_untouched(
     run_directory = str(tmp_path / "run")
     (repository / "new_module.py").write_text("VALUE = 1\n", encoding="utf-8")
 
-    base_tree = _run_task_diff(monkeypatch, capsys, run_directory).strip()
-    _run_task_diff(monkeypatch, capsys, run_directory, base_tree)
+    base_tree = _run_task_diff(monkeypatch, capsys, str(repository), run_directory).strip()
+    _run_task_diff(monkeypatch, capsys, str(repository), run_directory, base_tree)
 
     assert _git(repository, "diff", "--cached", "--name-only") == ""
     assert _git(repository, "status", "--porcelain") == "?? new_module.py\n"
 
 
+def test_writes_the_diff_under_the_given_file_name(
+    repository: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    run_directory = tmp_path / "run"
+    base_tree = _run_task_diff(monkeypatch, capsys, str(repository), str(run_directory)).strip()
+    (repository / "new_module.py").write_text("VALUE = 1\n", encoding="utf-8")
+
+    _run_task_diff(monkeypatch, capsys, str(repository), str(run_directory), base_tree, "round.diff")
+
+    assert "+VALUE = 1" in (run_directory / "round.diff").read_text(encoding="utf-8")
+    assert not (run_directory / "task.diff").exists()
+
+
+def test_diff_contains_changes_to_tracked_files_matched_by_an_ignore_rule(
+    repository: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    run_directory = str(tmp_path / "run")
+    (repository / "settings.ini").write_text("level = 1\n", encoding="utf-8")
+    _commit_all(repository)
+    (repository / ".gitignore").write_text("settings.ini\n", encoding="utf-8")
+    _commit_all(repository)
+    base_tree = _run_task_diff(monkeypatch, capsys, str(repository), run_directory).strip()
+
+    (repository / "settings.ini").write_text("level = 2\n", encoding="utf-8")
+    changed_paths = _run_task_diff(monkeypatch, capsys, str(repository), run_directory, base_tree)
+
+    assert changed_paths.splitlines() == ["M\tsettings.ini"]
+
+
 @pytest.mark.parametrize("base_tree", ["HEAD", "abc123", "--output=diff.txt"])
 def test_rejects_a_base_tree_that_is_not_a_tree_id(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, base_tree: str
+    repository: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, base_tree: str
 ) -> None:
-    monkeypatch.setattr(sys, "argv", ["task_diff.py", str(tmp_path / "run"), base_tree])
+    monkeypatch.setattr(sys, "argv", ["task_diff.py", str(repository), str(tmp_path / "run"), base_tree])
+
+    with pytest.raises(SystemExit):
+        TASK_DIFF["main"]()
+
+
+@pytest.mark.parametrize("diff_file_name", ["", "..", "nested/round.diff", "../round.diff"])
+def test_rejects_a_diff_file_name_that_is_not_a_plain_file_name(
+    repository: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, diff_file_name: str
+) -> None:
+    tree_id = "0" * 40
+    monkeypatch.setattr(sys, "argv", ["task_diff.py", str(repository), str(tmp_path / "run"), tree_id, diff_file_name])
+
+    with pytest.raises(SystemExit):
+        TASK_DIFF["main"]()
+
+
+def test_rejects_a_repository_that_is_not_a_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sys, "argv", ["task_diff.py", str(tmp_path / "missing"), str(tmp_path / "run")])
 
     with pytest.raises(SystemExit):
         TASK_DIFF["main"]()
