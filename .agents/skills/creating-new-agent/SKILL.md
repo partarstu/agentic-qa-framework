@@ -65,13 +65,21 @@ It must inherit `BaseAgentResult`, which carries `llm_comments` for the model to
 
 Create `agents/<agent_name>/main.py` from [resources/agent_template.py](resources/agent_template.py):
 
-- Pass MCP tools as **factories** (`mcp_toolset_factories=[build_atlassian_mcp_server_toolset]`), never live toolsets:
-  `AgentBase` opens a fresh MCP session for every run and closes it afterwards, so a stale session never breaks the
-  next request. Omit the argument if the agent needs no MCP tools.
-- A sub-agent needing Jira tools opens its own session per run:
-  `async with build_atlassian_mcp_server_toolset() as toolset: await sub_agent.run(prompt, toolsets=[toolset])`.
+- Pass MCP tools as **factories**
+  (`mcp_toolset_factories=[lambda: build_atlassian_mcp_server_toolset(_ATLASSIAN_TOOL_ALLOWLIST)]`), never live
+  toolsets: `AgentBase` opens a fresh MCP session for every run and closes it afterwards, so a stale session never
+  breaks the next request. Omit the argument if the agent needs no MCP tools.
+- Always pass the allowlist of the Atlassian MCP tool names the agent uses (e.g. `("jira_get_issue",
+  "jira_add_comment")`): the combined server also advertises Confluence tools, and an agent must not receive tools it
+  was not built for.
+- A sub-agent needing Jira tools opens its own session per run: `async with
+  build_atlassian_mcp_server_toolset(_ATLASSIAN_TOOL_ALLOWLIST) as toolset: await sub_agent.run(prompt,
+  toolsets=[toolset])`.
 - Custom tools are methods passed via `tools=[...]`. The LLM sees their signature and docstring, so the docstring is
   the tool specification.
+- A tool takes every value it needs as its own parameter, which the model fills from the task text (e.g. a Jira issue
+  key). `AgentBase` runs the agent without dependencies, so a tool reading `ctx.deps` fails at its first call; do not
+  declare `deps_type`.
 - Pass the declared skill via `skill=AgentSkillDeclaration(...)` (required): it becomes the agent card's skill and
   feeds the composed card description.
 - Prompt-injection screening, agent registration and activity streaming are handled by `AgentBase`; do not

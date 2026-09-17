@@ -6,7 +6,7 @@
 Agent class template for a new agent.
 
 Replace <agent_name> with the folder name (e.g. requirements_review), <AgentName> with the class prefix
-(e.g. RequirementsReview), <OutputModel> with the result model and <DepsModel> with the dependencies model.
+(e.g. RequirementsReview) and <OutputModel> with the result model.
 """
 
 from pydantic_ai.settings import ThinkingLevel
@@ -15,10 +15,13 @@ import config
 from agents.<agent_name>.prompt import <AgentName>SystemPrompt
 from common import utils
 from common.agent_base import AgentBase
-from common.models import AgentSkillDeclaration, <DepsModel>, <OutputModel>
+from common.models import AgentSkillDeclaration, <OutputModel>
 from common.services.atlassian_mcp import build_atlassian_mcp_server_toolset
 
 logger = utils.get_logger("<agent_name>_agent")
+
+# The Atlassian MCP server advertises Jira and Confluence tools alike; list only the tools this agent uses.
+_ATLASSIAN_TOOL_ALLOWLIST = ("jira_get_issue", "<other_tool_name>")
 
 
 class <AgentName>Agent(AgentBase):
@@ -37,9 +40,7 @@ class <AgentName>Agent(AgentBase):
             output_type=<OutputModel>,
             instructions=instruction_prompt.get_prompt(),
             # Drop if the agent needs no MCP tools.
-            mcp_toolset_factories=[build_atlassian_mcp_server_toolset],
-            # Optional: drop if the agent needs no typed dependencies.
-            deps_type=<DepsModel>,
+            mcp_toolset_factories=[lambda: build_atlassian_mcp_server_toolset(_ATLASSIAN_TOOL_ALLOWLIST)],
             skill=AgentSkillDeclaration(
                 id=config.<AgentName>AgentConfig.SKILL_ID,
                 name=config.<AgentName>AgentConfig.SKILL_NAME,
@@ -58,6 +59,9 @@ class <AgentName>Agent(AgentBase):
     async def <custom_tool>(self, param: str) -> str:
         """
         <What the tool does - the LLM reads this docstring as the tool specification>.
+
+        Every value the tool needs is a parameter of its own: AgentBase runs the agent without
+        dependencies, so a tool can never read them from the run context.
 
         Args:
             param: <Description of the parameter>.
