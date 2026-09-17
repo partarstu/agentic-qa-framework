@@ -17,6 +17,7 @@ from google.auth.transport.requests import Request as GoogleAuthRequest
 from google.oauth2 import id_token
 from openai.types.shared import ReasoningEffort
 from pydantic_ai.models import Model, create_async_http_client
+from pydantic_ai.models.anthropic import AnthropicModelSettings
 from pydantic_ai.models.openai import OpenAIChatModel, OpenAIChatModelSettings
 from pydantic_ai.profiles.qwen import qwen_model_profile
 from pydantic_ai.providers.openai import OpenAIProvider
@@ -40,6 +41,30 @@ QWEN_REASONING_EFFORT_MAP: dict[ThinkingLevel, ReasoningEffort] = {
     "xhigh": "xhigh",
 }
 THINKING_DISABLED_BODY = {"chat_template_kwargs": {"enable_thinking": False}}
+CLAUDE_5_PREFIXES = ("claude-opus-5", "claude-sonnet-5", "claude-fable-5", "claude-mythos-5")
+
+
+def is_claude_5(model_name: object) -> bool:
+    """Return whether a pydantic-ai model name identifies a Claude 5 family model."""
+    return isinstance(model_name, str) and model_name.split(":")[-1].startswith(CLAUDE_5_PREFIXES)
+
+
+def build_claude_5_settings(
+    thinking_level: ThinkingLevel | None, max_output_tokens: int | None
+) -> AnthropicModelSettings:
+    """Build Claude 5 settings without unsupported sampling fields or token budgets."""
+    settings: AnthropicModelSettings = {}
+    if max_output_tokens is not None:
+        settings["max_tokens"] = max_output_tokens
+    if thinking_level is False:
+        settings["anthropic_thinking"] = {"type": "disabled"}
+    elif thinking_level is True:
+        settings["anthropic_thinking"] = {"type": "adaptive"}
+    elif isinstance(thinking_level, str):
+        effort = "low" if thinking_level == "minimal" else thinking_level
+        settings["anthropic_thinking"] = {"type": "adaptive"}
+        settings["anthropic_effort"] = effort
+    return settings
 
 
 def build_model(model_name: str | Model, thinking_level: ThinkingLevel | None = None) -> str | Model:

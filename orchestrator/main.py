@@ -61,7 +61,9 @@ from common.models import (
     ProjectExecutionRequest,
     RoutingOutcome,
     SelectedAgents,
+    SyncOutcome,
     TestCase,
+    TestCaseType,
     TestExecutionRequest,
     TestExecutionResult,
 )
@@ -79,8 +81,9 @@ from common.streaming import (
 )
 from common.token_usage import TokenUsage
 from common.utils import compile_name_pattern
-from orchestrator.auth import LoginRequest, TokenResponse, auth_service, dashboard_auth
+from orchestrator.auth import LoginRequest, TokenResponse, auth_service, client_ip, dashboard_auth, login_rate_limiter
 from orchestrator.dashboard_service import dashboard_service
+from orchestrator.dashboard_state import dashboard_state_store
 from orchestrator.memory_log_handler import setup_memory_logging
 from orchestrator.models import (
     AgentStatus,
@@ -107,6 +110,7 @@ logger = utils.get_logger("orchestrator")
 setup_memory_logging()
 
 execution_lock = asyncio.Lock()
+report_lock = asyncio.Lock()
 agent_selection_lock = asyncio.Lock()  # Ensures atomic agent selection and reservation
 cancellation_queue = asyncio.Queue()
 _results_extractor_semaphore = asyncio.Semaphore(1)  # Serializes extractor calls to avoid rate limit errors
@@ -137,6 +141,8 @@ class EndpointFilter(logging.Filter):
 # noinspection PyUnusedLocal
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    auth_service.validate_configuration()
+    await dashboard_state_store.start()
     # Filter out dashboard polling logs from uvicorn access logger
     logging.getLogger("uvicorn.access").addFilter(EndpointFilter())
 
@@ -177,6 +183,7 @@ async def lifespan(app: FastAPI):
             logger.info("Cancellation retry task successfully cancelled.")
 
     await streaming_hub.shutdown()
+    await dashboard_state_store.close()
 
 
 def _validate_api_key(api_key: str = Security(api_key_header)):
@@ -198,11 +205,18 @@ orchestrator_app = FastAPI(lifespan=lifespan)
 
 
 @orchestrator_app.post("/api/auth/login", response_model=TokenResponse)
-async def login(request: LoginRequest):
+async def login(login_request: LoginRequest, http_request: Request):
     """Authenticate user and return a JWT token."""
-    if not auth_service.authenticate(request.username, request.password):
+    retry_after = login_rate_limiter.check(client_ip(http_request))
+    if retry_after is not None:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many login attempts. Please wait before trying again.",
+            headers={"Retry-After": str(retry_after)},
+        )
+    if not await asyncio.to_thread(auth_service.authenticate, login_request.username, login_request.password):
         raise HTTPException(status_code=401, detail="Invalid username or password")
-    return auth_service.create_token(request.username)
+    return auth_service.create_token(login_request.username)
 
 
 @orchestrator_app.post("/api/auth/logout")
@@ -256,6 +270,20 @@ async def get_recent_tasks(limit: int = Query(default=50, le=100), _: str = Depe
 async def get_recent_errors(limit: int = Query(default=20, le=50), _: str = Depends(dashboard_auth)):
     """Get recent errors with context."""
     return await dashboard_service.get_recent_errors(limit=limit)
+
+
+@orchestrator_app.get("/api/dashboard/rag-sync-status")
+async def get_rag_sync_status(_: str = Depends(dashboard_auth)):
+    """Get durable RAG sync outcomes for the dashboard panel."""
+    return await dashboard_service.get_rag_sync_status()
+
+
+@orchestrator_app.post("/sync-outcome")
+async def receive_sync_outcome(outcome: SyncOutcome, api_key: str = Depends(_validate_api_key)):
+    """Record a validated sync completion callback without changing job success semantics."""
+    level = logging.ERROR if outcome.status == "failed" else logging.WARNING if outcome.status == "completed_with_errors" else logging.INFO
+    logger.log(level, "Sync %s for %s: %s", outcome.status, outcome.scope, outcome.message)
+    return {"accepted": True}
 
 
 @orchestrator_app.get("/api/dashboard/logs")
@@ -818,6 +846,14 @@ class ConfluenceSyncRequest(BaseModel):
     skip_page_body: bool = False
 
 
+class ManualTestExecutionRequest(BaseModel):
+    """Validated request for one explicitly selected unattended execution agent."""
+
+    test_case_key: str = Field(min_length=1, max_length=100, pattern=r"^[A-Z][A-Z0-9_]*-\d+$")
+    agent_id: str = Field(min_length=1, max_length=100)
+    project_key: str = Field(min_length=1, max_length=50, pattern=r"^[A-Z][A-Z0-9_]*$")
+
+
 async def _trigger_rag_sync(source: str, scope_id: str, runner_args: list[str]) -> Any:
     """Acquires the scope lock (serialized) and starts the sync in the configured mode.
 
@@ -886,8 +922,10 @@ async def execute_tests(request: ProjectExecutionRequest, api_key: str = Depends
         test_management_client = get_test_management_client()
         automated_test_cases = []
         try:
-            automated_tests_dict = test_management_client.fetch_ready_for_execution_test_cases_by_labels(
-                project_key, [config.OrchestratorConfig.AUTOMATED_TC_LABEL]
+            automated_tests_dict = await asyncio.to_thread(
+                test_management_client.fetch_ready_for_execution_test_cases_by_labels,
+                project_key,
+                [config.OrchestratorConfig.AUTOMATED_TC_LABEL],
             )
             automated_test_cases = automated_tests_dict.get(config.OrchestratorConfig.AUTOMATED_TC_LABEL, [])
             if not automated_test_cases:
@@ -910,7 +948,7 @@ async def execute_tests(request: ProjectExecutionRequest, api_key: str = Depends
 
         # Request incident creation for all failed tests
         logger.info("Processing failed tests for incident creation.")
-        await _request_incident_creation_for_failed_tests(all_execution_results)
+        await _request_incident_creation_for_failed_tests(all_execution_results, project_key)
 
         if all_execution_results:
             logger.info("Generating test execution report based on all execution results.")
@@ -925,20 +963,35 @@ async def execute_tests(request: ProjectExecutionRequest, api_key: str = Depends
         }
 
 
+@orchestrator_app.post("/execute-test")
+async def execute_test(request: ManualTestExecutionRequest, api_key: str = Depends(_validate_api_key)):
+    """Execute one test on the explicitly selected agent without incident creation."""
+    test_management_client = get_test_management_client()
+    test_case = await asyncio.to_thread(test_management_client.fetch_test_case_by_key, request.test_case_key)
+    result = await _execute_single_test(request.agent_id, test_case, "manual", selected_agent_id=request.agent_id)
+    if result is None:
+        raise HTTPException(status_code=502, detail="Execution agent returned no result.")
+    try:
+        await _generate_test_report([result], request.project_key, test_management_client)
+    except Exception as exc:
+        _record_error(f"Manual execution report failed: {exc}")
+    return result.model_dump()
+
+
 async def _generate_test_report(all_execution_results, project_key, test_management_client):
-    test_cycle_name = f"Automated Test Execution - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-    test_cycle_key = test_management_client.create_test_plan(project_key, test_cycle_name)
-    logger.info(f"Uploading {len(all_execution_results)} test execution result(s) to test management system.")
-    test_management_client.create_test_execution(all_execution_results, project_key, test_cycle_key)
-    logger.info("Test execution results upload to test management system completed.")
-    reporting_client = get_test_reporting_client(str(Path(__file__).resolve().parent.parent.resolve()))
-    logger.info("Generating HTML test report.")
-    reporting_client.generate_report(all_execution_results)
-    logger.info("HTML test report generation completed.")
+    async with report_lock:
+        test_cycle_name = f"Automated Test Execution - {datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')}"
+        test_cycle_key = await asyncio.to_thread(test_management_client.create_test_plan, project_key, test_cycle_name)
+        logger.info(f"Uploading {len(all_execution_results)} test execution result(s) to test management system.")
+        await asyncio.to_thread(test_management_client.create_test_execution, all_execution_results, project_key, test_cycle_key)
+        reporting_client = get_test_reporting_client(str(Path(__file__).resolve().parent.parent.resolve()))
+        await asyncio.to_thread(reporting_client.generate_report, all_execution_results)
+        logger.info("HTML test report generation completed.")
 
 
 async def _request_incident_creation_for_failed_tests(
     all_execution_results: list[TestExecutionResult],
+    project_key: str,
 ) -> None:
     """
     Process all failed test execution results and create incidents for each.
@@ -959,6 +1012,7 @@ async def _request_incident_creation_for_failed_tests(
         logger.info(f"Test case {result.testCaseKey} failed. Initiating incident creation.")
         try:
             incident_input = IncidentCreationInput(
+                project_key=project_key,
                 test_case=result.test_case,
                 test_execution_result=str(result.generalErrorMessage),
                 test_step_results=result.stepResults,
@@ -996,9 +1050,12 @@ async def _request_all_test_cases_execution(grouped_test_cases):
 async def _group_test_cases_by_labels(automated_test_cases):
     grouped_test_cases = defaultdict(list)
     for tc in automated_test_cases:
-        for label in tc.labels:
-            if label != config.OrchestratorConfig.AUTOMATED_TC_LABEL:
-                grouped_test_cases[label].append(tc)
+        labels = {test_type.label for test_type in TestCaseType}
+        matching_labels = [label for label in tc.labels if label in labels]
+        if not matching_labels:
+            logger.warning("Skipping test case %s: no recognized test-type label.", tc.key)
+        for label in matching_labels:
+            grouped_test_cases[label].append(tc)
     return grouped_test_cases
 
 
@@ -1148,14 +1205,21 @@ async def _agent_worker(
         _record_error(f"Unexpected error in agent worker {agent_id} on host '{host}': {e}")
 
 
-async def _execute_single_test(agent_id: str, test_case: TestCase, test_type: str) -> TestExecutionResult | None:
+async def _execute_single_test(
+    agent_id: str, test_case: TestCase, test_type: str, selected_agent_id: str | None = None
+) -> TestExecutionResult | None:
     task_description = f"Execution of test case {test_case.key} (type: {test_type})"
     execution_request = TestExecutionRequest(test_case=test_case)
     artifacts = []
     # Reported to the test management systems, which read every timestamp as UTC.
     start_timestamp = datetime.now(UTC)
     try:
-        completed_task = await _send_task_to_agent(execution_request.model_dump_json(), task_description)
+        if selected_agent_id is None:
+            completed_task = await _send_task_to_agent(execution_request.model_dump_json(), task_description)
+        else:
+            completed_task = await _send_task_to_agent(
+                execution_request.model_dump_json(), task_description, selected_agent_id
+            )
         artifacts = _get_artifacts_from_task(completed_task, task_description)
     except Exception as e:
         _handle_exception(f"Failed to execute test case {test_case.key}. Error: {e}", 500)
@@ -1420,7 +1484,7 @@ def _build_logs_artifact(log_lines: list[str]) -> Artifact:
     data = "\n".join(log_lines).encode("utf-8")
     return Artifact(
         name=ArtifactName.LOGS,
-        parts=[Part(raw=data, media_type="text/plain", filename="execution_logs.txt")],
+        parts=[Part(raw=data, media_type="text/plain", filename="execution_logs.md")],
     )
 
 
@@ -1516,7 +1580,9 @@ async def _save_agent_usage_from_task(task: Task, internal_task_id: str) -> None
         logger.warning(f"Failed to extract token usage for task {internal_task_id}: {e}")
 
 
-async def _send_task_to_agent_with_message(message: Message, task_description: str) -> Task | None:
+async def _send_task_to_agent_with_message(
+    message: Message, task_description: str, selected_agent_id: str | None = None
+) -> Task | None:
     """Send a custom message (with file parts) to an agent.
 
     Args:
@@ -1532,7 +1598,20 @@ async def _send_task_to_agent_with_message(message: Message, task_description: s
     httpx_client: httpx.AsyncClient | None = None
     try:
         # Wait for an agent and reserve it atomically
-        agent_id, agent_card = await reserve_agent_waiting_if_needed(task_description, internal_task_id)
+        if selected_agent_id is None:
+            agent_id, agent_card = await reserve_agent_waiting_if_needed(task_description, internal_task_id)
+        else:
+            async with agent_selection_lock:
+                agent_card = await agent_registry.get_card(selected_agent_id)
+                if agent_card is None:
+                    raise HTTPException(status_code=404, detail="Execution agent was not found.")
+                status = await agent_registry.get_status(selected_agent_id)
+                if status == AgentStatus.BUSY:
+                    raise HTTPException(status_code=409, detail="Execution agent is busy.")
+                if status == AgentStatus.BROKEN:
+                    raise HTTPException(status_code=503, detail="Execution agent is unavailable.")
+                await agent_registry.update_status(selected_agent_id, AgentStatus.BUSY)
+                agent_id = selected_agent_id
         task_start_time = datetime.now()
         agent_name = await agent_registry.get_name(agent_id)
 
@@ -1693,7 +1772,9 @@ async def _send_task_to_agent_with_message(message: Message, task_description: s
             await httpx_client.aclose()
 
 
-async def _send_task_to_agent(input_data: str, task_description: str) -> Task | None:
+async def _send_task_to_agent(
+    input_data: str, task_description: str, selected_agent_id: str | None = None
+) -> Task | None:
     """Send a text message to an agent.
 
     Args:
@@ -1704,7 +1785,7 @@ async def _send_task_to_agent(input_data: str, task_description: str) -> Task | 
         The completed Task, or None if the task failed to complete.
     """
     message = new_text_message(input_data, role=Role.ROLE_USER)
-    return await _send_task_to_agent_with_message(message, task_description)
+    return await _send_task_to_agent_with_message(message, task_description, selected_agent_id)
 
 
 async def reserve_agent_waiting_if_needed(
@@ -2067,20 +2148,16 @@ async def _process_url_discovery(url: str):
     health-check loop's responsibility, so known URLs are skipped here."""
     if await agent_registry.get_agent_id_by_url(url):
         return
-
     agent_card = await _fetch_agent_card(url)
     if not agent_card:
         return
 
-    card_url = agent_card.supported_interfaces[0].url
-    existing_agent_id = await agent_registry.get_agent_id_by_url(card_url)
-    if existing_agent_id:
-        logger.debug(f"Agent with URL {card_url} is already registered with ID {existing_agent_id}.")
-        return
-
-    new_agent_id = str(uuid4())
-    await agent_registry.register(new_agent_id, agent_card)
-    logger.info(f"Discovered and registered agent with URL: {card_url}")
+    advertised_url = agent_card.supported_interfaces[0].url
+    if advertised_url != url:
+        agent_card.supported_interfaces[0].url = url
+        logger.info("Rewrote advertised agent URL %s to reached URL %s.", advertised_url, url)
+    agent_id = await agent_registry.register_or_refresh(url, agent_card)
+    logger.info("Discovered and registered agent %s with URL: %s", agent_id, url)
 
 
 async def _discover_agents():

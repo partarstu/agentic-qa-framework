@@ -28,7 +28,7 @@ class _GroundingSuffixPrompt(PromptBase):
     def get_script_dir(self) -> Path:
         return _get_prompts_root()
 
-    def __init__(self, template_file_name: str = "retrieval_grounding_suffix.txt"):
+    def __init__(self, template_file_name: str = "retrieval_grounding_suffix.md"):
         super().__init__(template_file_name)
 
     def get_prompt(self) -> str:
@@ -43,7 +43,7 @@ class RequirementsReviewSystemPrompt(PromptBase):
     def get_script_dir(self) -> Path:
         return _get_prompts_root()
 
-    def __init__(self, template_file_name: str = "main_prompt_template.txt"):
+    def __init__(self, template_file_name: str = "main_prompt_template.md"):
         """
         Initializes the InstructionPrompt instance.
 
@@ -73,7 +73,7 @@ class RequirementsReviewWithAttachmentsPrompt(PromptBase):
 
     def __init__(
         self,
-        template_file_name: str = "review_with_attachments_prompt.txt",
+        template_file_name: str = "review_with_attachments_prompt.md",
         grounding_instruction: str | None = None,
     ):
         """
@@ -105,7 +105,7 @@ class RequirementsReviewRetrievalInstruction(PromptBase):
     def get_script_dir(self) -> Path:
         return _get_prompts_root()
 
-    def __init__(self, template_file_name: str = "retrieval_instruction_template.txt"):
+    def __init__(self, template_file_name: str = "retrieval_instruction_template.md"):
         super().__init__(template_file_name)
 
     def get_prompt(self) -> str:

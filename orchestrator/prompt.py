@@ -39,10 +39,10 @@ def _load_instruction(template_file_name: str) -> str:
     return OrchestratorPrompt(template_file_name).get_prompt()
 
 
-ROUTING_INSTRUCTION = _load_instruction("routing_instruction_template.txt")
-MULTI_ROUTING_INSTRUCTION = _load_instruction("multi_routing_instruction_template.txt")
-RESULTS_EXTRACTOR_INSTRUCTION = _load_instruction("results_extractor_instruction_template.txt")
-ADDITIONAL_FIELDS_INSTRUCTION_TEMPLATE = OrchestratorPrompt("additional_fields_instruction_template.txt")
+ROUTING_INSTRUCTION = _load_instruction("routing_instruction_template.md")
+MULTI_ROUTING_INSTRUCTION = _load_instruction("multi_routing_instruction_template.md")
+RESULTS_EXTRACTOR_INSTRUCTION = _load_instruction("results_extractor_instruction_template.md")
+ADDITIONAL_FIELDS_INSTRUCTION_TEMPLATE = OrchestratorPrompt("additional_fields_instruction_template.md")
 
 
 def build_additional_fields_instruction() -> str:

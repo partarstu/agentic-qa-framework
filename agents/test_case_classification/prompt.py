@@ -14,7 +14,7 @@ class TestCaseClassificationSystemPrompt(PromptBase):
     def get_script_dir(self) -> Path:
         return Path(__file__).resolve().parent
 
-    def __init__(self, template_file_name: str = "prompt_template.txt"):
+    def __init__(self, template_file_name: str = "prompt_template.md"):
         super().__init__(template_file_name)
 
     def get_prompt(self) -> str:

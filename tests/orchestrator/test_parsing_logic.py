@@ -40,7 +40,7 @@ def _create_text_artifact(texts: list[str]) -> Artifact:
     return Artifact(name="test-artifact", parts=parts)
 
 
-def _create_file_artifact(filename: str = "test.txt") -> Artifact:
+def _create_file_artifact(filename: str = "test.md") -> Artifact:
     """Helper to create an artifact with a file part."""
     return Artifact(
         name="file-artifact",
@@ -48,7 +48,7 @@ def _create_file_artifact(filename: str = "test.txt") -> Artifact:
     )
 
 
-def _create_mixed_artifact(text: str, filename: str = "test.txt") -> Artifact:
+def _create_mixed_artifact(text: str, filename: str = "test.md") -> Artifact:
     """Helper to create an artifact with both text and file parts."""
     return Artifact(
         name="mixed-artifact",

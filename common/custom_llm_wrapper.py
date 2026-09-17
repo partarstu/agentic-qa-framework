@@ -33,7 +33,7 @@ from pydantic_ai.settings import ThinkingLevel
 
 import config
 from common import utils
-from common.model_factory import build_model
+from common.model_factory import build_claude_5_settings, build_model, is_claude_5
 from common.models import JsonSerializableModel
 from common.prompt_injection.guard import GuardPrompt, PromptGuardFactory
 
@@ -43,11 +43,14 @@ logger = utils.get_logger("llm_wrapper")
 
 
 class CustomLlmWrapper(WrapperModel):
-    def __init__(self, model_name: str, thinking_level: ThinkingLevel | None = None):
+    def __init__(
+        self, model_name: str, thinking_level: ThinkingLevel | None = None, max_output_tokens: int | None = None
+    ):
         super().__init__(build_model(model_name, thinking_level))
         self.wrapped_model_name: str = model_name
         self.latest_instructions: str | None = None
         self.thinking_level = thinking_level
+        self.max_output_tokens = max_output_tokens if max_output_tokens is not None else config.MAX_OUTPUT_TOKENS
 
     @classmethod
     def create_agent(
@@ -63,10 +66,11 @@ class CustomLlmWrapper(WrapperModel):
         deps_type: type | None = None,
         retries: int = 3,
         output_retries: int = 3,
+        max_output_tokens: int | None = None,
     ) -> Agent:
         """Creates a pydantic_ai Agent backed by a CustomLlmWrapper model."""
         return Agent(
-            model=cls(model_name=model_name, thinking_level=thinking_level),
+            model=cls(model_name=model_name, thinking_level=thinking_level, max_output_tokens=max_output_tokens),
             output_type=output_type,
             instructions=instructions,
             system_prompt=system_prompt or (),
@@ -81,6 +85,8 @@ class CustomLlmWrapper(WrapperModel):
     def _get_model_settings(self, provided_settings: ModelSettings | None) -> ModelSettings:
         if provided_settings is not None:
             return provided_settings
+        if is_claude_5(self.wrapped_model_name):
+            return build_claude_5_settings(self.thinking_level, self.max_output_tokens)
         if self.thinking_level is None:
             return ModelSettings(top_p=config.TOP_P, temperature=config.TEMPERATURE)
         else:

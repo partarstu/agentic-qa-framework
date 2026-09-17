@@ -39,7 +39,7 @@ from common.models import (
 )
 from common.services.vector_db_service import VectorDbService
 from common.streaming import compute_activity_budget
-from common.token_usage import TokenUsage
+from common.token_usage import TokenUsage, operation_meter
 
 REGISTRATION_PATH = f"{config.ORCHESTRATOR_URL}/register"
 ATTACHMENTS_LOCAL_DESTINATION_FOLDER_PATH = config.ATTACHMENTS_LOCAL_DESTINATION_FOLDER_PATH
@@ -242,6 +242,9 @@ class AgentBase(ABC):
         if result is None:
             return
         self.latest_token_usage = TokenUsage.from_run_usage(result.usage(), self.model_name)
+        meter = operation_meter.get()
+        if meter is not None:
+            self.latest_token_usage.operations = meter.entries()
         logger.info(self.latest_token_usage.summary_line())
 
     def _log_llm_comments_if_result_incomplete(self, output: BaseModel | None | str) -> None:

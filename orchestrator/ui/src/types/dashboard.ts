@@ -93,6 +93,17 @@ export interface LogEntry {
   agent_id?: string | null;
 }
 
+export interface RagSyncOutcome {
+  sync_type: string;
+  scope: string;
+  status: string;
+  processed_count: number;
+  message: string;
+  started_at?: string;
+  updated_at: string;
+  stale: boolean;
+}
+
 // SSE live-state overlay (keyed by task_id in App.tsx)
 export interface TaskLiveState {
   task_id: string;

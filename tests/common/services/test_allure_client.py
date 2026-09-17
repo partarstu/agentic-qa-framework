@@ -118,7 +118,7 @@ def test_generate_report_failed(mock_logger_cls, allure_client):
                 end_timestamp="2023-01-01T10:01:00Z",
                 artifacts=[
                     FileArtifact(
-                        name="execution_logs.txt",
+                        name="execution_logs.md",
                         raw=logs_content.encode("utf-8"),
                         media_type="text/plain",
                     )
@@ -153,12 +153,12 @@ def test_clean_directories(allure_client):
     os.makedirs(results_dir, exist_ok=True)
     os.makedirs(report_dir, exist_ok=True)
 
-    (results_dir / "dummy.txt").touch()
+    (results_dir / "dummy.md").touch()
     (report_dir / "dummy.html").touch()
 
     allure_client._clean_directories()
 
-    assert not (results_dir / "dummy.txt").exists()
+    assert not (results_dir / "dummy.md").exists()
     assert not (report_dir / "dummy.html").exists()
     assert results_dir.exists()
     assert report_dir.exists()

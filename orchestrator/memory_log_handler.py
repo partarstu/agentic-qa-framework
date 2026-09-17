@@ -10,7 +10,9 @@ import logging
 import threading
 from collections import deque
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
+
+from common.utils import StructuredJsonFormatter
 
 
 @dataclass
@@ -59,21 +61,24 @@ class MemoryLogHandler(logging.Handler):
         self._buffer: deque[LogEntry] = deque(maxlen=max_size)
         self._buffer_lock = threading.Lock()
         self._initialized = True
-        self.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
+        self.setFormatter(StructuredJsonFormatter())
 
     def emit(self, record: logging.LogRecord) -> None:
         """Store the log record in the buffer."""
         try:
             entry = LogEntry(
-                timestamp=datetime.fromtimestamp(record.created).isoformat(),
+                timestamp=datetime.fromtimestamp(record.created, UTC).isoformat(),
                 level=record.levelname,
                 logger_name=record.name,
-                message=self.format(record),
+                message=record.getMessage(),
                 task_id=getattr(record, "task_id", None),
                 agent_id=getattr(record, "agent_id", None),
             )
             with self._buffer_lock:
                 self._buffer.append(entry)
+            from orchestrator.dashboard_state import dashboard_state_store
+
+            dashboard_state_store.enqueue("log", {"id": f"{record.created}-{record.name}", "payload": entry.to_dict()})
         except Exception:
             self.handleError(record)
 

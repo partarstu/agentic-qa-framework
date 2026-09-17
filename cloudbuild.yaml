@@ -4,6 +4,18 @@
 
 steps:
 
+  # Render declarative service configuration before builds/deployments. The generated
+  # artifacts contain no secret values; Cloud Run resolves listed secret names itself.
+  - name: 'gcr.io/cloud-builders/docker'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        docker run --rm -v "$PWD:/workspace" -w /workspace agentic-qa-base:latest \
+          python scripts/render_deployment_config.py orchestrator production --output-dir deploy/rendered
+        test -s deploy/rendered/orchestrator.env.yaml
+        test -f deploy/rendered/orchestrator.secrets.txt
+
   # Build the base image
   - name: 'gcr.io/cloud-builders/docker'
     args: [ 'build', '-t', 'agentic-qa-base:latest', '-f', 'Dockerfile.base', '.' ]
@@ -104,7 +116,7 @@ steps:
             --set-secrets=JIRA_API_TOKEN=JIRA_API_TOKEN:latest,JIRA_USERNAME=JIRA_USERNAME:latest,JIRA_URL=JIRA_URL:latest,CONFLUENCE_URL=CONFLUENCE_URL:latest,CONFLUENCE_USERNAME=CONFLUENCE_USERNAME:latest,CONFLUENCE_API_TOKEN=CONFLUENCE_API_TOKEN:latest \
             --set-env-vars=TZ=$_TIMEZONE,MCP_LOGGING_STDOUT=true,DISABLE_JIRA_MARKUP_TRANSLATION=true \
             --port=9000 \
-            --args=--transport,sse,--port,9000,-v \
+            --args=--transport,streamable-http,--stateless,--port,9000,-v \
             --add-volume=type=cloud-storage,name=jira-volume,bucket=$_BUCKET_NAME,mount-options=only-dir=$_JIRA_ATTACHMENTS_FOLDER \
             --add-volume-mount=volume=jira-volume,mount-path=$_JIRA_MCP_SERVER_ATTACHMENTS_MOUNT_PATH \
             --concurrency=100
@@ -254,7 +266,7 @@ steps:
           --set-env-vars=^;^REMOTE_EXECUTION_AGENT_HOSTS=$_REMOTE_EXECUTION_AGENT_HOSTS \
           --set-env-vars=TZ=$_TIMEZONE,AGENT_DISCOVERY_PORTS=443-443,GOOGLE_CLOUD_LOGGING_ENABLED=true,QDRANT_URL=$_QDRANT_URL,DASHBOARD_JWT_EXPIRE_HOURS=24 \
           --set-env-vars=RAG_SYNC_JOB_NAME=projects/$PROJECT_ID/locations/us-central1/jobs/rag-sync-job,RAG_SYNC_JOB_REGION=us-central1,RAG_SYNC_JOB_TASK_TIMEOUT_SECONDS=$_RAG_SYNC_TASK_TIMEOUT_SECONDS,RAG_SYNC_LOCK_TTL_SECONDS=$_RAG_SYNC_LOCK_TTL_SECONDS,RAG_SYNC_START_ALLOWANCE_SECONDS=$_RAG_SYNC_START_ALLOWANCE_SECONDS \
-          --set-secrets=GOOGLE_API_KEY=GOOGLE_API_KEY:latest,JIRA_API_TOKEN=JIRA_API_TOKEN:latest,JIRA_USERNAME=JIRA_USERNAME:latest,ZEPHYR_API_TOKEN=ZEPHYR_API_TOKEN:latest,JIRA_URL=JIRA_URL:latest,ZEPHYR_BASE_URL=ZEPHYR_BASE_URL:latest,ORCHESTRATOR_API_KEY=ORCHESTRATOR_API_KEY:latest,QDRANT_API_KEY=QDRANT_API_KEY:latest,DASHBOARD_USERNAME=DASHBOARD_USERNAME:latest,DASHBOARD_PASSWORD=DASHBOARD_PASSWORD:latest,DASHBOARD_JWT_SECRET=DASHBOARD_JWT_SECRET:latest,REMOTE_EXECUTION_AGENT_AUTH_TOKEN=AGENT_AUTH_TOKEN:latest \
+          --set-secrets=GOOGLE_API_KEY=GOOGLE_API_KEY:latest,JIRA_API_TOKEN=JIRA_API_TOKEN:latest,JIRA_USERNAME=JIRA_USERNAME:latest,ZEPHYR_API_TOKEN=ZEPHYR_API_TOKEN:latest,JIRA_URL=JIRA_URL:latest,ZEPHYR_BASE_URL=ZEPHYR_BASE_URL:latest,ORCHESTRATOR_API_KEY=ORCHESTRATOR_API_KEY:latest,QDRANT_API_KEY=QDRANT_API_KEY:latest,DASHBOARD_USERNAME=DASHBOARD_USERNAME:latest,DASHBOARD_PASSWORD_HASH=DASHBOARD_PASSWORD_HASH:latest,DASHBOARD_JWT_SECRET=DASHBOARD_JWT_SECRET:latest,REMOTE_EXECUTION_AGENT_AUTH_TOKEN=AGENT_AUTH_TOKEN:latest \
           --add-volume=type=cloud-storage,name=gcs-allure-reports,bucket=$_ALLURE_REPORTS_BUCKET \
           --add-volume-mount=volume=gcs-allure-reports,mount-path=$_ALLURE_REPORTS_CONTAINER_PATH \
           --timeout=$_ORCHESTRATOR_REQUEST_TIMEOUT \

@@ -23,6 +23,9 @@ logger = utils.get_logger(__name__)
 
 
 class ZephyrClient(TestManagementClientBase):
+    def fetch_test_cases_by_project(self, project_key: str):
+        """List project test cases; sync callers retain their source-system statuses."""
+        raise NotImplementedError("Project-wide Zephyr test-case listing is not configured.")
     """
     A client for interacting with the Zephyr Scale Cloud API.
     """

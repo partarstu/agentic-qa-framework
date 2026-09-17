@@ -13,6 +13,8 @@ import logging
 import threading
 from collections import deque
 
+from common.utils import StructuredJsonFormatter
+
 
 class AgentLogCaptureHandler(logging.Handler):
     """
@@ -28,7 +30,7 @@ class AgentLogCaptureHandler(logging.Handler):
         self._lock = threading.Lock()
         self._drain_cursor: int = 0
         self._emitted_total: int = 0
-        self.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
+        self.setFormatter(StructuredJsonFormatter())
 
     def emit(self, record: logging.LogRecord) -> None:
         """Store the formatted log record in the buffer."""

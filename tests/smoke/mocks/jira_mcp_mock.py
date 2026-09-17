@@ -27,7 +27,7 @@ from starlette.responses import JSONResponse
 from starlette.routing import Mount, Route
 
 SEEDED_ISSUE_KEY = "SMOKE-1"
-ATTACHMENT_FILE_NAME = "reset-policy.txt"
+ATTACHMENT_FILE_NAME = "reset-policy.md"
 # A JSON attachment too: Jira serves those, and they only reach a model as a text equivalent.
 JSON_ATTACHMENT_FILE_NAME = "reset-request.json"
 JSON_ATTACHMENT_CONTENT = b'{"email": "user@example.com", "locale": "en-GB"}'

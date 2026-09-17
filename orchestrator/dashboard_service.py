@@ -6,14 +6,17 @@
 Dashboard service for aggregating orchestrator state for the Web UI.
 """
 
+import json
 import re
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from google.protobuf.json_format import MessageToDict
 
 import config
 from common import utils
+from common.services.sync_lock_store import SYNC_OUTCOME_RECORD_KIND
+from common.services.vector_db_service import VectorDbService
 from orchestrator.memory_log_handler import LogEntry, memory_log_handler
 from orchestrator.models import (
     ORCHESTRATOR_START_TIME,
@@ -95,7 +98,7 @@ class OrchestratorDashboardService:
         all_errors = await self.errors.get_all()
 
         # Calculate uptime
-        uptime_seconds = int((datetime.now() - ORCHESTRATOR_START_TIME).total_seconds())
+        uptime_seconds = int((datetime.now(UTC) - ORCHESTRATOR_START_TIME).total_seconds())
 
         return {
             "agents_total": total_agents,
@@ -111,7 +114,7 @@ class OrchestratorDashboardService:
             "cost_usd_total": round(cost_usd_total, 4) if cost_known else None,
             "orchestrator_start_time": ORCHESTRATOR_START_TIME.isoformat(),
             "uptime_seconds": uptime_seconds,
-            "current_time": datetime.now().isoformat(),
+            "current_time": datetime.now(UTC).isoformat(),
             "orchestrator_model": config.OrchestratorConfig.MODEL_NAME,
             "orchestrator_version": config.OrchestratorConfig.VERSION,
         }
@@ -163,6 +166,28 @@ class OrchestratorDashboardService:
         """Returns recent errors with context."""
         errors = await self.errors.get_recent(limit)
         return [error.to_dict() for error in errors]
+
+    async def get_rag_sync_status(self) -> list[dict[str, Any]]:
+        """Return durable sync outcomes without making dashboard availability depend on Qdrant."""
+        service = VectorDbService(config.QdrantConfig.METADATA_COLLECTION_NAME)
+        try:
+            outcomes = await service.scroll_payload_records({"kind": SYNC_OUTCOME_RECORD_KIND})
+            for outcome in outcomes:
+                stale = False
+                if outcome.get("status") == "running":
+                    try:
+                        stale = (
+                            datetime.now(UTC) - datetime.fromisoformat(outcome["updated_at"])
+                        ).total_seconds() > config.RagSyncConfig.JOB_TASK_TIMEOUT_SECONDS
+                    except (KeyError, ValueError):
+                        stale = True
+                outcome["stale"] = stale
+            return sorted(outcomes, key=lambda outcome: outcome.get("updated_at", ""), reverse=True)
+        except Exception:
+            logger.warning("Unable to load RAG sync outcomes for dashboard.", exc_info=True)
+            return []
+        finally:
+            await service.close()
 
     async def get_logs(
         self,
@@ -234,6 +259,23 @@ class OrchestratorDashboardService:
             lines = log_chunk.splitlines()
             for line in lines:
                 if not line.strip():
+                    continue
+
+                try:
+                    structured = json.loads(line)
+                except json.JSONDecodeError:
+                    structured = None
+                if isinstance(structured, dict) and "message" in structured:
+                    entries.append(
+                        LogEntry(
+                            timestamp=str(structured.get("timestamp", "")),
+                            level=str(structured.get("level", "INFO")).upper(),
+                            logger_name=str(structured.get("logger", f"agent.{agent_id}")),
+                            message=str(structured["message"]),
+                            task_id=str(structured.get("task_id") or task_id),
+                            agent_id=str(structured.get("agent_id") or agent_id),
+                        )
+                    )
                     continue
 
                 # Default values in case parsing fails

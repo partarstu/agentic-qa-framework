@@ -90,7 +90,9 @@ class IncidentCreationAgent(AgentBase):
     def get_max_requests_per_task(self) -> int:
         return config.IncidentCreationAgentConfig.MAX_REQUESTS_PER_TASK
 
-    async def _search_duplicate_candidates_in_rag(self, incident_description: str) -> list[JiraIssue]:
+    async def _search_duplicate_candidates_in_rag(
+        self, incident_description: str, project_key: str
+    ) -> list[JiraIssue]:
         """Searches for potential duplicate incidents using the RAG vector database.
 
         Args:
@@ -100,7 +102,9 @@ class IncidentCreationAgent(AgentBase):
         Returns:
             List of JiraIssue objects representing potential duplicate incidents.
         """
-        logger.info("Starting RAG duplicate candidate search...")
+        if not project_key.strip():
+            raise ValueError("project_key must not be blank for duplicate detection.")
+        logger.info("Starting RAG duplicate candidate search for project %s.", project_key)
         if not self.vector_db_service:
             logger.warning("Vector DB service not initialized, skipping RAG search.")
             return []
@@ -110,7 +114,11 @@ class IncidentCreationAgent(AgentBase):
                 qdrant_models.FieldCondition(
                     key="issue_type",
                     match=qdrant_models.MatchValue(value=BUG_ISSUE_TYPE),
-                )
+                ),
+                qdrant_models.FieldCondition(
+                    key="project_key",
+                    match=qdrant_models.MatchValue(value=project_key),
+                ),
             ],
             must_not=[
                 qdrant_models.FieldCondition(

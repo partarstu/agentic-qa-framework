@@ -26,22 +26,31 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 async def _run(args: argparse.Namespace) -> int:
+    from rag_sync.outcome_reporting import report_terminal_outcome
+
     if args.source == "jira":
         from rag_sync.jira_sync import JiraRagSyncRunner
 
-        result = await JiraRagSyncRunner().sync_project(args.project_key, lock_token=args.lock_token)
+        try:
+            result = await JiraRagSyncRunner().sync_project(args.project_key, lock_token=args.lock_token)
+        except Exception as exc:
+            await report_terminal_outcome("jira", args.project_key, error=exc)
+            raise
+        await report_terminal_outcome("jira", args.project_key, result=result)
         print(f"Jira sync completed: {result.model_dump()}")
         return 0
 
     from rag_sync.confluence_sync import ConfluenceRagSyncRunner
 
-    result = await ConfluenceRagSyncRunner().sync_space(
-        space_key=args.space_key,
-        page_id=args.page_id,
-        attachment_name_pattern=args.attachment_name_pattern,
-        skip_page_body=args.skip_page_body,
-        lock_token=args.lock_token,
-    )
+    try:
+        result = await ConfluenceRagSyncRunner().sync_space(
+            space_key=args.space_key, page_id=args.page_id, attachment_name_pattern=args.attachment_name_pattern,
+            skip_page_body=args.skip_page_body, lock_token=args.lock_token,
+        )
+    except Exception as exc:
+        await report_terminal_outcome("confluence", args.space_key, error=exc)
+        raise
+    await report_terminal_outcome("confluence", args.space_key, result=result)
     print(f"Confluence sync completed: {result.model_dump()}")
     return 0 if result.status == "completed" else 2
 

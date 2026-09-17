@@ -18,6 +18,7 @@ import { AgentGrid } from './components/AgentGrid';
 import { TaskList } from './components/TaskList';
 import { ErrorLog } from './components/ErrorLog';
 import { LogViewer } from './components/LogViewer';
+import { RagSyncStatus } from './components/RagSyncStatus';
 import type {
   TaskLiveState,
   SnapshotPayload,
@@ -102,6 +103,7 @@ function Dashboard() {
     queryKey: ['errors'],
     queryFn: () => dashboardApi.getErrors(20),
   });
+  const { data: ragSyncOutcomes, isLoading: ragSyncLoading, isError: ragSyncError } = useQuery({ queryKey: ['rag-sync-status'], queryFn: dashboardApi.getRagSyncStatus });
 
   const {
     data: logData,
@@ -215,6 +217,7 @@ function Dashboard() {
         <AgentGrid agents={agents} isLoading={agentsLoading} liveTaskStates={liveStore} />
         <TaskList tasks={tasks} isLoading={tasksLoading} liveTaskStates={liveStore} />
         <ErrorLog errors={errors} isLoading={errorsLoading} />
+        <RagSyncStatus outcomes={ragSyncOutcomes} isLoading={ragSyncLoading} isError={ragSyncError} />
         <LogViewer
           logs={logs}
           isLoading={logsLoading}

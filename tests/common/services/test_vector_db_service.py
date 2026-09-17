@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 from qdrant_client import models
+from qdrant_client.http.exceptions import UnexpectedResponse
 
 from common.models import VectorizableBaseModel
 from common.services.vector_db_service import VectorDbService
@@ -225,10 +226,12 @@ async def test_hybrid_search_without_threshold_keeps_prefetch_unfiltered(vector_
 
 @pytest.mark.asyncio
 async def test_hybrid_search_missing_collection_returns_empty(vector_db_service, mock_qdrant_client):
-    _mock_collections_exist(mock_qdrant_client, "test_collection", exists=False)
+    mock_qdrant_client.query_points.side_effect = UnexpectedResponse(
+        404, "Not Found", b"missing collection", httpx.Headers()
+    )
     results = await vector_db_service.hybrid_search("incident text")
     assert results == []
-    mock_qdrant_client.query_points.assert_not_called()
+    mock_qdrant_client.query_points.assert_awaited_once()
 
 
 @pytest.fixture

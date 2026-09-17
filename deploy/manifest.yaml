@@ -1,0 +1,19 @@
+shared_defaults:
+  LOG_LEVEL: INFO
+services:
+  orchestrator:
+    env:
+      ORCHESTRATOR_PORT: "8000"
+      DASHBOARD_PERSISTENCE_ENABLED: "false"
+    secrets:
+      - ORCHESTRATOR_API_KEY
+      - DASHBOARD_USERNAME
+      - DASHBOARD_PASSWORD_HASH
+      - DASHBOARD_JWT_SECRET
+      - QDRANT_API_KEY
+environments:
+  production:
+    platform: gcp
+    project: ${PROJECT_ID}
+    region: us-central1
+    overrides: {}

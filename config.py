@@ -15,6 +15,17 @@ from pydantic_ai.settings import ThinkingLevel
 
 load_dotenv()
 
+
+def _optional_positive_int(name: str) -> int | None:
+    """Read an optional positive integer setting."""
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return None
+    value = int(raw)
+    if value <= 0:
+        raise ValueError(f"{name} must be a positive integer.")
+    return value
+
 # Logging
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
 GOOGLE_CLOUD_LOGGING_ENABLED = os.environ.get("GOOGLE_CLOUD_LOGGING_ENABLED", "False").lower() in ("true", "1", "t")
@@ -31,7 +42,7 @@ PROMPT_OVERRIDES_DIR = os.environ.get("PROMPT_OVERRIDES_DIR")
 ORCHESTRATOR_HOST = os.environ.get("ORCHESTRATOR_HOST", "localhost")
 ORCHESTRATOR_PORT = int(os.environ.get("ORCHESTRATOR_PORT", "8000"))
 ORCHESTRATOR_URL = os.environ.get("ORCHESTRATOR_URL", f"http://{ORCHESTRATOR_HOST}:{ORCHESTRATOR_PORT}")
-ATLASSIAN_MCP_SERVER_URL = os.environ.get("ATLASSIAN_MCP_SERVER_URL", "http://localhost:9000/sse")
+ATLASSIAN_MCP_SERVER_URL = os.environ.get("ATLASSIAN_MCP_SERVER_URL", "http://localhost:9000/mcp")
 ZEPHYR_BASE_URL = os.environ.get("ZEPHYR_BASE_URL")
 JIRA_BASE_URL = os.environ.get("JIRA_URL")
 JIRA_USER = os.environ.get("JIRA_USERNAME")
@@ -42,6 +53,8 @@ NEW_REQUIREMENTS_WEBHOOK_URL = f"{ORCHESTRATOR_URL}/new-requirements-available"
 STORY_READY_FOR_TEST_CASE_GENERATION_WEBHOOK_URL = f"{ORCHESTRATOR_URL}/story-ready-for-test-case-generation"
 EXECUTE_TESTS_WEBHOOK_URL = f"{ORCHESTRATOR_URL}/execute-tests"
 UPDATE_JIRA_DB_WEBHOOK_URL = f"{ORCHESTRATOR_URL}/update-jira-db"
+UPDATE_TEST_CASE_DB_WEBHOOK_URL = f"{ORCHESTRATOR_URL}/update-test-case-db"
+UPDATE_SHAREPOINT_DB_WEBHOOK_URL = f"{ORCHESTRATOR_URL}/update-sharepoint-db"
 
 # Secrets
 JIRA_WEBHOOK_SECRET = os.environ.get("JIRA_WEBHOOK_SECRET")
@@ -93,6 +106,7 @@ MCP_SERVER_ATTACHMENTS_FOLDER_PATH = os.environ.get("MCP_SERVER_ATTACHMENTS_FOLD
 ATTACHMENTS_LOCAL_DESTINATION_FOLDER_PATH = os.environ.get("ATTACHMENTS_LOCAL_DESTINATION_FOLDER_PATH", "/tmp")
 JIRA_ATTACHMENT_SKIP_POSTFIX = os.environ.get("JIRA_ATTACHMENT_SKIP_POSTFIX", "_SKIP")
 MCP_SERVER_TIMEOUT_SECONDS = 30
+MCP_SESSION_LIFECYCLE_TIMEOUT_SECONDS = int(os.environ.get("MCP_SESSION_LIFECYCLE_TIMEOUT_SECONDS", "30"))
 SUPPORTED_ATTACHMENT_MIME_TYPES: set[str] = {
     # Images
     "image/png",
@@ -134,6 +148,7 @@ ALLURE_REPORT_DIR = "allure-report"
 
 # OpenTelemetry
 OPEN_TELEMETRY_URL = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT")
+MAX_OUTPUT_TOKENS = _optional_positive_int("MAX_OUTPUT_TOKENS")
 
 # Common model config
 TOP_P = 1.0
@@ -196,6 +211,7 @@ class OrchestratorConfig:
     AGENT_DISCOVERY_TIMEOUT_SECONDS = 120
     INCOMING_REQUEST_WAIT_TIMEOUT = AGENT_DISCOVERY_TIMEOUT_SECONDS + 5
     MODEL_NAME = DEFAULT_MODEL_NAME
+    MAX_OUTPUT_TOKENS = _optional_positive_int("ORCHESTRATOR_MAX_OUTPUT_TOKENS") or MAX_OUTPUT_TOKENS
     API_KEY = os.environ.get("ORCHESTRATOR_API_KEY")
     AGENT_DISCOVERY_PORTS = os.environ.get("AGENT_DISCOVERY_PORTS", "8001-8007")
     REMOTE_EXECUTION_AGENT_HOSTS = os.environ.get("REMOTE_EXECUTION_AGENT_HOSTS", AGENT_BASE_URL)
@@ -209,10 +225,23 @@ class DashboardAuthConfig:
     """Configuration for UI dashboard authentication."""
 
     USERNAME = os.environ.get("DASHBOARD_USERNAME", "")
-    PASSWORD = os.environ.get("DASHBOARD_PASSWORD", "")
+    PASSWORD_HASH = os.environ.get("DASHBOARD_PASSWORD_HASH", "")
     JWT_SECRET = os.environ.get("DASHBOARD_JWT_SECRET", "")
     JWT_ALGORITHM = "HS256"
     JWT_EXPIRE_HOURS = int(os.environ.get("DASHBOARD_JWT_EXPIRE_HOURS", "24"))
+    LOGIN_RATE_LIMIT_ATTEMPTS = int(os.environ.get("LOGIN_RATE_LIMIT_ATTEMPTS", "5"))
+    LOGIN_RATE_LIMIT_WINDOW_SECONDS = int(os.environ.get("LOGIN_RATE_LIMIT_WINDOW_SECONDS", "60"))
+    LOGIN_RATE_LIMIT_TRUSTED_PROXY_HOPS = int(os.environ.get("LOGIN_RATE_LIMIT_TRUSTED_PROXY_HOPS", "0"))
+
+
+class DashboardPersistenceConfig:
+    """Optional durable backing store for dashboard history."""
+
+    ENABLED = os.environ.get("DASHBOARD_PERSISTENCE_ENABLED", "false").lower() in ("true", "1", "t")
+    COLLECTION_NAME = os.environ.get("QDRANT_DASHBOARD_COLLECTION_NAME", "dashboard_state")
+    LOG_RETENTION_DAYS = int(os.environ.get("DASHBOARD_LOG_RETENTION_DAYS", "1"))
+    HISTORY_RETENTION_DAYS = int(os.environ.get("DASHBOARD_HISTORY_RETENTION_DAYS", "7"))
+    MAINTENANCE_INTERVAL_SECONDS = int(os.environ.get("DASHBOARD_MAINTENANCE_INTERVAL_SECONDS", "3600"))
 
 
 # Requirements Review Agent
@@ -227,12 +256,13 @@ class RequirementsReviewAgentConfig:
     EXTERNAL_PORT = int(os.environ.get("EXTERNAL_PORT", PORT))
     PROTOCOL = "http"
     MODEL_NAME = DEFAULT_MODEL_NAME
+    MAX_OUTPUT_TOKENS = _optional_positive_int("REQUIREMENTS_REVIEW_MAX_OUTPUT_TOKENS") or MAX_OUTPUT_TOKENS
     MAX_REQUESTS_PER_TASK = 30
 
 
 # Test Case Classification Agent
 class TestCaseClassificationAgentConfig:
-    THINKING_LEVEL: ThinkingLevel = "minimal"
+    THINKING_LEVEL: ThinkingLevel = "low"
     VERSION = os.environ.get("TEST_CASE_CLASSIFICATION_AGENT_VERSION", "1.0")
     OWN_NAME = "Test Case Classification Agent"
     SKILL_ID = "test-case-classification"
@@ -242,12 +272,13 @@ class TestCaseClassificationAgentConfig:
     EXTERNAL_PORT = int(os.environ.get("EXTERNAL_PORT", PORT))
     PROTOCOL = "http"
     MODEL_NAME = DEFAULT_MODEL_NAME
+    MAX_OUTPUT_TOKENS = _optional_positive_int("TEST_CASE_CLASSIFICATION_MAX_OUTPUT_TOKENS") or MAX_OUTPUT_TOKENS
     MAX_REQUESTS_PER_TASK = 30
 
 
 # Test Case Generation Agent
 class TestCaseGenerationAgentConfig:
-    THINKING_LEVEL: ThinkingLevel = "minimal"
+    THINKING_LEVEL: ThinkingLevel = "low"
     VERSION = os.environ.get("TEST_CASE_GENERATION_AGENT_VERSION", "1.0")
     OWN_NAME = "Test Case Generation Agent"
     SKILL_ID = "test-case-generation"
@@ -257,12 +288,13 @@ class TestCaseGenerationAgentConfig:
     EXTERNAL_PORT = int(os.environ.get("EXTERNAL_PORT", PORT))
     PROTOCOL = "http"
     MODEL_NAME = DEFAULT_MODEL_NAME
+    MAX_OUTPUT_TOKENS = _optional_positive_int("TEST_CASE_GENERATION_MAX_OUTPUT_TOKENS") or MAX_OUTPUT_TOKENS
     MAX_REQUESTS_PER_TASK = 30
 
 
 # Test Case Review Agent
 class TestCaseReviewAgentConfig:
-    THINKING_LEVEL: ThinkingLevel = "medium"
+    THINKING_LEVEL: ThinkingLevel = "high"
     VERSION = os.environ.get("TEST_CASE_REVIEW_AGENT_VERSION", "1.0")
     REVIEW_COMPLETE_STATUS_NAME = "Review Complete"
     OWN_NAME = "Test Case Review Agent"
@@ -273,6 +305,7 @@ class TestCaseReviewAgentConfig:
     EXTERNAL_PORT = int(os.environ.get("EXTERNAL_PORT", PORT))
     PROTOCOL = "http"
     MODEL_NAME = DEFAULT_MODEL_NAME
+    MAX_OUTPUT_TOKENS = _optional_positive_int("TEST_CASE_REVIEW_MAX_OUTPUT_TOKENS") or MAX_OUTPUT_TOKENS
     MAX_REQUESTS_PER_TASK = 30
 
 
@@ -288,6 +321,7 @@ class IncidentCreationAgentConfig:
     EXTERNAL_PORT = int(os.environ.get("EXTERNAL_PORT", PORT))
     PROTOCOL = "http"
     MODEL_NAME = DEFAULT_MODEL_NAME
+    MAX_OUTPUT_TOKENS = _optional_positive_int("INCIDENT_CREATION_MAX_OUTPUT_TOKENS") or MAX_OUTPUT_TOKENS
     MAX_REQUESTS_PER_TASK = 30
     MIN_SIMILARITY_SCORE = float(os.environ.get("INCIDENT_AGENT_MIN_SIMILARITY_SCORE", "0.7"))
     ISSUE_PRIORITY_FIELD_ID = os.environ.get("ISSUE_PRIORITY_FIELD_ID", "priority")
@@ -331,9 +365,12 @@ class QdrantConfig:
     EMBEDDING_SERVICE_RETRY_BACKOFF_CAP_SECONDS = float(
         os.environ.get("EMBEDDING_SERVICE_RETRY_BACKOFF_CAP_SECONDS", "32.0")
     )
-    VALID_STATUSES = os.environ.get(
-        "JIRA_VALID_STATUSES", "To Do,In Review,Ready for Development,In Progress,Done"
-    ).split(",")
+    TEST_CASES_COLLECTION_NAME = os.environ.get("QDRANT_TEST_CASES_COLLECTION_NAME", "test_cases")
+    CONFLUENCE_COLLECTION_NAME = os.environ.get("QDRANT_CONFLUENCE_COLLECTION_NAME", "confluence_documents")
+    SHAREPOINT_COLLECTION_NAME = os.environ.get("QDRANT_SHAREPOINT_COLLECTION_NAME", "sharepoint_documents")
+    TEST_CASE_INDEX_STATUSES = tuple(item.strip() for item in os.environ.get("TEST_CASE_INDEX_STATUSES", "").split(",") if item.strip())
+    TEST_CASE_DUPLICATE_MIN_SCORE = float(os.environ.get("TEST_CASE_DUPLICATE_MIN_SCORE", "0.8"))
+    TEST_CASE_DUPLICATE_MAX_CANDIDATES = int(os.environ.get("TEST_CASE_DUPLICATE_MAX_CANDIDATES", "5"))
     BUG_ISSUE_TYPE = os.environ.get("JIRA_BUG_ISSUE_TYPE", "Bug")
     # Batch size for vector upserts, keeping requests within the size limit.
     UPSERT_BATCH_SIZE = int(os.environ.get("QDRANT_UPSERT_BATCH_SIZE", "64"))
@@ -382,6 +419,7 @@ class RagSyncConfig:
     )
     # How long an unconfirmed job start keeps the lock before the next request may take over.
     START_ALLOWANCE_SECONDS = int(os.environ.get("RAG_SYNC_START_ALLOWANCE_SECONDS", "300"))
+    CALLBACK_URL = os.environ.get("SYNC_CALLBACK_ORCHESTRATOR_URL")
 
 
 class DocumentRagConfig:
@@ -393,7 +431,9 @@ class DocumentRagConfig:
     """
 
     # Documents collection holding page-body chunks and attachment page parts.
-    DOCUMENTS_COLLECTION_NAME = os.environ.get("QDRANT_DOCUMENTS_COLLECTION_NAME", "confluence_documents")
+    DOCUMENTS_COLLECTION_NAME = QdrantConfig.CONFLUENCE_COLLECTION_NAME
+    CONFLUENCE_RETRIEVAL_ENABLED = os.environ.get("CONFLUENCE_RETRIEVAL_ENABLED", "false").lower() in ("true", "1", "t")
+    SHAREPOINT_RETRIEVAL_ENABLED = os.environ.get("SHAREPOINT_RETRIEVAL_ENABLED", "false").lower() in ("true", "1", "t")
     # Confluence REST v2 page size for listing calls.
     LIST_PAGE_SIZE = int(os.environ.get("RAG_CONFLUENCE_LIST_PAGE_SIZE", "50"))
     # Retries for Confluence 429/5xx responses, honouring Retry-After.

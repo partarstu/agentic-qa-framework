@@ -18,7 +18,7 @@ import httpx
 
 import config
 from common import utils
-from common.services.sync_lock_store import SyncLockStore, scope_key
+from common.services.sync_lock_store import SyncLockStore, SyncOutcomeStore, scope_key
 from common.services.vector_db_service import VectorDbService
 
 logger = utils.get_logger("rag_sync_trigger")
@@ -42,6 +42,7 @@ class RagSyncTrigger:
             ttl_seconds=config.RagSyncConfig.LOCK_TTL_SECONDS,
             start_allowance_seconds=config.RagSyncConfig.START_ALLOWANCE_SECONDS,
         )
+        self._outcomes = SyncOutcomeStore(metadata_db)
 
     async def trigger(
         self,
@@ -65,6 +66,7 @@ class RagSyncTrigger:
                 start failed. ``start_confirmed`` False means the failure kept the lock.
         """
         token = await self.acquire(source, scope_id)
+        await self._outcomes.write(scope_key(source, scope_id), "running", "Sync start requested.", sync_type=source)
         return await self.start(source, scope_id, runner_args, token)
 
     async def acquire(self, source: str, scope_id: str) -> str:
@@ -110,7 +112,10 @@ class RagSyncTrigger:
             if config.RagSyncConfig.JOB_NAME:
                 return await self._start_job(source, runner_args, token)
             return await self._run_locally(source, runner_args, token)
-        except SyncTriggerError:
+        except SyncTriggerError as exc:
+            status = "failed" if exc.start_confirmed else "running"
+            message = str(exc) if exc.start_confirmed else f"Sync start unconfirmed: {exc}"
+            await self._outcomes.write(scope, status, message, sync_type=source)
             raise
         except Exception as e:
             if _is_definite_start_failure(e):

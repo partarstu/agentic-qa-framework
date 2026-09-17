@@ -28,7 +28,7 @@ os.environ["GOOGLE_API_KEY"] = "dummy"
 # and keep prompt-injection checks off by default (tests that need them opt in explicitly).
 os.environ.setdefault("ORCHESTRATOR_API_KEY", "test-orchestrator-key")
 os.environ.setdefault("DASHBOARD_USERNAME", "test-admin")
-os.environ.setdefault("DASHBOARD_PASSWORD", "test-password")
+os.environ.setdefault("DASHBOARD_PASSWORD_HASH", "$2b$12$1xngtpKa0L19xVXRr65je.ahTTd1j/CHHa8iC8Kmhn4sqRpQAZb9u")
 os.environ.setdefault("DASHBOARD_JWT_SECRET", "test-jwt-secret-not-for-production")
 os.environ.setdefault("PROMPT_INJECTION_CHECK_ENABLED", "False")
 

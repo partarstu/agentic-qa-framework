@@ -168,10 +168,10 @@ def test_agent_downloaded_the_story_attachment_over_rest(
     data = wait_for_recorded(
         http_client,
         JIRA_REST_RECORDED_URL,
-        lambda d: any(dl.get("filename") == "reset-policy.txt" for dl in d.get("attachment_downloads", [])),
+        lambda d: any(dl.get("filename") == "reset-policy.md" for dl in d.get("attachment_downloads", [])),
     )
     downloaded = {dl.get("filename") for dl in data.get("attachment_downloads", [])}
-    assert "reset-policy.txt" in downloaded, (
+    assert "reset-policy.md" in downloaded, (
         f"The review flow never downloaded the story's attachment over REST. Downloaded: {downloaded}"
     )
     # The MCP download tool stays advertised by the mock, so the per-agent tool filtering
@@ -436,6 +436,17 @@ def test_update_jira_db_webhook_accepted(update_jira_db_response: httpx.Response
     )
     details = update_jira_db_response.json().get("details", {})
     assert details.get("processed_count", 0) >= 1, f"The RAG sync processed no issues: {details}"
+
+
+def test_rag_sync_outcome_is_visible_on_dashboard(
+    update_jira_db_response: httpx.Response, http_client: httpx.Client, auth_headers: dict[str, str]
+) -> None:
+    """The completed Jira sync writes an outcome visible through the dashboard boundary."""
+    assert update_jira_db_response.status_code == 200
+    response = http_client.get(f"{ORCHESTRATOR_URL}/api/dashboard/rag-sync-status", headers=auth_headers)
+    assert response.status_code == 200, response.text
+    outcomes = response.json()
+    assert any(item.get("scope") == "jira:SMOKE" and item.get("status") == "completed" for item in outcomes)
 
 
 def test_rag_sync_upserted_seeded_story_into_vector_db(
@@ -722,6 +733,19 @@ def test_dashboard_reports_the_configured_orchestrator_version(
     assert reported_version == ORCHESTRATOR_VERSION, (
         f"The dashboard reports orchestrator version {reported_version!r} instead of {ORCHESTRATOR_VERSION!r}."
     )
+
+
+def test_dashboard_history_is_backed_by_persistent_state(
+    http_client: httpx.Client, auth_headers: dict[str, str]
+) -> None:
+    """A restart smoke run must retain dashboard history through its Qdrant payload records.
+
+    The smoke compose stack enables persistence; the suite runner restarts the
+    orchestrator between this assertion's setup and its restart companion stage.
+    """
+    response = http_client.get(f"{ORCHESTRATOR_URL}/api/dashboard/logs", headers=auth_headers)
+    assert response.status_code == 200, response.text
+    assert response.json(), "Dashboard history was not retained from the persistent state store."
 
 
 def test_dashboard_agents_carry_the_composed_description(

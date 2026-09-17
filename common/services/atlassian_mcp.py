@@ -22,7 +22,7 @@ import anyio
 import httpx
 from mcp.shared.exceptions import McpError
 from pydantic_ai.exceptions import ModelRetry
-from pydantic_ai.mcp import MCPServerSSE
+from pydantic_ai.mcp import MCPServerStreamableHTTP
 from pydantic_ai.tools import AgentDepsT, RunContext
 from pydantic_ai.toolsets import AbstractToolset, ToolsetTool, WrapperToolset
 
@@ -103,7 +103,7 @@ class SelfHealingAtlassianToolset(WrapperToolset[AgentDepsT]):
     agent only ever sees the tools it was built to use.
     """
 
-    wrapped: MCPServerSSE
+    wrapped: MCPServerStreamableHTTP
     allowed_tools: frozenset[str] | None = None
 
     async def get_tools(self, ctx: RunContext[AgentDepsT]) -> dict[str, ToolsetTool[AgentDepsT]]:
@@ -152,9 +152,9 @@ class SelfHealingAtlassianToolset(WrapperToolset[AgentDepsT]):
         await self.wrapped.__aenter__()
 
 
-def build_atlassian_mcp_server() -> MCPServerSSE:
+def build_atlassian_mcp_server() -> MCPServerStreamableHTTP:
     """Create a fresh, not yet connected Atlassian MCP server client."""
-    return MCPServerSSE(url=config.ATLASSIAN_MCP_SERVER_URL, timeout=config.MCP_SERVER_TIMEOUT_SECONDS)
+    return MCPServerStreamableHTTP(url=config.ATLASSIAN_MCP_SERVER_URL, timeout=config.MCP_SERVER_TIMEOUT_SECONDS)
 
 
 def build_atlassian_mcp_server_toolset(allowed_tools: Iterable[str] | None = None) -> AbstractToolset:

@@ -84,6 +84,7 @@ async def test_search_duplicates_in_rag(agent):
         parent_issue_key=None,
     )
     input_data = IncidentCreationInput(
+        project_key="PROJ",
         test_case=test_case,
         test_execution_result="Failed with NPE",
         test_step_results=[],
@@ -112,7 +113,7 @@ System: {input_data.system_description}"""
     agent.vector_db_service.hybrid_search.return_value = [mock_hit]
 
     # Run
-    candidates = await agent._search_duplicate_candidates_in_rag(incident_description)
+    candidates = await agent._search_duplicate_candidates_in_rag(incident_description, input_data.project_key)
 
     assert len(candidates) == 1
     assert candidates[0].key == "BUG-1"
@@ -147,6 +148,7 @@ async def test_check_all_duplicates_batches_candidates_and_deduplicates_by_key(a
         parent_issue_key=None,
     )
     input_data = IncidentCreationInput(
+        project_key="PROJ",
         test_case=test_case,
         test_execution_result="Failed with NPE",
         test_step_results=[],
@@ -193,6 +195,7 @@ async def test_check_all_duplicates_deduplicates_keys_case_insensitively(agent, 
         parent_issue_key=None,
     )
     input_data = IncidentCreationInput(
+        project_key="PROJ",
         test_case=test_case,
         test_execution_result="Failed with NPE",
         test_step_results=[],

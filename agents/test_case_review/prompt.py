@@ -24,7 +24,7 @@ class TestCaseReviewSystemPrompt(PromptBase):
     def get_script_dir(self) -> Path:
         return _get_prompts_root()
 
-    def __init__(self, template_file_name: str = "main_prompt_template.txt"):
+    def __init__(self, template_file_name: str = "main_prompt_template.md"):
         """
         Initializes the TestCaseReviewSystemPrompt instance.
 
@@ -47,7 +47,7 @@ class TestCaseReviewWithAttachmentsPrompt(PromptBase):
     def get_script_dir(self) -> Path:
         return _get_prompts_root()
 
-    def __init__(self, template_file_name: str = "review_with_attachments_prompt.txt"):
+    def __init__(self, template_file_name: str = "review_with_attachments_prompt.md"):
         """
         Initializes the review with attachments prompt.
 

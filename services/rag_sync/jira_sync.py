@@ -60,7 +60,6 @@ class JiraRagSyncRunner:
             start_allowance_seconds=config.RagSyncConfig.START_ALLOWANCE_SECONDS,
         )
         self._state_store = SyncStateStore(self._metadata_db)
-        self._valid_statuses = set(config.QdrantConfig.VALID_STATUSES)
 
     async def close(self) -> None:
         await self._issues_db.close()
@@ -153,20 +152,15 @@ class JiraRagSyncRunner:
             logger.info(f"Deleted {len(stale_ids)} stale issue(s) for project {project_key}.")
 
     async def _sync_issues(self, issues: list[JiraIssue], scope: str, lock_token: str) -> int:
-        """Upserts active issues and deletes inactive ones, returning the number processed."""
+        """Upsert every issue regardless of Jira workflow status."""
         if not issues:
             return 0
         await self._issues_db.ensure_collection()
-        active_issues = [issue for issue in issues if issue.status in self._valid_statuses]
-        inactive_ids = [issue.id for issue in issues if issue.status not in self._valid_statuses]
         # The lock is verified before every write batch (upsert_batch batches internally).
-        for start in range(0, len(active_issues), config.QdrantConfig.UPSERT_BATCH_SIZE):
-            batch = active_issues[start : start + config.QdrantConfig.UPSERT_BATCH_SIZE]
+        for start in range(0, len(issues), config.QdrantConfig.UPSERT_BATCH_SIZE):
+            batch = issues[start : start + config.QdrantConfig.UPSERT_BATCH_SIZE]
             await self._verify_holder_or_abort(scope, lock_token)
             await self._issues_db.upsert_batch(batch, ensure=False)
-        if inactive_ids:
-            await self._verify_holder_or_abort(scope, lock_token)
-            await self._issues_db.delete(inactive_ids)
         return len(issues)
 
     async def _reset_sync_state(self, project_key: str, scope: str) -> None:

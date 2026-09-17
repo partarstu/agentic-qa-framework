@@ -233,7 +233,7 @@ def _fingerprint_payload(version, hash_value, point_ids=None, title="Home", item
 
 def _attachment(
     attachment_id="att-1",
-    title="guide.txt",
+    title="guide.md",
     version=1,
     file_size=5,
     media_type="text/plain",
@@ -253,7 +253,7 @@ def _attachment_fingerprint(
     hash_value="hash",
     point_ids=None,
     attachment_id="att-1",
-    attachment_name="guide.txt",
+    attachment_name="guide.md",
 ):
     return {
         "version": version,
@@ -575,12 +575,12 @@ class TestConfluenceSyncRunner:
             return_value={
                 "page:111": _fingerprint_payload(3, "hash", point_ids=["p-111"]),
                 "attachment:att-9": _attachment_fingerprint(
-                    attachment_id="att-9", attachment_name="guide.txt", point_ids=["p-att-9"]
+                    attachment_id="att-9", attachment_name="guide.md", point_ids=["p-att-9"]
                 ),
                 "page:222": _fingerprint_payload(4, "hash", point_ids=["p-222"]),
                 "attachment:att-8": {
                     **_attachment_fingerprint(
-                        attachment_id="att-8", attachment_name="other.txt", point_ids=["p-att-8"]
+                        attachment_id="att-8", attachment_name="other.md", point_ids=["p-att-8"]
                     ),
                     "page_id": "222",
                 },
@@ -700,12 +700,12 @@ class TestConfluenceSyncRunner:
 
         assert result.status == "completed"
         assert result.processed_count == 1
-        client.download_attachment.assert_awaited_once_with("/download/guide.txt")
+        client.download_attachment.assert_awaited_once_with("/download/guide.md")
         parts = documents_db.upsert_batch.call_args.args[0]
         assert len(parts) == 1
-        assert parts[0].breadcrumb == "Home > guide.txt > page 1 of 1"
+        assert parts[0].breadcrumb == "Home > guide.md > page 1 of 1"
         assert parts[0].text.endswith("guide text")
-        assert parts[0].document_name == "guide.txt"
+        assert parts[0].document_name == "guide.md"
         saved = fingerprints.save.call_args.args[2]
         assert saved["attachment_id"] == "att-1"
         assert saved["point_ids"] == [parts[0].get_vector_id()]
@@ -735,7 +735,7 @@ class TestConfluenceSyncRunner:
     async def test_attachment_metadata_change_updates_payload_without_download(self, runner):
         runner_obj, documents_db, _, _, fingerprints = runner
         page = _page(title="Renamed Home")
-        attachment = _attachment(title="renamed.txt")
+        attachment = _attachment(title="renamed.md")
         fingerprints.load_scope = AsyncMock(
             return_value={
                 "attachment:att-1": _attachment_fingerprint(point_ids=["point-1"])
@@ -755,7 +755,7 @@ class TestConfluenceSyncRunner:
         client.download_attachment.assert_not_awaited()
         payload = documents_db.set_payload.call_args.args[0]
         assert payload["page_title"] == "Renamed Home"
-        assert payload["document_name"] == "renamed.txt"
+        assert payload["document_name"] == "renamed.md"
         saved = fingerprints.save.call_args.args[2]
         assert saved["point_ids"] == ["point-1"]
 
@@ -794,14 +794,14 @@ class TestConfluenceSyncRunner:
     async def test_pattern_keeps_existing_nonmatching_attachment_but_removes_missing_one(self, runner):
         runner_obj, documents_db, _, _, fingerprints = runner
         page = _page()
-        present = _attachment(attachment_id="present", title="notes.txt")
+        present = _attachment(attachment_id="present", title="notes.md")
         fingerprints.load_scope = AsyncMock(
             return_value={
                 "attachment:present": _attachment_fingerprint(
-                    attachment_id="present", attachment_name="notes.txt", point_ids=["keep"]
+                    attachment_id="present", attachment_name="notes.md", point_ids=["keep"]
                 ),
                 "attachment:gone": _attachment_fingerprint(
-                    attachment_id="gone", attachment_name="gone.txt", point_ids=["delete"]
+                    attachment_id="gone", attachment_name="gone.md", point_ids=["delete"]
                 ),
             }
         )

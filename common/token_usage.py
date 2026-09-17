@@ -4,6 +4,9 @@
 
 """Token usage and estimated cost captured from a single agent run."""
 
+from contextvars import ContextVar
+
+from pydantic import Field
 from pydantic_ai.usage import RunUsage
 
 import config
@@ -25,6 +28,7 @@ class TokenUsage(JsonSerializableModel):
     requests: int
     tool_calls: int
     cost_usd: float | None
+    operations: list["OperationUsage"] = Field(default_factory=list)
 
     @classmethod
     def from_run_usage(cls, usage: RunUsage, model_name: str) -> "TokenUsage":
@@ -46,6 +50,50 @@ class TokenUsage(JsonSerializableModel):
             f"Token usage [{self.model_name}]: input={self.input_tokens}, output={self.output_tokens}, "
             f"total={self.total_tokens}, requests={self.requests}, tool_calls={self.tool_calls}, cost={cost}"
         )
+
+
+class OperationUsage(JsonSerializableModel):
+    """Usage counters attributed to one named LLM operation."""
+
+    operation: str
+    model_name: str
+    requests: int = 0
+    uncached_input_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
+    output_tokens: int = 0
+    tool_calls: int = 0
+    cost_usd: float | None = None
+
+
+class OperationMeter:
+    """Accumulate provider usage for one task without sharing state between tasks."""
+
+    def __init__(self) -> None:
+        self._operations: dict[tuple[str, str], OperationUsage] = {}
+
+    def add(self, operation: str, model_name: str, usage: RunUsage) -> None:
+        """Add a provider usage bucket, accounting for inclusive cache fields."""
+        key = (operation, model_name)
+        entry = self._operations.setdefault(key, OperationUsage(operation=operation, model_name=model_name))
+        entry.requests += usage.requests
+        entry.uncached_input_tokens += max(0, usage.input_tokens - usage.cache_read_tokens - usage.cache_write_tokens)
+        entry.cache_read_tokens += usage.cache_read_tokens
+        entry.cache_write_tokens += usage.cache_write_tokens
+        entry.output_tokens += usage.output_tokens
+        entry.tool_calls += usage.tool_calls
+        entry.cost_usd = estimate_cost_usd(
+            entry.uncached_input_tokens + entry.cache_read_tokens + entry.cache_write_tokens,
+            entry.output_tokens,
+            model_name,
+        )
+
+    def entries(self) -> list[OperationUsage]:
+        """Return operation entries in a stable display order."""
+        return sorted(self._operations.values(), key=lambda entry: (entry.operation, entry.model_name))
+
+
+operation_meter: ContextVar[OperationMeter | None] = ContextVar("operation_meter", default=None)
 
 
 def estimate_cost_usd(input_tokens: int, output_tokens: int, model_name: str) -> float | None:

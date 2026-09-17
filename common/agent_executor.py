@@ -22,6 +22,7 @@ from common.a2a_contract import ArtifactName
 from common.agent_log_capture import AgentLogCaptureHandler
 from common.models import AgentRuntimeError
 from common.streaming import reset_current_log_handler, set_current_log_handler
+from common.token_usage import OperationMeter, operation_meter
 
 logger = utils.get_logger("agent_executor")
 
@@ -57,6 +58,7 @@ class DefaultAgentExecutor(AgentExecutor):
         root_logger = logging.getLogger()
         root_logger.addHandler(log_handler)
         handler_token = set_current_log_handler(log_handler)
+        meter_token = operation_meter.set(OperationMeter())
 
         logs_artifact_id = str(uuid4())  # stable id correlating every log chunk for this task
         sent_any_logs = False
@@ -146,6 +148,7 @@ class DefaultAgentExecutor(AgentExecutor):
 
                 # 3. Detach the handler.
                 reset_current_log_handler(handler_token)
+                operation_meter.reset(meter_token)
                 root_logger.removeHandler(log_handler)
                 handler_detached = True
 

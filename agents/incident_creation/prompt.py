@@ -40,7 +40,7 @@ class IncidentCreationPrompt(PromptBase):
     def get_script_dir(self) -> Path:
         return _get_prompts_root()
 
-    def __init__(self, template_file_name: str = "prompt_template.txt"):
+    def __init__(self, template_file_name: str = "prompt_template.md"):
         super().__init__(template_file_name)
 
     def get_prompt(self) -> str:
@@ -57,7 +57,7 @@ class DuplicateDetectionPrompt(PromptBase):
     def get_script_dir(self) -> Path:
         return _get_prompts_root()
 
-    def __init__(self, template_file_name: str = "duplicate_detection_prompt_template.txt"):
+    def __init__(self, template_file_name: str = "duplicate_detection_prompt_template.md"):
         super().__init__(template_file_name)
 
     def get_prompt(self) -> str:

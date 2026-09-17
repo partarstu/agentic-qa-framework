@@ -62,7 +62,7 @@ def test_fetch_media_file_content_from_local_invalid_mime():
         patch("mimetypes.guess_type", return_value=("text/plain", None)),
         pytest.raises(RuntimeError, match="not a media file"),
     ):
-        utils.fetch_media_file_content_from_local("test.txt", "/tmp")
+        utils.fetch_media_file_content_from_local("test.md", "/tmp")
 
 
 def test_parse_timestamp_cleans_trailing_comma_content():

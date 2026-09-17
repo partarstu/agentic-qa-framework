@@ -21,7 +21,7 @@ from orchestrator.auth import AuthService
 def test_authenticate_rejects_when_not_configured(monkeypatch):
     """Empty configured credentials must never authenticate an empty submission."""
     monkeypatch.setattr(config.DashboardAuthConfig, "USERNAME", "")
-    monkeypatch.setattr(config.DashboardAuthConfig, "PASSWORD", "")
+    monkeypatch.setattr(config.DashboardAuthConfig, "PASSWORD_HASH", "")
     monkeypatch.setattr(config.DashboardAuthConfig, "JWT_SECRET", "")
 
     assert AuthService().authenticate("", "") is False
@@ -30,7 +30,9 @@ def test_authenticate_rejects_when_not_configured(monkeypatch):
 
 def test_authenticate_succeeds_when_configured(monkeypatch):
     monkeypatch.setattr(config.DashboardAuthConfig, "USERNAME", "admin")
-    monkeypatch.setattr(config.DashboardAuthConfig, "PASSWORD", "s3cret")
+    monkeypatch.setattr(
+        config.DashboardAuthConfig, "PASSWORD_HASH", "$2b$12$qwMLhSWccDA4ebzrXCG2NO1rFd043AaCe/0Stg3GGf2XoqopfeeWC"
+    )
     monkeypatch.setattr(config.DashboardAuthConfig, "JWT_SECRET", "a-secret")
 
     service = AuthService()
@@ -41,7 +43,9 @@ def test_authenticate_succeeds_when_configured(monkeypatch):
 def test_verify_token_rejects_when_secret_missing(monkeypatch):
     """A token must not be trusted when no JWT secret is configured."""
     monkeypatch.setattr(config.DashboardAuthConfig, "USERNAME", "admin")
-    monkeypatch.setattr(config.DashboardAuthConfig, "PASSWORD", "s3cret")
+    monkeypatch.setattr(
+        config.DashboardAuthConfig, "PASSWORD_HASH", "$2b$12$qwMLhSWccDA4ebzrXCG2NO1rFd043AaCe/0Stg3GGf2XoqopfeeWC"
+    )
     monkeypatch.setattr(config.DashboardAuthConfig, "JWT_SECRET", "a-secret")
     token = AuthService().create_token("admin").access_token
 
@@ -53,7 +57,7 @@ def test_verify_token_rejects_when_secret_missing(monkeypatch):
 def test_create_token_raises_when_not_configured(monkeypatch):
     monkeypatch.setattr(config.DashboardAuthConfig, "JWT_SECRET", "")
     monkeypatch.setattr(config.DashboardAuthConfig, "USERNAME", "")
-    monkeypatch.setattr(config.DashboardAuthConfig, "PASSWORD", "")
+    monkeypatch.setattr(config.DashboardAuthConfig, "PASSWORD_HASH", "")
     with pytest.raises(HTTPException) as excinfo:
         AuthService().create_token("admin")
     assert excinfo.value.status_code == 503

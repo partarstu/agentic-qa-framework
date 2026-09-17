@@ -18,6 +18,9 @@ PRECONDITIONS_FIELD_ID = config.XRAY_PRECONDITIONS_FIELD_ID
 
 
 class XrayClient(TestManagementClientBase):
+    def fetch_test_cases_by_project(self, project_key: str):
+        """List project test cases; sync callers retain their source-system statuses."""
+        raise NotImplementedError("Project-wide Xray test-case listing is not configured.")
     """
     A client for interacting with the Xray Cloud API.
     """

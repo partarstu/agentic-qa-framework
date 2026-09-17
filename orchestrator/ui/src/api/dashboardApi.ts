@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import { apiClient } from './client';
-import type { DashboardSummary, AgentInfo, TaskInfo, ErrorInfo, LogEntry } from '../types/dashboard';
+import type { DashboardSummary, AgentInfo, TaskInfo, ErrorInfo, LogEntry, RagSyncOutcome } from '../types/dashboard';
 
 /**
  * Dashboard API client for fetching orchestrator state.
@@ -52,6 +52,11 @@ export const dashboardApi = {
     const response = await apiClient.get<LogEntry[]>('/logs', {
       params: { limit, offset, level, task_id: taskId, agent_id: agentId },
     });
+    return response.data;
+  },
+
+  async getRagSyncStatus(): Promise<RagSyncOutcome[]> {
+    const response = await apiClient.get<RagSyncOutcome[]>('/rag-sync-status');
     return response.data;
   },
 

@@ -46,7 +46,7 @@ _SEEDED_SEARCH_ISSUE = {
 _ATTACHMENTS = [
     {
         "id": "10001",
-        "filename": "reset-policy.txt",
+        "filename": "reset-policy.md",
         "mimeType": "text/plain",
         "size": 116,
         "content": "http://jira_rest_mock:8080/rest/api/2/attachment/content/10001",
@@ -60,7 +60,7 @@ _ATTACHMENTS = [
     },
 ]
 _ATTACHMENT_CONTENT = {
-    "reset-policy.txt": (
+    "reset-policy.md": (
         b"Password reset policy\n"
         b"- A reset link stays valid for 60 minutes.\n"
         b"- At most 3 reset requests per account per hour.\n"

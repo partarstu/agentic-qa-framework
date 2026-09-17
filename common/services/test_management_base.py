@@ -4,10 +4,14 @@
 
 from abc import ABC, abstractmethod
 
-from common.models import TestCase, TestExecutionResult
+from common.models import ListedTestCase, TestCase, TestExecutionResult
 
 
 class TestManagementClientBase(ABC):
+    @abstractmethod
+    def fetch_test_cases_by_project(self, project_key: str) -> list[ListedTestCase]:
+        """List every project test case together with its status."""
+        raise NotImplementedError
     @abstractmethod
     def create_test_cases(self, test_cases: list[TestCase], project_key: str, user_story_id: int) -> list[str]:
         raise NotImplementedError

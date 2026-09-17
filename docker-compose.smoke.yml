@@ -243,6 +243,8 @@ services:
       dockerfile: orchestrator/Dockerfile
     command: ["gunicorn", "-w", "1", "-k", "uvicorn.workers.UvicornWorker", "--bind", "0.0.0.0:8000", "orchestrator.main:orchestrator_app"]
     environment:
+      DASHBOARD_PERSISTENCE_ENABLED: "true"
+      QDRANT_DASHBOARD_COLLECTION_NAME: "dashboard_state"
       ORCHESTRATOR_HOST: "0.0.0.0"
       ORCHESTRATOR_PORT: "8000"
       # Explicit, non-default values so the smoke suite can assert both reach their consumers:
@@ -253,7 +255,7 @@ services:
       AGENT_DISCOVERY_PORTS: "8001-8001"
       ORCHESTRATOR_API_KEY: "smoke-api-key"
       DASHBOARD_USERNAME: "smoke"
-      DASHBOARD_PASSWORD: "smoke-pass"
+      DASHBOARD_PASSWORD_HASH: "$$2b$$12$$OZG8i8zm/ulUkJ7mqIBqwekJNMXG5Ia.6rOTr0Oqb/1tPFZs1IWNW"
       DASHBOARD_JWT_SECRET: "smoke-jwt-secret"
       PROMPT_INJECTION_CHECK_ENABLED: "false"
       GOOGLE_API_KEY: "${GOOGLE_API_KEY}"

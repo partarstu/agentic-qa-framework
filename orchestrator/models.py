@@ -12,9 +12,10 @@ logic and the dashboard service, avoiding circular imports.
 import asyncio
 from collections import deque
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
+from uuid import uuid4
 
 from a2a.types import AgentCard
 
@@ -123,6 +124,14 @@ class TaskHistory:
         async with self._lock:
             self._tasks.append(task)
             self._tasks_by_id[task.task_id] = task
+        self._persist("task", task.task_id, task.to_dict())
+
+    @staticmethod
+    def _persist(kind: str, record_id: str, payload: dict[str, Any]) -> None:
+        """Queue dashboard persistence without coupling state mutations to Qdrant availability."""
+        from orchestrator.dashboard_state import dashboard_state_store
+
+        dashboard_state_store.enqueue(kind, {"id": record_id, "payload": payload})
 
     async def update(
         self, task_id: str, status: TaskStatus, end_time: datetime | None = None, error_message: str | None = None
@@ -136,6 +145,7 @@ class TaskHistory:
                     task.end_time = end_time
                 if error_message:
                     task.error_message = error_message
+                self._persist("task", task_id, task.to_dict())
 
     async def get_all(self) -> list[TaskRecord]:
         """Get all task records, newest first."""
@@ -148,12 +158,14 @@ class TaskHistory:
             if task_id in self._tasks_by_id:
                 task = self._tasks_by_id[task_id]
                 task.agent_logs = logs
+                self._persist("task", task_id, task.to_dict())
 
     async def update_usage(self, task_id: str, usage: dict[str, Any]) -> None:
         """Update task with the agent's token usage and estimated cost."""
         async with self._lock:
             if task_id in self._tasks_by_id:
                 self._tasks_by_id[task_id].token_usage = usage
+                self._persist("task", task_id, self._tasks_by_id[task_id].to_dict())
 
     async def get_by_id(self, task_id: str) -> TaskRecord | None:
         """Get a specific task by ID."""
@@ -180,6 +192,7 @@ class TaskHistory:
                 if task.agent_logs is None:
                     task.agent_logs = []
                 task.agent_logs.extend(lines)
+                self._persist("task", task_id, task.to_dict())
 
 
 class ErrorHistory:
@@ -193,6 +206,7 @@ class ErrorHistory:
         """Add a new error record."""
         async with self._lock:
             self._errors.append(error)
+        TaskHistory._persist("error", error.error_id, error.to_dict())
 
     async def get_all(self) -> list[ErrorRecord]:
         """Get all error records, newest first."""
@@ -214,6 +228,7 @@ class AgentRegistry:
         self._broken_reasons: dict[str, BrokenReason] = {}
         self._stuck_task_ids: dict[str, str] = {}  # agent_id -> last stuck task_id
         self._current_tasks: dict[str, str] = {}  # agent_id -> current task_id
+        self._discovery_urls: dict[str, str] = {}
         self._lock = asyncio.Lock()
 
     async def get_card(self, agent_id: str) -> AgentCard | None:
@@ -230,6 +245,24 @@ class AgentRegistry:
             self._cards[agent_id] = card
             if agent_id not in self._statuses:
                 self._statuses[agent_id] = AgentStatus.AVAILABLE
+
+    async def register_or_refresh(self, discovery_url: str, card: AgentCard) -> str:
+        """Register a card by the reachable discovery URL without losing its state."""
+        async with self._lock:
+            for agent_id, url in self._discovery_urls.items():
+                if url == discovery_url:
+                    self._cards[agent_id] = card
+                    return agent_id
+            agent_id = str(uuid4())
+            self._cards[agent_id] = card
+            self._discovery_urls[agent_id] = discovery_url
+            self._statuses[agent_id] = AgentStatus.AVAILABLE
+            return agent_id
+
+    async def get_discovery_url(self, agent_id: str) -> str | None:
+        """Return the URL used to reach an agent during discovery."""
+        async with self._lock:
+            return self._discovery_urls.get(agent_id)
 
     async def update_status(
         self,
@@ -282,6 +315,7 @@ class AgentRegistry:
             self._broken_reasons.pop(agent_id, None)
             self._stuck_task_ids.pop(agent_id, None)
             self._current_tasks.pop(agent_id, None)
+            self._discovery_urls.pop(agent_id, None)
 
     async def get_all_cards(self) -> dict[str, AgentCard]:
         async with self._lock:
@@ -327,7 +361,7 @@ class AgentRegistry:
 
 
 # Global instances - initialized once at module load
-ORCHESTRATOR_START_TIME = datetime.now()
+ORCHESTRATOR_START_TIME = datetime.now(UTC)
 agent_registry = AgentRegistry()
 task_history = TaskHistory(max_size=10000)
 error_history = ErrorHistory(max_size=50)

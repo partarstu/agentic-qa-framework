@@ -515,7 +515,7 @@
     },
     {
       "unique-id": "rel-orchestrator-qdrant",
-      "description": "Orchestrator acquires the per-scope sync locks and reads/writes sync state in Qdrant (issue embedding writes moved to the RAG sync job).",
+      "description": "Orchestrator acquires per-scope sync locks, reads/writes sync state, and optionally persists dashboard task, error and accepted-log history as payload-only Qdrant records (issue embedding writes moved to the RAG sync job).",
       "protocol": "HTTPS",
       "controls": {
         "vector-db-api-key": {
@@ -810,6 +810,12 @@
           }
         }
       }
+    },
+    {
+      "unique-id": "rel-rag-sync-job-orchestrator-outcome",
+      "description": "The sync job posts its authenticated terminal outcome callback to the orchestrator when configured.",
+      "protocol": "HTTPS",
+      "relationship-type": { "connects": { "source": { "node": "rag-sync-job" }, "destination": { "node": "orchestrator" } } }
     },
     {
       "unique-id": "rel-rag-sync-job-embedding",

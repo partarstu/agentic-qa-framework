@@ -66,8 +66,14 @@ class ConfluenceSyncRequest(BaseModel):
 async def sync_jira(request: JiraSyncRequest, _: None = Depends(_require_service_auth)):
     """Runs the Jira sync inline and returns the result."""
     from rag_sync.jira_sync import JiraRagSyncRunner
+    from rag_sync.outcome_reporting import report_terminal_outcome
 
-    result = await JiraRagSyncRunner().sync_project(request.project_key, lock_token=request.lock_token)
+    try:
+        result = await JiraRagSyncRunner().sync_project(request.project_key, lock_token=request.lock_token)
+    except Exception as exc:
+        await report_terminal_outcome("jira", request.project_key, error=exc)
+        raise
+    await report_terminal_outcome("jira", request.project_key, result=result)
     return {"message": "Jira sync completed.", "details": result.model_dump()}
 
 
@@ -75,6 +81,7 @@ async def sync_jira(request: JiraSyncRequest, _: None = Depends(_require_service
 async def sync_confluence(request: ConfluenceSyncRequest, _: None = Depends(_require_service_auth)):
     """Runs the Confluence sync inline and returns the result."""
     from rag_sync.confluence_sync import ConfluenceRagSyncRunner
+    from rag_sync.outcome_reporting import report_terminal_outcome
 
     try:
         if request.attachment_name_pattern:
@@ -87,7 +94,9 @@ async def sync_confluence(request: ConfluenceSyncRequest, _: None = Depends(_req
             lock_token=request.lock_token,
         )
     except RuntimeError as e:
+        await report_terminal_outcome("confluence", request.space_key, error=e)
         raise HTTPException(status_code=409, detail=str(e)) from e
+    await report_terminal_outcome("confluence", request.space_key, result=result)
     return {"message": f"Confluence sync {result.status}.", "details": result.model_dump()}
 
 

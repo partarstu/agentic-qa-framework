@@ -165,6 +165,18 @@ class RagUpdateResult(BaseAgentResult):
     processed_count: int = Field(description="Number of items processed during the update")
 
 
+class SyncOutcome(JsonSerializableModel):
+    """Durable, validated state of one scoped sync operation."""
+
+    sync_type: str = Field(min_length=1)
+    scope: str = Field(min_length=1)
+    status: Literal["running", "completed", "completed_with_errors", "failed"]
+    processed_count: int = Field(default=0, ge=0)
+    message: str = Field(default="", max_length=2000)
+    started_at: str | None = None
+    updated_at: str
+
+
 class RequirementsReviewFeedback(BaseAgentResult):
     suggested_improvements: str = Field(
         description="List of improvements suggested by the requirements review, in plain text"
@@ -220,6 +232,29 @@ class TestCase(JsonSerializableModel):
     )
 
 
+class ListedTestCase(JsonSerializableModel):
+    """A test case returned by a project-wide listing with its current status."""
+
+    test_case: TestCase
+    status: str
+
+
+class TestCaseType(StrEnum):
+    """Supported automated test-case types and their Jira labels."""
+
+    UI = "UI"
+    API = "API"
+    SECURITY = "SECURITY"
+    PERFORMANCE = "PERFORMANCE"
+    LOAD = "LOAD"
+    STRESS = "STRESS"
+
+    @property
+    def label(self) -> str:
+        """Return the Jira label used to route this test type."""
+        return self.value.lower()
+
+
 class GeneratedTestCases(BaseAgentResult):
     """Result of test case generation."""
 
@@ -229,7 +264,7 @@ class GeneratedTestCases(BaseAgentResult):
 class ClassifiedTestCase(JsonSerializableModel):
     issue_key: str = Field(description="The Jira issue key of the test case")
     name: str = Field(description="The name of the test case")
-    test_type: Literal["UI", "API", "Performance", "Load/Stress"]
+    test_type: TestCaseType
     automation_capability: Literal["automated", "semi-automated", "manual"]
     labels: list[str]
     tool_use_comment: str = Field(
@@ -375,6 +410,7 @@ class SelectedAgents(JsonSerializableModel):
 
 
 class IncidentCreationInput(JsonSerializableModel):
+    project_key: str = Field(min_length=1, description="Project key owning the incident")
     test_case: TestCase
     test_execution_result: str
     test_step_results: list["TestStepResult"] = Field(

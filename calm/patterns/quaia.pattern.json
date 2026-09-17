@@ -48,6 +48,7 @@
         { "contains": { "properties": { "unique-id": { "const": "rel-test-case-review-jira" }, "controls": { "required": ["jira-credential-origin-scope"] } }, "required": ["controls"] } },
         { "contains": { "properties": { "unique-id": { "const": "rel-rag-sync-job-confluence" } }, "required": ["unique-id"] } },
         { "contains": { "properties": { "unique-id": { "const": "rel-rag-sync-job-embedding" }, "controls": { "required": ["internal-service-api-key"] } }, "required": ["controls"] } },
+        { "contains": { "properties": { "unique-id": { "const": "rel-rag-sync-job-orchestrator-outcome" } }, "required": ["unique-id"] } },
         { "contains": { "properties": { "unique-id": { "const": "rel-deployed-in-cloud-run" } }, "required": ["unique-id"] } }
       ]
     }

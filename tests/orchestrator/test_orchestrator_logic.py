@@ -480,7 +480,7 @@ async def test_handle_stream_chunk_log_last_chunk_consolidates():
     consolidated = collected[0]
     assert consolidated.name == "logs"
     assert len(consolidated.parts) == 1
-    assert consolidated.parts[0].filename == "execution_logs.txt"
+    assert consolidated.parts[0].filename == "execution_logs.md"
     assert consolidated.parts[0].raw == b"line1\nline2"
 
 

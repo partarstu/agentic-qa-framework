@@ -2,11 +2,13 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
+import json
 import logging
 import mimetypes
 import os
 import re
 import sys
+from contextvars import ContextVar
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -17,6 +19,7 @@ import config
 from common.models import FileArtifact
 
 logging_initialized = False
+log_context: ContextVar[dict[str, str | None] | None] = ContextVar("log_context", default=None)
 
 # Length cap for user-supplied name patterns, shared by all call sites.
 MAX_NAME_PATTERN_LENGTH = 200
@@ -38,6 +41,56 @@ def compile_name_pattern(pattern: str) -> re.Pattern:
         raise ValueError(f"Invalid name pattern '{pattern}': {e}") from e
 
 
+class StructuredLogFilter(logging.Filter):
+    """Add execution context to every record without changing call sites."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        for key, value in (log_context.get() or {}).items():
+            if value is not None and not hasattr(record, key):
+                setattr(record, key, value)
+        return True
+
+
+class StructuredJsonFormatter(logging.Formatter):
+    """Render a log record as one UTC JSON object suitable for Cloud Logging."""
+
+    _CANONICAL_FIELDS = frozenset(
+        {"timestamp", "level", "severity", "message", "logger", "module", "line", "agent_name", "task_id", "agent_id"}
+    )
+
+    def format(self, record: logging.LogRecord) -> str:
+        message = record.getMessage()
+        standard = logging.makeLogRecord({}).__dict__
+        custom = {key: value for key, value in record.__dict__.items() if key not in standard and key not in self._CANONICAL_FIELDS}
+        payload: dict[str, object] = {"custom": custom} if custom else {}
+        payload.update(
+            {
+                "timestamp": datetime.fromtimestamp(record.created, UTC).isoformat(),
+                "level": record.levelname,
+                "severity": record.levelname,
+                "message": message,
+                "logger": record.name,
+                "module": record.module,
+                "line": record.lineno,
+                "agent_name": getattr(record, "agent_name", None),
+                "task_id": getattr(record, "task_id", None),
+                "agent_id": getattr(record, "agent_id", None),
+            }
+        )
+        if record.exc_info:
+            payload["exception"] = self.formatException(record.exc_info)
+        return json.dumps(payload, default=str)
+
+
+def render_log_record(line: str) -> str:
+    """Render a structured log line for reports while tolerating legacy text lines."""
+    try:
+        record = json.loads(line)
+    except json.JSONDecodeError:
+        return line
+    return f"{record.get('timestamp', '')} - {record.get('logger', '')} - {record.get('level', '')} - {record.get('message', '')}"
+
+
 def _initialize_logging():
     global logging_initialized
     if config.GOOGLE_CLOUD_LOGGING_ENABLED:
@@ -49,7 +102,11 @@ def _initialize_logging():
         handlers: list[logging.Handler] = [logging.StreamHandler(sys.stdout)]
         if config.LOG_TO_FILE:
             handlers.append(_build_file_log_handler())
-        logging.basicConfig(handlers=handlers, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+        formatter = StructuredJsonFormatter()
+        for handler in handlers:
+            handler.setFormatter(formatter)
+            handler.addFilter(StructuredLogFilter())
+        logging.basicConfig(handlers=handlers)
     logging_initialized = True
 
 

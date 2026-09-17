@@ -12,11 +12,13 @@ TTL being longer than the job's task timeout.
 
 import secrets
 import time
+from datetime import UTC, datetime
 
 from common.services.vector_db_service import VectorDbService
 
 LOCK_RECORD_KIND = "sync-lock"
 SYNC_STATE_RECORD_KIND = "sync-state"
+SYNC_OUTCOME_RECORD_KIND = "sync-outcome"
 
 
 def scope_key(source: str, scope_id: str) -> str:
@@ -127,3 +129,36 @@ class SyncStateStore:
 
     async def reset(self, scope: str) -> None:
         await self._metadata_db.delete_payload_record(_record_id(SYNC_STATE_RECORD_KIND, scope))
+
+
+class SyncOutcomeStore:
+    """Persist reporting-only status for the most recent sync of each scope."""
+
+    def __init__(self, metadata_db: VectorDbService):
+        self._metadata_db = metadata_db
+
+    async def write(
+        self, scope: str, status: str, message: str, processed_count: int = 0, sync_type: str | None = None
+    ) -> None:
+        """Write an outcome while leaving sync behaviour untouched on storage failures."""
+        now = datetime.now(UTC).isoformat()
+        try:
+            existing = await self._metadata_db.get_payload_record(_record_id(SYNC_OUTCOME_RECORD_KIND, scope))
+            await self._metadata_db.upsert_payload_record(
+                _record_id(SYNC_OUTCOME_RECORD_KIND, scope),
+                {
+                    "kind": SYNC_OUTCOME_RECORD_KIND,
+                    "scope": scope,
+                    "sync_type": sync_type or scope.split(":", 1)[0],
+                    "status": status,
+                    "message": message,
+                    "processed_count": processed_count,
+                    "updated_at": now,
+                    "started_at": (existing or {}).get("started_at", now),
+                },
+            )
+        except Exception:
+            # Dashboard visibility must never convert a successful sync into a failure.
+            import logging
+
+            logging.getLogger(__name__).exception("Unable to persist sync outcome for %s.", scope)

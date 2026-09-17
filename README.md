@@ -222,6 +222,10 @@ URL.
 
 ### Environment Variables
 
+### Deployment manifest
+
+`deploy/manifest.yaml` is the source of truth for declared runtime configuration and secret names. Render a service locally with `uv run scripts/render_deployment_config.py orchestrator production`; it produces an env YAML file, a separate Cloud Run secret mapping, and a stable configuration marker. Runtime overrides must use `QUAIA_DEPLOY_OVERRIDE_<DECLARED_KEY>`; undeclared keys fail rendering and empty overrides preserve manifest defaults. Secret values never enter rendered env files.
+
 Create a `.env` file in the project root and configure the following environment variables. These variables control the
 behavior of the orchestrator and agents.
 
@@ -277,7 +281,7 @@ JIRA_ADDITIONAL_FIELD_IDS= # Optional. Comma-separated Jira custom field IDs (e.
                                  # entries and duplicates are dropped, and every entry must match the Jira custom field
                                  # ID format ('customfield_' followed by digits) - anything else fails startup. Unset
                                  # means the task texts are unchanged.
-ATLASSIAN_MCP_SERVER_URL=http://localhost:9000/sse # Default: http://localhost:9000/sse. The URL of the Atlassian (Jira + Confluence) MCP server.
+ATLASSIAN_MCP_SERVER_URL=http://localhost:9000/mcp # Default: http://localhost:9000/mcp. The URL of the Atlassian (Jira + Confluence) MCP server.
 JIRA_URL=YOUR_JIRA_INSTANCE_URL # Required for Xray, the RAG sync runtime and the agents' attachment downloads. The base URL of your Jira
                                  # instance (e.g. https://your-company.atlassian.net). Also used by the separate Jira
                                  # MCP server (see "Jira MCP Server Setup" below), which has its own .env file.
@@ -291,7 +295,21 @@ TEST_ENVIRONMENT_LABEL=Standard Test Environment # Default: Standard Test Enviro
 # Dashboard Authentication
 # These settings control access to the UI monitoring dashboard at /api/dashboard/*
 DASHBOARD_USERNAME=admin # Required. Username for dashboard login. Dashboard auth fails closed if this is unset.
-DASHBOARD_PASSWORD=admin # Required. Password for dashboard login. CHANGE THIS IN PRODUCTION! Auth fails closed if unset.
+DASHBOARD_PASSWORD_HASH= # Required bcrypt hash for dashboard login. Generate with: python -c "import bcrypt; print(bcrypt.hashpw(b'password', bcrypt.gensalt()).decode())". Escape $ as $$ in compose files.
+MAX_OUTPUT_TOKENS= # Optional global LLM output cap; agent-specific caps override it. Claude deployments should set this explicitly.
+QDRANT_TEST_CASES_COLLECTION_NAME=test_cases
+CONFLUENCE_RETRIEVAL_ENABLED=false
+SHAREPOINT_RETRIEVAL_ENABLED=false
+DASHBOARD_PERSISTENCE_ENABLED=false # Opt-in durable task, error, and accepted dashboard-log history in Qdrant.
+QDRANT_DASHBOARD_COLLECTION_NAME=dashboard_state
+DASHBOARD_LOG_RETENTION_DAYS=1
+DASHBOARD_HISTORY_RETENTION_DAYS=7
+DASHBOARD_MAINTENANCE_INTERVAL_SECONDS=3600
+SYNC_CALLBACK_ORCHESTRATOR_URL= # Optional authenticated /sync-outcome callback target for sync-job completion.
+
+### RAG sync outcomes
+
+Each scoped sync writes `running`, then `completed`, `completed_with_errors`, or `failed` outcome metadata. An ambiguous job launch stays `running` with an unconfirmed-start message; the dashboard marks a running outcome stale after `RAG_SYNC_JOB_TASK_TIMEOUT_SECONDS`. The sync job uses 4 GiB and 2 CPU because document parsing is memory intensive. Outcome writes and callbacks are reporting-only: troubleshoot Qdrant or callback failures from logs without assuming the underlying sync failed.
 DASHBOARD_JWT_SECRET=change-me-in-production-please # Required. Secret key for JWT token signing. CHANGE THIS IN PRODUCTION! Tokens are rejected if this is unset.
 DASHBOARD_JWT_EXPIRE_HOURS=24 # Default: 24. Number of hours before JWT tokens expire.
 
@@ -362,7 +380,7 @@ RAG_SYNC_SERVICE_URL= # Unset by default. Local sync service URL (development on
 RAG_SYNC_JOB_TASK_TIMEOUT_SECONDS=3600 # Default: 3600. Task timeout bounding one sync run.
 RAG_SYNC_LOCK_TTL_SECONDS=3900 # Default: task timeout + 300. Lock expiry; a live job never outlives its lock.
 RAG_SYNC_START_ALLOWANCE_SECONDS=300 # Default: 300. How long an unconfirmed job start keeps the lock before takeover.
-JIRA_VALID_STATUSES=To Do,In Review,Ready for Development,In Progress,Done # Default shown. Comma-separated Jira
+# Every Jira status is ingested. Reset the Jira sync cursor once after upgrading from a status-filtered deployment.
                                  # statuses eligible to be synced into the RAG vector DB.
 
 # Confluence Document Ingestion (WS9)

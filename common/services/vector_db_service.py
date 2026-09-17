@@ -8,6 +8,7 @@ import uuid
 
 import httpx
 from qdrant_client import AsyncQdrantClient, models
+from qdrant_client.http.exceptions import UnexpectedResponse
 
 import config
 from common import utils
@@ -86,8 +87,9 @@ class VectorDbService:
         self._ensured = False
 
     async def close(self):
-        """Closes the shared HTTP client. Call this during application shutdown."""
+        """Close the embedding HTTP client and Qdrant connection pool."""
         await self._http_client.aclose()
+        await self.client.close()
         if self._metadata_db is not None:
             await self._metadata_db.close()
 
@@ -300,9 +302,6 @@ class VectorDbService:
         """
         logger.info(f"Starting hybrid search in '{self.collection_name}' (limit {limit})...")
         try:
-            if not await self._collection_exists():
-                logger.warning(f"Collection {self.collection_name} doesn't exist yet in DB")
-                return []
             embeddings, model = await self._embed_texts([query_text], query=True)
             dense, sparse_indices, sparse_values = embeddings[0]
             await self._verify_model_identity(model)
@@ -328,6 +327,11 @@ class VectorDbService:
                 with_payload=with_payload,
             )
             return response.points
+        except UnexpectedResponse as exc:
+            if exc.status_code == 404:
+                logger.warning("Collection %s does not exist yet in DB.", self.collection_name)
+                return []
+            raise
         except Exception:
             logger.exception("Error querying Vector DB")
             raise

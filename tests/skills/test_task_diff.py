@@ -58,7 +58,7 @@ def test_diff_contains_only_changes_made_after_the_snapshot(
     run_directory = str(tmp_path / "run")
     with (repository / "calc.py").open("a", encoding="utf-8") as calc:
         calc.write("\n\ndef sub(a, b):\n    return a - b\n")
-    (repository / "notes.txt").write_text("existing work\n", encoding="utf-8")
+    (repository / "notes.md").write_text("existing work\n", encoding="utf-8")
     base_tree = _run_task_diff(monkeypatch, capsys, str(repository), run_directory).strip()
 
     with (repository / "calc.py").open("a", encoding="utf-8") as calc:
@@ -71,7 +71,7 @@ def test_diff_contains_only_changes_made_after_the_snapshot(
     assert "+def mul(a, b):" in diff
     assert "+VALUE = 1" in diff
     assert "+def sub(a, b):" not in diff
-    assert "notes.txt" not in diff
+    assert "notes.md" not in diff
 
 
 def test_snapshot_and_diff_leave_the_git_index_untouched(
@@ -116,7 +116,7 @@ def test_diff_contains_changes_to_tracked_files_matched_by_an_ignore_rule(
     assert changed_paths.splitlines() == ["M\tsettings.ini"]
 
 
-@pytest.mark.parametrize("base_tree", ["HEAD", "abc123", "--output=diff.txt"])
+@pytest.mark.parametrize("base_tree", ["HEAD", "abc123", "--output=diff.md"])
 def test_rejects_a_base_tree_that_is_not_a_tree_id(
     repository: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, base_tree: str
 ) -> None:

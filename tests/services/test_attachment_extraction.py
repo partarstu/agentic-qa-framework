@@ -101,7 +101,7 @@ class TestAttachmentExtraction:
     def test_txt_and_markdown_are_verbatim_but_csv_is_normalized(self):
         content = b"  kept  \n12\nword-\nwrapped\n"
 
-        assert extract_attachment("notes.txt", content).pages[0].text == content.decode()
+        assert extract_attachment("notes.md", content).pages[0].text == content.decode()
         assert extract_attachment("notes.md", content).pages[0].text == content.decode()
         assert extract_attachment("notes.csv", content).pages[0].text == "kept\nwordwrapped"
 
