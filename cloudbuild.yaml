@@ -252,15 +252,13 @@ steps:
           --max-instances=1 \
           --concurrency=5 \
           --set-env-vars=^;^REMOTE_EXECUTION_AGENT_HOSTS=$_REMOTE_EXECUTION_AGENT_HOSTS \
-          --set-env-vars=TZ=$_TIMEZONE,AGENT_DISCOVERY_PORTS=443-443,GOOGLE_CLOUD_LOGGING_ENABLED=true,QDRANT_URL=$_QDRANT_URL,EMBEDDING_SERVICE_URL=$_EMBEDDING_SERVICE_URL,ATTACHMENTS_LOCAL_DESTINATION_FOLDER_PATH=$_LOCAL_ATTACHMENTS_MOUNT_PATH,MCP_SERVER_ATTACHMENTS_FOLDER_PATH=$_JIRA_MCP_SERVER_ATTACHMENTS_MOUNT_PATH,DASHBOARD_JWT_EXPIRE_HOURS=24 \
+          --set-env-vars=TZ=$_TIMEZONE,AGENT_DISCOVERY_PORTS=443-443,GOOGLE_CLOUD_LOGGING_ENABLED=true,QDRANT_URL=$_QDRANT_URL,DASHBOARD_JWT_EXPIRE_HOURS=24 \
           --set-env-vars=RAG_SYNC_JOB_NAME=projects/$PROJECT_ID/locations/us-central1/jobs/rag-sync-job,RAG_SYNC_JOB_REGION=us-central1,RAG_SYNC_JOB_TASK_TIMEOUT_SECONDS=$_RAG_SYNC_TASK_TIMEOUT_SECONDS,RAG_SYNC_LOCK_TTL_SECONDS=$_RAG_SYNC_LOCK_TTL_SECONDS,RAG_SYNC_START_ALLOWANCE_SECONDS=$_RAG_SYNC_START_ALLOWANCE_SECONDS \
           --set-secrets=GOOGLE_API_KEY=GOOGLE_API_KEY:latest,JIRA_API_TOKEN=JIRA_API_TOKEN:latest,JIRA_USERNAME=JIRA_USERNAME:latest,ZEPHYR_API_TOKEN=ZEPHYR_API_TOKEN:latest,JIRA_URL=JIRA_URL:latest,ZEPHYR_BASE_URL=ZEPHYR_BASE_URL:latest,ORCHESTRATOR_API_KEY=ORCHESTRATOR_API_KEY:latest,QDRANT_API_KEY=QDRANT_API_KEY:latest,DASHBOARD_USERNAME=DASHBOARD_USERNAME:latest,DASHBOARD_PASSWORD=DASHBOARD_PASSWORD:latest,DASHBOARD_JWT_SECRET=DASHBOARD_JWT_SECRET:latest,REMOTE_EXECUTION_AGENT_AUTH_TOKEN=AGENT_AUTH_TOKEN:latest \
           --add-volume=type=cloud-storage,name=gcs-allure-reports,bucket=$_ALLURE_REPORTS_BUCKET \
           --add-volume-mount=volume=gcs-allure-reports,mount-path=$_ALLURE_REPORTS_CONTAINER_PATH \
-          --add-volume=type=cloud-storage,name=jira-volume,bucket=$_BUCKET_NAME,mount-options=only-dir=$_JIRA_ATTACHMENTS_FOLDER \
-          --add-volume-mount=volume=jira-volume,mount-path=$_LOCAL_ATTACHMENTS_MOUNT_PATH \
           --timeout=$_ORCHESTRATOR_REQUEST_TIMEOUT \
-          $PROMPT_OVERRIDE_ARGS
+          $$PROMPT_OVERRIDE_ARGS
 
   # Deploy the RAG sync job to Cloud Run and grant the orchestrator's runtime identity
   # the least-privilege role to run it with overrides (WS8)
@@ -282,11 +280,16 @@ steps:
           --cpu=$_RAG_SYNC_CPU \
           --set-secrets=JIRA_API_TOKEN=JIRA_API_TOKEN:latest,JIRA_USERNAME=JIRA_USERNAME:latest,JIRA_URL=JIRA_URL:latest,CONFLUENCE_URL=CONFLUENCE_URL:latest,CONFLUENCE_USERNAME=CONFLUENCE_USERNAME:latest,CONFLUENCE_API_TOKEN=CONFLUENCE_API_TOKEN:latest,QDRANT_API_KEY=QDRANT_API_KEY:latest,INTERNAL_SERVICE_API_KEY=INTERNAL_SERVICE_API_KEY:latest \
           --set-env-vars=TZ=$_TIMEZONE,QDRANT_URL=$_QDRANT_URL,EMBEDDING_SERVICE_URL=$_EMBEDDING_SERVICE_URL,RAG_SYNC_JOB_TASK_TIMEOUT_SECONDS=$_RAG_SYNC_TASK_TIMEOUT_SECONDS,RAG_SYNC_LOCK_TTL_SECONDS=$_RAG_SYNC_LOCK_TTL_SECONDS,RAG_SYNC_START_ALLOWANCE_SECONDS=$_RAG_SYNC_START_ALLOWANCE_SECONDS,QDRANT_DOCUMENTS_COLLECTION_NAME=$_QDRANT_DOCUMENTS_COLLECTION_NAME,RAG_OFFICE_CONVERSION_ENABLED=$_RAG_OFFICE_CONVERSION_ENABLED,RAG_MAX_ATTACHMENT_BYTES=$_RAG_MAX_ATTACHMENT_BYTES,RAG_MAX_PAGES_PER_DOCUMENT=$_RAG_MAX_PAGES_PER_DOCUMENT,RAG_RENDER_DPI=$_RAG_RENDER_DPI,RAG_MAX_IMAGE_PIXELS=$_RAG_MAX_IMAGE_PIXELS
-        ORCHESTRATOR_SA=$(gcloud run services describe orchestrator --region=us-central1 --format='value(spec.template.spec.serviceAccountName)')
-        gcloud projects add-iam-policy-binding $PROJECT_ID \
-          --member="serviceAccount:$ORCHESTRATOR_SA" \
-          --role=roles/run.jobInvoker \
-          --condition='title=rag-sync-job-only,expression=resource.name=="projects/'"$PROJECT_ID"'/locations/us-central1/jobs/rag-sync-job"'
+        # The orchestrator runs as the default compute service account unless one was assigned.
+        ORCHESTRATOR_SA=$$(gcloud run services describe orchestrator --region=us-central1 --format='value(spec.template.spec.serviceAccountName)')
+        if [ -z "$$ORCHESTRATOR_SA" ]; then
+          ORCHESTRATOR_SA="$$(gcloud projects describe $PROJECT_ID --format='value(projectNumber)')-compute@developer.gserviceaccount.com"
+        fi
+        # Least privilege: run.jobs.runWithOverrides on this one job only.
+        gcloud run jobs add-iam-policy-binding rag-sync-job \
+          --region=us-central1 \
+          --member="serviceAccount:$$ORCHESTRATOR_SA" \
+          --role=roles/run.jobsExecutorWithOverrides
 
   # Deploy to Cloud Run requirements-review-agent
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
@@ -312,12 +315,10 @@ steps:
           --memory=3Gi \
           --max-instances=1 \
           --concurrency=2 \
-          --set-secrets=GOOGLE_API_KEY=GOOGLE_API_KEY:latest,JIRA_API_TOKEN=JIRA_API_TOKEN:latest,JIRA_USERNAME=JIRA_USERNAME:latest,ZEPHYR_API_TOKEN=ZEPHYR_API_TOKEN:latest,JIRA_URL=JIRA_URL:latest,ATLASSIAN_MCP_SERVER_URL=ATLASSIAN_MCP_SERVER_URL:latest,ZEPHYR_BASE_URL=ZEPHYR_BASE_URL:latest \
-          --set-env-vars=TZ=$_TIMEZONE,GOOGLE_CLOUD_LOGGING_ENABLED=true,AGENT_BASE_URL=$_REQUIREMENTS_REVIEW_AGENT_BASE_URL,EXTERNAL_PORT=443,EMBEDDING_SERVICE_URL=$_EMBEDDING_SERVICE_URL,PROMPT_GUARD_SERVICE_URL=$_PROMPT_GUARD_SERVICE_URL,ATTACHMENTS_LOCAL_DESTINATION_FOLDER_PATH=$_LOCAL_ATTACHMENTS_MOUNT_PATH,MCP_SERVER_ATTACHMENTS_FOLDER_PATH=$_JIRA_MCP_SERVER_ATTACHMENTS_MOUNT_PATH \
+          --set-secrets=GOOGLE_API_KEY=GOOGLE_API_KEY:latest,JIRA_API_TOKEN=JIRA_API_TOKEN:latest,JIRA_USERNAME=JIRA_USERNAME:latest,ZEPHYR_API_TOKEN=ZEPHYR_API_TOKEN:latest,JIRA_URL=JIRA_URL:latest,ATLASSIAN_MCP_SERVER_URL=ATLASSIAN_MCP_SERVER_URL:latest,ZEPHYR_BASE_URL=ZEPHYR_BASE_URL:latest,QDRANT_API_KEY=QDRANT_API_KEY:latest \
+          --set-env-vars=TZ=$_TIMEZONE,GOOGLE_CLOUD_LOGGING_ENABLED=true,AGENT_BASE_URL=$_REQUIREMENTS_REVIEW_AGENT_BASE_URL,EXTERNAL_PORT=443,EMBEDDING_SERVICE_URL=$_EMBEDDING_SERVICE_URL,PROMPT_GUARD_SERVICE_URL=$_PROMPT_GUARD_SERVICE_URL,QDRANT_URL=$_QDRANT_URL \
           --port=8001 \
-          --add-volume=type=cloud-storage,name=jira-volume,bucket=$_BUCKET_NAME,mount-options=only-dir=$_JIRA_ATTACHMENTS_FOLDER \
-          --add-volume-mount=volume=jira-volume,mount-path=$_LOCAL_ATTACHMENTS_MOUNT_PATH \
-          $PROMPT_OVERRIDE_ARGS
+          $$PROMPT_OVERRIDE_ARGS
 
   # Deploy to Cloud Run test-case-generation-agent
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
@@ -344,11 +345,9 @@ steps:
           --max-instances=1 \
           --concurrency=2 \
           --set-secrets=GOOGLE_API_KEY=GOOGLE_API_KEY:latest,JIRA_API_TOKEN=JIRA_API_TOKEN:latest,JIRA_USERNAME=JIRA_USERNAME:latest,ZEPHYR_API_TOKEN=ZEPHYR_API_TOKEN:latest,JIRA_URL=JIRA_URL:latest,ATLASSIAN_MCP_SERVER_URL=ATLASSIAN_MCP_SERVER_URL:latest,ZEPHYR_BASE_URL=ZEPHYR_BASE_URL:latest \
-          --set-env-vars=TZ=$_TIMEZONE,GOOGLE_CLOUD_LOGGING_ENABLED=true,AGENT_BASE_URL=$_TEST_CASE_GENERATION_AGENT_BASE_URL,EXTERNAL_PORT=443,EMBEDDING_SERVICE_URL=$_EMBEDDING_SERVICE_URL,PROMPT_GUARD_SERVICE_URL=$_PROMPT_GUARD_SERVICE_URL,ATTACHMENTS_LOCAL_DESTINATION_FOLDER_PATH=$_LOCAL_ATTACHMENTS_MOUNT_PATH,MCP_SERVER_ATTACHMENTS_FOLDER_PATH=$_JIRA_MCP_SERVER_ATTACHMENTS_MOUNT_PATH \
+          --set-env-vars=TZ=$_TIMEZONE,GOOGLE_CLOUD_LOGGING_ENABLED=true,AGENT_BASE_URL=$_TEST_CASE_GENERATION_AGENT_BASE_URL,EXTERNAL_PORT=443,EMBEDDING_SERVICE_URL=$_EMBEDDING_SERVICE_URL,PROMPT_GUARD_SERVICE_URL=$_PROMPT_GUARD_SERVICE_URL \
           --port=8001 \
-          --add-volume=type=cloud-storage,name=jira-volume,bucket=$_BUCKET_NAME,mount-options=only-dir=$_JIRA_ATTACHMENTS_FOLDER \
-          --add-volume-mount=volume=jira-volume,mount-path=$_LOCAL_ATTACHMENTS_MOUNT_PATH \
-          $PROMPT_OVERRIDE_ARGS
+          $$PROMPT_OVERRIDE_ARGS
 
   # Deploy to Cloud Run test-case-classification-agent
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
@@ -375,11 +374,9 @@ steps:
           --max-instances=1 \
           --concurrency=2 \
           --set-secrets=GOOGLE_API_KEY=GOOGLE_API_KEY:latest,JIRA_API_TOKEN=JIRA_API_TOKEN:latest,JIRA_USERNAME=JIRA_USERNAME:latest,ZEPHYR_API_TOKEN=ZEPHYR_API_TOKEN:latest,JIRA_URL=JIRA_URL:latest,ATLASSIAN_MCP_SERVER_URL=ATLASSIAN_MCP_SERVER_URL:latest,ZEPHYR_BASE_URL=ZEPHYR_BASE_URL:latest \
-          --set-env-vars=TZ=$_TIMEZONE,GOOGLE_CLOUD_LOGGING_ENABLED=true,AGENT_BASE_URL=$_TEST_CASE_CLASSIFICATION_AGENT_BASE_URL,EXTERNAL_PORT=443,EMBEDDING_SERVICE_URL=$_EMBEDDING_SERVICE_URL,PROMPT_GUARD_SERVICE_URL=$_PROMPT_GUARD_SERVICE_URL,ATTACHMENTS_LOCAL_DESTINATION_FOLDER_PATH=$_LOCAL_ATTACHMENTS_MOUNT_PATH,MCP_SERVER_ATTACHMENTS_FOLDER_PATH=$_JIRA_MCP_SERVER_ATTACHMENTS_MOUNT_PATH \
+          --set-env-vars=TZ=$_TIMEZONE,GOOGLE_CLOUD_LOGGING_ENABLED=true,AGENT_BASE_URL=$_TEST_CASE_CLASSIFICATION_AGENT_BASE_URL,EXTERNAL_PORT=443,EMBEDDING_SERVICE_URL=$_EMBEDDING_SERVICE_URL,PROMPT_GUARD_SERVICE_URL=$_PROMPT_GUARD_SERVICE_URL \
           --port=8001 \
-          --add-volume=type=cloud-storage,name=jira-volume,bucket=$_BUCKET_NAME,mount-options=only-dir=$_JIRA_ATTACHMENTS_FOLDER \
-          --add-volume-mount=volume=jira-volume,mount-path=$_LOCAL_ATTACHMENTS_MOUNT_PATH \
-          $PROMPT_OVERRIDE_ARGS
+          $$PROMPT_OVERRIDE_ARGS
 
   # Deploy to Cloud Run test-case-review-agent
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
@@ -406,11 +403,9 @@ steps:
           --max-instances=1 \
           --concurrency=2 \
           --set-secrets=GOOGLE_API_KEY=GOOGLE_API_KEY:latest,JIRA_API_TOKEN=JIRA_API_TOKEN:latest,JIRA_USERNAME=JIRA_USERNAME:latest,ZEPHYR_API_TOKEN=ZEPHYR_API_TOKEN:latest,JIRA_URL=JIRA_URL:latest,ATLASSIAN_MCP_SERVER_URL=ATLASSIAN_MCP_SERVER_URL:latest,ZEPHYR_BASE_URL=ZEPHYR_BASE_URL:latest \
-          --set-env-vars=TZ=$_TIMEZONE,GOOGLE_CLOUD_LOGGING_ENABLED=true,AGENT_BASE_URL=$_TEST_CASE_REVIEW_AGENT_BASE_URL,EXTERNAL_PORT=443,EMBEDDING_SERVICE_URL=$_EMBEDDING_SERVICE_URL,PROMPT_GUARD_SERVICE_URL=$_PROMPT_GUARD_SERVICE_URL,ATTACHMENTS_LOCAL_DESTINATION_FOLDER_PATH=$_LOCAL_ATTACHMENTS_MOUNT_PATH,MCP_SERVER_ATTACHMENTS_FOLDER_PATH=$_JIRA_MCP_SERVER_ATTACHMENTS_MOUNT_PATH \
+          --set-env-vars=TZ=$_TIMEZONE,GOOGLE_CLOUD_LOGGING_ENABLED=true,AGENT_BASE_URL=$_TEST_CASE_REVIEW_AGENT_BASE_URL,EXTERNAL_PORT=443,EMBEDDING_SERVICE_URL=$_EMBEDDING_SERVICE_URL,PROMPT_GUARD_SERVICE_URL=$_PROMPT_GUARD_SERVICE_URL \
           --port=8001 \
-          --add-volume=type=cloud-storage,name=jira-volume,bucket=$_BUCKET_NAME,mount-options=only-dir=$_JIRA_ATTACHMENTS_FOLDER \
-          --add-volume-mount=volume=jira-volume,mount-path=$_LOCAL_ATTACHMENTS_MOUNT_PATH \
-          $PROMPT_OVERRIDE_ARGS
+          $$PROMPT_OVERRIDE_ARGS
 
   # Deploy to Cloud Run incident-creation-agent
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
@@ -440,12 +435,12 @@ steps:
           --add-volume=type=cloud-storage,name=jira-volume,bucket=$_BUCKET_NAME,mount-options=only-dir=$_JIRA_ATTACHMENTS_FOLDER \
           --add-volume-mount=volume=jira-volume,mount-path=$_LOCAL_ATTACHMENTS_MOUNT_PATH \
           --port=8001 \
-          $PROMPT_OVERRIDE_ARGS
+          $$PROMPT_OVERRIDE_ARGS
 
 substitutions:
   _TIMEZONE: 'Europe/Vienna'
   _DEPLOY_ALL_SERVICES: 'false'
-  _DEPLOY_JIRA_MCP: 'false'
+  _DEPLOY_ATLASSIAN_MCP: 'false'
   _DEPLOY_EMBEDDING_SERVICE: 'false'
   _DEPLOY_PROMPT_GUARD: 'false'
   _DEPLOY_QDRANT: 'false'
@@ -472,7 +467,16 @@ substitutions:
   _RAG_SYNC_TASK_TIMEOUT_SECONDS: '3600'
   _RAG_SYNC_LOCK_TTL_SECONDS: '3900'
   _RAG_SYNC_START_ALLOWANCE_SECONDS: '300'
+  _RAG_SYNC_MEMORY: '4Gi'
+  _RAG_SYNC_CPU: '2'
+  _QDRANT_DOCUMENTS_COLLECTION_NAME: 'confluence_documents'
+  _RAG_OFFICE_CONVERSION_ENABLED: 'true'
+  _RAG_MAX_ATTACHMENT_BYTES: '104857600'
+  _RAG_MAX_PAGES_PER_DOCUMENT: '200'
+  _RAG_RENDER_DPI: '150'
+  _RAG_MAX_IMAGE_PIXELS: '4096'
   _QDRANT_STORAGE_FOLDER: 'qdrant'
+  _PROMPT_OVERRIDES_DIR: ''
   _PROMPT_OVERRIDES_BUCKET: ''
   _PROMPT_OVERRIDES_FOLDER: ''
 

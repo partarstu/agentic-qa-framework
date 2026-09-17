@@ -10,7 +10,10 @@ model as ``BinaryContent``, applying the same predicates as before (skip postfix
 supported MIME type, text-equivalent media types).
 """
 
+import re
+
 import httpx
+from pydantic_ai.exceptions import ModelRetry
 from pydantic_ai.messages import BinaryContent
 
 import config
@@ -19,6 +22,23 @@ from common.attachment_handler import as_text_equivalent, is_supported_mime_type
 from common.services.jira_client import build_jira_client
 
 logger = utils.get_logger("jira_attachments")
+
+# Jira issue keys are a project key, a hyphen and the issue number, e.g. PROJ-123.
+_ISSUE_KEY_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]*-\d+$")
+
+
+def require_valid_issue_key(issue_key: str) -> None:
+    """Rejects an issue key that the model made up or smuggled a path into.
+
+    Raises:
+        ModelRetry: When the key does not have the Jira issue key format. Raised as a retry, not
+            as a hard error, so the model can correct the key instead of failing the whole task.
+    """
+    if not _ISSUE_KEY_PATTERN.fullmatch(issue_key):
+        raise ModelRetry(
+            f"'{issue_key[:50]}' is not a Jira issue key. Pass the key of the issue you are working on, "
+            "in the format PROJ-123."
+        )
 
 
 def _origin(url: str) -> tuple[str, str, int | None]:
@@ -68,11 +88,16 @@ def download_issue_attachments(issue_key: str) -> dict[str, BinaryContent]:
     """Downloads the supported attachments of a Jira issue over the REST API.
 
     Args:
-        issue_key: The key of the Jira issue (e.g. ``PROJ-123``).
+        issue_key: The key of the Jira issue (e.g. ``PROJ-123``). It comes from the model, so it is
+            validated before it reaches the Jira REST path.
 
     Returns:
         Dictionary mapping file name to BinaryContent for every supported attachment.
+
+    Raises:
+        ModelRetry: When the key does not have the Jira issue key format, so the model can correct it.
     """
+    require_valid_issue_key(issue_key)
     jira = build_jira_client()
     issue = jira.issue(issue_key, fields="attachment")
     attachments: dict[str, BinaryContent] = {}

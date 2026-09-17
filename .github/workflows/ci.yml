@@ -207,6 +207,9 @@ jobs:
         run: docker compose -f docker-compose.smoke.yml up -d --build --wait
 
       - name: Run smoke tests
+        env:
+          # The A/B judge runs its model in the pytest process, not in a container.
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
         run: uv run pytest tests/smoke -m smoke -v
 
       - name: Dump compose logs

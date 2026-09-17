@@ -33,6 +33,8 @@ import asyncio
 import base64
 import time
 
+from qdrant_client import models
+
 import config
 from common import utils
 from common.models import DocumentPagePart, RagUpdateResult
@@ -152,6 +154,8 @@ class ConfluenceRagSyncRunner:
             if not listing_complete:
                 logger.warning(f"Listing for scope {scope} was incomplete; nothing is deleted this run.")
             stored = await self._fingerprints.load_scope(scope)
+            if await self._has_lost_its_points(space_key, stored):
+                stored = await self._reset_fingerprints(scope, stored, lock_token)
             if page_id is not None:
                 # Page-scoped run: removal candidates are restricted to the scoped
                 # page's items (its body and its attachments); the rest of the space
@@ -232,6 +236,32 @@ class ConfluenceRagSyncRunner:
             return RagUpdateResult(status=status, processed_count=processed)
         finally:
             await client.close()
+
+    async def _has_lost_its_points(self, space_key: str, stored: dict[str, dict]) -> bool:
+        """Whether the space's fingerprints reference points that are no longer in the documents collection.
+
+        The collection is shared by all spaces and recreated when its vector schema or embedding model
+        changes (WS7), so the check is taken per space. Fingerprints without points (e.g. empty pages)
+        cannot tell, so they never trigger a reset.
+        """
+        if not any(fingerprint.get("point_ids") for fingerprint in stored.values()):
+            return False
+        space_filter = models.Filter(
+            must=[models.FieldCondition(key="space_key", match=models.MatchValue(value=space_key))]
+        )
+        return not await self._documents_db.has_points(space_filter)
+
+    async def _reset_fingerprints(self, scope: str, stored: dict[str, dict], lock_token: str) -> dict[str, dict]:
+        """Forces a full re-ingest of a space whose points are gone from the documents collection.
+
+        The surviving fingerprints would otherwise skip every unchanged item. Returns the now empty
+        set of stored fingerprints.
+        """
+        logger.info(f"Stored points of {scope} are missing; resetting its {len(stored)} fingerprint(s).")
+        await self._verify_holder_or_abort(scope, lock_token)
+        for item_key in stored:
+            await self._fingerprints.delete(scope, item_key)
+        return {}
 
     async def _list_attachments(
         self, client: ConfluenceClient, pages: list[dict]

@@ -74,16 +74,13 @@ def retrieval(retrieved_page):
         yield patches
 
 
-def _ctx(issue_key: str = "PROJ-1") -> MagicMock:
-    ctx = MagicMock()
-    ctx.deps.key = issue_key
-    return ctx
+ISSUE_KEY = "PROJ-1"
 
 
 @pytest.mark.asyncio
 async def test_blank_retrieval_query_raises_model_retry(agent, retrieval):
     with pytest.raises(ModelRetry, match="retrieval_query"):
-        await agent._review_with_reference_documentation(_ctx(), "issue content", retrieval_query="  ")
+        await agent._review_with_reference_documentation(ISSUE_KEY, "issue content", retrieval_query="  ")
 
     agent.review_agent.run.assert_not_awaited()
 
@@ -93,7 +90,7 @@ async def test_documentation_parts_are_appended_after_issue_and_attachments(agen
     attachment = BinaryContent(data=b"png", media_type="image/png", identifier="mock.png")
     retrieval[0].return_value = {"mock.png": attachment}
 
-    await agent._review_with_reference_documentation(_ctx(), "issue content", retrieval_query="login flow")
+    await agent._review_with_reference_documentation(ISSUE_KEY, "issue content", retrieval_query="login flow")
 
     mock_retrieve = retrieval[1]
     assert mock_retrieve.await_args.args[1] == "login flow"
@@ -107,7 +104,7 @@ async def test_documentation_parts_are_appended_after_issue_and_attachments(agen
 @pytest.mark.asyncio
 async def test_scope_parameters_are_length_capped(agent, retrieval):
     await agent._review_with_reference_documentation(
-        _ctx(),
+        ISSUE_KEY,
         "issue content",
         retrieval_query="q",
         space_key="S" * 500,
@@ -119,3 +116,77 @@ async def test_scope_parameters_are_length_capped(agent, retrieval):
     assert scope.space_key == "S" * 200
     assert scope.page_id == "P" * 200
     assert scope.document_name_pattern == "D" * 200
+
+
+@pytest.fixture
+def construct_agent(mock_config):
+    """Builds the agent with AgentBase stubbed, returning it with the AgentBase keyword arguments."""
+
+    def _construct(embedding_service_url: str) -> tuple[RequirementsReviewAgent, dict]:
+        mock_config.QdrantConfig.EMBEDDING_SERVICE_URL = embedding_service_url
+        mock_config.QdrantConfig.METADATA_COLLECTION_NAME = "rag_metadata"
+        with (
+            patch("agents.requirements_review.main.RequirementsReviewSystemPrompt.get_prompt", return_value="Prompt"),
+            patch(
+                "agents.requirements_review.main.RequirementsReviewWithAttachmentsPrompt.grounding_suffix",
+                return_value="Ground",
+            ),
+            patch(
+                "agents.requirements_review.main.RequirementsReviewWithAttachmentsPrompt.__init__", return_value=None
+            ) as mock_sub_prompt_init,
+            patch(
+                "agents.requirements_review.main.RequirementsReviewWithAttachmentsPrompt.get_prompt", return_value="Sub"
+            ),
+            patch(
+                "agents.requirements_review.main.RequirementsReviewRetrievalInstruction.get_prompt", return_value="Retr"
+            ),
+            patch("agents.requirements_review.main.VectorDbService") as mock_db_cls,
+            patch("agents.requirements_review.main.CustomLlmWrapper.create_agent"),
+            patch("agents.requirements_review.main.AgentBase.__init__", return_value=None) as mock_base_init,
+        ):
+            review_agent = RequirementsReviewAgent()
+        review_agent.db_class = mock_db_cls
+        review_agent.grounding_instruction = mock_sub_prompt_init.call_args.kwargs["grounding_instruction"]
+        return review_agent, mock_base_init.call_args.kwargs
+
+    return _construct
+
+
+def test_enabled_retrieval_advertises_query_tool_appends_instruction_and_checks_model_identity(construct_agent) -> None:
+    review_agent, base_kwargs = construct_agent("http://embeddings")
+
+    assert review_agent.retrieval_enabled
+    assert base_kwargs["tools"][0].__name__ == "_review_with_reference_documentation"
+    assert base_kwargs["instructions"] == "Prompt\n\nRetr"
+    assert review_agent.grounding_instruction == "Ground"
+    review_agent.db_class.assert_called_once_with("documents", metadata_collection_name="rag_metadata")
+
+
+def test_disabled_retrieval_advertises_attachments_only_tool_without_instruction(construct_agent) -> None:
+    review_agent, base_kwargs = construct_agent("")
+
+    assert not review_agent.retrieval_enabled
+    assert review_agent.documents_db is None
+    assert base_kwargs["tools"][0].__name__ == "_review_with_attachments"
+    assert base_kwargs["instructions"] == "Prompt"
+    assert review_agent.grounding_instruction is None
+    review_agent.db_class.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_attachments_only_review_runs_without_retrieval(agent, retrieval) -> None:
+    await agent._review_with_attachments(ISSUE_KEY, "issue content")
+
+    retrieval[1].assert_not_awaited()
+    parts = agent.review_agent.run.await_args.args[0]
+    assert parts == ["Jira Issue content:\n```issue content```"]
+
+
+@pytest.mark.asyncio
+async def test_retrieval_runtime_failure_fails_the_review(agent, retrieval) -> None:
+    retrieval[1].side_effect = ConnectionError("embedding service unreachable")
+
+    with pytest.raises(ConnectionError, match="embedding service unreachable"):
+        await agent._review_with_reference_documentation(ISSUE_KEY, "issue content", retrieval_query="login flow")
+
+    agent.review_agent.run.assert_not_awaited()

@@ -727,7 +727,7 @@
                 "control-id": "quaia-rag-sync-job-invocation",
                 "name": "RAG Sync Job Invocation IAM",
                 "description": "The orchestrator's runtime identity holds run.jobs.runWithOverrides on the sync job only.",
-                "role": "roles/run.jobInvoker",
+                "role": "roles/run.jobsExecutorWithOverrides",
                 "permissions": [
                   "run.jobs.runWithOverrides"
                 ],

@@ -11,6 +11,7 @@ from a2a.helpers import get_message_text
 from a2a.types import Message
 from a2a.utils.constants import AGENT_CARD_WELL_KNOWN_PATH
 from fastapi.testclient import TestClient
+from pydantic_ai.models.test import TestModel
 from pydantic_ai.usage import RunUsage
 
 if TYPE_CHECKING:
@@ -272,3 +273,53 @@ def test_card_description_composes_model_version_and_skill():
     assert "2.5" in description
     assert "Test Skill" in description
     assert "<br>" in description
+
+
+@pytest.mark.asyncio
+async def test_agent_run_reaches_its_tools_with_their_arguments() -> None:
+    """A tool must receive everything it needs from its own parameters.
+
+    ``AgentBase.run`` starts the agent without dependencies, so a tool that expects them
+    (``ctx.deps``) fails at the first call. Running a tool through the real agent, instead of
+    calling it directly, is what catches that.
+    """
+    tool_calls: list[tuple[str, str]] = []
+
+    async def review_issue(jira_issue_key: str, jira_issue_content: str) -> str:
+        """Reviews the Jira issue with the given key.
+
+        Args:
+            jira_issue_key: The key of the Jira issue.
+            jira_issue_content: The content of the Jira issue.
+        """
+        tool_calls.append((jira_issue_key, jira_issue_content))
+        return "reviewed"
+
+    agent = TestAgent(
+        agent_name="test-agent",
+        base_url="http://localhost",
+        protocol="http",
+        port=8000,
+        external_port=8000,
+        model_name="openai:test-model",
+        version="2.5",
+        skill=AgentSkillDeclaration(
+            id="test-skill",
+            name="Test Skill",
+            description="Skill used by the unit-test agent",
+        ),
+        output_type=MockOutput,
+        instructions="test instructions",
+        tools=[review_issue],
+    )
+
+    message = MagicMock(spec=Message)
+    message.parts = []
+    with (
+        agent.agent.override(model=TestModel()),
+        patch("common.agent_base.get_message_text", return_value="Jira user story with key PROJ-1"),
+    ):
+        await agent.run(message)
+
+    assert tool_calls, "The agent run never reached the tool."
+    assert all(key and content for key, content in tool_calls), f"A tool argument was empty: {tool_calls}"

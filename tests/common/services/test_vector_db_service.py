@@ -2,6 +2,7 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
+import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -114,6 +115,21 @@ async def test_ensure_collection_creates(vector_db_service, mock_qdrant_client, 
     await vector_db_service.ensure_collection()
     mock_qdrant_client.create_collection.assert_called_once()
     mock_httpx_client.post.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_ensure_collection_creates_named_dense_and_sparse_vectors(
+    vector_db_service, mock_qdrant_client, mock_httpx_client
+):
+    _mock_collections_exist(mock_qdrant_client, "test_collection", exists=False)
+
+    await vector_db_service.ensure_collection()
+
+    create_kwargs = mock_qdrant_client.create_collection.call_args.kwargs
+    dense = create_kwargs["vectors_config"]["dense"]
+    assert dense.size == 3
+    assert dense.distance == models.Distance.COSINE
+    assert create_kwargs["sparse_vectors_config"]["sparse"].modifier == models.Modifier.IDF
 
 
 @pytest.mark.asyncio
@@ -247,6 +263,19 @@ async def test_model_identity_stored_on_first_write(service_with_metadata_db, mo
 
 
 @pytest.mark.asyncio
+async def test_model_identity_is_read_and_written_under_one_uuid_point_id(service_with_metadata_db):
+    """Qdrant accepts only unsigned integers and UUIDs as point IDs, so the record ID must be a UUID."""
+    issues_db, metadata_db = service_with_metadata_db
+
+    await issues_db._verify_model_identity("test-model")
+
+    read_id = metadata_db.client.retrieve.call_args.kwargs["ids"][0]
+    written_id = metadata_db.client.upsert.call_args.kwargs["points"][0].id
+    assert str(uuid.UUID(read_id)) == read_id
+    assert written_id == read_id
+
+
+@pytest.mark.asyncio
 async def test_model_identity_mismatch_refuses(service_with_metadata_db, mock_qdrant_client):
     issues_db, metadata_db = service_with_metadata_db
     stored = MagicMock()
@@ -267,6 +296,29 @@ async def test_model_identity_matching_model_passes(service_with_metadata_db, mo
     await issues_db._verify_model_identity("test-model")
 
     metadata_db.client.upsert.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_has_points_is_false_when_the_collection_is_missing(vector_db_service, mock_qdrant_client):
+    _mock_collections_exist(mock_qdrant_client, "test_collection", exists=False)
+
+    assert not await vector_db_service.has_points(models.Filter(must=[]))
+    mock_qdrant_client.scroll.assert_not_called()
+
+
+@pytest.mark.parametrize(("stored_points", "expected"), [([MagicMock()], True), ([], False)])
+@pytest.mark.asyncio
+async def test_has_points_scrolls_one_point_matching_the_filter(
+    vector_db_service, mock_qdrant_client, stored_points, expected
+):
+    _mock_collections_exist(mock_qdrant_client, "test_collection", exists=True)
+    mock_qdrant_client.scroll.return_value = (stored_points, None)
+    scope_filter = models.Filter(must=[models.FieldCondition(key="space_key", match=models.MatchValue(value="DEV"))])
+
+    assert await vector_db_service.has_points(scope_filter) is expected
+    call = mock_qdrant_client.scroll.call_args.kwargs
+    assert call["scroll_filter"] == scope_filter
+    assert call["limit"] == 1
 
 
 @pytest.mark.asyncio

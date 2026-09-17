@@ -4,7 +4,6 @@
 
 from pydantic_ai.messages import BinaryContent
 from pydantic_ai.settings import ThinkingLevel
-from pydantic_ai.tools import RunContext
 
 import config
 from agents.test_case_generation.prompt import (
@@ -20,7 +19,6 @@ from common.models import (
     AcceptanceCriteriaList,
     AgentSkillDeclaration,
     GeneratedTestCases,
-    JiraUserStory,
     TestStepsSequenceList,
 )
 from common.services.atlassian_mcp import build_atlassian_mcp_server_toolset
@@ -83,7 +81,6 @@ class TestCaseGenerationAgent(AgentBase):
             output_type=GeneratedTestCases,
             instructions=instruction_prompt.get_prompt(),
             mcp_toolset_factories=[lambda: build_atlassian_mcp_server_toolset(_JIRA_TOOL_ALLOWLIST)],
-            deps_type=JiraUserStory,
             skill=AgentSkillDeclaration(
                 id=config.TestCaseGenerationAgentConfig.SKILL_ID,
                 name=config.TestCaseGenerationAgentConfig.SKILL_NAME,
@@ -98,11 +95,12 @@ class TestCaseGenerationAgent(AgentBase):
     def get_max_requests_per_task(self) -> int:
         return config.TestCaseGenerationAgentConfig.MAX_REQUESTS_PER_TASK
 
-    async def _generate_test_cases(self, ctx: RunContext[JiraUserStory], jira_issue_content: str) -> GeneratedTestCases:
+    async def _generate_test_cases(self, jira_issue_key: str, jira_issue_content: str) -> GeneratedTestCases:
         """
         Generates test cases based on the Jira issue content and attachments.
 
         Args:
+            jira_issue_key: The key of the Jira issue (e.g. PROJ-123), used to download its attachments.
             jira_issue_content: The whole content of the Jira issue.
 
         Returns:
@@ -110,7 +108,7 @@ class TestCaseGenerationAgent(AgentBase):
         """
         from common.services.jira_attachments import download_issue_attachments
 
-        attachments_content = download_issue_attachments(ctx.deps.key)
+        attachments_content = download_issue_attachments(jira_issue_key)
         extracted_acceptance_criteria = await self.extract_acceptance_criteria(attachments_content, jira_issue_content)
         test_steps_sequences = await self.generate_test_steps(extracted_acceptance_criteria)
         generated_test_cases = await self.create_test_cases_from_steps(

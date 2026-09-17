@@ -182,6 +182,7 @@ class TestJiraRunner:
             issues_db.upsert_batch = AsyncMock()
             issues_db.delete = AsyncMock()
             issues_db.scroll_all_ids_by_project = AsyncMock(return_value=[])
+            issues_db.has_points = AsyncMock(return_value=True)
             mock_vdb.side_effect = [issues_db, metadata_db]
 
             lock_store = MagicMock()
@@ -191,6 +192,7 @@ class TestJiraRunner:
             metadata_db.close = AsyncMock()
             state_store.get_cursor = AsyncMock(return_value=None)
             state_store.save_cursor = AsyncMock()
+            state_store.reset = AsyncMock()
             mock_state_cls.return_value = state_store
 
             from rag_sync.jira_sync import JiraRagSyncRunner
@@ -271,3 +273,41 @@ class TestJiraRunner:
              pytest.raises(PermissionError):
             await runner_obj.sync_project("PROJ", lock_token="tok")
         issues_db.upsert_batch.assert_not_called()
+
+    async def test_project_without_stored_issues_resets_cursor_and_legacy_watermark(self, runner, metadata_db):
+        """The issues collection is shared: after another project's sync recreated it, this project's
+        cursor and legacy watermark must not survive and skip its unchanged issues (WS7 migration)."""
+        from common.models import ProjectMetadata
+
+        runner_obj, issues_db, lock_store, state_store = runner
+        runner_obj._metadata_db = metadata_db
+        legacy_id = ProjectMetadata(project_key="PROJ", last_update="1970-01-01T00:00:00Z").get_vector_id()
+        await metadata_db.upsert_payload_record(legacy_id, {"last_update": "2026-01-01T00:00:00Z"})
+        issues_db.has_points = AsyncMock(return_value=False)
+        lock_store.mark_started = AsyncMock(return_value=True)
+        lock_store.is_holder = AsyncMock(return_value=True)
+        lock_store.release = AsyncMock(return_value=True)
+
+        with patch.object(runner_obj, "_create_jira_client", return_value=MagicMock()), \
+             patch.object(runner_obj, "_fetch_all_issue_ids", return_value=[]), \
+             patch.object(runner_obj, "_fetch_issues_updated_since", return_value=[]) as fetch_issues:
+            await runner_obj.sync_project("PROJ", lock_token="tok")
+
+        project_condition = issues_db.has_points.await_args.args[0].must[0]
+        assert (project_condition.key, project_condition.match.value) == ("project_key", "PROJ")
+        state_store.reset.assert_awaited_once_with("jira:PROJ")
+        assert await metadata_db.get_payload_record(legacy_id) is None
+        assert fetch_issues.call_args.args[2] == "1970-01-01T00:00:00Z"
+
+    async def test_project_with_stored_issues_keeps_the_cursor(self, runner):
+        runner_obj, _, lock_store, state_store = runner
+        lock_store.mark_started = AsyncMock(return_value=True)
+        lock_store.is_holder = AsyncMock(return_value=True)
+        lock_store.release = AsyncMock(return_value=True)
+
+        with patch.object(runner_obj, "_create_jira_client", return_value=MagicMock()), \
+             patch.object(runner_obj, "_fetch_issues_updated_since", return_value=[]), \
+             patch.object(runner_obj, "_get_last_update_timestamp", AsyncMock(return_value="1970-01-01T00:00:00Z")):
+            await runner_obj.sync_project("PROJ", lock_token="tok")
+
+        state_store.reset.assert_not_awaited()

@@ -5,7 +5,10 @@
 """Stateful recording mock for the Qdrant REST surface, plus the embedding service.
 
 Serves the endpoints ``VectorDbService`` exercises: the collection list/create
-cycle, point upsert/retrieve/scroll/delete and similarity queries. The RAG sync
+cycle (recording each collection's named vector schema and payload indexes), point upsert (recording
+each point's vector names)/retrieve/scroll, deletion by IDs or by payload filter,
+payload-only updates and similarity queries. Like Qdrant, it rejects point IDs that are
+neither unsigned integers nor UUIDs with a 400. The RAG sync
 flow (``/update-jira-db``, forwarded to the local sync service) creates its collections and upserts the seeded story
 here; the incident-creation agent's duplicate search probes the collection list
 and, when the collection exists, queries it (always answered with no hits, so the
@@ -20,7 +23,9 @@ flow stays hermetic and LLM-free.
 recorded is exposed at ``GET /__recorded`` for the smoke assertions.
 """
 
-from fastapi import FastAPI, Request
+import uuid
+
+from fastapi import FastAPI, HTTPException, Request
 
 app = FastAPI()
 
@@ -31,14 +36,38 @@ _collections: dict[str, dict[str, dict]] = {}
 _recorded: dict = {
     "collections_probes": 0,
     "created_collections": [],
+    "collection_schemas": {},
+    "payload_indexes": [],
     "upserted_points": [],
     "queries": [],
     "deleted_point_ids": [],
+    "deleted_by_filter": [],
+    "payload_updates": [],
     "embedding_calls": [],
     "hybrid_queries": [],
 }
 
 _UPDATE_RESULT = {"result": {"operation_id": 0, "status": "completed"}, "status": "ok", "time": 0.0}
+
+
+def _is_valid_point_id(point_id: object) -> bool:
+    """Qdrant accepts only unsigned integers and UUID strings as point IDs."""
+    if isinstance(point_id, int):
+        return point_id >= 0
+    try:
+        uuid.UUID(str(point_id))
+    except ValueError:
+        return False
+    return True
+
+
+def _reject_invalid_point_ids(point_ids: list) -> None:
+    """Answer like Qdrant (400) when any ID is neither an unsigned integer nor a UUID."""
+    invalid = [point_id for point_id in point_ids if not _is_valid_point_id(point_id)]
+    if invalid:
+        raise HTTPException(
+            status_code=400, detail=f"Format error in JSON body: unable to parse point ID {invalid[0]!r}"
+        )
 
 
 @app.get("/")
@@ -83,20 +112,40 @@ async def list_collections() -> dict:
 
 @app.put("/collections/{name}")
 async def create_collection(name: str, request: Request) -> dict:
-    await request.json()
+    payload = await request.json()
     _collections.setdefault(name, {})
     _recorded["created_collections"].append(name)
+    _recorded["collection_schemas"][name] = {
+        "vectors": sorted((payload.get("vectors") or {}).keys()),
+        "sparse_vectors": sorted((payload.get("sparse_vectors") or {}).keys()),
+    }
     return {"result": True, "status": "ok", "time": 0.0}
+
+
+@app.put("/collections/{name}/index")
+async def create_payload_index(name: str, request: Request) -> dict:
+    """Create a payload index on one field, as ``ensure_collection`` does for every indexed field."""
+    payload = await request.json()
+    _recorded["payload_indexes"].append(
+        {"collection": name, "field_name": payload.get("field_name"), "field_schema": payload.get("field_schema")}
+    )
+    return _UPDATE_RESULT
 
 
 @app.put("/collections/{name}/points")
 async def upsert_points(name: str, request: Request) -> dict:
     payload = await request.json()
+    _reject_invalid_point_ids([point["id"] for point in payload.get("points", [])])
     points = _collections.setdefault(name, {})
     for point in payload.get("points", []):
         points[str(point["id"])] = point
         _recorded["upserted_points"].append(
-            {"collection": name, "id": point["id"], "payload": point.get("payload", {})}
+            {
+                "collection": name,
+                "id": point["id"],
+                "payload": point.get("payload", {}),
+                "vector_names": sorted((point.get("vector") or {}).keys()),
+            }
         )
     return _UPDATE_RESULT
 
@@ -104,6 +153,7 @@ async def upsert_points(name: str, request: Request) -> dict:
 @app.post("/collections/{name}/points")
 async def retrieve_points(name: str, request: Request) -> dict:
     payload = await request.json()
+    _reject_invalid_point_ids(payload.get("ids", []))
     points = _collections.get(name, {})
     records = [
         {"id": points[str(pid)]["id"], "payload": points[str(pid)].get("payload"), "vector": None}
@@ -122,24 +172,58 @@ async def scroll_points(name: str, request: Request) -> dict:
     the equality filters honoured.
     """
     payload = await request.json()
-    must = ((payload.get("filter") or {}).get("must")) or []
-    required = {c["key"]: c["match"]["value"] for c in must if "match" in c}
     records = [
         {"id": point["id"], "payload": point.get("payload"), "vector": None}
         for point in _collections.get(name, {}).values()
-        if all(point.get("payload", {}).get(key) == value for key, value in required.items())
+        if _matches_filter(point, payload.get("filter"))
     ]
     return {"result": {"points": records, "next_page_offset": None}, "status": "ok", "time": 0.0}
 
 
 @app.post("/collections/{name}/points/delete")
 async def delete_points(name: str, request: Request) -> dict:
+    """Delete points by IDs or by a payload filter (scope deletion)."""
     payload = await request.json()
+    _reject_invalid_point_ids(payload.get("points", []))
     points = _collections.get(name, {})
+    if payload.get("filter") is not None:
+        _recorded["deleted_by_filter"].append({"collection": name, "filter": payload["filter"]})
+        for pid in [pid for pid, point in points.items() if _matches_filter(point, payload["filter"])]:
+            points.pop(pid)
     for pid in payload.get("points", []):
         points.pop(str(pid), None)
         _recorded["deleted_point_ids"].append({"collection": name, "id": pid})
     return _UPDATE_RESULT
+
+
+@app.post("/collections/{name}/points/payload")
+async def set_payload(name: str, request: Request) -> dict:
+    """Merge a payload into points selected by IDs or by a payload filter, without re-embedding."""
+    payload = await request.json()
+    _reject_invalid_point_ids(payload.get("points") or [])
+    points = _collections.get(name, {})
+    _recorded["payload_updates"].append(
+        {
+            "collection": name,
+            "payload": payload.get("payload"),
+            "points": payload.get("points"),
+            "filter": payload.get("filter"),
+        }
+    )
+    selected_ids = {str(pid) for pid in payload.get("points") or []}
+    for pid, point in points.items():
+        if pid in selected_ids or (payload.get("filter") is not None and _matches_filter(point, payload["filter"])):
+            point.setdefault("payload", {}).update(payload.get("payload") or {})
+    return _UPDATE_RESULT
+
+
+def _matches_filter(point: dict, point_filter: dict | None) -> bool:
+    """Honour the top-level ``must`` equality conditions the services send."""
+    must = ((point_filter or {}).get("must")) or []
+    required = {
+        condition["key"]: condition["match"]["value"] for condition in must if "value" in condition.get("match", {})
+    }
+    return all(point.get("payload", {}).get(key) == value for key, value in required.items())
 
 
 @app.post("/collections/{name}/points/query")

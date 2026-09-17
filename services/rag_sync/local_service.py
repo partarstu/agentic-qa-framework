@@ -13,8 +13,11 @@ import hmac
 import os
 import sys
 
-# Make the repository root importable when the service is started directly.
+# Make the runtime importable when the service is started directly. The image copies rag_sync/ next to
+# common/, while the repository nests it under services/, so both the package's parent directory
+# (for "rag_sync.*") and the one above it (the repository root, for "common.*") go on the path.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import uvicorn
 from fastapi import Depends, FastAPI, Header, HTTPException

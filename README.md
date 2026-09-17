@@ -91,6 +91,21 @@ compete for the same available agents. Key features include:
 * **Wait-and-Retry:** If no suitable agent is available, the orchestrator waits with exponential backoff.
 * **LLM-Based Selection Caching:** The orchestrator caches LLM decisions for agent sets to avoid redundant API calls.
 
+Routing is one model call over **every** registered agent, each listed with its ID, name, card description, declared
+skills and current availability, so the model can tell "busy" from "incapable". Every decision carries a mandatory
+justification and is logged with the task ID, the outcome and the selected agent name (visible in the dashboard
+logs). The decision has one of three outcomes:
+
+* **Agent selected:** the agent is reserved, provided it is registered and currently AVAILABLE; any other ID is logged
+  as an invalid routing result and handled like the busy outcome.
+* **Suitable but busy:** the orchestrator keeps waiting and retrying; when the wait times out, the error names the
+  suitable-but-busy situation and includes the last justification.
+* **None suitable:** the orchestrator stops at once, records a dashboard error and fails the request with the
+  justification instead of waiting for the timeout.
+
+The label-based selection of execution agents also returns a justification, which is logged whenever the selected set
+is empty or partial.
+
 ### Broken Agent Recovery
 
 A background task continuously monitors broken agents and attempts recovery:
@@ -111,6 +126,12 @@ end-of-stream, a timeout (including an MCP request timeout), or an HTTP network/
 re-establishes it (full handshake, including log-level negotiation) and retries the failed operation **exactly once**.
 The budget is one reconnect per operation, and both tool discovery and tool invocation are covered. Anything that is not
 recoverable — a bad argument, an unknown issue key — propagates unchanged, so real errors still reach the model.
+
+The MCP server is a combined Jira + Confluence server (`ATLASSIAN_MCP_SERVER_URL`). Each agent passes the allowlist of
+the tool names it actually uses, and its tool discovery is filtered down to that list, so no agent receives Confluence
+(or Jira) tools it was not built for. A write tool (e.g. `confluence_update_page`, `jira_add_comment`) is never
+repeated after a reconnect; only tools whose name starts with a read verb after the `jira_`/`confluence_` prefix, or
+that the server annotates as read-only or idempotent, are.
 
 ### Traceability of Agents and Test Results
 
@@ -257,7 +278,7 @@ JIRA_ADDITIONAL_FIELD_IDS= # Optional. Comma-separated Jira custom field IDs (e.
                                  # ID format ('customfield_' followed by digits) - anything else fails startup. Unset
                                  # means the task texts are unchanged.
 ATLASSIAN_MCP_SERVER_URL=http://localhost:9000/sse # Default: http://localhost:9000/sse. The URL of the Atlassian (Jira + Confluence) MCP server.
-JIRA_URL=YOUR_JIRA_INSTANCE_URL # Required for the orchestrator's RAG DB sync and for Xray. The base URL of your Jira
+JIRA_URL=YOUR_JIRA_INSTANCE_URL # Required for Xray, the RAG sync runtime and the agents' attachment downloads. The base URL of your Jira
                                  # instance (e.g. https://your-company.atlassian.net). Also used by the separate Jira
                                  # MCP server (see "Jira MCP Server Setup" below), which has its own .env file.
 JIRA_USERNAME=YOUR_JIRA_USERNAME # Required alongside JIRA_URL. The email address associated with your Jira account.
@@ -392,7 +413,7 @@ PROMPT_INJECTION_MODEL_NAME=ProtectAI/deberta-v3-base-prompt-injection-v2 # Defa
 **Note on Local Models:**
 If you are running the orchestrator or agents locally (not in a Docker container deployed to the cloud), you must manually download the necessary models:
 1. **Prompt Injection Detection Model:** Required if `PROMPT_INJECTION_CHECK_ENABLED` is set to `True`. Run `scripts/download_prompt_guard_model.py`.
-2. **Embedding Model:** Required for components using the Vector DB (the Incident Creation agent and the Orchestrator, which runs the Jira RAG sync). Run `scripts/download_embedding_model.py`.
+2. **Embedding Model:** Required when running the embedding service locally, which every Vector DB client (the Incident Creation agent, the Requirements Review agent's document retrieval and the RAG sync runtime) calls. Run `scripts/download_embedding_model.py`.
 
 When deploying to cloud environments via Docker, the model downloads are handled automatically as part of the Docker image build process.
 
@@ -411,10 +432,17 @@ To run the Jira MCP server, you will need Docker installed.
    JIRA_URL=YOUR_JIRA_INSTANCE_URL
    JIRA_API_TOKEN=YOUR_JIRA_API_TOKEN
    JIRA_USERNAME=YOUR_JIRA_USERNAME   
+   CONFLUENCE_URL=YOUR_CONFLUENCE_URL
+   CONFLUENCE_USERNAME=YOUR_CONFLUENCE_USERNAME
+   CONFLUENCE_API_TOKEN=YOUR_CONFLUENCE_API_TOKEN
    ```
     * `JIRA_URL`: The base URL of your Jira instance (e.g., `https://your-company.atlassian.net`).
     * `JIRA_API_TOKEN`: A Jira API token for authentication. You can generate one in your Atlassian account settings.
     * `JIRA_USERNAME`: The email address associated with your Jira account.
+    * `CONFLUENCE_URL`, `CONFLUENCE_USERNAME`, `CONFLUENCE_API_TOKEN`: Optional. When present, the server also enables
+      its Confluence toolset (e.g. `https://your-company.atlassian.net/wiki`, your Atlassian email and an Atlassian API
+      token). The same three values configure the RAG sync runtime's Confluence access (see
+      [Updating the RAG Vector Database](#updating-the-rag-vector-database)).
 
 2. **Run the MCP Server using Docker:**
    Navigate to the `mcp/jira/` directory and execute the `start_mcp_server.bat` script (valid only for Windows
@@ -427,7 +455,9 @@ To run the Jira MCP server, you will need Docker installed.
    This command will start the Docker container for the MCP server, mapping port `9000` on your host to the container's
    port `9000`. It also mounts a local directory (`D:\temp` in the example, corresponding to
    `ATTACHMENTS_LOCAL_DESTINATION_FOLDER_PATH` in your main `.env` file) to `/tmp` inside the container (corresponding to
-   `MCP_SERVER_ATTACHMENTS_FOLDER_PATH`). Ensure this local directory exists and has appropriate permissions. Such an
+   `MCP_SERVER_ATTACHMENTS_FOLDER_PATH`). Ensure this local directory exists and has appropriate permissions. The agents
+   that review Jira issues download attachments directly over the Jira REST API; the shared folder is only used by the
+   Incident Creation agent to hand files to the MCP server. Such an
    approach is needed because the current implementation of Jira MCP server only downloads the attachments locally on
    the server and doesn't transfer them to the agent. That's why those downloaded attachments need to be retrieved and
    volume mapping is the current solution for that. Within the cloud setup, a cloud storage could be mapped to the
@@ -437,7 +467,8 @@ To run the Jira MCP server, you will need Docker installed.
 ### Starting agents locally
 
 1. **Start Qdrant Vector Database (required for RAG features):**
-   The Incident Creation agent and the Orchestrator's Jira RAG sync require a running Qdrant instance for vector database operations.
+   The Incident Creation agent, the Requirements Review agent's document retrieval, the RAG sync runtime and the
+   orchestrator's sync locks require a running Qdrant instance for vector database operations.
    ```bash
    scripts/start_qdrant.bat
    ```
@@ -607,6 +638,8 @@ you run any of the commands below.
     * `DASHBOARD_PASSWORD`
     * `DASHBOARD_JWT_SECRET`
     * `AGENT_AUTH_TOKEN` (mapped to the orchestrator's `REMOTE_EXECUTION_AGENT_AUTH_TOKEN`)
+    * `CONFLUENCE_URL`, `CONFLUENCE_USERNAME`, `CONFLUENCE_API_TOKEN` (RAG sync job and Atlassian MCP server)
+    * `INTERNAL_SERVICE_API_KEY` (RAG sync job, for the embedding service)
 5. Cloud Storage bucket for general operations (with all needed folders created, see "Substitution Variables").
 6. Cloud Storage bucket for storing and publicly serving test execution reports (this bucket needs to have public
    access)
@@ -647,10 +680,24 @@ gcloud builds submit --config 'path/to/your/cloudbuild.yaml' --substitutions "`^
 * `_ALLURE_REPORTS_CONTAINER_PATH`: The path inside the orchestrator container where the Allure reports volume is
   mounted. Default: `/app/allure-report`.
 * `_LOCAL_ATTACHMENTS_MOUNT_PATH` / `_JIRA_MCP_SERVER_ATTACHMENTS_MOUNT_PATH`: The container paths where the shared
-  attachments volume is mounted for the orchestrator/agents and for the Jira MCP server, respectively. Both default to
-  `/tmp` and correspond to `ATTACHMENTS_LOCAL_DESTINATION_FOLDER_PATH` / `MCP_SERVER_ATTACHMENTS_FOLDER_PATH`.
-* `_DEPLOY_ALL_SERVICES`: Set to `true` to deploy all services. Individual service flags — `_DEPLOY_JIRA_MCP`,
+  attachments volume is mounted for the Incident Creation agent and for the Atlassian MCP server, respectively. Both
+  default to `/tmp` and correspond to `ATTACHMENTS_LOCAL_DESTINATION_FOLDER_PATH` / `MCP_SERVER_ATTACHMENTS_FOLDER_PATH`.
+* `_RAG_SYNC_TASK_TIMEOUT_SECONDS` / `_RAG_SYNC_LOCK_TTL_SECONDS` / `_RAG_SYNC_START_ALLOWANCE_SECONDS`: The sync job's
+  task timeout, the scope lock expiry (keep it above the task timeout) and how long an unconfirmed job start keeps the
+  lock. Defaults: `3600` / `3900` / `300`.
+* `_RAG_SYNC_MEMORY` / `_RAG_SYNC_CPU`: Memory and CPU of the sync job. Defaults: `4Gi` / `2`.
+* `_QDRANT_DOCUMENTS_COLLECTION_NAME`, `_RAG_OFFICE_CONVERSION_ENABLED`, `_RAG_MAX_ATTACHMENT_BYTES`,
+  `_RAG_MAX_PAGES_PER_DOCUMENT`, `_RAG_RENDER_DPI`, `_RAG_MAX_IMAGE_PIXELS`: The sync job's settings of the same names
+  (see *Environment Variables*).
+* `_PROMPT_OVERRIDES_DIR` / `_PROMPT_OVERRIDES_BUCKET` / `_PROMPT_OVERRIDES_FOLDER`: Optional prompt overrides. When
+  `_PROMPT_OVERRIDES_DIR` is set, the folder `_PROMPT_OVERRIDES_FOLDER` of the bucket `_PROMPT_OVERRIDES_BUCKET` is
+  mounted at that path into the orchestrator and every agent, and `PROMPT_OVERRIDES_DIR` points to it.
+* `_DEPLOY_ALL_SERVICES`: Set to `true` to deploy all services. Individual service flags — `_DEPLOY_ATLASSIAN_MCP`,
   `_DEPLOY_EMBEDDING_SERVICE`, `_DEPLOY_PROMPT_GUARD`, `_DEPLOY_QDRANT` — are available for granular deployment instead.
+
+The build always deploys the RAG sync Cloud Run Job (`rag-sync-job`, task retries 0) and grants the orchestrator's
+runtime service account `roles/run.jobsExecutorWithOverrides` on that job only, which carries the
+`run.jobs.runWithOverrides` permission the orchestrator needs to start executions with per-run arguments.
 
 **Important**: Before the initial deployment of the framework into Google Cloud Run it's quite hard to know which URL
 will be assigned to each agent and orchestrator. That's why most probably you'll have to run the deployment command
@@ -667,7 +714,13 @@ VM-hosted real executors. It drives the system through the orchestrator's public
 each mocked boundary:
 
 * **Requirements review** (`POST /new-requirements-available`) → a non-empty review comment reaches Jira (REST or MCP),
-  and the agent first fetched the source story via the Jira MCP.
+  and the agent first fetched the source story via the Jira MCP. The comment carries the marker of the prompt override
+  mounted from `tests/smoke/overrides/`, the story attachment is downloaded over Jira REST, and the review issues a
+  hybrid documents query whose text is non-empty and shorter than the issue content.
+* **Additional Jira fields** (`JIRA_ADDITIONAL_FIELD_IDS`) → the Jira MCP mock records that the review and generation
+  flows requested the configured custom field IDs.
+* **Routing and cards** → routing decisions with justifications reach the dashboard logs, and every agent's card
+  description carries its model, version and skill name.
 * **Test-case generation** (`POST /story-ready-for-test-case-generation`) → real test cases (name + steps) reach Zephyr,
   linked back to the originating story.
 * **Test-case classification** (same webhook) → labels reach Zephyr.
@@ -676,9 +729,10 @@ each mocked boundary:
   the seeded Jira project, the failed execution is reported to Zephyr inside a fresh test cycle, the bug is linked to
   that execution, and the duplicate search consulted the vector DB.
 * **Jira DB update** (`POST /update-jira-db`) → the orchestrator forwards to the local sync service, which pushes the seeded Jira story into the mocked vector DB
-  (collection creation + point upsert).
+  (collection creation with the named dense + sparse schema, and a point upsert carrying both vectors).
 * **Confluence DB update** (`POST /update-confluence-db`) → the local sync service ingests the seeded Confluence page
-  (space lookup, page listing, body fetch, breadcrumb-prefixed chunks upserted into the documents collection); a second
+  (space lookup, page listing, body fetch, breadcrumb-prefixed chunks upserted into the documents collection) and its
+  PDF and image attachments (page records with the reconciliation chain and a page image); a second
   sync of the unchanged space re-embeds nothing, and a concurrent request for the same scope answers `409 Conflict`.
 * **Negative paths** → all five webhooks reject an invalid API key (401), a missing `issue_key` fails with 400, a
   missing `project_key` or `space_key` fails with 422, and the dashboard API rejects a missing token (401) — all without dispatching
@@ -805,7 +859,8 @@ starts the sync in the configured mode:
   container arguments, and answers `202 Accepted` with the execution name.
 * **Local mode** (`RAG_SYNC_SERVICE_URL` set): the orchestrator forwards the request to
   the local sync service, awaits the result and returns it. Start it with
-  `python services/rag_sync/local_service.py`.
+  `python services/rag_sync/local_service.py --port 8085` (it requires `INTERNAL_SERVICE_API_KEY`, which the
+  orchestrator sends).
 * Neither configured: the endpoints answer with an error naming the missing configuration.
 
 An external scheduler (e.g. Cloud Scheduler) calls the endpoints on a cadence with the
@@ -865,6 +920,40 @@ python -m services.rag_sync.cli jira --project-key SCRUM
 python -m services.rag_sync.cli confluence --space-key DEV
 ```
 
+The exit code reflects the outcome: `0` for a clean run, `2` for a Confluence run that completed with errors, `3` when
+the runner lost its lock and `1` for any other failure.
+
+**Model and schema changes.** Every collection records the embedding model that produced its vectors; syncs and
+retrieval refuse to write or query with a different model. After changing the model or the vector schema, delete the
+affected collection. Each project's or space's next sync then finds none of its points in the collection, resets that
+scope's sync state (the Jira cursor or the Confluence fingerprints) and re-ingests everything, even when another scope's
+sync has already recreated the shared collection.
+
+**Residual risks of the lock.** The orchestrator serializes lock acquisition in-process, which is sound because it runs
+as a single instance. Two runs started outside the orchestrator (the CLI or a direct call to the local service, both
+meant for development) within milliseconds of each other can both acquire the lock. A job that starts just as its
+unconfirmed lock is taken over can briefly overlap with the new run; whichever run no longer holds the lock stops at
+its next holder check, before its next write.
+
+### Document Grounding of Requirements Reviews
+
+The Requirements Review agent grounds its review in the ingested Confluence documentation when the vector database
+and the embedding service are configured (`EMBEDDING_SERVICE_URL` set); otherwise retrieval is skipped with one INFO
+log at startup and the review uses the issue and its attachments only.
+
+* With retrieval enabled, the agent's review tool requires a focused retrieval query (key topics, feature names and
+  domain terms, without Jira boilerplate) and accepts an optional scope (space key, page ID, document-name regex) that
+  the model sets only when the issue explicitly references a Confluence location. A blank query is an explicit tool
+  error. With retrieval disabled, the tool advertises neither parameter and no retrieval instruction is added.
+* The retrieval is a hybrid dense + sparse query over the documents collection. Hits are grouped per page, and each of
+  the top `RAG_MAX_RESULTS` pages contributes a header (reconciliation chain or breadcrumb and URL) plus its page image
+  when one exists, otherwise its text. The parts are appended after the issue content and the Jira attachments.
+* A retrieval failure at runtime (e.g. an unreachable embedding service or Qdrant) fails the review instead of
+  silently reviewing without documentation.
+* Retrieved text passes the prompt-injection guard like any other model input. Page images cannot be screened by the
+  text classifier; since Confluence content is editable by many users, treat ingested spaces as part of the attack
+  surface and restrict ingestion to trusted spaces.
+
 ### Dashboard API Endpoints
 
 The dashboard exposes REST API endpoints for programmatic access to monitoring data. All dashboard endpoints require JWT authentication.
@@ -901,7 +990,8 @@ dashboard while a task is running.
 Every agent created via `AgentBase` automatically receives a `report_activity` tool and a
 one-line instruction snippet appended to its system prompt. Developers writing agent prompt
 templates **do not** need to include these manually — they are injected by
-`AgentBase.__init__`.
+`AgentBase.__init__`. This one-line instruction is tool plumbing, not a prompt template, so
+`PROMPT_OVERRIDES_DIR` cannot override it.
 
 The LLM calls `report_activity(description)` with a short sentence (≤ 120 chars) describing
 the current reasoning phase or the tool it is about to invoke. Each call is forwarded to the
@@ -1014,10 +1104,10 @@ schedulers before upgrading:
 4. **The embedding service `/embed` endpoint is replaced** by the backend-specific batch endpoints (e.g.
    `/embed-document-text`, `/embed-query-text`); readiness is reported by `/ready` (unauthenticated) separately
    from liveness `/health`.
-5. **Collections must be recreated and sync state reset.** The vector schema moved to named dense + sparse vectors
-   and the embedding model changed. Recreate the Jira and documents collections (or delete their sync-state
-   records), then run a full `/update-jira-db` per project and `/update-confluence-db` per space before relying on
-   duplicate detection or retrieval again.
+5. **Collections must be recreated.** The vector schema moved to named dense + sparse vectors
+   and the embedding model changed. Delete the Jira issues and documents collections, then run `/update-jira-db` per
+   project and `/update-confluence-db` per space before relying on duplicate detection or retrieval again. A sync that
+   finds none of its scope's points in the collection resets that scope's sync state itself and re-ingests everything.
 6. **New cloud resources are required:** the RAG sync Cloud Run job, the IAM binding letting the orchestrator run
    it with overrides (`run.jobs.runWithOverrides`), and the Confluence secrets (`CONFLUENCE_URL`,
    `CONFLUENCE_USERNAME`, `CONFLUENCE_API_TOKEN`) on the sync job and the MCP server.

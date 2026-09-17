@@ -83,7 +83,9 @@ def baseline_snapshot() -> RunSnapshot:
 
 
 @pytest.fixture(scope="session")
-def ab_result(baseline_snapshot: RunSnapshot, candidate_snapshot: RunSnapshot) -> _AbResult:
+def ab_result(
+    baseline_snapshot: RunSnapshot, candidate_snapshot: RunSnapshot, judge_google_api_key: None
+) -> _AbResult:
     """Compare the run against the baseline once: the judging costs real model calls."""
     baseline_metrics = compute_metrics(baseline_snapshot)
     candidate_metrics = compute_metrics(candidate_snapshot)

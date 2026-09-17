@@ -441,7 +441,7 @@ def test_update_jira_db_webhook_accepted(update_jira_db_response: httpx.Response
 def test_rag_sync_upserted_seeded_story_into_vector_db(
     update_jira_db_response: httpx.Response, http_client: httpx.Client
 ) -> None:
-    """The sync must push the seeded story into the tickets collection of the vector DB."""
+    """The sync must push the seeded story into the tickets collection of the vector DB, with dense + sparse vectors."""
     data = wait_for_recorded(
         http_client,
         QDRANT_RECORDED_URL,
@@ -461,6 +461,14 @@ def test_rag_sync_upserted_seeded_story_into_vector_db(
     assert payload.get("summary", "").strip(), f"The upserted story has no summary: {payload}"
     assert TICKETS_COLLECTION_NAME in data.get("created_collections", []), (
         f"The tickets collection was never created. Recorded: {data}"
+    )
+    # WS7: the collection is created with the hybrid schema and the story carries both named vectors.
+    schema = data.get("collection_schemas", {}).get(TICKETS_COLLECTION_NAME, {})
+    assert schema.get("vectors") == ["dense"] and schema.get("sparse_vectors") == ["sparse"], (
+        f"The tickets collection lacks the named dense + sparse vector schema: {schema}"
+    )
+    assert upserts[0].get("vector_names") == ["dense", "sparse"], (
+        f"The upserted story does not carry dense + sparse vectors: {upserts[0]}"
     )
 
 

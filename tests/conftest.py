@@ -6,7 +6,21 @@ import os
 import sys
 from unittest.mock import MagicMock
 
-# Set dummy API key for OpenAI provider
+from dotenv import dotenv_values
+
+
+def _configured_google_api_key() -> str | None:
+    """The real key from the environment or the .env file, before the dummy replaces it.
+
+    Only the smoke suite uses it (see tests/smoke/conftest.py); unit tests never reach a real
+    API, so they run with the dummy below.
+    """
+    return os.environ.get("GOOGLE_API_KEY") or dotenv_values().get("GOOGLE_API_KEY")
+
+
+CONFIGURED_GOOGLE_API_KEY = _configured_google_api_key()
+
+# Set dummy API keys, so that no unit test can reach a real provider.
 os.environ["OPENAI_API_KEY"] = "dummy"
 os.environ["GOOGLE_API_KEY"] = "dummy"
 

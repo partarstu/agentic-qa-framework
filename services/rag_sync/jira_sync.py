@@ -17,6 +17,7 @@ from datetime import datetime
 
 from jira import JIRA
 from jira.resources import Issue
+from qdrant_client import models
 
 import config
 from common import utils
@@ -109,6 +110,11 @@ class JiraRagSyncRunner:
         jira_client = await asyncio.to_thread(self._create_jira_client)
 
         await self._verify_holder_or_abort(scope, lock_token)
+        project_filter = models.Filter(
+            must=[models.FieldCondition(key="project_key", match=models.MatchValue(value=project_key))]
+        )
+        if not await self._issues_db.has_points(project_filter):
+            await self._reset_sync_state(project_key, scope)
         await self._reconcile_deleted_issues(jira_client, project_key, scope, lock_token)
 
         last_update = await self._get_last_update_timestamp(project_key)
@@ -162,6 +168,18 @@ class JiraRagSyncRunner:
             await self._verify_holder_or_abort(scope, lock_token)
             await self._issues_db.delete(inactive_ids)
         return len(issues)
+
+    async def _reset_sync_state(self, project_key: str, scope: str) -> None:
+        """Forces a full re-ingest of a project that has no points in the issues collection.
+
+        The collection is shared by all projects and recreated when its vector schema or embedding
+        model changes (WS7), so the decision is taken per project: a surviving cursor, or the legacy
+        watermark it falls back to, would otherwise skip every issue not updated since the last run.
+        """
+        logger.info(f"No stored issues for {scope}; resetting its sync state for a full re-ingest.")
+        await self._state_store.reset(scope)
+        legacy_id = ProjectMetadata(project_key=project_key, last_update=DEFAULT_LAST_UPDATE).get_vector_id()
+        await self._metadata_db.delete_payload_record(legacy_id)
 
     async def _get_last_update_timestamp(self, project_key: str) -> str:
         scope = scope_key(JIRA_SCOPE, project_key)

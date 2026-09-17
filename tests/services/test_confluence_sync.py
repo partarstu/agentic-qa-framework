@@ -291,6 +291,7 @@ def runner():
         documents_db.upsert_batch = AsyncMock()
         documents_db.delete = AsyncMock()
         documents_db.set_payload = AsyncMock()
+        documents_db.has_points = AsyncMock(return_value=True)
         metadata_db = MagicMock()
         metadata_db.close = AsyncMock()
         mock_vdb.side_effect = [documents_db, metadata_db]
@@ -640,6 +641,48 @@ class TestConfluenceSyncRunner:
         cursor_scope, cursor = state_store.save_cursor.call_args[0]
         assert cursor_scope == "confluence:DEV"
         assert cursor["processed_count"] == 0
+
+    async def test_space_without_stored_points_resets_fingerprints_and_reingests_unchanged_page(self, runner):
+        """The documents collection is shared: after another space's sync recreated it, this space's
+        fingerprints still exist but its points don't, so its unchanged page is re-ingested (WS7)."""
+        runner_obj, documents_db, _, _, fingerprints = runner
+        page = _page()
+        stored_hash = content_hash("<p>Hello.</p>", "Home", "1")
+        fingerprints.load_scope = AsyncMock(
+            return_value={"page:111": _fingerprint_payload(3, stored_hash, point_ids=["a"])}
+        )
+        documents_db.has_points = AsyncMock(return_value=False)
+        client = _client_mock()
+        client.get_space_id_by_key = AsyncMock(return_value="555")
+        client.list_pages_in_space = AsyncMock(return_value=[page])
+        client.get_page = AsyncMock(return_value=page)
+        client.close = AsyncMock()
+
+        with patch("rag_sync.confluence_sync.ConfluenceClient", return_value=client):
+            result = await runner_obj.sync_space("DEV")
+
+        assert result.processed_count == 1
+        space_condition = documents_db.has_points.await_args.args[0].must[0]
+        assert (space_condition.key, space_condition.match.value) == ("space_key", "DEV")
+        fingerprints.delete.assert_awaited_once_with("confluence:DEV", "page:111")
+        documents_db.upsert_batch.assert_awaited()
+        fingerprints.save.assert_awaited_once()
+
+    async def test_fingerprints_without_points_never_trigger_a_reset(self, runner):
+        runner_obj, documents_db, _, _, fingerprints = runner
+        stored_hash = content_hash("<p>Hello.</p>", "Home", "1")
+        fingerprints.load_scope = AsyncMock(return_value={"page:111": _fingerprint_payload(3, stored_hash)})
+        client = _client_mock()
+        client.get_space_id_by_key = AsyncMock(return_value="555")
+        client.list_pages_in_space = AsyncMock(return_value=[_page()])
+        client.close = AsyncMock()
+
+        with patch("rag_sync.confluence_sync.ConfluenceClient", return_value=client):
+            result = await runner_obj.sync_space("DEV")
+
+        assert result.processed_count == 0
+        documents_db.has_points.assert_not_awaited()
+        fingerprints.delete.assert_not_called()
 
     async def test_new_attachment_is_downloaded_extracted_and_fingerprinted(self, runner):
         runner_obj, documents_db, _, state_store, fingerprints = runner

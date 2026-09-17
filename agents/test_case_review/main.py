@@ -5,7 +5,7 @@
 from typing import TYPE_CHECKING
 
 from pydantic_ai.settings import ThinkingLevel
-from pydantic_ai.tools import RunContext, Tool
+from pydantic_ai.tools import Tool
 from pydantic_ai.usage import RunUsage, UsageLimits
 
 import config
@@ -18,7 +18,6 @@ from common.models import (
     TestCase,
     TestCaseReviewFeedback,
     TestCaseReviewFeedbacks,
-    TestCaseReviewRequest,
 )
 from common.services.atlassian_mcp import build_atlassian_mcp_server_toolset
 from common.services.test_management_system_client_provider import get_test_management_client
@@ -56,7 +55,6 @@ class TestCaseReviewAgent(AgentBase):
             protocol=config.TestCaseReviewAgentConfig.PROTOCOL,
             model_name=config.TestCaseReviewAgentConfig.MODEL_NAME,
             version=config.TestCaseReviewAgentConfig.VERSION,
-            deps_type=TestCaseReviewRequest,
             output_type=TestCaseReviewFeedbacks,
             instructions=instruction_prompt.get_prompt(),
             mcp_toolset_factories=[lambda: build_atlassian_mcp_server_toolset(_JIRA_TOOL_ALLOWLIST)],
@@ -84,7 +82,7 @@ class TestCaseReviewAgent(AgentBase):
 
     async def _review_test_cases_with_attachments(
         self,
-        ctx: RunContext[TestCaseReviewRequest],
+        jira_issue_key: str,
         jira_issue_content: str,
         test_cases: list[TestCase],
     ) -> TestCaseReviewFeedbacks:
@@ -92,6 +90,7 @@ class TestCaseReviewAgent(AgentBase):
         Reviews a list of test cases, taking into account the Jira issue content and its attachments.
 
         Args:
+            jira_issue_key: The key of the Jira issue (e.g. PROJ-123), used to download its attachments.
             jira_issue_content: The complete content of the Jira issue.
             test_cases: The list of test cases to review.
 
@@ -101,7 +100,7 @@ class TestCaseReviewAgent(AgentBase):
 
         from common.services.jira_attachments import download_issue_attachments
 
-        attachments_content = download_issue_attachments(ctx.deps.key)
+        attachments_content = download_issue_attachments(jira_issue_key)
         attachment_parts: list[str | BinaryContent] = []
         for filename, binary_content in (attachments_content or {}).items():
             attachment_parts.append(f"Attachment: {filename}")

@@ -244,7 +244,8 @@ class VectorDbService:
             await self._metadata_db._store_model_identity(self.collection_name, model)
 
     def _model_identity_id(self, collection_name: str) -> str:
-        return f"model-identity-{collection_name}"
+        # Qdrant accepts only unsigned integers and UUIDs as point IDs.
+        return _record_uuid(f"model-identity-{collection_name}")
 
     async def _store_model_identity(self, collection_name: str, model: str) -> None:
         """Record which model produced a collection's vectors (part of the metadata collection)."""
@@ -437,6 +438,19 @@ class VectorDbService:
         except Exception:
             logger.exception("Error deleting from Vector DB")
             raise
+
+    async def has_points(self, scope_filter: models.Filter) -> bool:
+        """Whether at least one point matches the filter; False when the collection doesn't exist."""
+        if not await self._collection_exists():
+            return False
+        points, _ = await self.client.scroll(
+            collection_name=self.collection_name,
+            scroll_filter=scope_filter,
+            limit=1,
+            with_payload=False,
+            with_vectors=False,
+        )
+        return bool(points)
 
     async def delete_by_filter(self, scope_filter: models.Filter):
         """Delete every point matching the filter (reconciliation of removed items)."""

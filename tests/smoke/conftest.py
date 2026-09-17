@@ -19,12 +19,14 @@ env vars. The dashboard/API credentials are the fixed throwaway values baked int
 
 import os
 import time
+from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 
 import httpx
 import pytest
 
 import config
+from tests.conftest import CONFIGURED_GOOGLE_API_KEY
 
 ORCHESTRATOR_URL = os.environ.get("SMOKE_ORCHESTRATOR_URL", "http://localhost:8000").rstrip("/")
 JIRA_REST_RECORDED_URL = os.environ.get("SMOKE_JIRA_REST_RECORDED_URL", "http://localhost:8080/__recorded")
@@ -83,6 +85,26 @@ AGENT_READY_TIMEOUT = 240.0
 # A single webhook drives real LLM routing plus one or more full agent runs.
 WEBHOOK_TIMEOUT = httpx.Timeout(1200.0)
 POLL_INTERVAL = 5.0
+
+
+@pytest.fixture(scope="session")
+def judge_google_api_key() -> Iterator[None]:
+    """Give the A/B judge the real Gemini key it calls Gemini with.
+
+    The root conftest replaces GOOGLE_API_KEY with a dummy so no unit test can reach a real
+    provider. Only the judge runs a model inside the pytest process - every other smoke test
+    drives the containers, which get their key from the environment - so the configured key is
+    restored just for the tests that request this fixture.
+    """
+    if not CONFIGURED_GOOGLE_API_KEY:
+        pytest.fail(
+            "GOOGLE_API_KEY is not set in the environment or in .env; the smoke suite drives real "
+            "Gemini calls and cannot run without it."
+        )
+    dummy_key = os.environ["GOOGLE_API_KEY"]
+    os.environ["GOOGLE_API_KEY"] = CONFIGURED_GOOGLE_API_KEY
+    yield
+    os.environ["GOOGLE_API_KEY"] = dummy_key
 
 
 @pytest.fixture(scope="session")

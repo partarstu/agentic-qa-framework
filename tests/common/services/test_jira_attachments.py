@@ -7,6 +7,7 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
+from pydantic_ai.exceptions import ModelRetry
 
 from common.services.jira_attachments import download_issue_attachments
 from common.services.jira_client import build_jira_client
@@ -193,3 +194,31 @@ def test_skips_unsupported_and_postfixed_attachments(mock_client, mock_get, mock
 def test_issue_without_attachments_yields_empty_dict(mock_client, mock_get):
     mock_client.return_value.issue.return_value = _issue_with(None)
     assert download_issue_attachments("PROJ-1") == {}
+
+
+# The issue key comes from the model, so it is validated before it reaches the Jira REST path.
+
+
+@pytest.mark.parametrize(
+    "issue_key",
+    ["", "proj-123", "PROJ", "PROJ-123/../secret", "PROJ-123?fields=*all", "../../PROJ-123"],
+    ids=["empty", "lowercase", "no-number", "path-traversal", "query-injection", "relative-path"],
+)
+@patch("common.services.jira_attachments.build_jira_client")
+def test_invalid_issue_key_raises_model_retry_before_reaching_jira(mock_client, issue_key: str) -> None:
+    with pytest.raises(ModelRetry, match="not a Jira issue key"):
+        download_issue_attachments(issue_key)
+
+    mock_client.assert_not_called()
+
+
+@patch("common.services.jira_attachments.config")
+@patch("common.services.jira_attachments.build_jira_client")
+def test_valid_issue_key_reaches_jira(mock_client, mock_config) -> None:
+    mock_config.JIRA_BASE_URL = "https://jira.example.com"
+    issue = MagicMock()
+    issue.fields.attachment = []
+    mock_client.return_value.issue.return_value = issue
+
+    assert download_issue_attachments("PROJ-123") == {}
+    mock_client.return_value.issue.assert_called_once_with("PROJ-123", fields="attachment")
