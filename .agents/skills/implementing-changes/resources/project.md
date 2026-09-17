@@ -19,6 +19,16 @@ uv run pytest --cov=. --cov-report=xml --cov-report=term --cov-precision=2      
 uvx diff-cover coverage.xml --diff-file <run dir>/task.diff --fail-under=80 --show-uncovered  # changed-line coverage
 ```
 
+Tests outside the main checkout (e.g. a baseline in a git worktree) must use the main checkout's synced environment.
+A fresh environment lacks the optional extras (`rag-sync`, `embedding-service`, ...) and fails with
+`ModuleNotFoundError` (e.g. `pymupdf`). Run them from the worktree directory with:
+
+```bash
+UV_PROJECT_ENVIRONMENT=<repository root>/.venv uv run --no-sync pytest --cov=. --cov-report=xml --cov-report=term --cov-precision=2
+```
+
+Never drop `--no-sync`: it would re-sync the main environment to the worktree's lock file.
+
 The smoke suite is not part of the loop: it needs the `docker-compose.smoke.yml` stack and makes billed LLM calls.
 
 ## Left for the user

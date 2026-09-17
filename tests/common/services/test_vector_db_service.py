@@ -2,15 +2,13 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
-import base64
-import contextlib
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 from qdrant_client import models
 
-from common.models import DocumentPagePart, VectorizableBaseModel
+from common.models import VectorizableBaseModel
 from common.services.vector_db_service import VectorDbService
 
 
@@ -42,19 +40,13 @@ def mock_httpx_client():
         def _respond_to_post(url, json=None, headers=None):
             mock_response = MagicMock()
             mock_response.raise_for_status.return_value = None
-            if url.endswith("/embed-page-image"):
-                payload = {"model": "visual-model", "vectors": [[0.3, 0.4] for _ in (json or {}).get("images", [])]}
-            elif url.endswith("/embed-visual-query-text"):
-                payload = {"model": "visual-model", "vectors": [[0.5, 0.6] for _ in (json or {}).get("texts", [])]}
-            else:
-                payload = {
-                    "model": "test-model",
-                    "embeddings": [
-                        {"dense": [0.1, 0.2, 0.3], "sparse": {"indices": [1, 2], "values": [0.5, 0.6]}}
-                        for _ in (json or {}).get("texts", [])
-                    ],
-                }
-            mock_response.json.return_value = payload
+            mock_response.json.return_value = {
+                "model": "test-model",
+                "embeddings": [
+                    {"dense": [0.1, 0.2, 0.3], "sparse": {"indices": [1, 2], "values": [0.5, 0.6]}}
+                    for _ in (json or {}).get("texts", [])
+                ]
+            }
             return mock_response
 
         mock_client.post = AsyncMock(side_effect=_respond_to_post)
@@ -323,197 +315,3 @@ async def test_retrieve_accepts_payload_selector(vector_db_service, mock_qdrant_
     await vector_db_service.retrieve(["1"], with_payload=selector)
 
     assert mock_qdrant_client.retrieve.call_args.kwargs["with_payload"] == selector
-
-
-# --- Visual mode (opt-in, documents collection) -------------------------------------------
-
-
-DOCUMENTS_COLLECTION = "confluence_documents"
-
-
-def _document_part(**overrides) -> DocumentPagePart:
-    fields = {
-        "space_key": "DOC",
-        "page_id": "111",
-        "page_title": "Home",
-        "attachment_id": "att-1",
-        "attachment_name": "guide.pdf",
-        "content_kind": "attachment",
-        "document_name": "guide.pdf",
-        "breadcrumb": "Home > guide.pdf > page 1 of 1",
-        "text": "Home > guide.pdf > page 1 of 1\n\ncontent",
-        "page_number": 1,
-        "page_count": 1,
-        "part_index": 0,
-    }
-    fields.update(overrides)
-    return DocumentPagePart(**fields)
-
-
-def test_default_visual_image_is_none():
-    assert DummyModel(id="1", content="text").get_visual_image() is None
-
-
-@contextlib.contextmanager
-def documents_service(visual_enabled: bool):
-    """A documents-collection service with mocked boundaries and the visual flag set."""
-    with (
-        patch("common.services.vector_db_service.config.QdrantConfig") as mock_config,
-        patch("config.DocumentRagConfig.VISUAL_ENABLED", visual_enabled),
-    ):
-        mock_config.URL = "http://localhost"
-        mock_config.API_KEY = None
-        mock_config.TIMEOUT_SECONDS = 30.0
-        mock_config.EMBEDDING_SERVICE_URL = "http://embedding-service:8080"
-        mock_config.EMBEDDING_SERVICE_TIMEOUT_SECONDS = 60.0
-        mock_config.UPSERT_BATCH_SIZE = 2
-        service = VectorDbService(DOCUMENTS_COLLECTION)
-        metadata_db = VectorDbService("metadata")
-        service._metadata_db = metadata_db
-        metadata_db.client.retrieve.return_value = []
-        yield service, metadata_db
-
-
-def _visual_posts(mock_httpx_client) -> list:
-    return [c for c in mock_httpx_client.post.call_args_list if "visual" in c.args[0]]
-
-
-@pytest.mark.asyncio
-async def test_ensure_collection_visual_adds_visual_vector_and_identity(mock_qdrant_client, mock_httpx_client):
-    _mock_collections_exist(mock_qdrant_client, DOCUMENTS_COLLECTION, exists=False)
-    with documents_service(visual_enabled=True) as (service, metadata_db):
-        await service.ensure_collection()
-
-    vectors_config = mock_qdrant_client.create_collection.call_args.kwargs["vectors_config"]
-    # Text vector size detected from the text probe (3), visual size from the visual probe (2).
-    assert vectors_config["dense"].size == 3
-    assert vectors_config["visual"].size == 2
-    identity_points = [call.kwargs["points"][0] for call in metadata_db.client.upsert.call_args_list]
-    assert {point.id for point in identity_points} == {
-        "model-identity-confluence_documents",
-        "model-identity-visual-confluence_documents",
-    }
-    visual_identity = next(p for p in identity_points if p.id == "model-identity-visual-confluence_documents")
-    assert visual_identity.payload["model"] == "visual-model"
-
-
-@pytest.mark.asyncio
-async def test_ensure_collection_without_visual_stays_dense_and_sparse(mock_qdrant_client, mock_httpx_client):
-    _mock_collections_exist(mock_qdrant_client, DOCUMENTS_COLLECTION, exists=False)
-    with documents_service(visual_enabled=False) as (service, metadata_db):
-        await service.ensure_collection()
-
-    vectors_config = mock_qdrant_client.create_collection.call_args.kwargs["vectors_config"]
-    assert set(vectors_config) == {"dense"}
-    assert _visual_posts(mock_httpx_client) == []
-    assert metadata_db.client.upsert.call_count == 1  # text identity only
-
-
-@pytest.mark.asyncio
-async def test_hybrid_search_visual_adds_third_prefetch(mock_qdrant_client, mock_httpx_client):
-    _mock_collections_exist(mock_qdrant_client, DOCUMENTS_COLLECTION, exists=True)
-    mock_qdrant_client.query_points.return_value = MagicMock(points=[])
-    with documents_service(visual_enabled=True) as (service, metadata_db):
-        await service.hybrid_search("query", limit=6, score_threshold=0.7)
-
-    prefetches = mock_qdrant_client.query_points.call_args.kwargs["prefetch"]
-    assert [prefetch.using for prefetch in prefetches] == ["dense", "sparse", "visual"]
-    # The threshold still applies to the dense branch only.
-    assert prefetches[0].score_threshold == 0.7
-    assert prefetches[1].score_threshold is None
-    assert prefetches[2].score_threshold is None
-    assert prefetches[2].limit == 6
-    assert len(_visual_posts(mock_httpx_client)) == 1
-    # The visual model identity is checked against its own record.
-    retrieved_ids = [call.kwargs["ids"] for call in metadata_db.client.retrieve.call_args_list]
-    assert ["model-identity-visual-confluence_documents"] in retrieved_ids
-
-
-@pytest.mark.asyncio
-async def test_hybrid_search_without_visual_matches_text_only_behaviour(mock_qdrant_client, mock_httpx_client):
-    _mock_collections_exist(mock_qdrant_client, DOCUMENTS_COLLECTION, exists=True)
-    mock_qdrant_client.query_points.return_value = MagicMock(points=[])
-    with documents_service(visual_enabled=False) as (service, metadata_db):
-        await service.hybrid_search("query", limit=6, score_threshold=0.7)
-
-    prefetches = mock_qdrant_client.query_points.call_args.kwargs["prefetch"]
-    assert [prefetch.using for prefetch in prefetches] == ["dense", "sparse"]
-    assert _visual_posts(mock_httpx_client) == []
-    retrieved_ids = [call.kwargs["ids"] for call in metadata_db.client.retrieve.call_args_list]
-    assert retrieved_ids == [["model-identity-confluence_documents"]]
-
-
-@pytest.mark.asyncio
-async def test_upsert_batch_visual_attaches_vectors_to_image_parts_only(mock_qdrant_client, mock_httpx_client):
-    _mock_collections_exist(mock_qdrant_client, DOCUMENTS_COLLECTION, exists=True)
-    with documents_service(visual_enabled=True) as (service, metadata_db):
-        parts = [
-            _document_part(part_index=0, image=base64.b64encode(b"png-bytes").decode("ascii")),
-            _document_part(part_index=1),
-        ]
-        await service.upsert_batch(parts, ensure=False)
-
-    points = mock_qdrant_client.upsert.call_args.kwargs["points"]
-    assert set(points[0].vector.keys()) == {"dense", "sparse", "visual"}
-    assert points[0].vector["visual"] == [0.3, 0.4]
-    assert set(points[1].vector.keys()) == {"dense", "sparse"}
-    # Exactly the part-0 image was sent to the visual endpoint.
-    image_posts = [c for c in mock_httpx_client.post.call_args_list if c.args[0].endswith("/embed-page-image")]
-    assert len(image_posts) == 1
-    assert image_posts[0].kwargs["json"] == {"images": [base64.b64encode(b"png-bytes").decode("ascii")]}
-    identity_ids = [call.kwargs["points"][0].id for call in metadata_db.client.upsert.call_args_list]
-    assert "model-identity-visual-confluence_documents" in identity_ids
-
-
-@pytest.mark.asyncio
-async def test_upsert_batch_visual_mode_without_images_makes_no_visual_calls(mock_qdrant_client, mock_httpx_client):
-    _mock_collections_exist(mock_qdrant_client, DOCUMENTS_COLLECTION, exists=True)
-    with documents_service(visual_enabled=True):
-        service = VectorDbService(DOCUMENTS_COLLECTION)
-        await service.upsert_batch([_document_part(part_index=0)], ensure=False)
-
-    image_posts = [c for c in mock_httpx_client.post.call_args_list if c.args[0].endswith("/embed-page-image")]
-    assert image_posts == []
-
-
-@pytest.mark.asyncio
-async def test_upsert_batch_without_visual_makes_no_visual_calls(mock_qdrant_client, mock_httpx_client):
-    _mock_collections_exist(mock_qdrant_client, DOCUMENTS_COLLECTION, exists=True)
-    with documents_service(visual_enabled=False) as (service, _metadata_db):
-        parts = [
-            _document_part(part_index=0, image=base64.b64encode(b"png-bytes").decode("ascii")),
-            _document_part(part_index=1),
-        ]
-        await service.upsert_batch(parts, ensure=False)
-
-    points = mock_qdrant_client.upsert.call_args.kwargs["points"]
-    assert all(set(point.vector.keys()) == {"dense", "sparse"} for point in points)
-    assert _visual_posts(mock_httpx_client) == []
-    # Matching identity: nothing stored, and no visual identity record in particular.
-    assert not any(
-        call.kwargs["points"][0].id == "model-identity-visual-confluence_documents"
-        for call in mock_qdrant_client.upsert.call_args_list
-    )
-
-
-@pytest.mark.asyncio
-async def test_visual_model_identity_mismatch_refuses(service_with_metadata_db):
-    issues_db, metadata_db = service_with_metadata_db
-    stored = MagicMock()
-    stored.payload = {"model": "old-visual-model"}
-    metadata_db.client.retrieve.return_value = [stored]
-
-    with pytest.raises(RuntimeError, match=r"old-visual-model.*new-visual-model"):
-        await issues_db._verify_model_identity("new-visual-model", visual=True)
-
-
-@pytest.mark.asyncio
-async def test_embed_page_images_batches_by_service_batch_limit(vector_db_service, mock_httpx_client):
-    with patch("common.services.vector_db_service.config.EmbeddingServiceConfig") as mock_embedding_config:
-        mock_embedding_config.MAX_BATCH_SIZE = 1
-        vectors, model = await vector_db_service._embed_page_images([b"a", b"b", b"c"])
-
-    assert vectors == [[0.3, 0.4], [0.3, 0.4], [0.3, 0.4]]
-    assert model == "visual-model"
-    assert mock_httpx_client.post.call_count == 3
-    assert all(call.args[0].endswith("/embed-page-image") for call in mock_httpx_client.post.call_args_list)

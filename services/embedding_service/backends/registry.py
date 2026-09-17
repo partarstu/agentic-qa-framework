@@ -57,10 +57,6 @@ def create_registry(enabled_backends: tuple[str, ...]) -> BackendRegistry:
     """Create the registry from the enabled backend names.
 
     The backend classes are imported lazily here, keeping module import ML-free.
-
-    Raises:
-        ValueError: When a backend name is unknown, or the visual backend is enabled
-            without a configured visual model.
     """
     backends: dict[str, EmbeddingBackend] = {}
     for name in enabled_backends:
@@ -68,14 +64,6 @@ def create_registry(enabled_backends: tuple[str, ...]) -> BackendRegistry:
             from embedding_service.backends.text_backend import BgeM3TextBackend
 
             backends[name] = BgeM3TextBackend()
-        elif name == "visual":
-            import config
-
-            if not config.EmbeddingServiceConfig.VISUAL_MODEL_NAME:
-                raise ValueError("Backend 'visual' requires EMBEDDING_VISUAL_MODEL to be set.")
-            from embedding_service.backends.visual_backend import BgeVlVisualBackend
-
-            backends[name] = BgeVlVisualBackend()
         else:
-            raise ValueError(f"Unknown embedding backend: '{name}'. Known backends: text, visual.")
+            raise ValueError(f"Unknown embedding backend: '{name}'. Known backends: text.")
     return BackendRegistry(backends)

@@ -71,6 +71,15 @@ uv run --no-project <skill dir>/scripts/task_diff.py <run dir> <tree ID>   # wri
 3. Create the run directory, take the baseline snapshot and record its tree ID.
 4. Spawn a tester in `BASELINE` mode. Record the total coverage and the tests that already fail.
 
+When the change already exists as uncommitted work (e.g. a previous session implemented it), the working tree is not
+the "before" state:
+
+- Use `git rev-parse HEAD^{tree}` as the baseline tree ID, so the diff covers the existing work.
+- Run the baseline tester in a detached worktree at `HEAD` inside the run directory
+  (`git worktree add --detach <run dir>/baseline-worktree HEAD`), with the environment rule from
+  `resources/project.md`. Remove the worktree (`git worktree remove`) after the final report.
+- Skip step 2 and start with the review loop.
+
 ## 2. Implement
 
 Spawn the implementer in `IMPLEMENT` mode with the plan. Continue when it returns `DONE`.

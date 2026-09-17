@@ -21,16 +21,40 @@ from common.services.jira_client import build_jira_client
 logger = utils.get_logger("jira_attachments")
 
 
-def _download(attachment) -> bytes:
-    """Downloads one attachment's content with basic auth.
+def _origin(url: str) -> tuple[str, str, int | None]:
+    """Scheme, host and port of a URL as the HTTP client parses them.
 
-    Jira Cloud returns the attachment's ``content`` field as an absolute URL, so it
-    is used as-is; a relative path (seen on Data Center setups) resolves against the
-    base URL.
+    httpx lower-cases scheme and host and reports a scheme's default port as None, so
+    ``https://host`` and ``https://host:443`` share an origin.
+
+    Raises:
+        httpx.InvalidURL: When the client would refuse the URL (e.g. a control character).
+        UnicodeError: When the host is invalid IDNA/punycode or the URL holds a lone surrogate.
     """
-    content_url = attachment.content
-    if not content_url.startswith(("http://", "https://")):
-        content_url = f"{config.JIRA_BASE_URL}{content_url}"
+    parsed = httpx.URL(url)
+    return parsed.scheme, parsed.host, parsed.port
+
+
+def _resolve_content_url(content: str) -> str | None:
+    """Resolves an attachment's ``content`` field to the URL to download, or None when it is untrusted.
+
+    Jira Cloud returns an absolute URL; a relative path (seen on Data Center setups) is
+    appended to the base URL. Either way the resulting URL is used only when its scheme,
+    host and port match the configured base URL, so the credentials never reach another
+    origin (a crafted relative path such as ``@other-host/...`` changes the host too).
+    The check parses URLs with httpx, the client that sends the request, so both agree.
+    """
+    try:
+        url = content if httpx.URL(content).scheme else f"{config.JIRA_BASE_URL}{content}"
+        is_same_origin = _origin(url) == _origin(config.JIRA_BASE_URL)
+    except (httpx.InvalidURL, UnicodeError):
+        # URLs the client would refuse are untrusted as well.
+        return None
+    return url if is_same_origin else None
+
+
+def _download(content_url: str) -> bytes:
+    """Downloads one attachment's content with basic auth."""
     response = httpx.get(
         content_url,
         auth=(config.JIRA_USER, config.JIRA_TOKEN),
@@ -57,7 +81,11 @@ def download_issue_attachments(issue_key: str) -> dict[str, BinaryContent]:
         if should_skip_attachment(filename):
             logger.info("Skipping attachment '%s' due to skip postfix.", filename)
             continue
-        content = _download(attachment)
+        content_url = _resolve_content_url(attachment.content)
+        if content_url is None:
+            logger.warning("Skipping attachment '%s' - its content URL is not on the configured Jira origin.", filename)
+            continue
+        content = _download(content_url)
         binary = as_text_equivalent(BinaryContent(data=content, media_type=attachment.mimeType, identifier=filename))
         if not is_supported_mime_type(binary.media_type):
             logger.info("Skipping attachment '%s' - unsupported MIME type: %s", filename, attachment.mimeType)

@@ -581,10 +581,94 @@
       "unique-id": "rel-requirements-review-jira",
       "description": "Requirements Review Agent downloads the reviewed issue's attachments over the Jira REST API.",
       "protocol": "HTTPS",
+      "controls": {
+        "jira-credential-origin-scope": {
+          "description": "Jira credentials are sent only to attachment URLs whose scheme, host and port match JIRA_URL; attachments on another origin are skipped.",
+          "requirements": [
+            {
+              "requirement-url": "https://quaia.finos.calm/controls/credential-scope.requirement.json",
+              "config": {
+                "control-id": "quaia-jira-credential-origin-scope-requirements-review",
+                "name": "Jira Credential Origin Scope",
+                "description": "The attachment downloader sends Jira basic auth only to the configured Jira origin.",
+                "allowed-origin": "JIRA_URL",
+                "on-mismatch": "skip",
+                "enforced": true
+              }
+            }
+          ]
+        }
+      },
       "relationship-type": {
         "connects": {
           "source": {
             "node": "requirements-review-agent"
+          },
+          "destination": {
+            "node": "jira"
+          }
+        }
+      }
+    },
+    {
+      "unique-id": "rel-test-case-generation-jira",
+      "description": "Test Case Generation Agent downloads the processed issue's attachments over the Jira REST API.",
+      "protocol": "HTTPS",
+      "controls": {
+        "jira-credential-origin-scope": {
+          "description": "Jira credentials are sent only to attachment URLs whose scheme, host and port match JIRA_URL; attachments on another origin are skipped.",
+          "requirements": [
+            {
+              "requirement-url": "https://quaia.finos.calm/controls/credential-scope.requirement.json",
+              "config": {
+                "control-id": "quaia-jira-credential-origin-scope-test-case-generation",
+                "name": "Jira Credential Origin Scope",
+                "description": "The attachment downloader sends Jira basic auth only to the configured Jira origin.",
+                "allowed-origin": "JIRA_URL",
+                "on-mismatch": "skip",
+                "enforced": true
+              }
+            }
+          ]
+        }
+      },
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "test-case-generation-agent"
+          },
+          "destination": {
+            "node": "jira"
+          }
+        }
+      }
+    },
+    {
+      "unique-id": "rel-test-case-review-jira",
+      "description": "Test Case Review Agent downloads the processed issue's attachments over the Jira REST API.",
+      "protocol": "HTTPS",
+      "controls": {
+        "jira-credential-origin-scope": {
+          "description": "Jira credentials are sent only to attachment URLs whose scheme, host and port match JIRA_URL; attachments on another origin are skipped.",
+          "requirements": [
+            {
+              "requirement-url": "https://quaia.finos.calm/controls/credential-scope.requirement.json",
+              "config": {
+                "control-id": "quaia-jira-credential-origin-scope-test-case-review",
+                "name": "Jira Credential Origin Scope",
+                "description": "The attachment downloader sends Jira basic auth only to the configured Jira origin.",
+                "allowed-origin": "JIRA_URL",
+                "on-mismatch": "skip",
+                "enforced": true
+              }
+            }
+          ]
+        }
+      },
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "test-case-review-agent"
           },
           "destination": {
             "node": "jira"

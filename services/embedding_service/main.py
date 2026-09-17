@@ -3,8 +3,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 
 import asyncio
-import base64
-import binascii
 import hmac
 import os
 import sys
@@ -82,17 +80,6 @@ class TextEmbeddingResponse(BaseModel):
 
 class TextEmbeddingsResponse(BaseModel):
     embeddings: list[TextEmbeddingResponse]
-    model: str
-
-
-class ImageEmbeddingRequest(BaseModel):
-    """Batch of page images as base64-encoded PNGs."""
-
-    images: list[str] = Field(min_length=1)
-
-
-class VisualEmbeddingsResponse(BaseModel):
-    vectors: list[list[float]]
     model: str
 
 
@@ -178,70 +165,6 @@ async def embed_query_texts(
     """Embed query texts, applying the model's query instruction when it has one."""
     embeddings, model = await _embed_texts(request.texts, query=True)
     return _to_response(embeddings, model)
-
-
-def _decode_images(images: list[str]) -> list[bytes]:
-    """Decodes base64 PNGs, rejecting oversized or malformed input before decoding.
-
-    Standard base64 grows 3 bytes to 4 characters, so the encoded length is capped at
-    the counterpart of the decoded byte limit before anything is decoded.
-    """
-    max_batch = config.EmbeddingServiceConfig.MAX_BATCH_SIZE
-    max_bytes = config.EmbeddingServiceConfig.MAX_IMAGE_BYTES
-    if len(images) > max_batch:
-        raise HTTPException(status_code=422, detail=f"Batch of {len(images)} exceeds the limit of {max_batch} images.")
-    max_chars = 4 * ((max_bytes + 2) // 3)
-    decoded = []
-    for index, data in enumerate(images):
-        if len(data) > max_chars:
-            raise HTTPException(
-                status_code=422,
-                detail=f"Image at index {index} exceeds the limit of {max_bytes} bytes.",
-            )
-        try:
-            decoded.append(base64.b64decode(data, validate=True))
-        except binascii.Error as exc:
-            raise HTTPException(
-                status_code=422, detail=f"Image at index {index} is not valid base64."
-            ) from exc
-    return decoded
-
-
-async def _get_visual_backend():
-    """Loads the visual backend (awaiting warm-up), or answers 404 when it is disabled."""
-    if not _registry.is_enabled("visual"):
-        raise HTTPException(status_code=404, detail="Backend 'visual' is not enabled.")
-    return await _registry.get_loaded("visual")
-
-
-@app.post("/embed-page-image", response_model=VisualEmbeddingsResponse)
-async def embed_page_images(
-    request: ImageEmbeddingRequest, _: None = Depends(_require_service_auth)
-) -> VisualEmbeddingsResponse:
-    """Embed page images (base64 PNGs); returns one dense visual vector per image."""
-    images = _decode_images(request.images)
-    backend = await _get_visual_backend()
-    model = backend.model_name()
-    # Imported here, not at module level, to keep the service import free of image/ML libraries.
-    from PIL import UnidentifiedImageError
-
-    try:
-        vectors = await asyncio.to_thread(backend.embed_page_images, images)
-    except UnidentifiedImageError as exc:
-        raise HTTPException(status_code=422, detail="Request contains data that is not a valid image.") from exc
-    return VisualEmbeddingsResponse(vectors=vectors, model=model)
-
-
-@app.post("/embed-visual-query-text", response_model=VisualEmbeddingsResponse)
-async def embed_visual_query_texts(
-    request: TextEmbeddingRequest, _: None = Depends(_require_service_auth)
-) -> VisualEmbeddingsResponse:
-    """Embed visual query texts into the page-image vector space."""
-    _validate_texts(request.texts)
-    backend = await _get_visual_backend()
-    model = backend.model_name()
-    vectors = await asyncio.to_thread(backend.embed_visual_query_texts, request.texts)
-    return VisualEmbeddingsResponse(vectors=vectors, model=model)
 
 
 if __name__ == "__main__":

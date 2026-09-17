@@ -43,6 +43,9 @@
         { "contains": { "properties": { "unique-id": { "const": "rel-orchestrator-rag-sync-job" }, "controls": { "required": ["job-invocation-iam"] } }, "required": ["controls"] } },
         { "contains": { "properties": { "unique-id": { "const": "rel-rag-sync-job-qdrant" }, "controls": { "required": ["vector-db-api-key"] } }, "required": ["controls"] } },
         { "contains": { "properties": { "unique-id": { "const": "rel-rag-sync-job-jira" } }, "required": ["unique-id"] } },
+        { "contains": { "properties": { "unique-id": { "const": "rel-requirements-review-jira" }, "controls": { "required": ["jira-credential-origin-scope"] } }, "required": ["controls"] } },
+        { "contains": { "properties": { "unique-id": { "const": "rel-test-case-generation-jira" }, "controls": { "required": ["jira-credential-origin-scope"] } }, "required": ["controls"] } },
+        { "contains": { "properties": { "unique-id": { "const": "rel-test-case-review-jira" }, "controls": { "required": ["jira-credential-origin-scope"] } }, "required": ["controls"] } },
         { "contains": { "properties": { "unique-id": { "const": "rel-rag-sync-job-confluence" } }, "required": ["unique-id"] } },
         { "contains": { "properties": { "unique-id": { "const": "rel-rag-sync-job-embedding" }, "controls": { "required": ["internal-service-api-key"] } }, "required": ["controls"] } },
         { "contains": { "properties": { "unique-id": { "const": "rel-deployed-in-cloud-run" } }, "required": ["unique-id"] } }

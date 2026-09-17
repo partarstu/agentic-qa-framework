@@ -51,11 +51,3 @@ class EmbeddingBackend:
     def embed_query_texts(self, texts: list[str]) -> list[TextEmbedding]:
         """Embed query texts, applying the model's query instruction when it has one."""
         raise NotImplementedError
-
-    def embed_page_images(self, images: list[bytes]) -> list[list[float]]:
-        """Embed page images (PNG bytes), one dense vector per image (visual backend)."""
-        raise NotImplementedError
-
-    def embed_visual_query_texts(self, texts: list[str]) -> list[list[float]]:
-        """Embed visual query texts into the page-image vector space (visual backend)."""
-        raise NotImplementedError

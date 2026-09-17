@@ -146,9 +146,6 @@ services:
       CONFLUENCE_API_TOKEN: "smoke-token"
       QDRANT_URL: "http://qdrant_mock:6333"
       EMBEDDING_SERVICE_URL: "http://qdrant_mock:6333"
-      # WS6, opt-in visual mode: the sync embeds attachment page images into the
-      # documents collection's 'visual' vector through the embedding stand-in.
-      EMBEDDING_VISUAL_ENABLED: "true"
     depends_on: *sync-dependencies
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8085/health')"]
@@ -171,9 +168,6 @@ services:
       # concurrently running Confluence sync ingests into the mocked vector DB.
       QDRANT_URL: "http://qdrant_mock:6333"
       EMBEDDING_SERVICE_URL: "http://qdrant_mock:6333"
-      # WS6, opt-in visual mode: the review's documents hybrid query adds the third
-      # visual prefetch, embedding the query through the stand-in's visual endpoint.
-      EMBEDDING_VISUAL_ENABLED: "true"
     volumes:
       - ./tests/smoke/overrides:/prompt-overrides:ro
     depends_on:
