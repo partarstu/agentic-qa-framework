@@ -192,11 +192,10 @@ async def test_a_cancelled_task_does_not_retry(fresh_session_factory):
 
 
 @pytest.mark.asyncio
-async def test_a_fresh_session_set_up_timeout_surfaces_as_a_clear_error(
-    fresh_session_factory, monkeypatch
-):
+async def test_a_fresh_session_set_up_timeout_surfaces_as_a_clear_error(fresh_session_factory, monkeypatch):
     server = _wrapped_server(anyio.ClosedResourceError())
     fresh = fresh_session_factory("tool result")
+
     async def slow_enter(*_):
         await anyio.sleep(10)
 
@@ -216,6 +215,7 @@ async def test_a_fresh_session_tear_down_timeout_is_logged_but_never_masks_the_r
 ):
     server = _wrapped_server(anyio.ClosedResourceError())
     fresh = fresh_session_factory("tool result")
+
     async def slow_exit(*_):
         await anyio.sleep(10)
 
@@ -240,8 +240,6 @@ async def test_a_fresh_session_tear_down_timeout_is_logged_but_never_masks_the_r
     ],
     ids=["unannotated_write", "unannotated_create", "annotated_as_a_write"],
 )
-
-
 async def test_a_write_is_not_repeated_after_the_failure(tool, fresh_session_factory):
     """Jira may already have applied the write, so repeating it would duplicate it."""
     server = _wrapped_server(anyio.ClosedResourceError(), "second call result")
@@ -305,6 +303,7 @@ async def test_closing_a_toolset_whose_session_never_started_does_not_raise():
     assert await toolset.__aexit__(None, None, None) is None
     server.__aexit__.assert_not_awaited()
 
+
 def test_each_factory_call_builds_a_separate_session():
     first, second = build_atlassian_mcp_server_toolset(), build_atlassian_mcp_server_toolset()
 
@@ -351,3 +350,9 @@ def test_factory_reads_the_atlassian_server_url(monkeypatch):
     monkeypatch.setattr(config, "ATLASSIAN_MCP_SERVER_URL", "http://atlassian-mcp:9000/sse")
     server = build_atlassian_mcp_server()
     assert urlparse(server.url).netloc == "atlassian-mcp:9000"
+
+
+def test_factory_applies_the_client_timeout_to_connecting_and_reading(monkeypatch):
+    monkeypatch.setattr(config, "MCP_SERVER_TIMEOUT_SECONDS", 45)
+    server = build_atlassian_mcp_server()
+    assert (server.timeout, server.read_timeout) == (45, 45)

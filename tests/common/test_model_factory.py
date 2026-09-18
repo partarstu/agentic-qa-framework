@@ -140,6 +140,30 @@ def test_retry_transport_retries_retryable_status_and_logs_the_attempt(caplog, m
     assert "retrying in" in retry_line.message
 
 
+def test_anthropic_retry_logs_the_http_status_of_an_httpx2_error(caplog, monkeypatch):
+    """The Anthropic client speaks httpx2, whose status error is not httpx's: the reason must still be the status."""
+    import asyncio
+
+    import httpx2
+
+    monkeypatch.setattr(config.RetryConfig, "RETRY_BASE_DELAY_SECONDS", 0.01)
+    client = build_model("anthropic:claude-sonnet-5").client._client
+    calls = []
+
+    class _StubTransport(httpx2.AsyncBaseTransport):
+        async def handle_async_request(self, request):
+            calls.append(request)
+            return httpx2.Response(429) if len(calls) == 1 else httpx2.Response(200)
+
+    client._transport.wrapped = _StubTransport()
+
+    with caplog.at_level(logging.WARNING, logger="model_factory"):
+        response = asyncio.run(client.get("http://model.test/complete"))
+
+    assert response.status_code == 200
+    assert any("reason: HTTP 429" in record.message for record in caplog.records)
+
+
 def test_retry_transport_propagates_client_errors_untouched():
     import asyncio
 

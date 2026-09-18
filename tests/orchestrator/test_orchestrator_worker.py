@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from a2a.types import TaskState
+from fastapi import HTTPException
 
 from common.models import TestCase, TestExecutionResult
 from orchestrator.main import (
@@ -16,7 +17,11 @@ from orchestrator.main import (
     _agent_worker,
     _execute_single_test,
     _execute_test_group,
+    _generate_test_report,
+    _request_incident_creation_for_failed_tests,
+    _send_task_to_agent_with_message,
 )
+from orchestrator.models import TaskStatus
 from tests.orchestrator.conftest import agent_card
 
 
@@ -260,3 +265,174 @@ async def test_execute_test_group_spawns_one_worker_per_test_case(mock_registry)
 
     assert started_agent_ids == ["a-1", "a-2"]
     assert seen_pools == [all_agent_ids, all_agent_ids]
+
+
+@pytest.mark.asyncio
+async def test_execute_test_group_reports_unexecuted_cases_when_every_worker_exits(mock_registry):
+    """WS15: once no worker is left, the group finishes and reports the queued cases as errors instead of hanging."""
+    mock_registry.contains = AsyncMock(return_value=True)
+
+    async def _exit_at_once(agent_id, queue, results, pool_agent_ids):
+        """Stand-in for a worker whose agent broke before it took any test case."""
+
+    with patch("orchestrator.main._agent_worker", _exit_at_once):
+        results = await asyncio.wait_for(
+            _execute_test_group("UI", [_test_case("TC-1"), _test_case("TC-2")], ["a-1"]), timeout=5
+        )
+
+    assert [(r.testCaseKey, r.testExecutionStatus) for r in results] == [("TC-1", "error"), ("TC-2", "error")]
+    assert all("no execution agent remained available" in r.generalErrorMessage for r in results)
+
+
+@pytest.mark.asyncio
+async def test_agent_worker_records_and_reraises_cancellation(mock_registry, mock_queue):
+    mock_queue.get.side_effect = [(_test_case(), "UI")]
+
+    with (
+        patch("orchestrator.main._execute_single_test", new_callable=AsyncMock, side_effect=asyncio.CancelledError),
+        patch("orchestrator.main._record_error") as mock_record_error,
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await _agent_worker("agent-1", mock_queue, [], ["agent-1"])
+
+    mock_record_error.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_execute_single_test_keeps_the_status_of_an_http_exception(mock_registry):
+    """The manual reservation's 409 must reach the caller instead of being turned into a 500."""
+    with (
+        patch(
+            "orchestrator.main._send_task_to_agent",
+            new_callable=AsyncMock,
+            side_effect=HTTPException(status_code=409, detail="Execution agent is busy."),
+        ),
+        pytest.raises(HTTPException) as raised,
+    ):
+        await _execute_single_test("agent-1", _test_case(), "manual", selected_agent_id="agent-1")
+
+    assert raised.value.status_code == 409
+
+
+@pytest.mark.parametrize(
+    ("status", "expected_code"),
+    [(None, 404), (AgentStatus.BUSY, 409), (AgentStatus.BROKEN, 503)],
+    ids=["unknown", "busy", "broken"],
+)
+@pytest.mark.asyncio
+async def test_manual_reservation_rejects_an_unusable_agent(mock_registry, status, expected_code):
+    mock_registry.get_card = AsyncMock(return_value=None if status is None else agent_card())
+    mock_registry.get_status = AsyncMock(return_value=status)
+    mock_registry.update_status = AsyncMock()
+
+    with pytest.raises(HTTPException) as raised:
+        await _send_task_to_agent_with_message(MagicMock(), "manual run", selected_agent_id="agent-1")
+
+    assert raised.value.status_code == expected_code
+    mock_registry.update_status.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_send_task_cancellation_releases_the_agent_for_recovery_and_reraises(mock_registry):
+    mock_registry.update_status = AsyncMock()
+    mock_registry.set_current_task = AsyncMock()
+
+    with (
+        patch(
+            "orchestrator.main.reserve_agent_waiting_if_needed",
+            new_callable=AsyncMock,
+            return_value=("agent-1", agent_card()),
+        ),
+        patch("orchestrator.main.task_history") as mock_history,
+        patch("orchestrator.main.create_client", new_callable=AsyncMock, side_effect=asyncio.CancelledError),
+        patch("orchestrator.main._finalize_task", new_callable=AsyncMock) as mock_finalize,
+        patch("orchestrator.main.cancellation_queue") as mock_cancellation_queue,
+        patch("orchestrator.main._record_error") as mock_record_error,
+        pytest.raises(asyncio.CancelledError),
+    ):
+        mock_history.add = AsyncMock()
+        mock_cancellation_queue.put = AsyncMock()
+        await _send_task_to_agent_with_message(MagicMock(), "some task")
+
+    assert mock_finalize.await_args.args[2] == TaskStatus.CANCELLED
+    mock_registry.update_status.assert_awaited_with("agent-1", AgentStatus.BROKEN, BrokenReason.TASK_STUCK, None)
+    assert mock_cancellation_queue.put.await_args.args[0][0] == "agent-1"
+    mock_record_error.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_incident_fan_out_records_and_reraises_cancellation():
+    failed = TestExecutionResult(
+        stepResults=[],
+        testCaseKey="TC-1",
+        testCaseName="Name",
+        testExecutionStatus="failed",
+        generalErrorMessage="boom",
+        start_timestamp="now",
+        end_timestamp="then",
+        system_description="Linux",
+        test_case=_test_case(),
+    )
+    with (
+        patch("orchestrator.main._request_incident_creation", new_callable=AsyncMock, side_effect=asyncio.CancelledError),
+        patch("orchestrator.main._record_error") as mock_record_error,
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await _request_incident_creation_for_failed_tests([failed], "PROJ")
+
+    mock_record_error.assert_called_once()
+
+
+class TestGenerateTestReport:
+    """WS15: the upload and the HTML report are independent, tolerated steps."""
+
+    @pytest.fixture
+    def reporting_client(self):
+        with patch("orchestrator.main.get_test_reporting_client") as factory:
+            yield factory.return_value
+
+    @pytest.mark.asyncio
+    async def test_a_clean_run_reports_no_failure(self, reporting_client):
+        client = MagicMock()
+        client.create_test_plan.return_value = "CYCLE-1"
+
+        failures = await _generate_test_report(["result"], "PROJ", client)
+
+        assert failures == []
+        client.create_test_execution.assert_called_once_with(["result"], "PROJ", "CYCLE-1")
+        reporting_client.generate_report.assert_called_once_with(["result"])
+
+    @pytest.mark.asyncio
+    async def test_a_failed_upload_still_generates_the_report(self, reporting_client):
+        client = MagicMock()
+        client.create_test_plan.side_effect = RuntimeError("TMS down")
+
+        with patch("orchestrator.main._record_error") as mock_record_error:
+            failures = await _generate_test_report(["result"], "PROJ", client)
+
+        assert len(failures) == 1 and "TMS down" in failures[0]
+        mock_record_error.assert_called_once_with(failures[0])
+        reporting_client.generate_report.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_a_missing_test_plan_skips_only_the_upload(self, reporting_client):
+        client = MagicMock()
+        client.create_test_plan.return_value = None
+
+        with patch("orchestrator.main._record_error"):
+            failures = await _generate_test_report(["result"], "PROJ", client)
+
+        assert failures == ["No test plan was created; the upload of the test execution results was skipped."]
+        client.create_test_execution.assert_not_called()
+        reporting_client.generate_report.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_a_failed_report_is_tolerated(self, reporting_client):
+        client = MagicMock()
+        client.create_test_plan.return_value = "CYCLE-1"
+        reporting_client.generate_report.side_effect = RuntimeError("allure crashed")
+
+        with patch("orchestrator.main._record_error"):
+            failures = await _generate_test_report(["result"], "PROJ", client)
+
+        assert len(failures) == 1 and "allure crashed" in failures[0]

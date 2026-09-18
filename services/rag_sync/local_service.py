@@ -86,7 +86,7 @@ async def sync_jira(request: JiraSyncRequest, _: None = Depends(_require_service
     return {"message": "Jira sync completed.", "details": result.model_dump()}
 
 
-@app.post("/sync/test-cases")
+@app.post("/sync/test_cases")
 async def sync_test_cases(request: JiraSyncRequest, _: None = Depends(_require_service_auth)):
     """Runs the test-case full resync inline and returns the result (WS17)."""
     from rag_sync.outcome_reporting import report_terminal_outcome

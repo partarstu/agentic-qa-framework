@@ -24,7 +24,7 @@ ROOT_FOLDER_ID = "root-folder"
 DOCS_FOLDER_ID = "docs-folder"
 PDF_FILE_ID = "file-pdf"
 PDF_FILE_NAME = "password-reset-policy.pdf"
-DELTA_LINK = f"https://graph.microsoft.com/v1.0/drives/{DRIVE_ID}/root/delta?token=smoke-delta-1"
+DELTA_LINK = f"http://sharepoint_mock:8097/drives/{DRIVE_ID}/root/delta?token=smoke-delta-1"
 
 # The same tiny valid PDF the Confluence mock ships.
 _PDF_BYTES = base64.b64decode(
@@ -45,7 +45,7 @@ def _pdf_file() -> dict:
         "name": PDF_FILE_NAME,
         "file": {"mimeType": "application/pdf"},
         "size": len(_PDF_BYTES),
-        "ctag": f"c:{{{PDF_FILE_ID}}},1",
+        "cTag": f"c:{{{PDF_FILE_ID}}},1",
         "eTag": f'"{{{PDF_FILE_ID}}},1"',
         "parentReference": {"id": DOCS_FOLDER_ID, "driveId": DRIVE_ID},
     }

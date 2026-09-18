@@ -55,6 +55,10 @@ x-sync-dependencies: &sync-dependencies
     condition: service_healthy
   confluence_mock:
     condition: service_healthy
+  sharepoint_mock:
+    condition: service_healthy
+  zephyr_mock:
+    condition: service_healthy
 
 services:
   # The four recording mocks share one image; only jira_mcp_mock builds it, the
@@ -149,6 +153,11 @@ services:
       SHAREPOINT_CLIENT_ID: "smoke-client"
       SHAREPOINT_CLIENT_SECRET: "smoke-secret"
       SHAREPOINT_AUTHORITY_URL: "http://sharepoint_mock:8097"
+      SHAREPOINT_GRAPH_BASE_URL: "http://sharepoint_mock:8097"
+      # WS17: the test-case sync lists the project's test cases from the test management system.
+      TEST_MANAGEMENT_SYSTEM: "zephyr"
+      ZEPHYR_BASE_URL: "http://zephyr_mock:8090"
+      ZEPHYR_API_TOKEN: "smoke-token"
       QDRANT_URL: "http://qdrant_mock:6333"
       EMBEDDING_SERVICE_URL: "http://qdrant_mock:6333"
     depends_on: *sync-dependencies
@@ -159,14 +168,14 @@ services:
       retries: 12
       start_period: 5s
 
-  # WS18: Microsoft Graph recording mock for the SharePoint ingestion. Shares the
-  # mocks image; the rag_sync_local build creates it.
+  # WS18: Microsoft Graph recording mock (Entra token endpoint included) for the
+  # SharePoint ingestion. Shares the mocks image jira_mcp_mock builds.
   sharepoint_mock:
-    image: agentic-qa-mocks:latest
-    build:
-      context: tests/smoke
-      dockerfile: Dockerfile
+    image: smoke-mocks:latest
+    pull_policy: never
     command: ["uvicorn", "mocks.sharepoint_mock:app", "--host", "0.0.0.0", "--port", "8097"]
+    ports:
+      - "8097:8097"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8097/__recorded')"]
       interval: 5s

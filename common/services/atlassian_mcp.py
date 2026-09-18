@@ -160,8 +160,7 @@ class SelfHealingAtlassianToolset(WrapperToolset[AgentDepsT]):
                     await fresh.__aenter__()
             except TimeoutError:
                 raise TimeoutError(
-                    f"Atlassian MCP session set-up for {operation} did not complete within "
-                    f"{timeout_seconds}s."
+                    f"Atlassian MCP session set-up for {operation} did not complete within {timeout_seconds}s."
                 )
             return await run(fresh)
         finally:
@@ -174,7 +173,11 @@ class SelfHealingAtlassianToolset(WrapperToolset[AgentDepsT]):
 
 def build_atlassian_mcp_server() -> MCPServerStreamableHTTP:
     """Create a fresh, not yet connected Atlassian MCP server client."""
-    return MCPServerStreamableHTTP(url=config.ATLASSIAN_MCP_SERVER_URL, timeout=config.MCP_SERVER_TIMEOUT_SECONDS)
+    return MCPServerStreamableHTTP(
+        url=config.ATLASSIAN_MCP_SERVER_URL,
+        timeout=config.MCP_SERVER_TIMEOUT_SECONDS,
+        read_timeout=config.MCP_SERVER_TIMEOUT_SECONDS,
+    )
 
 
 def build_atlassian_mcp_server_toolset(allowed_tools: Iterable[str] | None = None) -> AbstractToolset:

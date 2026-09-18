@@ -55,9 +55,9 @@ async def _run(args: argparse.Namespace) -> int:
             raise
         await report_terminal_outcome("sharepoint", args.drive_id, result=result)
         print(f"SharePoint sync completed: {result.model_dump()}")
-        return 0
+        return 0 if result.status == "completed" else 2
 
-    if args.source == "test-cases":
+    if args.source == "test_cases":
         from rag_sync.test_case_sync import TestCaseRagSyncRunner
 
         try:
@@ -101,7 +101,7 @@ def main() -> int:
     sharepoint_parser.add_argument("--lock-token", help="Holder token issued by the orchestrator, if any.")
 
     test_cases_parser = subparsers.add_parser(
-        "test-cases", help="Full-resync the test cases of a project into the RAG vector DB."
+        "test_cases", help="Full-resync the test cases of a project into the RAG vector DB."
     )
     test_cases_parser.add_argument("--project-key", required=True, help="The Jira project key to synchronize.")
     test_cases_parser.add_argument("--lock-token", help="Holder token issued by the orchestrator, if any.")

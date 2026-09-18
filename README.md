@@ -316,6 +316,8 @@ LOGIN_RATE_LIMIT_TRUSTED_PROXY_HOPS=0 # How many X-Forwarded-For entries from th
 SHAREPOINT_TENANT_ID= # Entra tenant ID for SharePoint app-only access (Sites.Selected permission recommended).
 SHAREPOINT_CLIENT_ID= # Entra app registration client ID.
 SHAREPOINT_CLIENT_SECRET= # Entra app registration client secret. Store in a secret manager, never in the repo.
+SHAREPOINT_AUTHORITY_URL=https://login.microsoftonline.com # Default. Entra authority serving the client-credentials token request.
+SHAREPOINT_GRAPH_BASE_URL=https://graph.microsoft.com/v1.0 # Default. Microsoft Graph base URL (the smoke stack points both at its mock).
 QDRANT_SHAREPOINT_COLLECTION_NAME=sharepoint_documents # Per-source SharePoint document collection.
 
 ### RAG sync outcomes
@@ -504,7 +506,14 @@ To run the Jira MCP server, you will need Docker installed.
    ```bash
    scripts/start_qdrant.bat
    ```
-   This script will start Qdrant in a Docker container on port 6333.
+   This script starts Qdrant in a Docker container on port 6333, published on `127.0.0.1` only, and waits until it is
+   ready. The image tag matches the deployed Qdrant (`_QDRANT_IMAGE_TAG` in `cloudbuild.yaml`; override it with
+   `QDRANT_IMAGE_TAG`), and the data persists in the `qdrant_data` volume. Local runs always use this instance: set
+   `QDRANT_URL=http://localhost:6333` and leave `QDRANT_API_KEY` empty in your `.env`. Never point a local run at the
+   deployed Qdrant: local syncs, tests and experiments would write into production collections. A container created by
+   an older version of the script keeps its old image and port binding; recreate it with `docker rm -f qdrant` (the
+   data stays in the volume). Stop it (`docker stop qdrant`) before running the smoke suite, whose Qdrant mock uses the
+   same port.
 
 2. **Start the Embedding Service (optional):**
    If you want to use a dedicated embedding service instead of loading the model in each agent:
@@ -937,14 +946,17 @@ You can trigger the execution of automated tests for a specific project.
       "project_key": "SCRUM"
   }
   ```
-  The results will be reported back to Zephyr and an Allure report will be generated.
+  The results will be reported back to Zephyr and an Allure report will be generated. Uploading the results and
+  generating the report are independent steps: a failure of either is recorded as a dashboard error and listed in the
+  response's `reporting_failures` instead of failing the run (a missing test plan skips only the upload). Test cases
+  left queued after every execution agent of their group has gone are returned as `error` results.
 
 * **Execute a single test case manually:**
   Send a POST request to `/execute-test` with the `test_case_key`, the `agent_id` of an
   explicitly chosen unattended execution agent and the `project_key`. The agent is reserved
   directly (404 unknown, 409 busy, 503 broken) with no LLM routing; the result is uploaded to
   the test management system and the report is regenerated. A manual run never creates
-  incidents.
+  incidents. The response is the structured execution result plus its `reporting_failures`.
   ```json
   {"test_case_key": "SCRUM-42", "agent_id": "ui-execution-agent", "project_key": "SCRUM"}
   ```
@@ -1035,7 +1047,7 @@ lock TTL.
   Send a POST request to `/update-sharepoint-db` with a JSON payload containing the
   `drive_id`, and optionally a `folder_path` (restricting the sync to that folder's
   descendants) and an `attachment_name_pattern` (case-insensitive regex). Access is
-  app-only through Microsoft Entra (client-credentials via MSAL; the least-privilege
+  app-only through Microsoft Entra (a client-credentials token request; the least-privilege
   setup grants `Sites.Selected` per site). Change detection uses delta enumeration on
   the drive root: a drive-scoped run resumes from the stored delta link, a folder-scoped
   run performs a full enumeration filtered to the folder and never advances the drive's
@@ -1051,11 +1063,12 @@ Cloud Run Job invokes:
 ```bash
 python -m services.rag_sync.cli jira --project-key SCRUM
 python -m services.rag_sync.cli confluence --space-key DEV
-python -m services.rag_sync.cli test-cases --project-key SCRUM
+python -m services.rag_sync.cli test_cases --project-key SCRUM
 python -m services.rag_sync.cli sharepoint --drive-id b!abc123 --folder-path Specs
 ```
 
-The exit code reflects the outcome: `0` for a clean run, `2` for a Confluence run that completed with errors, `3` when
+The exit code reflects the outcome: `0` for a clean run, `2` for a Confluence or SharePoint run that completed with
+errors (a failing file is isolated to itself, and a SharePoint run then keeps its previous delta link), `3` when
 the runner lost its lock and `1` for any other failure.
 
 **Model and schema changes.** Every collection records the embedding model that produced its vectors; syncs and
@@ -1131,7 +1144,10 @@ The dashboard exposes REST API endpoints for programmatic access to monitoring d
 * `GET /api/dashboard/tasks?limit=50` - Get recent tasks with execution details.
 * `GET /api/dashboard/errors?limit=20` - Get recent errors with context.
 * `GET /api/dashboard/logs?limit=100&offset=0&level=ERROR&task_id=xxx&agent_id=yyy` - Get filtered application logs (supports pagination via `offset`).
-* `POST /api/dashboard/discovery` - Manually trigger agent discovery.
+* `POST /api/dashboard/discovery` - Manually trigger agent discovery: registers new agents, re-probes every registered
+  agent (a reachable BROKEN agent becomes AVAILABLE again, an unreachable one is removed unless it is BUSY) and returns
+  `{"message": "N agents reachable, M unreachable agents removed", "reachable": N, "removed": M}`. Startup, periodic
+  and manual discovery runs never overlap.
 
 **Other (unauthenticated):**
 

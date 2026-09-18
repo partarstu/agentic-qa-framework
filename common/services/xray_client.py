@@ -15,6 +15,8 @@ from common.services.test_management_base import TestManagementClientBase
 logger = utils.get_logger(__name__)
 
 PRECONDITIONS_FIELD_ID = config.XRAY_PRECONDITIONS_FIELD_ID
+# The GraphQL API rejects a larger page size.
+XRAY_PAGE_LIMIT = 100
 
 
 class XrayClient(TestManagementClientBase):
@@ -26,11 +28,13 @@ class XrayClient(TestManagementClientBase):
         """List every test case of the project with its current status (WS17 full resync).
 
         Xray offers no cheap "changed since" query, which is why the test-case sync is a full
-        resync; the listing runs as one JQL query over the GraphQL API.
+        resync; the listing pages through one JQL query over the GraphQL API, 100 tests per page
+        (the API's maximum ``limit``).
         """
         query = f"""
-        query getTests($jql: String!, $limit: Int!) {{
-            getTests(jql: $jql, limit: $limit) {{
+        query getTests($jql: String!, $limit: Int!, $start: Int!) {{
+            getTests(jql: $jql, limit: $limit, start: $start) {{
+                total
                 results {{
                     issueId
                     steps {{
@@ -44,10 +48,16 @@ class XrayClient(TestManagementClientBase):
             }}
         }}
         """
-        variables = {"jql": f"project = {project_key}", "limit": 1000}
-        response = self._execute_graphql_query(query, variables)
+        results: list[dict] = []
+        while True:
+            variables = {"jql": f'project = "{project_key}"', "limit": XRAY_PAGE_LIMIT, "start": len(results)}
+            page = self._execute_graphql_query(query, variables).get("data", {}).get("getTests", {})
+            page_results = page.get("results", [])
+            results.extend(page_results)
+            if not page_results or len(results) >= page.get("total", 0):
+                break
         listed: list[ListedTestCase] = []
-        for result in response.get("data", {}).get("getTests", {}).get("results", []):
+        for result in results:
             jira_fields = result.get("jira", {})
             summary = jira_fields.get("summary", "")
             steps = [

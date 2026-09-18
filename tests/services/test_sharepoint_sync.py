@@ -34,7 +34,7 @@ def _file(item_id: str, name: str, parent_id: str, **extra) -> dict:
         "name": name,
         "file": {"mimeType": "application/pdf"},
         "size": 100,
-        "ctag": f"c-{item_id}",
+        "cTag": f"c-{item_id}",
         "eTag": f"e-{item_id}",
         "parentReference": {"id": parent_id, "driveId": DRIVE_ID},
         **extra,
@@ -201,7 +201,13 @@ class TestFolderScoping:
         docs = _folder("f-docs", "Docs", "root")
         other = _folder("f-other", "Other", "root")
         graph.enumerate_delta.return_value = {
-            "value": [root, docs, other, _file("i-in", "inside.pdf", "f-docs"), _file("i-out", "outside.pdf", "f-other")],
+            "value": [
+                root,
+                docs,
+                other,
+                _file("i-in", "inside.pdf", "f-docs"),
+                _file("i-out", "outside.pdf", "f-other"),
+            ],
             "@odata.deltaLink": "https://graph/delta",
         }
 
@@ -217,7 +223,7 @@ class TestCtagEtagClassification:
         fingerprint = {
             "item_id": item["id"],
             "name": item["name"],
-            "ctag": item.get("ctag"),
+            "ctag": item.get("cTag"),
             "etag": item.get("eTag"),
             "folder_path": "Docs",
             "ancestor_ids": ["f-docs"],
@@ -231,7 +237,10 @@ class TestCtagEtagClassification:
     @pytest.mark.asyncio
     async def test_an_unchanged_file_is_skipped(self, runner, graph):
         item = _file("i-1", "spec.pdf", "f-docs")
-        graph.enumerate_delta.return_value = {"value": [_folder("root", "", None), _folder("f-docs", "Docs", "root"), item], "@odata.deltaLink": "d"}
+        graph.enumerate_delta.return_value = {
+            "value": [_folder("root", "", None), _folder("f-docs", "Docs", "root"), item],
+            "@odata.deltaLink": "d",
+        }
         runner._fingerprints.load_scope.return_value = {"file:i-1": self._stored(item)}
 
         processed = await runner.sync_drive(DRIVE_ID)
@@ -244,7 +253,10 @@ class TestCtagEtagClassification:
         item = _file("i-1", "renamed.pdf", "f-docs")
         stored = self._stored(item, point_ids=["p1", "p2"])
         stored["name"] = "old.pdf"
-        graph.enumerate_delta.return_value = {"value": [_folder("root", "", None), _folder("f-docs", "Docs", "root"), item], "@odata.deltaLink": "d"}
+        graph.enumerate_delta.return_value = {
+            "value": [_folder("root", "", None), _folder("f-docs", "Docs", "root"), item],
+            "@odata.deltaLink": "d",
+        }
         runner._fingerprints.load_scope.return_value = {"file:i-1": stored}
 
         await runner.sync_drive(DRIVE_ID)
@@ -259,7 +271,10 @@ class TestCtagEtagClassification:
         item = _file("i-1", "spec.pdf", "f-docs")
         stored = self._stored(item, point_ids=["p-old"])
         stored["ctag"] = "c-old"
-        graph.enumerate_delta.return_value = {"value": [_folder("root", "", None), _folder("f-docs", "Docs", "root"), item], "@odata.deltaLink": "d"}
+        graph.enumerate_delta.return_value = {
+            "value": [_folder("root", "", None), _folder("f-docs", "Docs", "root"), item],
+            "@odata.deltaLink": "d",
+        }
         runner._fingerprints.load_scope.return_value = {"file:i-1": stored}
 
         await runner.sync_drive(DRIVE_ID)
@@ -289,7 +304,10 @@ class TestDeletions:
         # deletion comes from the deleted facet, not from reconciliation.
         runner._state_store.get_cursor.return_value = {"delta_link": "https://graph/stored-delta", "folders": {}}
         deleted_folder = _deleted(_folder("f-docs", "Docs", "root"))
-        graph.enumerate_delta.return_value = {"value": [_folder("root", "", None), deleted_folder], "@odata.deltaLink": "d"}
+        graph.enumerate_delta.return_value = {
+            "value": [_folder("root", "", None), deleted_folder],
+            "@odata.deltaLink": "d",
+        }
         runner._fingerprints.load_scope.return_value = {
             "file:i-in": {"item_id": "i-in", "point_ids": ["p-in"], "ancestor_ids": ["f-docs"]},
             "file:i-out": {"item_id": "i-out", "point_ids": ["p-out"], "ancestor_ids": ["f-other"]},
@@ -308,7 +326,93 @@ class TestSizeCap:
             item = _file("i-big", "huge.pdf", "root", size=99999)
             graph.enumerate_delta.return_value = {"value": [_folder("root", "", None), item], "@odata.deltaLink": "d"}
 
-            with pytest.raises(Exception, match="exceeding"):
-                await runner.sync_drive(DRIVE_ID)
+            result = await runner.sync_drive(DRIVE_ID)
 
+        # A skip is isolated to its file and does not mark the run as failed.
+        assert result.status == "completed"
         graph.download_item.assert_not_called()
+
+
+class TestFailureIsolation:
+    @pytest.mark.asyncio
+    async def test_a_failing_file_does_not_stop_the_others_and_keeps_the_delta_link(self, runner, graph):
+        runner._state_store.get_cursor.return_value = {"delta_link": "https://graph/stored-delta", "folders": {}}
+        graph.enumerate_delta.return_value = {
+            "value": [_folder("root", "", None), _file("i-bad", "bad.pdf", "root"), _file("i-ok", "ok.pdf", "root")],
+            "@odata.deltaLink": "https://graph/new-delta",
+        }
+        graph.download_item.side_effect = [RuntimeError("download failed"), b"content"]
+
+        result = await runner.sync_drive(DRIVE_ID)
+
+        assert (result.status, result.processed_count) == ("completed-with-errors", 1)
+        # The next run must see the failed file again, so the delta link does not advance.
+        saved = runner._state_store.save_cursor.await_args.args[1]
+        assert saved["delta_link"] == "https://graph/stored-delta"
+
+
+class TestReconciliation:
+    @pytest.mark.asyncio
+    async def test_a_file_name_pattern_never_deletes_the_files_it_filters_out(self, runner, graph):
+        graph.enumerate_delta.return_value = {
+            "value": [
+                _folder("root", "", None),
+                _file("i-spec", "spec.pdf", "root"),
+                _file("i-notes", "notes.pdf", "root"),
+            ],
+            "@odata.deltaLink": "d",
+        }
+        runner._fingerprints.load_scope.return_value = {
+            "file:i-notes": {"item_id": "i-notes", "point_ids": ["p-notes"], "ancestor_ids": ["root"]},
+            "file:i-gone": {"item_id": "i-gone", "point_ids": ["p-gone"], "ancestor_ids": ["root"]},
+        }
+
+        await runner.sync_drive(DRIVE_ID, file_name_pattern=r"^spec")
+
+        # Only the file missing from the complete enumeration is deleted.
+        runner._documents_db.delete.assert_awaited_once_with(["p-gone"])
+
+    @pytest.mark.asyncio
+    async def test_a_deleted_folder_reported_with_its_folder_facet_is_deleted(self, runner, graph):
+        runner._state_store.get_cursor.return_value = {
+            "delta_link": "https://graph/stored-delta",
+            "folders": {"f-docs": {"name": "Docs", "parent": "root"}},
+        }
+        deleted_folder = {**_folder("f-docs", "Docs", "root"), "deleted": {"state": "deleted"}}
+        graph.enumerate_delta.return_value = {"value": [deleted_folder], "@odata.deltaLink": "d"}
+        runner._fingerprints.load_scope.return_value = {
+            "file:i-in": {"item_id": "i-in", "point_ids": ["p-in"], "ancestor_ids": ["f-docs"]},
+        }
+
+        await runner.sync_drive(DRIVE_ID)
+
+        runner._documents_db.delete.assert_awaited_once_with(["p-in"])
+        saved_folders = runner._state_store.save_cursor.await_args.args[1]["folders"]
+        assert "f-docs" not in saved_folders
+
+
+class TestFolderRename:
+    @pytest.mark.asyncio
+    async def test_a_folder_rename_refreshes_the_payload_of_its_unreported_descendants(self, runner, graph):
+        runner._state_store.get_cursor.return_value = {
+            "delta_link": "https://graph/stored-delta",
+            "folders": {"root": {"name": "", "parent": None}, "f-docs": {"name": "Docs", "parent": "root"}},
+        }
+        graph.enumerate_delta.return_value = {"value": [_folder("f-docs", "Specs", "root")], "@odata.deltaLink": "d"}
+        runner._fingerprints.load_scope.return_value = {
+            "file:i-1": {
+                "item_id": "i-1",
+                "name": "spec.pdf",
+                "folder_path": "Docs",
+                "ancestor_ids": ["f-docs", "root"],
+                "point_ids": ["p1"],
+            },
+        }
+
+        await runner.sync_drive(DRIVE_ID)
+
+        payload = runner._documents_db.set_payload.await_args.args[0]
+        assert payload["folder_path"] == "Specs"
+        assert runner._documents_db.set_payload.await_args.kwargs["point_ids"] == ["p1"]
+        saved = runner._fingerprints.save.await_args.args[2]
+        assert (saved["folder_path"], saved["ancestor_ids"]) == ("Specs", ["f-docs", "root"])

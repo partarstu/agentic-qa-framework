@@ -138,7 +138,9 @@ def test_generate_report_failed(mock_logger_cls, allure_client):
 
 def test_generate_report_renders_structured_log_lines_readably(mock_logger_cls, allure_client):
     mock_logger = mock_logger_cls.return_value
-    structured = '{"timestamp": "2026-05-04T10:33:56+00:00", "level": "ERROR", "message": "Click failed", "logger": "ui"}'
+    structured = (
+        '{"timestamp": "2026-05-04T10:33:56+00:00", "level": "ERROR", "message": "Click failed", "logger": "ui"}'
+    )
     results = [
         TestExecutionResult(
             stepResults=[],

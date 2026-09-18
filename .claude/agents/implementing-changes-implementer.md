@@ -2,6 +2,7 @@
 name: implementing-changes-implementer
 description: Implementer of the implementing-changes skill. Spawned only by the lead of that skill.
 disallowedTools: Agent
+maxTurns: 100
 skills:
   - writing-unit-tests
   - running-unit-tests

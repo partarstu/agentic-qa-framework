@@ -104,10 +104,18 @@ class SharePointRagSyncRunner:
 
         folder_scope = bool(folder_path)
         delta_link = None if folder_scope else state.get("delta_link")
-        items, new_folders, new_delta_link, full_enumeration = await self._enumerate(
-            client, drive_id, delta_link
-        )
+        items, new_folders, new_delta_link, full_enumeration = await self._enumerate(client, drive_id, delta_link)
+        renamed_folder_ids = {
+            folder_id
+            for folder_id, folder in new_folders.items()
+            if folder_id in folders and folders[folder_id] != folder
+        }
         folders = {**folders, **new_folders}
+        for item in items:
+            if self._is_deleted(item):
+                folders.pop(item["id"], None)
+        # Taken before any filter: reconciliation must never delete a file only a filter hid.
+        listed_ids = {item["id"] for item in items if self._is_file(item)}
 
         scope_folder_id = None
         if folder_scope:
@@ -116,17 +124,22 @@ class SharePointRagSyncRunner:
                 logger.warning(f"Folder {folder_path!r} not found in drive {drive_id}; nothing to sync.")
                 return RagUpdateResult(status="completed", processed_count=0)
             items = [
-                item
-                for item in items
-                if self._is_file(item) and scope_folder_id in self._ancestor_ids(item, folders)
+                item for item in items if self._is_file(item) and scope_folder_id in self._ancestor_ids(item, folders)
             ]
 
         if file_name_pattern:
             pattern = utils.compile_name_pattern(file_name_pattern)
-            items = [item for item in items if pattern.search(item.get("name", ""))]
+            items = [item for item in items if self._is_deleted(item) or pattern.search(item.get("name", ""))]
 
-        processed = 0
-        deleted = 0
+        # Delta doesn't re-report the descendants of a renamed or moved folder, so their payloads are
+        # refreshed from the stored fingerprints.
+        for item_key, fingerprint in list(stored.items()):
+            if renamed_folder_ids.intersection(fingerprint.get("ancestor_ids", [])):
+                stored[item_key] = await self._update_payload_metadata(
+                    scope, _item_from_fingerprint(fingerprint), folders, fingerprint, lock_token
+                )
+
+        processed = skipped = failed = deleted = 0
         for item in items:
             if self._is_deleted(item):
                 deleted += await self._delete_item_tree(scope, item, stored, lock_token)
@@ -134,13 +147,21 @@ class SharePointRagSyncRunner:
             if not self._is_file(item):
                 continue
             await self._verify_holder_or_abort(scope, lock_token)
-            if await self._sync_file(client, drive_id, item, folders, stored, scope, lock_token):
-                processed += 1
+            try:
+                if await self._sync_file(client, drive_id, item, folders, stored, scope, lock_token):
+                    processed += 1
+            except PermissionError:
+                raise
+            except AttachmentSkippedError as skip:
+                skipped += 1
+                logger.warning(f"Skipping SharePoint item {item['id']} in drive {drive_id}: {skip}")
+            except Exception as e:
+                failed += 1
+                logger.exception(f"Failed to sync SharePoint item {item['id']} in drive {drive_id}: {e}")
 
-        # Reconciliation deletes what a complete, unfiltered full enumeration proves gone;
-        # an incremental delta or a folder filter cannot know that.
+        # Reconciliation deletes what a complete full enumeration of the whole drive proves gone;
+        # an incremental delta or a folder-scoped run cannot know that.
         if full_enumeration and not folder_scope and new_delta_link:
-            listed_ids = {item["id"] for item in items}
             for item_key, fingerprint in list(stored.items()):
                 if fingerprint.get("item_id") not in listed_ids:
                     await self._delete_points(scope, item_key, fingerprint, lock_token)
@@ -148,13 +169,19 @@ class SharePointRagSyncRunner:
         else:
             logger.warning("Delta enumeration was incomplete; skipping deletions for this run.")
 
-        # A folder-scoped run must not advance the drive's delta link, so a later drive run
-        # still sees everything the folder run filtered away.
-        saved_delta_link = new_delta_link if (new_delta_link and not folder_scope) else state.get("delta_link")
+        # The delta link advances only on a clean drive-scoped run: after a failure the next run must see
+        # the failed files again, and a folder-scoped run must leave everything it filtered away to the
+        # next drive run.
+        advance = new_delta_link and not folder_scope and failed == 0
+        saved_delta_link = new_delta_link if advance else state.get("delta_link")
         await self._state_store.save_cursor(scope, {"delta_link": saved_delta_link, "folders": folders})
 
-        logger.info(f"SharePoint sync for drive {drive_id} completed; processed {processed}, deleted {deleted}.")
-        return RagUpdateResult(status="completed", processed_count=processed)
+        status = "completed-with-errors" if failed else "completed"
+        logger.info(
+            f"SharePoint sync for drive {drive_id} finished ({status}): {processed} processed, {skipped} skipped, "
+            f"{failed} failed, {deleted} deleted."
+        )
+        return RagUpdateResult(status=status, processed_count=processed)
 
     async def _enumerate(
         self, client: SharePointClient, drive_id: str, delta_link: str | None
@@ -181,8 +208,12 @@ class SharePointRagSyncRunner:
                 full = True
                 continue
             for item in page.get("value", []):
-                if self._is_folder(item):
-                    folders[item["id"]] = {"name": item.get("name", ""), "parent": item.get("parentReference", {}).get("id")}
+                # A deleted folder is an item to delete, not part of the folder tree.
+                if self._is_folder(item) and not self._is_deleted(item):
+                    folders[item["id"]] = {
+                        "name": item.get("name", ""),
+                        "parent": item.get("parentReference", {}).get("id"),
+                    }
                 else:
                     items.append(item)
             if link := page.get("@odata.nextLink"):
@@ -212,7 +243,9 @@ class SharePointRagSyncRunner:
 
     def _folder_path(self, item: dict, folders: dict[str, dict]) -> str:
         """The slash-joined path of an item's ancestors, root first."""
-        names = [folders.get(folder_id, {}).get("name", "") for folder_id in reversed(self._ancestor_ids(item, folders))]
+        names = [
+            folders.get(folder_id, {}).get("name", "") for folder_id in reversed(self._ancestor_ids(item, folders))
+        ]
         return "/".join(name for name in names if name)
 
     def _resolve_folder_id(self, folders: dict[str, dict], drive_id: str, folder_path: str) -> str | None:
@@ -243,14 +276,15 @@ class SharePointRagSyncRunner:
         name = item.get("name", "")
         stored_fingerprint = stored.get(item_key)
         if stored_fingerprint:
-            renamed_or_moved = (
-                stored_fingerprint.get("name") != name
-                or stored_fingerprint.get("folder_path") != self._folder_path(item, folders)
-            )
-            if stored_fingerprint.get("ctag") == item.get("ctag"):
+            renamed_or_moved = stored_fingerprint.get("name") != name or stored_fingerprint.get(
+                "folder_path"
+            ) != self._folder_path(item, folders)
+            if stored_fingerprint.get("ctag") == item.get("cTag"):
                 # The content is unchanged: a rename or move is a payload-only update.
                 if renamed_or_moved:
-                    await self._update_payload_metadata(scope, item, folders, stored_fingerprint, lock_token)
+                    stored[item_key] = await self._update_payload_metadata(
+                        scope, item, folders, stored_fingerprint, lock_token
+                    )
                 else:
                     logger.debug(f"Skipping {item_key}: cTag unchanged.")
                 return False
@@ -268,7 +302,9 @@ class SharePointRagSyncRunner:
             raise ValueError(f"File '{name}' exceeded the size limit while downloading.")
         hash_value = content_hash(content, str(INGESTION_SCHEMA_VERSION))
         if stored_fingerprint and stored_fingerprint.get("content_hash") == hash_value:
-            fingerprint = self._fingerprint(item, folders, hash_value, point_ids=stored_fingerprint.get("point_ids", []))
+            fingerprint = self._fingerprint(
+                item, folders, hash_value, point_ids=stored_fingerprint.get("point_ids", [])
+            )
             await self._verify_holder_or_abort(scope, lock_token)
             await self._fingerprints.save(scope, item_key, fingerprint)
             return True
@@ -286,7 +322,9 @@ class SharePointRagSyncRunner:
             await self._documents_db.delete(stale_ids)
         await self._verify_holder_or_abort(scope, lock_token)
         await self._fingerprints.save(
-            scope, item_key, self._fingerprint(item, folders, hash_value, point_ids=[part.get_vector_id() for part in parts])
+            scope,
+            item_key,
+            self._fingerprint(item, folders, hash_value, point_ids=[part.get_vector_id() for part in parts]),
         )
         logger.info(f"Ingested {len(parts)} part(s) of {item_key} ({name}).")
         return True
@@ -295,7 +333,7 @@ class SharePointRagSyncRunner:
         return {
             "item_id": item["id"],
             "name": item.get("name", ""),
-            "ctag": item.get("ctag"),
+            "ctag": item.get("cTag"),
             "etag": item.get("eTag"),
             "folder_path": self._folder_path(item, folders),
             "ancestor_ids": self._ancestor_ids(item, folders),
@@ -304,12 +342,16 @@ class SharePointRagSyncRunner:
             "point_ids": point_ids,
         }
 
-    def _build_parts(self, item: dict, folders: dict[str, dict], extracted: ExtractedDocument) -> list[DocumentPagePart]:
+    def _build_parts(
+        self, item: dict, folders: dict[str, dict], extracted: ExtractedDocument
+    ) -> list[DocumentPagePart]:
         name = item.get("name", "")
         folder_path = self._folder_path(item, folders)
         parts: list[DocumentPagePart] = []
         for page_number, page in enumerate(extracted.pages, start=1):
-            breadcrumb = f"{folder_path + '/' if folder_path else ''}{name} > page {page_number} of {extracted.total_page_count}"
+            breadcrumb = (
+                f"{folder_path + '/' if folder_path else ''}{name} > page {page_number} of {extracted.total_page_count}"
+            )
             text_parts = split_text_by_budget(page.text, breadcrumb) or [""]
             for part_index, text_part in enumerate(text_parts):
                 text = f"{breadcrumb}\n\n{text_part}" if text_part else breadcrumb
@@ -341,8 +383,12 @@ class SharePointRagSyncRunner:
 
     async def _update_payload_metadata(
         self, scope: str, item: dict, folders: dict[str, dict], stored_fingerprint: dict, lock_token: str
-    ) -> None:
-        """A rename/move or a folder rename: refresh the payload fields without re-embedding."""
+    ) -> dict:
+        """A rename/move or a folder rename: refresh the payload fields without re-embedding.
+
+        Returns:
+            The updated fingerprint.
+        """
         name = item.get("name", "")
         folder_path = self._folder_path(item, folders)
         await self._verify_holder_or_abort(scope, lock_token)
@@ -356,9 +402,16 @@ class SharePointRagSyncRunner:
             },
             point_ids=stored_fingerprint.get("point_ids", []),
         )
-        fingerprint = {**stored_fingerprint, "name": name, "folder_path": folder_path, "etag": item.get("eTag")}
+        fingerprint = {
+            **stored_fingerprint,
+            "name": name,
+            "folder_path": folder_path,
+            "ancestor_ids": self._ancestor_ids(item, folders),
+            "etag": item.get("eTag"),
+        }
         await self._fingerprints.save(scope, f"file:{item['id']}", fingerprint)
         logger.info(f"Payload-only update of {name} ({len(stored_fingerprint.get('point_ids', []))} point(s)).")
+        return fingerprint
 
     async def _delete_item_tree(self, scope: str, item: dict, stored: dict[str, dict], lock_token: str) -> int:
         """Deletes a deleted item's points and fingerprint; a deleted folder takes every
@@ -367,6 +420,7 @@ class SharePointRagSyncRunner:
         for item_key, fingerprint in list(stored.items()):
             if fingerprint.get("item_id") == item["id"] or item["id"] in fingerprint.get("ancestor_ids", []):
                 await self._delete_points(scope, item_key, fingerprint, lock_token)
+                del stored[item_key]
                 deleted += 1
         return deleted
 
@@ -382,3 +436,15 @@ class SharePointRagSyncRunner:
         """Stops at once, without further writes, when the runner no longer holds the lock."""
         if not await self._lock_store.is_holder(scope, lock_token):
             raise PermissionError(f"Lock for scope {scope} was taken over; this run stops without further writes.")
+
+
+def _item_from_fingerprint(fingerprint: dict) -> dict:
+    """The drive-item fields a payload-only update reads, rebuilt from a stored fingerprint for a file
+    the delta did not report (the descendant of a renamed folder)."""
+    ancestor_ids = fingerprint.get("ancestor_ids") or []
+    return {
+        "id": fingerprint["item_id"],
+        "name": fingerprint.get("name", ""),
+        "eTag": fingerprint.get("etag"),
+        "parentReference": {"id": ancestor_ids[0]} if ancestor_ids else {},
+    }

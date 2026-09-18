@@ -121,9 +121,7 @@ def test_agent_init(agent, mock_config):
 
 
 @patch("agents.test_case_review.main.get_test_management_client")
-async def test_add_review_feedback_appends_the_duplicate_check_to_the_comment(
-    mock_get_client, agent, duplicate_checks
-):
+async def test_add_review_feedback_appends_the_duplicate_check_to_the_comment(mock_get_client, agent, duplicate_checks):
     mock_client = MagicMock(spec=TestManagementClientBase)
     mock_get_client.return_value = mock_client
     duplicate_checks["TEST-1"] = TestCaseDuplicateCheck()

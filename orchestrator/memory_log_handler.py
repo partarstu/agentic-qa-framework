@@ -81,9 +81,17 @@ class MemoryLogHandler(logging.Handler):
                 self._buffer.append(entry)
             from orchestrator.dashboard_state import dashboard_state_store
 
-            dashboard_state_store.enqueue("log", {"id": f"{record.created}-{record.name}", "payload": entry.to_dict()})
+            # Log lines are never updated, so each one gets a fresh record id from the store.
+            dashboard_state_store.enqueue("log", {"payload": entry.to_dict()})
         except Exception:
             self.handleError(record)
+
+    def restore(self, entries: list[LogEntry]) -> None:
+        """Merge persisted log lines with the lines of this process chronologically, so the restored history
+        does not push the fresh boot sequence out of the fixed-size buffer."""
+        with self._buffer_lock:
+            merged = sorted([*entries, *self._buffer], key=lambda entry: entry.timestamp)
+            self._buffer = deque(merged, maxlen=self._buffer.maxlen)
 
     def get_logs(
         self,

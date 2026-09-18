@@ -62,7 +62,11 @@ class StructuredJsonFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         message = record.getMessage()
         standard = logging.makeLogRecord({}).__dict__
-        custom = {key: value for key, value in record.__dict__.items() if key not in standard and key not in self._CANONICAL_FIELDS}
+        custom = {
+            key: value
+            for key, value in record.__dict__.items()
+            if key not in standard and key not in self._CANONICAL_FIELDS
+        }
         payload: dict[str, object] = {"custom": custom} if custom else {}
         payload.update(
             {

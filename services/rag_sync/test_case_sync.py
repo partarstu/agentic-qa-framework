@@ -93,12 +93,15 @@ class TestCaseRagSyncRunner:
         )
         rendered = [render_test_case(project_key, item) for item in eligible]
 
+        # Created before the first read: on the very first run the collection doesn't exist yet.
+        await self._verify_holder_or_abort(scope, lock_token)
+        await self._test_cases_db.ensure_collection()
         stored = await self._scroll_stored(project_key)
         current_ids = {record.get_vector_id() for record in rendered}
 
-        changed = [record for record in rendered if stored.get(record.get_vector_id(), {}).get("hash") != record.content_hash]
-        await self._verify_holder_or_abort(scope, lock_token)
-        await self._test_cases_db.ensure_collection()
+        changed = [
+            record for record in rendered if stored.get(record.get_vector_id(), {}).get("hash") != record.content_hash
+        ]
         for start in range(0, len(changed), config.QdrantConfig.UPSERT_BATCH_SIZE):
             batch = changed[start : start + config.QdrantConfig.UPSERT_BATCH_SIZE]
             await self._verify_holder_or_abort(scope, lock_token)

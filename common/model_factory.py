@@ -195,7 +195,8 @@ def _log_retry_attempt(model_name: str):
 
     def log_attempt(retry_state) -> None:
         exception = retry_state.outcome.exception() if retry_state.outcome else None
-        if isinstance(exception, httpx.HTTPStatusError):
+        # The Anthropic client speaks httpx2, whose status error is a different class.
+        if isinstance(exception, (httpx.HTTPStatusError, httpx2.HTTPStatusError)):
             reason = f"HTTP {exception.response.status_code}"
         else:
             reason = type(exception).__name__ if exception is not None else "unknown"

@@ -71,3 +71,50 @@ def test_lost_lock_exits_three(cli, monkeypatch) -> None:
         runner_cls.return_value.sync_project = AsyncMock(side_effect=PermissionError("taken over"))
 
         assert cli.main() == 3
+
+
+@pytest.fixture
+def report_outcome():
+    with patch("rag_sync.outcome_reporting.report_terminal_outcome", new_callable=AsyncMock) as report:
+        yield report
+
+
+def test_sharepoint_run_passes_its_scope_and_reports_the_outcome(cli, monkeypatch, report_outcome) -> None:
+    from common.models import RagUpdateResult
+
+    argv = ["cli", "sharepoint", "--drive-id", "d-1", "--folder-path", "Docs", "--attachment-name-pattern", "^spec"]
+    monkeypatch.setattr(sys, "argv", argv)
+    result = RagUpdateResult(status="completed", processed_count=2)
+    with patch("rag_sync.sharepoint_sync.SharePointRagSyncRunner") as runner_cls:
+        runner_cls.return_value.sync_drive = AsyncMock(return_value=result)
+
+        assert cli.main() == 0
+
+    runner_cls.return_value.sync_drive.assert_awaited_once_with(
+        drive_id="d-1", folder_path="Docs", file_name_pattern="^spec", lock_token=None
+    )
+    report_outcome.assert_awaited_once_with("sharepoint", "d-1", result=result)
+
+
+@pytest.mark.parametrize("source", ["jira", "confluence", "sharepoint", "test_cases"])
+def test_every_triggered_source_is_a_cli_subcommand_and_a_local_route(cli, monkeypatch, source) -> None:
+    """The orchestrator passes its source name as the job's subcommand and as the local /sync/<source> path."""
+    from services.rag_sync.local_service import app
+
+    monkeypatch.setattr(sys, "argv", ["cli", source, "--help"])
+    with pytest.raises(SystemExit) as exited:
+        cli.main()
+
+    assert exited.value.code == 0
+    assert f"/sync/{source}" in {route.path for route in app.routes}
+
+
+def test_test_case_run_reports_a_failure_and_propagates_it(cli, monkeypatch, report_outcome) -> None:
+    monkeypatch.setattr(sys, "argv", ["cli", "test_cases", "--project-key", "PROJ"])
+    error = RuntimeError("listing failed")
+    with patch("rag_sync.test_case_sync.TestCaseRagSyncRunner") as runner_cls:
+        runner_cls.return_value.sync_project = AsyncMock(side_effect=error)
+
+        assert cli.main() != 0
+
+    report_outcome.assert_awaited_once_with("test_cases", "PROJ", error=error)

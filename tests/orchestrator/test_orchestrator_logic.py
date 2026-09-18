@@ -2,6 +2,7 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -30,6 +31,7 @@ from orchestrator.main import (
     _health_check_agents,
     _LogStreamState,
     _route_task,
+    _run_manual_discovery,
     _select_agent,
     agent_registry,
     cancellation_queue,
@@ -51,12 +53,14 @@ async def clear_registry():
     agent_registry._statuses.clear()
     agent_registry._broken_reasons.clear()
     agent_registry._stuck_task_ids.clear()
+    agent_registry._discovery_urls.clear()
     _drain_queue(cancellation_queue)
     yield
     agent_registry._cards.clear()
     agent_registry._statuses.clear()
     agent_registry._broken_reasons.clear()
     agent_registry._stuck_task_ids.clear()
+    agent_registry._discovery_urls.clear()
     _drain_queue(cancellation_queue)
 
 
@@ -392,6 +396,123 @@ async def test_discover_agents_fetches_new(clear_registry, mock_agent_card):
 
         # Verify _fetch_agent_card WAS called
         mock_fetch.assert_called_once_with("http://localhost:8001")
+
+
+# =============================================================================
+# Registration and manual discovery (WS14)
+# =============================================================================
+
+
+def _card_at(url: str, name: str = "Discovered Agent") -> AgentCard:
+    return AgentCard(
+        name=name,
+        description="Desc",
+        version="1.0.0",
+        capabilities=AgentCapabilities(streaming=False),
+        skills=[],
+        default_input_modes=["text"],
+        default_output_modes=["text"],
+        supported_interfaces=[AgentInterface(protocol_binding="JSONRPC", url=url)],
+    )
+
+
+@pytest.mark.asyncio
+async def test_discovery_registers_an_agent_under_the_url_it_was_reached_on(clear_registry):
+    """An agent advertising a loopback URL stays reachable: its card carries the discovered address."""
+    with (
+        patch("config.OrchestratorConfig.REMOTE_EXECUTION_AGENT_HOSTS", "http://agent-host"),
+        patch("config.OrchestratorConfig.AGENT_DISCOVERY_PORTS", "8001-8001"),
+        patch("orchestrator.main._fetch_agent_card", return_value=_card_at("http://127.0.0.1:8001")),
+    ):
+        await _discover_agents()
+
+    agent_id = await agent_registry.get_agent_id_by_url("http://agent-host:8001")
+    assert agent_id is not None
+    assert await agent_registry.get_discovery_url(agent_id) == "http://agent-host:8001"
+
+
+@pytest.mark.asyncio
+async def test_concurrent_discovery_runs_register_an_agent_once(clear_registry):
+    async def _slow_fetch(url):
+        await asyncio.sleep(0.01)
+        return _card_at(url)
+
+    with (
+        patch("config.OrchestratorConfig.REMOTE_EXECUTION_AGENT_HOSTS", "http://agent-host"),
+        patch("config.OrchestratorConfig.AGENT_DISCOVERY_PORTS", "8001-8001"),
+        patch("orchestrator.main._fetch_agent_card", side_effect=_slow_fetch),
+        patch("orchestrator.main._check_agent_reachability", AsyncMock(return_value=True)),
+    ):
+        await asyncio.gather(_discover_agents(), _run_manual_discovery(), _discover_agents())
+
+    assert len(await agent_registry.get_all_cards()) == 1
+
+
+@pytest.mark.asyncio
+async def test_register_or_refresh_keeps_the_id_and_status_of_a_known_url(clear_registry):
+    agent_id = await agent_registry.register_or_refresh("http://agent-host:8001", _card_at("http://agent-host:8001"))
+    await agent_registry.update_status(agent_id, AgentStatus.BUSY)
+
+    refreshed_id = await agent_registry.register_or_refresh(
+        "http://agent-host:8001", _card_at("http://agent-host:8001", name="Renamed Agent")
+    )
+
+    assert refreshed_id == agent_id
+    assert await agent_registry.get_status(agent_id) == AgentStatus.BUSY
+    assert (await agent_registry.get_card(agent_id)).name == "Renamed Agent"
+
+
+@pytest.mark.asyncio
+async def test_manual_discovery_revives_reachable_and_removes_unreachable_idle_agents(clear_registry):
+    await agent_registry.register("up-broken", _card_at("http://agent-host:8001"))
+    await agent_registry.update_status("up-broken", AgentStatus.BROKEN, BrokenReason.OFFLINE)
+    await agent_registry.register("down-idle", _card_at("http://agent-host:8002"))
+    await agent_registry.register("down-busy", _card_at("http://agent-host:8003"))
+    await agent_registry.update_status("down-busy", AgentStatus.BUSY)
+
+    with (
+        patch("orchestrator.main._discover_new_agents", AsyncMock(return_value=True)),
+        patch(
+            "orchestrator.main._check_agent_reachability",
+            AsyncMock(side_effect=lambda url: url.endswith(":8001")),
+        ),
+    ):
+        report = await _run_manual_discovery()
+
+    assert report == {"message": "1 agents reachable, 1 unreachable agents removed", "reachable": 1, "removed": 1}
+    assert await agent_registry.get_status("up-broken") == AgentStatus.AVAILABLE
+    assert not await agent_registry.contains("down-idle")
+    # A BUSY agent is never removed, even when it does not answer the probe.
+    assert await agent_registry.get_status("down-busy") == AgentStatus.BUSY
+
+
+@pytest.mark.asyncio
+async def test_manual_discovery_tolerates_a_failing_probe(clear_registry):
+    await agent_registry.register("healthy", _card_at("http://agent-host:8001"))
+    await agent_registry.register("crashing", _card_at("http://agent-host:8002"))
+
+    async def _probe(url):
+        if url.endswith(":8002"):
+            raise RuntimeError("probe crashed")
+        return True
+
+    with (
+        patch("orchestrator.main._discover_new_agents", AsyncMock(return_value=True)),
+        patch("orchestrator.main._check_agent_reachability", AsyncMock(side_effect=_probe)),
+    ):
+        report = await _run_manual_discovery()
+
+    assert (report["reachable"], report["removed"]) == (1, 1)
+    assert await agent_registry.contains("healthy")
+
+
+@pytest.mark.asyncio
+async def test_manual_discovery_reports_that_discovery_is_not_configured(clear_registry):
+    with patch("config.OrchestratorConfig.REMOTE_EXECUTION_AGENT_HOSTS", ""):
+        report = await _run_manual_discovery()
+
+    assert report["message"].startswith("Agent discovery is not configured")
+    assert (report["reachable"], report["removed"]) == (0, 0)
 
 
 # =============================================================================

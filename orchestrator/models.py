@@ -126,6 +126,15 @@ class TaskHistory:
             self._tasks_by_id[task.task_id] = task
         self._persist("task", task.task_id, task.to_dict())
 
+    async def restore(self, tasks: list[TaskRecord]) -> None:
+        """Merge persisted tasks with the ones this process already recorded, chronologically, without
+        persisting them again (which would reset their retention)."""
+        async with self._lock:
+            merged = [task for task in tasks if task.task_id not in self._tasks_by_id] + list(self._tasks)
+            merged.sort(key=lambda task: task.start_time)
+            self._tasks = deque(merged, maxlen=self._tasks.maxlen)
+            self._tasks_by_id = {task.task_id: task for task in self._tasks}
+
     @staticmethod
     def _persist(kind: str, record_id: str, payload: dict[str, Any]) -> None:
         """Queue dashboard persistence without coupling state mutations to Qdrant availability."""
@@ -207,6 +216,15 @@ class ErrorHistory:
         async with self._lock:
             self._errors.append(error)
         TaskHistory._persist("error", error.error_id, error.to_dict())
+
+    async def restore(self, errors: list[ErrorRecord]) -> None:
+        """Merge persisted errors with the ones this process already recorded, chronologically, without
+        persisting them again."""
+        async with self._lock:
+            known_ids = {error.error_id for error in self._errors}
+            merged = [error for error in errors if error.error_id not in known_ids] + list(self._errors)
+            merged.sort(key=lambda error: error.timestamp)
+            self._errors = deque(merged, maxlen=self._errors.maxlen)
 
     async def get_all(self) -> list[ErrorRecord]:
         """Get all error records, newest first."""
@@ -310,12 +328,28 @@ class AgentRegistry:
 
     async def remove(self, agent_id: str):
         async with self._lock:
-            self._cards.pop(agent_id, None)
-            self._statuses.pop(agent_id, None)
-            self._broken_reasons.pop(agent_id, None)
-            self._stuck_task_ids.pop(agent_id, None)
-            self._current_tasks.pop(agent_id, None)
-            self._discovery_urls.pop(agent_id, None)
+            self._remove_locked(agent_id)
+
+    async def remove_unless_busy(self, agent_id: str) -> bool:
+        """Remove an agent unless it is BUSY, checking the status under the same lock as the removal.
+
+        Returns:
+            Whether the agent was removed.
+        """
+        async with self._lock:
+            if agent_id not in self._cards or self._statuses.get(agent_id) == AgentStatus.BUSY:
+                return False
+            self._remove_locked(agent_id)
+            return True
+
+    def _remove_locked(self, agent_id: str) -> None:
+        """Drop every trace of an agent; the caller holds the registry lock."""
+        self._cards.pop(agent_id, None)
+        self._statuses.pop(agent_id, None)
+        self._broken_reasons.pop(agent_id, None)
+        self._stuck_task_ids.pop(agent_id, None)
+        self._current_tasks.pop(agent_id, None)
+        self._discovery_urls.pop(agent_id, None)
 
     async def get_all_cards(self) -> dict[str, AgentCard]:
         async with self._lock:

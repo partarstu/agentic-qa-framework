@@ -94,8 +94,20 @@ def test_init(mock_qdrant_client):
 
         from common.services.vector_db_service import AsyncQdrantClient
 
-        # port=None keeps the client from appending its own default port to QDRANT_URL (WS7).
-        AsyncQdrantClient.assert_called_with(url="http://localhost", port=None, api_key="test_key", timeout=30.0)
+        # port=None keeps the client from appending its own default port to QDRANT_URL (WS7);
+        # check_compatibility=False keeps its blocking server-version probe off the event loop.
+        AsyncQdrantClient.assert_called_with(
+            url="http://localhost", port=None, api_key="test_key", timeout=30.0, check_compatibility=False
+        )
+
+
+def test_the_sharepoint_collection_indexes_its_scope_fields(mock_qdrant_client):
+    """Every SharePoint query pins the source and may scope by drive and folder (WS18)."""
+    import config
+
+    service = VectorDbService(config.QdrantConfig.SHAREPOINT_COLLECTION_NAME)
+
+    assert {"source", "drive_id", "folder_path", "document_name"} <= set(service._indexed_fields())
 
 
 def test_init_missing_service_url(mock_qdrant_client):

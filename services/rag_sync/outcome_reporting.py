@@ -21,7 +21,8 @@ async def report_terminal_outcome(
     sync_type: str, scope_id: str, result: RagUpdateResult | None = None, error: Exception | None = None
 ) -> None:
     """Persist and optionally callback terminal status without changing the sync outcome."""
-    status = "failed" if error else "completed_with_errors" if result and result.status == "completed_with_errors" else "completed"
+    # The runners report partial success as "completed-with-errors"; anything but a clean completion counts as such.
+    status = "failed" if error else "completed_with_errors" if result and result.status != "completed" else "completed"
     outcome = SyncOutcome(
         sync_type=sync_type,
         scope=scope_key(sync_type, scope_id),

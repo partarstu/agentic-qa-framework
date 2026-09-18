@@ -89,7 +89,10 @@ def _scroll_result(points: list[tuple[str, str, str]]):
             self.payload = payload
 
     return (
-        [Point(point_id, {"content_hash": content_hash, "indexed_at": indexed_at}) for point_id, content_hash, indexed_at in points],
+        [
+            Point(point_id, {"content_hash": content_hash, "indexed_at": indexed_at})
+            for point_id, content_hash, indexed_at in points
+        ],
         None,
     )
 
@@ -110,6 +113,23 @@ class TestFullResync:
         runner._db.ensure_collection.assert_awaited_once()
         upserted = [record for batch in runner._db.upsert_batch.await_args_list for record in batch.args[0]]
         assert {record.test_case_key for record in upserted} == {"SMOKE-1", "SMOKE-2"}
+
+    @pytest.mark.asyncio
+    async def test_the_collection_exists_before_the_stored_points_are_read(self, runner):
+        """On the very first run the collection doesn't exist yet, and scrolling it would fail with a 404."""
+        calls: list[str] = []
+        runner._db.ensure_collection.side_effect = lambda: calls.append("ensure")
+
+        async def _scroll(**kwargs):
+            calls.append("scroll")
+            return _scroll_result([])
+
+        runner._db.client.scroll.side_effect = _scroll
+        runner._tms.return_value.fetch_test_cases_by_project.return_value = [_listed("SMOKE-1")]
+
+        await runner.sync_project(PROJECT_KEY)
+
+        assert calls[:2] == ["ensure", "scroll"]
 
     @pytest.mark.asyncio
     async def test_unchanged_content_hash_skips_the_re_embedding(self, runner):
@@ -158,7 +178,9 @@ class TestFullResync:
     @pytest.mark.asyncio
     async def test_a_failed_listing_aborts_without_any_deletion(self, runner):
         runner._tms.return_value.fetch_test_cases_by_project.side_effect = RuntimeError("TMS down")
-        runner._db.client.scroll.return_value = _scroll_result([(_point_id("SMOKE-1"), "h", "2026-01-01T00:00:00+00:00")])
+        runner._db.client.scroll.return_value = _scroll_result(
+            [(_point_id("SMOKE-1"), "h", "2026-01-01T00:00:00+00:00")]
+        )
 
         with pytest.raises(RuntimeError, match="TMS down"):
             await runner.sync_project(PROJECT_KEY)
@@ -181,7 +203,9 @@ class TestIndexedAtGuard:
     @pytest.mark.asyncio
     async def test_a_point_indexed_before_the_run_started_is_deleted_when_absent(self, runner):
         runner._tms.return_value.fetch_test_cases_by_project.return_value = []
-        runner._db.client.scroll.return_value = _scroll_result([(_point_id("SMOKE-OLD"), "h", "2026-01-01T00:00:00+00:00")])
+        runner._db.client.scroll.return_value = _scroll_result(
+            [(_point_id("SMOKE-OLD"), "h", "2026-01-01T00:00:00+00:00")]
+        )
 
         await runner.sync_project(PROJECT_KEY)
 

@@ -494,7 +494,8 @@ def test_failed_execution_reported_to_zephyr(
     execute_tests_response: httpx.Response, http_client: httpx.Client
 ) -> None:
     """The reporting half of /execute-tests: a failed execution of the seeded case must reach
-    Zephyr, inside a test cycle created for the seeded project."""
+    Zephyr, inside a test cycle created for the seeded project, and no reporting step failed (WS15)."""
+    assert execute_tests_response.json().get("reporting_failures") == [], execute_tests_response.json()
     data = wait_for_recorded(
         http_client,
         ZEPHYR_RECORDED_URL,
@@ -633,6 +634,7 @@ def test_manual_execution_reaches_zephyr_without_creating_a_bug(
 
     assert response.status_code == 200, f"Manual execution failed: {response.status_code} {response.text}"
     assert response.json().get("testCaseKey") == SEEDED_EXECUTABLE_TC_KEY, response.json()
+    assert response.json().get("reporting_failures") == [], response.json()
     zephyr = http_client.get(ZEPHYR_RECORDED_URL).json()
     assert len(_executions(zephyr)) == executions_before + 1, f"The manual result never reached Zephyr: {zephyr}"
     created_issues = http_client.get(JIRA_MCP_RECORDED_URL).json().get("created_issues", [])
@@ -955,6 +957,19 @@ def test_dashboard_reports_the_configured_agent_version(
         f"The dashboard reports version {executors[0].get('version')!r} instead of "
         f"{EXECUTION_AGENT_VERSION!r} for the mock execution agent."
     )
+
+
+def test_manual_discovery_reports_reachable_and_removed_agents(
+    all_agents_ready: None, http_client: httpx.Client, auth_headers: dict[str, str]
+) -> None:
+    """WS14: the manual discovery run re-probes every registered agent and returns its summary; with
+    every agent up, all of them are reachable and none is removed."""
+    response = http_client.post(f"{ORCHESTRATOR_URL}/api/dashboard/discovery", headers=auth_headers)
+    assert response.status_code == 200, f"Manual discovery failed: {response.status_code} {response.text}"
+    report = response.json()
+    assert report.get("removed") == 0, report
+    assert report.get("reachable", 0) >= len(EXPECTED_AGENT_NAMES), report
+    assert report.get("message") == f"{report['reachable']} agents reachable, 0 unreachable agents removed", report
 
 
 def test_dashboard_reports_the_configured_orchestrator_version(

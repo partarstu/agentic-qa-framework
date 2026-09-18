@@ -30,8 +30,17 @@ _QDRANT_RETRY_ATTEMPTS = 3
 # Payload fields indexed per collection kind after creation (WS7 plan table):
 # matching is by collection name from configuration.
 _DOCUMENTS_INDEXED_FIELDS = {
+    "source": models.PayloadSchemaType.KEYWORD,  # every document query pins the source discriminator (WS18)
     "space_key": models.PayloadSchemaType.KEYWORD,
     "page_id": models.PayloadSchemaType.KEYWORD,
+    "attachment_id": models.PayloadSchemaType.KEYWORD,
+    "document_name": models.PayloadSchemaType.KEYWORD,
+    "content_kind": models.PayloadSchemaType.KEYWORD,
+}
+_SHAREPOINT_INDEXED_FIELDS = {
+    "source": models.PayloadSchemaType.KEYWORD,
+    "drive_id": models.PayloadSchemaType.KEYWORD,
+    "folder_path": models.PayloadSchemaType.KEYWORD,
     "attachment_id": models.PayloadSchemaType.KEYWORD,
     "document_name": models.PayloadSchemaType.KEYWORD,
     "content_kind": models.PayloadSchemaType.KEYWORD,
@@ -116,11 +125,16 @@ class VectorDbService:
         self.collection_name = collection_name
         # QDRANT_URL is authoritative and includes the port (or relies on the scheme default).
         # port=None keeps the client from appending its own default (qdrant-client#394).
+        # check_compatibility=False skips the client's construction-time server-version probe:
+        # a blocking HTTP GET that would run on the event loop of whoever constructs the
+        # service (the dashboard constructs one per request) and stall it for as long as the
+        # server is slow to answer. Schema mismatches surface through the WS19 validation.
         self.client = AsyncQdrantClient(
             url=getattr(config.QdrantConfig, "URL", "http://localhost:6333"),
             port=None,
             api_key=getattr(config.QdrantConfig, "API_KEY", None),
             timeout=getattr(config.QdrantConfig, "TIMEOUT_SECONDS", 30),
+            check_compatibility=False,
         )
         self.embedding_service_url = getattr(config.QdrantConfig, "EMBEDDING_SERVICE_URL", None)
         if not self.embedding_service_url:
@@ -313,6 +327,8 @@ class VectorDbService:
             return _METADATA_INDEXED_FIELDS
         if self.collection_name == config.DocumentRagConfig.DOCUMENTS_COLLECTION_NAME:
             return _DOCUMENTS_INDEXED_FIELDS
+        if self.collection_name == config.QdrantConfig.SHAREPOINT_COLLECTION_NAME:
+            return _SHAREPOINT_INDEXED_FIELDS
         if self.collection_name == config.QdrantConfig.TEST_CASES_COLLECTION_NAME:
             return _TEST_CASES_INDEXED_FIELDS
         return {}

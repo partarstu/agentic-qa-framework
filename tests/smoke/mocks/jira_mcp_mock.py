@@ -16,6 +16,7 @@ The stateless Streamable HTTP transport is served under ``/mcp``; a plain
 """
 
 import base64
+import contextlib
 import json
 
 from mcp.server.fastmcp import FastMCP
@@ -77,6 +78,7 @@ _issue_counter = 0
 # allows localhost/127.0.0.1). Disable it: this is a test mock on a private network.
 mcp = FastMCP(
     "jira-mock",
+    stateless_http=True,  # mirrors the production server's --stateless
     transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
 )
 
@@ -203,10 +205,19 @@ async def _seeded_story_endpoint(_request: Request) -> JSONResponse:
     return JSONResponse(_SEEDED_STORY)
 
 
+@contextlib.asynccontextmanager
+async def _lifespan(_app: Starlette):
+    # A mounted Streamable HTTP app does not run its own lifespan: the host app must keep the
+    # MCP session manager running, or every /mcp request fails with "Task group is not initialized".
+    async with mcp.session_manager.run():
+        yield
+
+
 app = Starlette(
     routes=[
         Route("/__recorded", _recorded_endpoint),
         Route("/__seeded_story", _seeded_story_endpoint),
         Mount("/", app=mcp.streamable_http_app()),
-    ]
+    ],
+    lifespan=_lifespan,
 )

@@ -122,8 +122,11 @@ def judge_google_api_key() -> Iterator[None]:
         )
     dummy_key = os.environ["GOOGLE_API_KEY"]
     os.environ["GOOGLE_API_KEY"] = CONFIGURED_GOOGLE_API_KEY
+    # The model factory builds the Gemini client from config, which read the dummy at import time.
+    config.GOOGLE_API_KEY = CONFIGURED_GOOGLE_API_KEY
     yield
     os.environ["GOOGLE_API_KEY"] = dummy_key
+    config.GOOGLE_API_KEY = dummy_key
 
 
 @pytest.fixture(scope="session")

@@ -92,9 +92,7 @@ class IncidentCreationAgent(AgentBase):
     def get_max_requests_per_task(self) -> int:
         return config.IncidentCreationAgentConfig.MAX_REQUESTS_PER_TASK
 
-    async def _search_duplicate_candidates_in_rag(
-        self, incident_description: str, project_key: str
-    ) -> list[JiraIssue]:
+    async def _search_duplicate_candidates_in_rag(self, incident_description: str, project_key: str) -> list[JiraIssue]:
         """Searches for potential duplicate incidents using the RAG vector database.
 
         Args:

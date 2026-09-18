@@ -25,12 +25,16 @@ class DashboardStateStore:
         self._queue: asyncio.Queue[tuple[str, dict]] = asyncio.Queue(maxsize=max_queue_size)
         self._writer: asyncio.Task[None] | None = None
         self._maintenance: asyncio.Task[None] | None = None
+        self._rehydrated = False
 
     async def start(self) -> None:
-        """Start best-effort writer and maintenance tasks when persistence is enabled."""
+        """Start best-effort writer and maintenance tasks when persistence is enabled.
+
+        A failed initial read doesn't disable persistence: the maintenance loop retries it.
+        """
         if not config.DashboardPersistenceConfig.ENABLED:
             return
-        await self.rehydrate()
+        self._rehydrated = await self.rehydrate()
         self._writer = asyncio.create_task(self._write_loop())
         self._maintenance = asyncio.create_task(self._maintenance_loop())
 
@@ -54,64 +58,103 @@ class DashboardStateStore:
             finally:
                 self._queue.task_done()
 
-    async def rehydrate(self) -> None:
-        """Restore persisted state, repairing tasks interrupted by a process restart."""
+    async def rehydrate(self) -> bool:
+        """Restore the persisted state within the retention windows, merged chronologically with the state
+        this process already has. A task still RUNNING was interrupted by the restart: it is marked FAILED
+        and persisted, so the running count stays honest.
+
+        Returns:
+            False when the store could not be read; the maintenance loop then retries.
+        """
         try:
             records = await self._service.scroll_payload_records({})
         except Exception:
-            logger.exception("Dashboard-state rehydration failed; maintenance will retry later.")
-            return
+            logger.exception("Dashboard-state rehydration failed; the maintenance loop retries it.")
+            return False
+        from orchestrator.memory_log_handler import LogEntry, memory_log_handler
         from orchestrator.models import ErrorRecord, TaskRecord, TaskStatus, error_history, task_history
 
+        cutoffs = _retention_cutoffs()
+        tasks: list[TaskRecord] = []
+        errors: list[ErrorRecord] = []
+        logs: list[LogEntry] = []
         for record in records:
-            payload = record.get("payload")
-            if not isinstance(payload, dict):
+            kind, payload = record.get("kind"), record.get("payload")
+            if kind not in cutoffs or not isinstance(payload, dict) or str(record.get("stored_at", "")) < cutoffs[kind]:
                 continue
-            if record.get("kind") == "task":
-                try:
-                    task = TaskRecord(
-                        task_id=payload["task_id"], agent_id=payload["agent_id"], agent_name=payload["agent_name"],
-                        description=payload["description"], status=TaskStatus(payload["status"]),
-                        start_time=datetime.fromisoformat(payload["start_time"]),
-                        end_time=datetime.fromisoformat(payload["end_time"]) if payload.get("end_time") else None,
-                        error_message=payload.get("error_message"), agent_logs=payload.get("agent_logs"),
-                        current_activity=payload.get("current_activity"), token_usage=payload.get("token_usage"),
-                    )
-                    if task.status == TaskStatus.RUNNING:
-                        task.status = TaskStatus.FAILED
-                        task.end_time = datetime.now(UTC)
-                        task.error_message = "Task was interrupted by an orchestrator restart."
-                    await task_history.add(task)
-                except (KeyError, TypeError, ValueError):
-                    logger.warning("Ignoring malformed persisted task record.")
-            elif record.get("kind") == "error":
-                try:
-                    await error_history.add(
-                        ErrorRecord(
-                            error_id=payload["error_id"], timestamp=datetime.fromisoformat(payload["timestamp"]),
-                            message=payload["message"], task_id=payload.get("task_id"), agent_id=payload.get("agent_id"),
-                            module=payload.get("module"), traceback_snippet=payload.get("traceback_snippet"),
+            try:
+                if kind == "task":
+                    tasks.append(
+                        TaskRecord(
+                            task_id=payload["task_id"],
+                            agent_id=payload["agent_id"],
+                            agent_name=payload["agent_name"],
+                            description=payload["description"],
+                            status=TaskStatus(payload["status"]),
+                            start_time=_utc(payload["start_time"]),
+                            end_time=_utc(payload["end_time"]) if payload.get("end_time") else None,
+                            error_message=payload.get("error_message"),
+                            agent_logs=payload.get("agent_logs"),
+                            current_activity=payload.get("current_activity"),
+                            token_usage=payload.get("token_usage"),
                         )
                     )
-                except (KeyError, TypeError, ValueError):
-                    logger.warning("Ignoring malformed persisted error record.")
+                elif kind == "error":
+                    errors.append(
+                        ErrorRecord(
+                            error_id=payload["error_id"],
+                            timestamp=_utc(payload["timestamp"]),
+                            message=payload["message"],
+                            task_id=payload.get("task_id"),
+                            agent_id=payload.get("agent_id"),
+                            module=payload.get("module"),
+                            traceback_snippet=payload.get("traceback_snippet"),
+                        )
+                    )
+                else:
+                    logs.append(
+                        LogEntry(
+                            timestamp=payload["timestamp"],
+                            level=payload["level"],
+                            logger_name=payload["logger"],
+                            message=payload["message"],
+                            task_id=payload.get("task_id"),
+                            agent_id=payload.get("agent_id"),
+                            agent_name=payload.get("agent_name"),
+                        )
+                    )
+            except (KeyError, TypeError, ValueError):
+                logger.warning("Ignoring a malformed persisted %s record.", kind)
+
+        for task in tasks:
+            if task.status == TaskStatus.RUNNING:
+                task.status = TaskStatus.FAILED
+                task.end_time = datetime.now(UTC)
+                task.error_message = "Task was interrupted by an orchestrator restart."
+                self.enqueue("task", {"id": task.task_id, "payload": task.to_dict()})
+        await task_history.restore(tasks)
+        await error_history.restore(errors)
+        memory_log_handler.restore(logs)
+        logger.info(
+            "Restored %d task(s), %d error(s) and %d log line(s) of dashboard state.",
+            len(tasks),
+            len(errors),
+            len(logs),
+        )
+        return True
 
     async def _maintenance_loop(self) -> None:
         while True:
             await self.prune()
+            if not self._rehydrated:
+                self._rehydrated = await self.rehydrate()
             await asyncio.sleep(config.DashboardPersistenceConfig.MAINTENANCE_INTERVAL_SECONDS)
 
     async def prune(self) -> None:
         """Delete expired persisted state on every first and subsequent maintenance tick."""
         try:
             await self._service.ensure_payload_collection()
-            now = datetime.now(UTC)
-            for kind, days in (
-                ("log", config.DashboardPersistenceConfig.LOG_RETENTION_DAYS),
-                ("task", config.DashboardPersistenceConfig.HISTORY_RETENTION_DAYS),
-                ("error", config.DashboardPersistenceConfig.HISTORY_RETENTION_DAYS),
-            ):
-                cutoff = (now - timedelta(days=days)).isoformat()
+            for kind, cutoff in _retention_cutoffs().items():
                 await self._service.delete_by_filter(
                     models.Filter(
                         must=[
@@ -132,6 +175,24 @@ class DashboardStateStore:
             *(task for task in (self._writer, self._maintenance) if task is not None), return_exceptions=True
         )
         await self._service.close()
+
+
+def _retention_cutoffs() -> dict[str, str]:
+    """The oldest ``stored_at`` still retained, per record kind."""
+    now = datetime.now(UTC)
+    log_days = config.DashboardPersistenceConfig.LOG_RETENTION_DAYS
+    history_days = config.DashboardPersistenceConfig.HISTORY_RETENTION_DAYS
+    return {
+        "log": (now - timedelta(days=log_days)).isoformat(),
+        "task": (now - timedelta(days=history_days)).isoformat(),
+        "error": (now - timedelta(days=history_days)).isoformat(),
+    }
+
+
+def _utc(value: str) -> datetime:
+    """A persisted timestamp as an aware UTC datetime; records written before WS23 carry naive ones."""
+    parsed = datetime.fromisoformat(value)
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
 
 
 dashboard_state_store = DashboardStateStore()

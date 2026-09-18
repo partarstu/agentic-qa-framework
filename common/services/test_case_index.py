@@ -46,11 +46,24 @@ def render_test_case(project_key: str, listed: ListedTestCase) -> IndexedTestCas
         for step in test_case.steps
     )
     text = "\n".join(
-        part for part in (f"Name: {test_case.name}", f"Objective: {test_case.summary}", f"Preconditions: {test_case.preconditions or ''}", steps) if part
+        part
+        for part in (
+            f"Name: {test_case.name}",
+            f"Objective: {test_case.summary}",
+            f"Preconditions: {test_case.preconditions or ''}",
+            steps,
+        )
+        if part
     )
     return IndexedTestCase(
         test_management_system=config.TEST_MANAGEMENT_SYSTEM,
-        project_key=project_key, test_case_key=test_case.key or "", name=test_case.name, status=listed.status,
-        labels=test_case.labels, parent_issue_key=test_case.parent_issue_key, text=text,
-        content_hash=hashlib.sha256(text.encode("utf-8")).hexdigest(), indexed_at=datetime.now(UTC).isoformat(),
+        project_key=project_key,
+        test_case_key=test_case.key or "",
+        name=test_case.name,
+        status=listed.status,
+        labels=test_case.labels,
+        parent_issue_key=test_case.parent_issue_key,
+        text=text,
+        content_hash=hashlib.sha256(text.encode("utf-8")).hexdigest(),
+        indexed_at=datetime.now(UTC).isoformat(),
     )

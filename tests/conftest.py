@@ -24,6 +24,12 @@ CONFIGURED_GOOGLE_API_KEY = _configured_google_api_key()
 os.environ["OPENAI_API_KEY"] = "dummy"
 os.environ["GOOGLE_API_KEY"] = "dummy"
 
+# Point the vector DB at localhost like CI does: a developer's .env may name a real remote
+# instance, and unit tests must never read from or write to it. Nothing serves the port
+# locally, so any accidental real call fails fast instead of reaching the remote.
+os.environ["QDRANT_URL"] = "http://localhost:6333"
+os.environ.pop("QDRANT_API_KEY", None)
+
 # Provide dummy auth configuration so the now fail-closed auth has valid settings under test,
 # and keep prompt-injection checks off by default (tests that need them opt in explicitly).
 os.environ.setdefault("ORCHESTRATOR_API_KEY", "test-orchestrator-key")

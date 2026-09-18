@@ -895,14 +895,14 @@
       },
       "controls": {
         "graph-oauth-client-credentials": {
-          "description": "Graph access uses Entra app-only (client-credentials) tokens via MSAL; the least-privilege Sites.Selected application permission is granted per site.",
+          "description": "Graph access uses Entra app-only (client-credentials) tokens; the least-privilege Sites.Selected application permission is granted per site.",
           "requirements": [
             {
               "requirement-url": "https://quaia.finos.calm/controls/authentication.requirement.json",
               "config": {
                 "control-id": "quaia-graph-oauth-client-credentials",
                 "name": "Graph OAuth Client Credentials",
-                "description": "Calls to Microsoft Graph authenticate with an app-only OAuth 2.0 client-credentials access token obtained through MSAL.",
+                "description": "Calls to Microsoft Graph authenticate with an app-only OAuth 2.0 client-credentials access token requested from the Entra token endpoint.",
                 "auth-method": "oauth2",
                 "enforced": true
               }

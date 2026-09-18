@@ -4,9 +4,11 @@
 
 """Microsoft Graph access for SharePoint document libraries (WS18).
 
-App-only (client-credentials) tokens come from MSAL; the least-privilege setup is the
-``Sites.Selected`` application permission granted per site. Graph itself is called over
-httpx with explicit timeouts and 429/5xx back-off that honours ``Retry-After``.
+App-only tokens come from Entra's client-credentials grant, one form POST to the tenant's
+``/oauth2/v2.0/token`` endpoint (the flow MSAL wraps; MSAL itself only accepts an HTTPS authority,
+which rules out a hermetic mock); the least-privilege setup is the ``Sites.Selected`` application
+permission granted per site. Graph itself is called over httpx with explicit timeouts and 429/5xx
+back-off that honours ``Retry-After``.
 
 Change detection uses delta enumeration on the drive root: the caller pages through
 ``@odata.nextLink`` to a final ``@odata.deltaLink``; deletions arrive with the ``deleted``
@@ -17,14 +19,12 @@ required.
 import time
 
 import httpx
-import msal
 
 import config
 from common import utils
 
 logger = utils.get_logger("sharepoint_client")
 
-GRAPH_BASE_URL = "https://graph.microsoft.com/v1.0"
 GRAPH_SCOPE = "https://graph.microsoft.com/.default"
 # Retries for 429/5xx responses, honouring Retry-After.
 MAX_RETRIES = 5
@@ -49,19 +49,29 @@ class SharePointClient:
         ]
         if missing:
             raise ValueError(f"SharePoint access requires SHAREPOINT_{', SHAREPOINT_'.join(missing)} to be set.")
-        self._authority = f"{config.SharePointConfig.AUTHORITY_URL}/{tenant_id}"
-        self._app = msal.ConfidentialClientApplication(
-            client_id, authority=self._authority, client_credential=client_secret
-        )
+        self._token_url = f"{config.SharePointConfig.AUTHORITY_URL}/{tenant_id}/oauth2/v2.0/token"
+        self._client_id = client_id
+        self._client_secret = client_secret
         self._token: str | None = None
         self._token_expiry = 0.0
 
     def _access_token(self) -> str:
         """A cached app-only token, refreshed five minutes before it expires."""
         if self._token is None or time.monotonic() >= self._token_expiry - 300:
-            result = self._app.acquire_token_for_client(scopes=[GRAPH_SCOPE])
-            if "access_token" not in result:
-                raise RuntimeError(f"SharePoint token acquisition failed: {result.get('error_description')}")
+            response = httpx.post(
+                self._token_url,
+                data={
+                    "grant_type": "client_credentials",
+                    "client_id": self._client_id,
+                    "client_secret": self._client_secret,
+                    "scope": GRAPH_SCOPE,
+                },
+                timeout=TIMEOUT_SECONDS,
+            )
+            result = response.json() if response.headers.get("content-type", "").startswith("application/json") else {}
+            if response.status_code != 200 or "access_token" not in result:
+                reason = result.get("error_description") or f"HTTP {response.status_code}"
+                raise RuntimeError(f"SharePoint token acquisition failed: {reason}")
             self._token = result["access_token"]
             self._token_expiry = time.monotonic() + int(result.get("expires_in", 3600))
         return self._token
@@ -70,8 +80,12 @@ class SharePointClient:
         return {"Authorization": f"Bearer {self._access_token()}"}
 
     def _request_with_retry(self, method: str, url: str) -> httpx.Response:
-        """One Graph call with 429/5xx back-off that honours Retry-After."""
-        with httpx.Client(timeout=TIMEOUT_SECONDS) as client:
+        """One Graph call with 429/5xx back-off that honours Retry-After.
+
+        Redirects are followed: a file download answers 302 with a pre-authenticated URL, and httpx drops
+        the Authorization header when the redirect leaves the Graph origin.
+        """
+        with httpx.Client(timeout=TIMEOUT_SECONDS, follow_redirects=True) as client:
             for attempt in range(MAX_RETRIES):
                 response = client.request(method, url, headers=self._headers())
                 if response.status_code == 410:
@@ -81,9 +95,7 @@ class SharePointClient:
                 if response.status_code in (429, 502, 503, 504) and attempt < MAX_RETRIES - 1:
                     retry_after = response.headers.get("Retry-After")
                     delay = float(retry_after) if retry_after else min(2**attempt, 32)
-                    logger.warning(
-                        f"Graph {method} {url} returned {response.status_code}; retrying in {delay:.0f}s."
-                    )
+                    logger.warning(f"Graph {method} {url} returned {response.status_code}; retrying in {delay:.0f}s.")
                     time.sleep(delay)
                     continue
                 response.raise_for_status()
@@ -96,7 +108,7 @@ class SharePointClient:
         A ``delta_link`` of ``None`` starts a full enumeration from the drive root. A 410
         raises ``DeltaResyncRequired``.
         """
-        url = delta_link or f"{GRAPH_BASE_URL}/drives/{drive_id}/root/delta"
+        url = delta_link or f"{config.SharePointConfig.GRAPH_BASE_URL}/drives/{drive_id}/root/delta"
         response = self._request_with_retry("GET", url)
         if response.status_code == 410:
             raise DeltaResyncRequired(f"The delta link for drive {drive_id} expired (410 Gone).")
@@ -104,6 +116,6 @@ class SharePointClient:
 
     def download_item(self, drive_id: str, item_id: str) -> bytes:
         """The content of one drive item."""
-        url = f"{GRAPH_BASE_URL}/drives/{drive_id}/items/{item_id}/content"
+        url = f"{config.SharePointConfig.GRAPH_BASE_URL}/drives/{drive_id}/items/{item_id}/content"
         response = self._request_with_retry("GET", url)
         return response.content

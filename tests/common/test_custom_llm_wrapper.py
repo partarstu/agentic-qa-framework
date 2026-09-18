@@ -116,9 +116,7 @@ async def test_request_records_usage_under_operation_name(mock_wrapped_model):
     from common.token_usage import OperationMeter, operation_meter
 
     with patch("common.custom_llm_wrapper.build_model", return_value=mock_wrapped_model):
-        wrapper = CustomLlmWrapper(
-            model_name="google-gla:gemini-3.5-flash", operation_name="duplicate_detector"
-        )
+        wrapper = CustomLlmWrapper(model_name="google-gla:gemini-3.5-flash", operation_name="duplicate_detector")
     response = ModelResponse(
         parts=[TextPart(content="answer"), ToolCallPart(tool_name="search", args={}, tool_call_id="1")],
         usage=RequestUsage(input_tokens=110, output_tokens=20, cache_read_tokens=7, cache_write_tokens=3),

@@ -111,6 +111,7 @@ setup_memory_logging()
 
 execution_lock = asyncio.Lock()
 report_lock = asyncio.Lock()
+discovery_lock = asyncio.Lock()  # Serialises the startup, periodic and manual discovery runs
 agent_selection_lock = asyncio.Lock()  # Ensures atomic agent selection and reservation
 cancellation_queue = asyncio.Queue()
 _results_extractor_semaphore = asyncio.Semaphore(1)  # Serializes extractor calls to avoid rate limit errors
@@ -281,7 +282,13 @@ async def get_rag_sync_status(_: str = Depends(dashboard_auth)):
 @orchestrator_app.post("/sync-outcome")
 async def receive_sync_outcome(outcome: SyncOutcome, api_key: str = Depends(_validate_api_key)):
     """Record a validated sync completion callback without changing job success semantics."""
-    level = logging.ERROR if outcome.status == "failed" else logging.WARNING if outcome.status == "completed_with_errors" else logging.INFO
+    level = (
+        logging.ERROR
+        if outcome.status == "failed"
+        else logging.WARNING
+        if outcome.status == "completed_with_errors"
+        else logging.INFO
+    )
     logger.log(level, "Sync %s for %s: %s", outcome.status, outcome.scope, outcome.message)
     return {"accepted": True}
 
@@ -301,10 +308,9 @@ async def get_logs(
 
 @orchestrator_app.post("/api/dashboard/discovery")
 async def trigger_agent_discovery(_: str = Depends(dashboard_auth)):
-    """Manually trigger agent discovery."""
+    """Manually trigger agent discovery and report the reachable and removed agents."""
     try:
-        await _discover_agents()
-        return {"message": "Agent discovery triggered successfully"}
+        return await _run_manual_discovery()
     except HTTPException:
         raise
     except Exception as e:
@@ -986,16 +992,13 @@ async def execute_tests(request: ProjectExecutionRequest, api_key: str = Depends
         logger.info("Processing failed tests for incident creation.")
         await _request_incident_creation_for_failed_tests(all_execution_results, project_key)
 
+        reporting_failures = []
         if all_execution_results:
             logger.info("Generating test execution report based on all execution results.")
-            try:
-                await _generate_test_report(all_execution_results, project_key, test_management_client)
-            except HTTPException:
-                raise
-            except Exception as e:
-                _handle_exception(f"Failed to generate test report: {e}")
+            reporting_failures = await _generate_test_report(all_execution_results, project_key, test_management_client)
         return {
-            "message": f"Test execution completed for project {project_key}. Ran {len(all_execution_results)} tests."
+            "message": f"Test execution completed for project {project_key}. Ran {len(all_execution_results)} tests.",
+            "reporting_failures": reporting_failures,
         }
 
 
@@ -1007,22 +1010,50 @@ async def execute_test(request: ManualTestExecutionRequest, api_key: str = Depen
     result = await _execute_single_test(request.agent_id, test_case, "manual", selected_agent_id=request.agent_id)
     if result is None:
         raise HTTPException(status_code=502, detail="Execution agent returned no result.")
-    try:
-        await _generate_test_report([result], request.project_key, test_management_client)
-    except Exception as exc:
-        _record_error(f"Manual execution report failed: {exc}")
-    return result.model_dump()
+    reporting_failures = await _generate_test_report([result], request.project_key, test_management_client)
+    return {**result.model_dump(), "reporting_failures": reporting_failures}
 
 
-async def _generate_test_report(all_execution_results, project_key, test_management_client):
+async def _generate_test_report(all_execution_results, project_key, test_management_client) -> list[str]:
+    """Uploads the results to the test management system and generates the HTML report (WS15).
+
+    Both steps are independent: each failure is recorded as a dashboard error and tolerated, and a missing
+    test plan skips the execution upload but not the report. The lock keeps concurrent runs from corrupting
+    the report tool's fixed output directories.
+
+    Returns:
+        The messages of the steps that failed; empty when reporting succeeded.
+    """
+    failures: list[str] = []
+
+    def record_failure(message: str) -> None:
+        _record_error(message)
+        failures.append(message)
+
     async with report_lock:
-        test_cycle_name = f"Automated Test Execution - {datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')}"
-        test_cycle_key = await asyncio.to_thread(test_management_client.create_test_plan, project_key, test_cycle_name)
-        logger.info(f"Uploading {len(all_execution_results)} test execution result(s) to test management system.")
-        await asyncio.to_thread(test_management_client.create_test_execution, all_execution_results, project_key, test_cycle_key)
-        reporting_client = get_test_reporting_client(str(Path(__file__).resolve().parent.parent.resolve()))
-        await asyncio.to_thread(reporting_client.generate_report, all_execution_results)
-        logger.info("HTML test report generation completed.")
+        try:
+            test_cycle_name = f"Automated Test Execution - {datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')}"
+            test_cycle_key = await asyncio.to_thread(
+                test_management_client.create_test_plan, project_key, test_cycle_name
+            )
+            if test_cycle_key:
+                logger.info(
+                    f"Uploading {len(all_execution_results)} test execution result(s) to test management system."
+                )
+                await asyncio.to_thread(
+                    test_management_client.create_test_execution, all_execution_results, project_key, test_cycle_key
+                )
+            else:
+                record_failure("No test plan was created; the upload of the test execution results was skipped.")
+        except Exception as e:
+            record_failure(f"Uploading the test execution results to the test management system failed: {e}")
+        try:
+            reporting_client = get_test_reporting_client(str(Path(__file__).resolve().parent.parent.resolve()))
+            await asyncio.to_thread(reporting_client.generate_report, all_execution_results)
+            logger.info("HTML test report generation completed.")
+        except Exception as e:
+            record_failure(f"Generating the HTML test report failed: {e}")
+    return failures
 
 
 async def _request_incident_creation_for_failed_tests(
@@ -1062,6 +1093,9 @@ async def _request_incident_creation_for_failed_tests(
                 f"Incident creation completed for test case {result.testCaseKey}. "
                 f"Incident key: {incident_result.incident_key if incident_result else 'N/A'}"
             )
+        except asyncio.CancelledError:
+            _record_error(f"Incident creation for test case {result.testCaseKey} was cancelled.")
+            raise
         except Exception:
             _record_error(f"Failed to create incident for test case {result.testCaseKey}.")
 
@@ -1148,17 +1182,45 @@ async def _execute_test_group(
     for agent_id in valid_agent_ids[: len(test_cases)]:
         workers.append(asyncio.create_task(_agent_worker(agent_id, queue, results, valid_agent_ids)))
 
-    # Wait for all items in the queue to be processed
-    await queue.join()
+    # The group is done when the queue is drained or when every worker has exited (e.g. its agent broke),
+    # whichever comes first: waiting on the queue alone would hang forever once no worker is left.
+    queue_drained = asyncio.create_task(queue.join())
+    workers_exited = asyncio.gather(*workers)
+    try:
+        await asyncio.wait({queue_drained, workers_exited}, return_when=asyncio.FIRST_COMPLETED)
+    except asyncio.CancelledError:
+        for worker in workers:
+            worker.cancel()
+        raise
+    finally:
+        queue_drained.cancel()
 
-    # Signal all workers to stop
+    # Signal the remaining workers to stop and wait for them to finish gracefully
     for _ in workers:
         queue.put_nowait(None)
+    await workers_exited
 
-    # Wait for workers to finish gracefully
-    await asyncio.gather(*workers)
-
+    while not queue.empty():
+        item = queue.get_nowait()
+        if item is not None:
+            results.append(_unexecuted_test_result(item[0]))
     return results
+
+
+def _unexecuted_test_result(test_case: TestCase) -> TestExecutionResult:
+    """The result of a test case left in the queue after every execution agent of its group has gone."""
+    logger.error(f"Test case {test_case.key} was not executed: no execution agent remained available.")
+    now = datetime.now(UTC).isoformat()
+    return TestExecutionResult(
+        stepResults=[],
+        testCaseKey=test_case.key,
+        testCaseName=test_case.name,
+        testExecutionStatus="error",
+        generalErrorMessage="Not executed: no execution agent remained available to run this test case.",
+        start_timestamp=now,
+        end_timestamp=now,
+        test_case=test_case,
+    )
 
 
 async def _agent_worker(
@@ -1235,7 +1297,8 @@ async def _agent_worker(
                 break  # Exit worker as agent is broken
             queue.task_done()
     except asyncio.CancelledError:
-        logger.info(f"Agent worker for {agent_id} cancelled.")
+        _record_error(f"Agent worker for {agent_id} was cancelled.", agent_id=agent_id)
+        raise
     except Exception as e:
         host = _get_agent_host(await agent_registry.get_card(agent_id))
         _record_error(f"Unexpected error in agent worker {agent_id} on host '{host}': {e}")
@@ -1257,6 +1320,9 @@ async def _execute_single_test(
                 execution_request.model_dump_json(), task_description, selected_agent_id
             )
         artifacts = _get_artifacts_from_task(completed_task, task_description)
+    except HTTPException:
+        # Its status (the manual reservation's 404/409/503, a timeout's 408) must reach the caller unchanged.
+        raise
     except Exception as e:
         _handle_exception(f"Failed to execute test case {test_case.key}. Error: {e}", 500)
     finally:
@@ -1491,7 +1557,7 @@ async def _finalize_task(
     Agent-registry updates (update_status, set_current_task) are the caller's
     responsibility and follow this call.
     """
-    await task_history.update(internal_task_id, final_status, datetime.now(), error_msg)
+    await task_history.update(internal_task_id, final_status, datetime.now(UTC), error_msg)
     await task_history.clear_current_activity(internal_task_id)
     event = TaskDoneEvent(
         task_id=internal_task_id,
@@ -1631,6 +1697,7 @@ async def _send_task_to_agent_with_message(
 
     internal_task_id = str(uuid4())
     agent_id = None
+    last_task_id = None
     httpx_client: httpx.AsyncClient | None = None
     try:
         # Wait for an agent and reserve it atomically
@@ -1648,7 +1715,7 @@ async def _send_task_to_agent_with_message(
                     raise HTTPException(status_code=503, detail="Execution agent is unavailable.")
                 await agent_registry.update_status(selected_agent_id, AgentStatus.BUSY)
                 agent_id = selected_agent_id
-        task_start_time = datetime.now()
+        task_start_time = datetime.now(UTC)
         agent_name = await agent_registry.get_name(agent_id)
 
         # Record task start in history
@@ -1672,7 +1739,6 @@ async def _send_task_to_agent_with_message(
         )
         response_iterator = a2a_client.send_message(SendMessageRequest(message=message))
         start_time = time.time()
-        last_task_id = None
         last_status = None
         collected_artifacts: list[Artifact] = []
         log_state = _LogStreamState()
@@ -1787,6 +1853,17 @@ async def _send_task_to_agent_with_message(
         )
         return None
 
+    except asyncio.CancelledError:
+        # CancelledError is no Exception: without this branch a cancelled task would leave its agent BUSY forever.
+        if agent_id is not None:
+            _record_error(f"Task '{task_description}' was cancelled.", internal_task_id, agent_id)
+            with suppress(Exception):
+                await _finalize_task(internal_task_id, agent_id, TaskStatus.CANCELLED, "Task was cancelled")
+            # The remote task may still be running: the recovery worker cancels it and frees the agent.
+            await agent_registry.update_status(agent_id, AgentStatus.BROKEN, BrokenReason.TASK_STUCK, last_task_id)
+            await agent_registry.set_current_task(agent_id, None)
+            await cancellation_queue.put((agent_id, time.time()))
+        raise
     except HTTPException:
         # HTTPException is raised by _handle_exception, agent status already handled above
         raise
@@ -1940,7 +2017,7 @@ def _record_error(message: str, task_id: str | None = None, agent_id: str | None
     logger.exception(message)
     error_record = ErrorRecord(
         error_id=str(uuid4()),
-        timestamp=datetime.now(),
+        timestamp=datetime.now(UTC),
         message=message,
         task_id=task_id,
         agent_id=agent_id,
@@ -2197,9 +2274,56 @@ async def _process_url_discovery(url: str):
 
 
 async def _discover_agents():
+    """Registers the new agents found on the configured host/port candidates (startup and periodic runs)."""
+    async with discovery_lock:
+        await _discover_new_agents()
+
+
+async def _run_manual_discovery() -> dict[str, Any]:
+    """The manual discovery run (WS14): new-agent discovery plus a re-probe of every registered agent.
+
+    A reachable BROKEN agent becomes AVAILABLE again; an unreachable one is removed unless it is BUSY,
+    so stale entries (e.g. a VM-hosted agent that moved to a new address) disappear. One failing probe
+    never fails the run.
     """
-    Discovers remote agents by scanning a port range on each of the configured base URLs.
-    Checks reachability of existing agents and discovers new ones.
+    async with discovery_lock:
+        if not await _discover_new_agents():
+            return {
+                "message": "Agent discovery is not configured: set REMOTE_EXECUTION_AGENT_HOSTS and "
+                "AGENT_DISCOVERY_PORTS.",
+                "reachable": 0,
+                "removed": 0,
+            }
+        cards = await agent_registry.get_all_cards()
+        agent_ids = list(cards)
+        probes = await asyncio.gather(
+            *(_check_agent_reachability(cards[agent_id].supported_interfaces[0].url) for agent_id in agent_ids),
+            return_exceptions=True,
+        )
+        reachable = removed = 0
+        for agent_id, probe in zip(agent_ids, probes, strict=True):
+            if isinstance(probe, BaseException):
+                logger.warning("Probing agent %s failed: %s", agent_id, probe)
+            if probe is True:
+                reachable += 1
+                if await agent_registry.get_status(agent_id) == AgentStatus.BROKEN:
+                    await agent_registry.update_status(agent_id, AgentStatus.AVAILABLE)
+                    logger.info("Agent %s is reachable again; marked AVAILABLE.", agent_id)
+            elif await agent_registry.remove_unless_busy(agent_id):
+                removed += 1
+                logger.info("Removed unreachable agent %s.", agent_id)
+        return {
+            "message": f"{reachable} agents reachable, {removed} unreachable agents removed",
+            "reachable": reachable,
+            "removed": removed,
+        }
+
+
+async def _discover_new_agents() -> bool:
+    """Registers the new agents found on the configured candidates; the caller holds the discovery lock.
+
+    Returns:
+        False when discovery is not configured (or misconfigured), True otherwise.
     """
     agent_base_urls_str = config.OrchestratorConfig.REMOTE_EXECUTION_AGENT_HOSTS
     port_range_str = config.OrchestratorConfig.AGENT_DISCOVERY_PORTS
@@ -2209,7 +2333,7 @@ async def _discover_agents():
             "Agent discovery configuration is incomplete. "
             "Please set both REMOTE_EXECUTION_AGENT_HOSTS and AGENT_DISCOVERY_PORTS."
         )
-        return
+        return False
 
     base_urls = [url.strip() for url in agent_base_urls_str.split(",")]
 
@@ -2220,7 +2344,7 @@ async def _discover_agents():
             f"Invalid port range format for AGENT_DISCOVERY_PORTS: '{port_range_str}'. "
             f"Expected format is 'start-end', e.g., '8001-8010'."
         )
-        return
+        return False
 
     remote_agent_urls = []
     for base_url in base_urls:
@@ -2229,10 +2353,11 @@ async def _discover_agents():
 
     if not remote_agent_urls:
         logger.warning("No agent URLs were generated for discovery.")
-        return
+        return False
 
     tasks = [_process_url_discovery(url) for url in set(remote_agent_urls)]
     await asyncio.gather(*tasks)
+    return True
 
 
 # =============================================================================

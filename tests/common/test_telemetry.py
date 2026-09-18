@@ -35,14 +35,15 @@ def test_operation_counters_are_recorded_per_token_type_and_operation(monkeypatc
     reader = _reader_meter(monkeypatch)
     meter = OperationMeter()
     meter.add("main", "google-gla:gemini-3.5-flash", RunUsage(requests=2, input_tokens=110, output_tokens=20))
-    meter.add("duplicate_detector", "google-gla:gemini-3.5-flash", RunUsage(requests=1, input_tokens=55, output_tokens=8))
+    meter.add(
+        "duplicate_detector", "google-gla:gemini-3.5-flash", RunUsage(requests=1, input_tokens=55, output_tokens=8)
+    )
 
     telemetry.record_operation_usage("incident_creation", meter.entries())
 
     points = _data_points(reader, telemetry.TOKEN_USAGE_HISTOGRAM)
     by_operation_and_type = {
-        (point.attributes["quaia.operation"], point.attributes["gen_ai.token.type"]): point.sum
-        for point in points
+        (point.attributes["quaia.operation"], point.attributes["gen_ai.token.type"]): point.sum for point in points
     }
     assert by_operation_and_type[("main", "input")] == 110
     assert by_operation_and_type[("main", "output")] == 20

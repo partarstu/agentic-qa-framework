@@ -43,9 +43,10 @@ def test_same_key_in_another_test_management_system_gets_another_point_id(monkey
 
 
 def test_point_id_is_stable_across_renders():
-    assert render_test_case("PROJ", _listed("PROJ-T1")).get_vector_id() == render_test_case(
-        "PROJ", _listed("PROJ-T1")
-    ).get_vector_id()
+    assert (
+        render_test_case("PROJ", _listed("PROJ-T1")).get_vector_id()
+        == render_test_case("PROJ", _listed("PROJ-T1")).get_vector_id()
+    )
 
 
 def test_rendered_text_covers_name_objective_preconditions_and_steps():

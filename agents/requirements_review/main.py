@@ -202,7 +202,9 @@ class RequirementsReviewAgent(AgentBase):
         user_message_parts.extend(assemble_retrieved_parts(result.pages))
         logger.info(
             "Retrieved %d reference documentation page(s) for issue %s (unavailable sources: %s)",
-            len(result.pages), jira_issue_key, result.unavailable_sources or "none",
+            len(result.pages),
+            jira_issue_key,
+            result.unavailable_sources or "none",
         )
         return await self._run_review(user_message_parts)
 

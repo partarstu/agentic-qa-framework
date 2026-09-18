@@ -178,3 +178,38 @@ def test_link_issue_to_test_case(mock_post, zephyr_client):
     assert mock_post.called
     _, kwargs = mock_post.call_args
     assert kwargs["json"] == {"issueId": 10001, "type": "Relates"}
+
+
+def test_fetch_test_cases_by_project_resolves_status_names_from_the_catalog(zephyr_client):
+    """A listed test case references its status by id only; the name comes from the status catalog."""
+    pages = {
+        0: {"values": [{"key": "PROJ-T1", "status": {"id": 2, "self": "http://zephyr/statuses/2"}}], "isLast": False},
+        100: {"values": [{"key": "PROJ-T2", "status": {"id": 1, "self": "http://zephyr/statuses/1"}}], "isLast": True},
+    }
+
+    def _respond(request_fn, url, **kwargs):
+        if "/statuses" in url:
+            return MagicMock(json=lambda: {"values": [{"id": 1, "name": "Draft"}, {"id": 2, "name": "Approved"}]})
+        page = pages[kwargs["params"]["startAt"]]
+        return MagicMock(json=lambda: page)
+
+    with (
+        patch.object(ZephyrClient, "_request", side_effect=_respond),
+        patch.object(
+            ZephyrClient,
+            "_parse_tc_json",
+            side_effect=lambda client, key, tc: TestCase(
+                key=tc["key"],
+                name="N",
+                summary="S",
+                steps=[],
+                labels=[],
+                comment="",
+                preconditions="",
+                parent_issue_key=None,
+            ),
+        ),
+    ):
+        listed = zephyr_client.fetch_test_cases_by_project("PROJ")
+
+    assert [(item.test_case.key, item.status) for item in listed] == [("PROJ-T1", "Approved"), ("PROJ-T2", "Draft")]

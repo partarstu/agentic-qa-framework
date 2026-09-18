@@ -102,7 +102,7 @@ def confluence_only(documents_db):
         patch.object(config_documentrag(), "CONFLUENCE_RETRIEVAL_ENABLED", True),
         patch.object(config_documentrag(), "SHAREPOINT_RETRIEVAL_ENABLED", False),
     ):
-            yield documents_db
+        yield documents_db
 
 
 def config_documentrag():
@@ -227,12 +227,12 @@ class TestPerSourceRetrieval:
             patch.object(config_documentrag(), "CONFLUENCE_RETRIEVAL_ENABLED", True),
             patch.object(config_documentrag(), "SHAREPOINT_RETRIEVAL_ENABLED", True),
         ):
-                sharepoint_db.hybrid_search = AsyncMock(
-                    return_value=[_hit(_attachment_payload(source="sharepoint", space_key="", page_id=""))]
-                )
-                result = await retrieve_documents(
-                    documents_db, "query", RetrievalScope(drive_id="drive1"), sharepoint_db=sharepoint_db
-                )
+            sharepoint_db.hybrid_search = AsyncMock(
+                return_value=[_hit(_attachment_payload(source="sharepoint", space_key="", page_id=""))]
+            )
+            result = await retrieve_documents(
+                documents_db, "query", RetrievalScope(drive_id="drive1"), sharepoint_db=sharepoint_db
+            )
 
         confluence_filter = documents_db.hybrid_search.await_args.kwargs["query_filter"]
         assert [c.key for c in confluence_filter.must] == ["source"]
@@ -248,14 +248,14 @@ class TestPerSourceRetrieval:
             patch.object(config_documentrag(), "CONFLUENCE_RETRIEVAL_ENABLED", True),
             patch.object(config_documentrag(), "SHAREPOINT_RETRIEVAL_ENABLED", True),
         ):
-                documents_db.hybrid_search = AsyncMock(
-                    return_value=[_hit(_body_payload(text="c1"), 0.9), _hit(_body_payload(page_id="223", text="c2"), 0.8)]
-                )
-                sharepoint_db.hybrid_search = AsyncMock(
-                    return_value=[_hit(_body_payload(source="sharepoint", space_key="", page_id="", text="s1"), 0.95)]
-                )
+            documents_db.hybrid_search = AsyncMock(
+                return_value=[_hit(_body_payload(text="c1"), 0.9), _hit(_body_payload(page_id="223", text="c2"), 0.8)]
+            )
+            sharepoint_db.hybrid_search = AsyncMock(
+                return_value=[_hit(_body_payload(source="sharepoint", space_key="", page_id="", text="s1"), 0.95)]
+            )
 
-                result = await retrieve_documents(documents_db, "query", sharepoint_db=sharepoint_db)
+            result = await retrieve_documents(documents_db, "query", sharepoint_db=sharepoint_db)
 
         # Rank interleaving, not fused score: s1 outranks c1 despite the higher similarity, because
         # scores are not comparable across collections; each source's first page comes first.
@@ -267,10 +267,10 @@ class TestPerSourceRetrieval:
             patch.object(config_documentrag(), "CONFLUENCE_RETRIEVAL_ENABLED", True),
             patch.object(config_documentrag(), "SHAREPOINT_RETRIEVAL_ENABLED", True),
         ):
-                documents_db.hybrid_search = AsyncMock(return_value=[_hit(_body_payload(text="c1"), 0.9)])
-                sharepoint_db.hybrid_search = AsyncMock(side_effect=RuntimeError("collection gone"))
+            documents_db.hybrid_search = AsyncMock(return_value=[_hit(_body_payload(text="c1"), 0.9)])
+            sharepoint_db.hybrid_search = AsyncMock(side_effect=RuntimeError("collection gone"))
 
-                result = await retrieve_documents(documents_db, "query", sharepoint_db=sharepoint_db)
+            result = await retrieve_documents(documents_db, "query", sharepoint_db=sharepoint_db)
 
         assert [page.part.text for page in result.pages] == ["c1"]
         assert result.unavailable_sources == ["sharepoint"]
@@ -281,11 +281,11 @@ class TestPerSourceRetrieval:
             patch.object(config_documentrag(), "CONFLUENCE_RETRIEVAL_ENABLED", True),
             patch.object(config_documentrag(), "SHAREPOINT_RETRIEVAL_ENABLED", True),
         ):
-                documents_db.hybrid_search = AsyncMock(side_effect=RuntimeError("down"))
-                sharepoint_db.hybrid_search = AsyncMock(side_effect=RuntimeError("down"))
+            documents_db.hybrid_search = AsyncMock(side_effect=RuntimeError("down"))
+            sharepoint_db.hybrid_search = AsyncMock(side_effect=RuntimeError("down"))
 
-                with pytest.raises(RuntimeError, match="All document sources failed"):
-                    await retrieve_documents(documents_db, "query", sharepoint_db=sharepoint_db)
+            with pytest.raises(RuntimeError, match="All document sources failed"):
+                await retrieve_documents(documents_db, "query", sharepoint_db=sharepoint_db)
 
     @pytest.mark.asyncio
     async def test_no_enabled_source_yields_an_empty_result(self, documents_db):
@@ -293,7 +293,7 @@ class TestPerSourceRetrieval:
             patch.object(config_documentrag(), "CONFLUENCE_RETRIEVAL_ENABLED", False),
             patch.object(config_documentrag(), "SHAREPOINT_RETRIEVAL_ENABLED", False),
         ):
-                result = await retrieve_documents(documents_db, "query")
+            result = await retrieve_documents(documents_db, "query")
 
         assert result.pages == []
         documents_db.hybrid_search.assert_not_awaited()

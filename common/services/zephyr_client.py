@@ -28,16 +28,23 @@ class ZephyrClient(TestManagementClientBase):
     """
 
     def fetch_test_cases_by_project(self, project_key: str) -> list[ListedTestCase]:
-        """List every test case of the project with its current status (WS17 full resync)."""
+        """List every test case of the project with its current status (WS17 full resync).
+
+        A listed test case references its status by id only, so the names come from the status catalog.
+        """
         search_url = f"{self.base_url}/testcases"
         listed: list[ListedTestCase] = []
         params: dict[str, Any] = {"projectKey": project_key, "maxResults": 100, "startAt": 0}
         with httpx.Client() as client:
+            status_names = {
+                status.get("id"): status.get("name", "")
+                for status in self._get_test_case_statuses(client, {"projectKey": project_key})
+            }
             while True:
                 response = self._request(client.get, search_url, headers=self.headers, params=params)
                 data = response.json()
                 for tc in data.get("values", []):
-                    status = (tc.get("status") or {}).get("name", "")
+                    status = status_names.get((tc.get("status") or {}).get("id"), "")
                     listed.append(ListedTestCase(test_case=self._parse_tc_json(client, None, tc), status=status))
                 if data.get("isLast", True):
                     break
@@ -288,7 +295,7 @@ class ZephyrClient(TestManagementClientBase):
             self._update_test_case(client, tc_url, test_case_data)
             logger.info(f"Successfully changed status of test case {test_case_key} to '{new_status_name}'.")
 
-    def _get_test_case_status_id_by_name(self, client, status_name: str, params):
+    def _get_test_case_statuses(self, client, params) -> list[dict]:
         statuses_url = f"{self.base_url}/statuses?maxResults=100&statusType=TEST_CASE"
         logger.debug(f"Fetching statuses from {statuses_url}")
         statuses_response = self._request(client.get, statuses_url, headers=self.headers, params=params)
@@ -296,6 +303,10 @@ class ZephyrClient(TestManagementClientBase):
         logger.debug(f"Zephyr API response for fetching statuses: {response_json}")
         statuses = response_json.get("values", [])
         logger.debug(f"Found {len(statuses)} statuses")
+        return statuses
+
+    def _get_test_case_status_id_by_name(self, client, status_name: str, params):
+        statuses = self._get_test_case_statuses(client, params)
         target_status_id = next(
             (
                 status.get("id")

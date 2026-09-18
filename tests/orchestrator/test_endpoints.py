@@ -94,7 +94,7 @@ async def test_execute_tests_endpoint():
         patch("orchestrator.main.get_test_management_client") as mock_get_client,
         patch("orchestrator.main._group_test_cases_by_labels", new_callable=AsyncMock) as mock_group,
         patch("orchestrator.main._request_all_test_cases_execution", new_callable=AsyncMock) as mock_exec,
-        patch("orchestrator.main._generate_test_report", new_callable=AsyncMock) as mock_report,
+        patch("orchestrator.main._generate_test_report", new_callable=AsyncMock, return_value=[]) as mock_report,
     ):
         mock_tm_client = MagicMock()
         mock_get_client.return_value = mock_tm_client
@@ -241,7 +241,7 @@ async def test_execute_test_accepts_test_case_keys_of_both_systems_and_creates_n
     with (
         patch("orchestrator.main.get_test_management_client") as mock_client,
         patch("orchestrator.main._execute_single_test", new_callable=AsyncMock, return_value=result) as mock_execute,
-        patch("orchestrator.main._generate_test_report", new_callable=AsyncMock) as mock_report,
+        patch("orchestrator.main._generate_test_report", new_callable=AsyncMock, return_value=[]) as mock_report,
         patch("orchestrator.main._request_incident_creation", new_callable=AsyncMock) as mock_incident,
     ):
         response = client.post(
@@ -250,6 +250,7 @@ async def test_execute_test_accepts_test_case_keys_of_both_systems_and_creates_n
 
     assert response.status_code == 200
     assert response.json()["testCaseKey"] == test_case_key
+    assert response.json()["reporting_failures"] == []
     mock_client.return_value.fetch_test_case_by_key.assert_called_once_with(test_case_key)
     assert mock_execute.await_args.kwargs["selected_agent_id"] == "agent-1"
     mock_report.assert_awaited_once()

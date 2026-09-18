@@ -196,6 +196,7 @@ class DefaultAgentExecutor(AgentExecutor):
         finally:
             if not handler_detached:
                 reset_current_log_handler(handler_token)
+                operation_meter.reset(meter_token)
                 root_logger.removeHandler(log_handler)
             # The task is over: publish the accumulated per-operation counters as OTel metrics.
             # Reporting only — a metrics failure must not affect the task's terminal status.

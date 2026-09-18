@@ -87,7 +87,9 @@ def render(
     placeholders = {"{project}": project, "{region}": region, "{version}": str(resolved_version)}
     rendered_env = {key: _expand(value, placeholders) for key, value in sorted(env.items()) if value}
     secrets = _secrets(manifest, service, service_config)
-    return RenderedService(env=rendered_env, secrets=secrets, marker=_marker(str(resolved_version), rendered_env, secrets))
+    return RenderedService(
+        env=rendered_env, secrets=secrets, marker=_marker(str(resolved_version), rendered_env, secrets)
+    )
 
 
 def _lookup(manifest: Mapping, section: str, name: str) -> Mapping:
@@ -124,9 +126,7 @@ def _applicable_overrides(
     if undeclared:
         raise ValueError(f"{source} {undeclared[0]!r} is not declared by the manifest.")
     return {
-        key: str(value)
-        for key, value in overrides.items()
-        if value not in (None, "") and key in declared_by_service
+        key: str(value) for key, value in overrides.items() if value not in (None, "") and key in declared_by_service
     }
 
 

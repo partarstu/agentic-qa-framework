@@ -152,7 +152,9 @@ class TestRedeployMarker:
         assert _render(manifest, version="V1.16.3").marker.startswith("v1_16_3-")
 
 
-@pytest.mark.parametrize(("section", "service", "environment"), [("service", "missing", "dev"), ("environment", "api", "prod")])
+@pytest.mark.parametrize(
+    ("section", "service", "environment"), [("service", "missing", "dev"), ("environment", "api", "prod")]
+)
 def test_an_unknown_service_or_environment_fails(manifest, section, service, environment):
     with pytest.raises(ValueError, match=f"Unknown {section}"):
         render(manifest, service, environment, environ={"PROJECT_ID": "proj"})
@@ -199,8 +201,13 @@ def test_the_redeploy_gate_skips_only_an_unchanged_marker(tmp_path, deployed_mar
 
     # The fake gcloud is found through the working directory, which keeps Windows drive letters out of PATH.
     result = subprocess.run(
-        [shutil.which("bash"), "-c", 'PATH=".:$PATH" bash "$1" service orchestrator us-central1 1_0-abc', "gate",
-         gate.as_posix()],
+        [
+            shutil.which("bash"),
+            "-c",
+            'PATH=".:$PATH" bash "$1" service orchestrator us-central1 1_0-abc',
+            "gate",
+            gate.as_posix(),
+        ],
         cwd=tmp_path,
         check=True,
         capture_output=True,

@@ -105,7 +105,7 @@ AGENT_BASE_URL = os.environ.get("AGENT_BASE_URL", "http://localhost")
 MCP_SERVER_ATTACHMENTS_FOLDER_PATH = os.environ.get("MCP_SERVER_ATTACHMENTS_FOLDER_PATH", "/tmp")
 ATTACHMENTS_LOCAL_DESTINATION_FOLDER_PATH = os.environ.get("ATTACHMENTS_LOCAL_DESTINATION_FOLDER_PATH", "/tmp")
 JIRA_ATTACHMENT_SKIP_POSTFIX = os.environ.get("JIRA_ATTACHMENT_SKIP_POSTFIX", "_SKIP")
-MCP_SERVER_TIMEOUT_SECONDS = 30
+MCP_SERVER_TIMEOUT_SECONDS = int(os.environ.get("MCP_SERVER_TIMEOUT_SECONDS", "30"))
 MCP_SESSION_LIFECYCLE_TIMEOUT_SECONDS = int(os.environ.get("MCP_SESSION_LIFECYCLE_TIMEOUT_SECONDS", "30"))
 SUPPORTED_ATTACHMENT_MIME_TYPES: set[str] = {
     # Images
@@ -440,8 +440,9 @@ class SharePointConfig:
     TENANT_ID = os.environ.get("SHAREPOINT_TENANT_ID")
     CLIENT_ID = os.environ.get("SHAREPOINT_CLIENT_ID")
     CLIENT_SECRET = os.environ.get("SHAREPOINT_CLIENT_SECRET")
-    # Overridable so a mocked Graph endpoint can serve the token request too (smoke).
+    # Both overridable so a mocked Graph endpoint serves the token request and the Graph calls (smoke).
     AUTHORITY_URL = os.environ.get("SHAREPOINT_AUTHORITY_URL", "https://login.microsoftonline.com")
+    GRAPH_BASE_URL = os.environ.get("SHAREPOINT_GRAPH_BASE_URL", "https://graph.microsoft.com/v1.0")
 
 
 class DocumentRagConfig:

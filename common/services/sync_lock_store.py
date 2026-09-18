@@ -14,7 +14,10 @@ import secrets
 import time
 from datetime import UTC, datetime
 
+from common import utils
 from common.services.vector_db_service import VectorDbService
+
+logger = utils.get_logger("sync_lock_store")
 
 LOCK_RECORD_KIND = "sync-lock"
 SYNC_STATE_RECORD_KIND = "sync-state"
@@ -154,11 +157,10 @@ class SyncOutcomeStore:
                     "message": message,
                     "processed_count": processed_count,
                     "updated_at": now,
-                    "started_at": (existing or {}).get("started_at", now),
+                    # A new run starts with "running"; its terminal write keeps that run's start time.
+                    "started_at": now if status == "running" else (existing or {}).get("started_at", now),
                 },
             )
         except Exception:
             # Dashboard visibility must never convert a successful sync into a failure.
-            import logging
-
-            logging.getLogger(__name__).exception("Unable to persist sync outcome for %s.", scope)
+            logger.exception("Unable to persist sync outcome for %s.", scope)
