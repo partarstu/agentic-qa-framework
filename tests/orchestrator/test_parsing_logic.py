@@ -436,6 +436,7 @@ class TestRequestIncidentCreationErrorHandling:
             test_step_results=[],
             system_description="Test system",
             issue_priority_field_id="priority_field_id",
+            project_key="SMOKE",
         )
 
         # Create artifact with AgentExecutionError
@@ -479,6 +480,7 @@ class TestRequestIncidentCreationErrorHandling:
             test_step_results=[],
             system_description="Test system",
             issue_priority_field_id="priority_field_id",
+            project_key="SMOKE",
         )
 
         # Create artifact with successful result

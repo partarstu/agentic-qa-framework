@@ -181,6 +181,12 @@ class RagSyncTrigger:
         match source:
             case "jira":
                 payload["project_key"] = arg("--project-key")
+            case "sharepoint":
+                payload["drive_id"] = arg("--drive-id")
+                if (folder_path := arg("--folder-path")) is not None:
+                    payload["folder_path"] = folder_path
+                if (pattern := arg("--attachment-name-pattern")) is not None:
+                    payload["attachment_name_pattern"] = pattern
             case "test_cases":
                 payload["project_key"] = arg("--project-key")
             case "confluence":

@@ -11,6 +11,7 @@ from pydantic_ai.exceptions import ModelRetry
 from pydantic_ai.messages import BinaryContent
 
 from agents.requirements_review.main import RequirementsReviewAgent
+from common.services.document_retrieval import RetrievalResult
 
 
 @pytest.fixture
@@ -32,6 +33,8 @@ def mock_config():
         mock_conf.MCP_SERVER_TIMEOUT_SECONDS = 30
         mock_conf.QdrantConfig.EMBEDDING_SERVICE_URL = "http://embeddings"
         mock_conf.DocumentRagConfig.DOCUMENTS_COLLECTION_NAME = "documents"
+        mock_conf.DocumentRagConfig.CONFLUENCE_RETRIEVAL_ENABLED = True
+        mock_conf.DocumentRagConfig.SHAREPOINT_RETRIEVAL_ENABLED = False
         yield mock_conf
 
 
@@ -65,7 +68,10 @@ def retrieval(retrieved_page):
                 patch("agents.requirements_review.main.download_issue_attachments", return_value={})
             ),
             stack.enter_context(
-                patch("agents.requirements_review.main.retrieve_documents", AsyncMock(return_value=[retrieved_page]))
+                patch(
+                    "agents.requirements_review.main.retrieve_documents",
+                    AsyncMock(return_value=RetrievalResult([retrieved_page], [])),
+                )
             ),
             stack.enter_context(
                 patch("agents.requirements_review.main.assemble_retrieved_parts", return_value=["DOC-PART"])
@@ -162,7 +168,8 @@ def test_enabled_retrieval_advertises_query_tool_appends_instruction_and_checks_
     review_agent.db_class.assert_called_once_with("documents", metadata_collection_name="rag_metadata")
 
 
-def test_disabled_retrieval_advertises_attachments_only_tool_without_instruction(construct_agent) -> None:
+def test_disabled_retrieval_advertises_attachments_only_tool_without_instruction(mock_config, construct_agent) -> None:
+    mock_config.DocumentRagConfig.CONFLUENCE_RETRIEVAL_ENABLED = False
     review_agent, base_kwargs = construct_agent("")
 
     assert not review_agent.retrieval_enabled

@@ -28,6 +28,8 @@ export function LoginPage() {
         setError({ message: 'Orchestrator is offline or not reachable', isOffline: true });
       } else if (axios.isAxiosError(err) && err.response?.status === 401) {
         setError({ message: 'Invalid username or password', isOffline: false });
+      } else if (axios.isAxiosError(err) && err.response?.status === 429) {
+        setError({ message: 'Too many login attempts. Please wait a minute and try again.', isOffline: false });
       } else {
         setError({ message: 'An unexpected error occurred', isOffline: false });
       }

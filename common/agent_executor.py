@@ -55,11 +55,14 @@ class DefaultAgentExecutor(AgentExecutor):
 
         log_handler = AgentLogCaptureHandler()
         log_handler.setLevel(config.LOG_LEVEL)
+        log_handler.addFilter(utils.StructuredLogFilter())
         root_logger = logging.getLogger()
         root_logger.addHandler(log_handler)
         handler_token = set_current_log_handler(log_handler)
         meter = OperationMeter()
         meter_token = operation_meter.set(meter)
+        # Every log line of this run carries the agent's and the task's identity, without call-site changes (WS23).
+        log_context_token = utils.log_context.set({"agent_name": self._agent_name(), "task_id": task_id})
 
         logs_artifact_id = str(uuid4())  # stable id correlating every log chunk for this task
         sent_any_logs = False
@@ -200,6 +203,7 @@ class DefaultAgentExecutor(AgentExecutor):
                 telemetry.record_operation_usage(self._agent_name(), meter.entries())
             except Exception:
                 logger.exception("Failed to record token-usage metrics for task %s.", task_id)
+            utils.log_context.reset(log_context_token)
 
     def _agent_name(self) -> str:
         return getattr(self.agent, "agent_name", None) or getattr(self.agent, "name", "") or "agent"

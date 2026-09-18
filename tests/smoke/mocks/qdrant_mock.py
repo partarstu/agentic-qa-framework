@@ -12,7 +12,9 @@ neither unsigned integers nor UUIDs with a 400. The RAG sync
 flow (``/update-jira-db``, forwarded to the local sync service) creates its collections and upserts the seeded story
 here; the incident-creation agent's duplicate search probes the collection list
 and, when the collection exists, queries it (always answered with no hits, so the
-"no duplicates -> create a fresh bug" path is taken deterministically).
+"no duplicates -> create a fresh bug" path is taken deterministically). Only the
+test-case collection answers queries with its stored matching points, so the test-case
+review's duplicate judge runs over the test cases indexed next to it.
 
 ``POST /embed-document-text`` and ``POST /embed-query-text`` stand in for the
 embedding service — ``VectorDbService`` embeds every text before storing or
@@ -33,6 +35,8 @@ _EMBEDDING_DIM = 8
 
 # Collections keyed by name; each holds its points keyed by stringified point id.
 _collections: dict[str, dict[str, dict]] = {}
+# The vector configuration each collection was created with, keyed by collection name.
+_vector_configs: dict[str, dict] = {}
 _recorded: dict = {
     "collections_probes": 0,
     "created_collections": [],
@@ -114,12 +118,40 @@ async def list_collections() -> dict:
 async def create_collection(name: str, request: Request) -> dict:
     payload = await request.json()
     _collections.setdefault(name, {})
+    _vector_configs[name] = {
+        "vectors": payload.get("vectors") or {},
+        "sparse_vectors": payload.get("sparse_vectors") or {},
+    }
     _recorded["created_collections"].append(name)
     _recorded["collection_schemas"][name] = {
         "vectors": sorted((payload.get("vectors") or {}).keys()),
         "sparse_vectors": sorted((payload.get("sparse_vectors") or {}).keys()),
     }
     return {"result": True, "status": "ok", "time": 0.0}
+
+
+@app.get("/collections/{name}")
+async def get_collection(name: str) -> dict:
+    """Describe a collection with the vector configuration it was created with (WS19 schema validation)."""
+    if name not in _collections:
+        raise HTTPException(status_code=404, detail=f"Collection `{name}` doesn't exist!")
+    info = {
+        "status": "green",
+        "optimizer_status": "ok",
+        "segments_count": 1,
+        "config": {
+            "params": _vector_configs.get(name, {}),
+            "hnsw_config": {"m": 16, "ef_construct": 100, "full_scan_threshold": 10000},
+            "optimizer_config": {
+                "deleted_threshold": 0.2,
+                "vacuum_min_vector_number": 1000,
+                "default_segment_number": 0,
+                "flush_interval_sec": 5,
+            },
+        },
+        "payload_schema": {},
+    }
+    return {"result": info, "status": "ok", "time": 0.0}
 
 
 @app.put("/collections/{name}/index")
@@ -217,21 +249,46 @@ async def set_payload(name: str, request: Request) -> dict:
     return _UPDATE_RESULT
 
 
-def _matches_filter(point: dict, point_filter: dict | None) -> bool:
-    """Honour the top-level ``must`` equality conditions the services send."""
-    must = ((point_filter or {}).get("must")) or []
-    required = {
-        condition["key"]: condition["match"]["value"] for condition in must if "value" in condition.get("match", {})
+def _equality_conditions(conditions: list[dict] | None) -> dict:
+    return {
+        condition["key"]: condition["match"]["value"]
+        for condition in conditions or []
+        if "value" in condition.get("match", {})
     }
-    return all(point.get("payload", {}).get(key) == value for key, value in required.items())
+
+
+def _matches_filter(point: dict, point_filter: dict | None) -> bool:
+    """Honour the top-level ``must`` and ``must_not`` equality conditions the services send."""
+    payload = point.get("payload", {})
+    required = _equality_conditions((point_filter or {}).get("must"))
+    excluded = _equality_conditions((point_filter or {}).get("must_not"))
+    return all(payload.get(key) == value for key, value in required.items()) and not any(
+        payload.get(key) == value for key, value in excluded.items()
+    )
+
+
+# The one collection whose queries are answered with stored points: the test-case review's
+# duplicate search, so its judge runs end to end over the test cases indexed next to it.
+_ANSWERED_COLLECTION = "test_cases"
+
+
+def _scored_points(name: str, point_filter: dict | None, limit: int) -> list[dict]:
+    if name != _ANSWERED_COLLECTION:
+        return []
+    matches = [point for point in _collections.get(name, {}).values() if _matches_filter(point, point_filter)]
+    return [
+        {"id": point["id"], "version": 0, "score": 0.9, "payload": point.get("payload")} for point in matches[:limit]
+    ]
 
 
 @app.post("/collections/{name}/points/query")
 async def query_points(name: str, request: Request) -> dict:
-    """Always report no hits, so the duplicate search deterministically finds no duplicates.
+    """Report stored matching points for the test-case collection and no hits elsewhere.
 
-    Hybrid queries (named-vector prefetches fused with RRF) are recorded so the smoke
-    suite can assert the incident flow issues a hybrid search.
+    Every other collection answers with no hits, so e.g. the incident duplicate search
+    deterministically finds no duplicates. Hybrid queries (named-vector prefetches fused
+    with RRF) are recorded with each prefetch's filter so the smoke suite can assert the
+    flows issue scoped hybrid searches.
     """
     payload = await request.json()
     _recorded["queries"].append({"collection": name, "filter": payload.get("filter")})
@@ -245,6 +302,7 @@ async def query_points(name: str, request: Request) -> dict:
                         "using": p.get("using"),
                         "limit": p.get("limit"),
                         "score_threshold": p.get("score_threshold"),
+                        "filter": p.get("filter"),
                     }
                     for p in prefetches
                 ],
@@ -253,7 +311,9 @@ async def query_points(name: str, request: Request) -> dict:
                 "filter": payload.get("filter"),
             }
         )
-    return {"result": {"points": []}, "status": "ok", "time": 0.0}
+    point_filter = prefetches[0].get("filter") if prefetches else payload.get("filter")
+    points = _scored_points(name, point_filter, payload.get("limit") or 10)
+    return {"result": {"points": points}, "status": "ok", "time": 0.0}
 
 
 @app.get("/__recorded")

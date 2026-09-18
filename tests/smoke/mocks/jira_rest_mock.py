@@ -22,8 +22,7 @@ _recorded_comments: list[dict[str, str]] = []
 _recorded_attachment_downloads: list[dict[str, str]] = []
 
 # The same story the Jira MCP mock seeds (jira_mcp_mock._SEEDED_STORY), in the raw
-# shape the jira client's search API returns. Its status must be one of
-# config.QdrantConfig.VALID_STATUSES so the RAG sync treats it as active.
+# shape the jira client's search API returns.
 _SEEDED_SEARCH_ISSUE = {
     "id": "10001",
     "key": "SMOKE-1",
@@ -37,6 +36,20 @@ _SEEDED_SEARCH_ISSUE = {
         "status": {"name": "To Do"},
         "issuetype": {"name": "Story"},
         "updated": "2026-01-01T00:00:00.000+0000",
+    },
+}
+
+# An issue in a status the former status allow-list excluded: the sync must still ingest it (WS18).
+_SEEDED_CLOSED_ISSUE = {
+    "id": "10002",
+    "key": "SMOKE-2",
+    "self": "http://jira_rest_mock:8080/rest/api/2/issue/10002",
+    "fields": {
+        "summary": "Password reset emails were sent twice",
+        "description": "Every password reset request sent two identical emails; fixed in the mail service.",
+        "status": {"name": "Closed"},
+        "issuetype": {"name": "Bug"},
+        "updated": "2026-01-02T00:00:00.000+0000",
     },
 }
 
@@ -122,9 +135,10 @@ async def add_comment(issue_key: str, request: Request) -> JSONResponse:
 
 @app.get("/rest/api/2/search")
 async def search_issues() -> dict:
-    """Answer every JQL search with the seeded story (the RAG sync searches twice:
+    """Answer every JQL search with the seeded issues (the RAG sync searches twice:
     all issue ids for reconciliation, then issues updated since the watermark)."""
-    return {"expand": "", "startAt": 0, "maxResults": 50, "total": 1, "issues": [_SEEDED_SEARCH_ISSUE]}
+    issues = [_SEEDED_SEARCH_ISSUE, _SEEDED_CLOSED_ISSUE]
+    return {"expand": "", "startAt": 0, "maxResults": 50, "total": len(issues), "issues": issues}
 
 
 @app.get("/__recorded")

@@ -1,16 +1,245 @@
+# SPDX-FileCopyrightText: 2025-2026 Taras Paruta (partarstu@gmail.com)
+#
+# SPDX-License-Identifier: AGPL-3.0-only
+
+# Deployment manifest (WS26): the source of truth for what every deployed workload is configured with.
+# scripts/render_deployment_config.py resolves it per service and environment into an env-vars file, a
+# secret-name list and a redeploy marker; cloudbuild.yaml consumes those. Resource sizing, image tags,
+# request timeouts and container ports stay in cloudbuild.yaml.
+#
+# Precedence (later wins): shared_defaults and the service's env -> the deployment target's identity
+# (GOOGLE_CLOUD_PROJECT, GOOGLE_CLOUD_REGION) -> the environment's overrides -> runtime overrides
+# (QUAIA_DEPLOY_OVERRIDE_<KEY> variables). Overrides may only set declared keys; an empty value never
+# beats a default, and a key left empty is not deployed at all. Values may use the placeholders
+# {project}, {region} and {version}. A service's version is part of its redeploy marker: bump it to
+# redeploy a code change whose configuration is unchanged.
+
+# Every secret name a service may reference; only names travel through the pipeline.
+secrets:
+  - AGENT_AUTH_TOKEN
+  - ATLASSIAN_MCP_SERVER_URL
+  - CONFLUENCE_API_TOKEN
+  - CONFLUENCE_URL
+  - CONFLUENCE_USERNAME
+  - DASHBOARD_JWT_SECRET
+  - DASHBOARD_PASSWORD_HASH
+  - DASHBOARD_USERNAME
+  - GOOGLE_API_KEY
+  - INTERNAL_SERVICE_API_KEY
+  - JIRA_API_TOKEN
+  - JIRA_URL
+  - JIRA_USERNAME
+  - ORCHESTRATOR_API_KEY
+  - QDRANT_API_KEY
+  - SHAREPOINT_CLIENT_ID
+  - SHAREPOINT_CLIENT_SECRET
+  - SHAREPOINT_TENANT_ID
+  - ZEPHYR_API_TOKEN
+  - ZEPHYR_BASE_URL
+
 shared_defaults:
-  LOG_LEVEL: INFO
+  TZ: Europe/Vienna
+
 services:
-  orchestrator:
+  # Third-party images (atlassian-mcp-server, qdrant-vector-db) declare no version: cloudbuild.yaml
+  # passes their image tag as the version, so a new tag redeploys them.
+  atlassian-mcp-server:
     env:
-      ORCHESTRATOR_PORT: "8000"
-      DASHBOARD_PERSISTENCE_ENABLED: "false"
+      MCP_LOGGING_STDOUT: "true"
+      DISABLE_JIRA_MARKUP_TRANSLATION: "true"
     secrets:
-      - ORCHESTRATOR_API_KEY
-      - DASHBOARD_USERNAME
-      - DASHBOARD_PASSWORD_HASH
-      - DASHBOARD_JWT_SECRET
-      - QDRANT_API_KEY
+      JIRA_API_TOKEN: JIRA_API_TOKEN
+      JIRA_USERNAME: JIRA_USERNAME
+      JIRA_URL: JIRA_URL
+      CONFLUENCE_URL: CONFLUENCE_URL
+      CONFLUENCE_USERNAME: CONFLUENCE_USERNAME
+      CONFLUENCE_API_TOKEN: CONFLUENCE_API_TOKEN
+
+  embedding-service:
+    version: "1.0"
+    env:
+      EMBEDDING_BACKENDS: text
+      EMBEDDING_TEXT_MODEL: BAAI/bge-m3
+    secrets: {}
+
+  prompt-guard-service:
+    version: "1.0"
+    env: {}
+    secrets: {}
+
+  qdrant-vector-db:
+    env: {}
+    secrets:
+      QDRANT__SERVICE__API_KEY: QDRANT_API_KEY
+
+  orchestrator:
+    version: "1.0"
+    env:
+      ORCHESTRATOR_VERSION: "{version}"
+      GOOGLE_CLOUD_LOGGING_ENABLED: "true"
+      REMOTE_EXECUTION_AGENT_HOSTS: ""
+      AGENT_DISCOVERY_PORTS: "443-443"
+      QDRANT_URL: ""
+      DASHBOARD_JWT_EXPIRE_HOURS: "24"
+      DASHBOARD_PERSISTENCE_ENABLED: "false"
+      RAG_SYNC_JOB_NAME: "projects/{project}/locations/{region}/jobs/rag-sync-job"
+      RAG_SYNC_JOB_REGION: "{region}"
+      RAG_SYNC_JOB_TASK_TIMEOUT_SECONDS: "3600"
+      RAG_SYNC_LOCK_TTL_SECONDS: "3900"
+      RAG_SYNC_START_ALLOWANCE_SECONDS: "300"
+      PROMPT_OVERRIDES_DIR: ""
+    secrets:
+      GOOGLE_API_KEY: GOOGLE_API_KEY
+      JIRA_API_TOKEN: JIRA_API_TOKEN
+      JIRA_USERNAME: JIRA_USERNAME
+      JIRA_URL: JIRA_URL
+      ZEPHYR_API_TOKEN: ZEPHYR_API_TOKEN
+      ZEPHYR_BASE_URL: ZEPHYR_BASE_URL
+      ORCHESTRATOR_API_KEY: ORCHESTRATOR_API_KEY
+      QDRANT_API_KEY: QDRANT_API_KEY
+      DASHBOARD_USERNAME: DASHBOARD_USERNAME
+      DASHBOARD_PASSWORD_HASH: DASHBOARD_PASSWORD_HASH
+      DASHBOARD_JWT_SECRET: DASHBOARD_JWT_SECRET
+      REMOTE_EXECUTION_AGENT_AUTH_TOKEN: AGENT_AUTH_TOKEN
+
+  rag-sync-job:
+    version: "1.0"
+    env:
+      QDRANT_URL: ""
+      EMBEDDING_SERVICE_URL: ""
+      RAG_SYNC_JOB_TASK_TIMEOUT_SECONDS: "3600"
+      RAG_SYNC_LOCK_TTL_SECONDS: "3900"
+      RAG_SYNC_START_ALLOWANCE_SECONDS: "300"
+      QDRANT_CONFLUENCE_COLLECTION_NAME: confluence_documents
+      RAG_OFFICE_CONVERSION_ENABLED: "true"
+      RAG_MAX_ATTACHMENT_BYTES: "104857600"
+      RAG_MAX_PAGES_PER_DOCUMENT: "200"
+      RAG_RENDER_DPI: "150"
+      RAG_MAX_IMAGE_PIXELS: "4096"
+    secrets:
+      JIRA_API_TOKEN: JIRA_API_TOKEN
+      JIRA_USERNAME: JIRA_USERNAME
+      JIRA_URL: JIRA_URL
+      CONFLUENCE_URL: CONFLUENCE_URL
+      CONFLUENCE_USERNAME: CONFLUENCE_USERNAME
+      CONFLUENCE_API_TOKEN: CONFLUENCE_API_TOKEN
+      QDRANT_API_KEY: QDRANT_API_KEY
+      INTERNAL_SERVICE_API_KEY: INTERNAL_SERVICE_API_KEY
+      # The test-case sync (WS17) reads the test management system.
+      ZEPHYR_API_TOKEN: ZEPHYR_API_TOKEN
+      ZEPHYR_BASE_URL: ZEPHYR_BASE_URL
+      # The SharePoint sync (WS18) authenticates app-only against Microsoft Graph.
+      SHAREPOINT_TENANT_ID: SHAREPOINT_TENANT_ID
+      SHAREPOINT_CLIENT_ID: SHAREPOINT_CLIENT_ID
+      SHAREPOINT_CLIENT_SECRET: SHAREPOINT_CLIENT_SECRET
+
+  requirements-review-agent:
+    version: "1.0"
+    env:
+      REQUIREMENTS_REVIEW_AGENT_VERSION: "{version}"
+      GOOGLE_CLOUD_LOGGING_ENABLED: "true"
+      AGENT_BASE_URL: ""
+      EXTERNAL_PORT: "443"
+      EMBEDDING_SERVICE_URL: ""
+      PROMPT_GUARD_SERVICE_URL: ""
+      QDRANT_URL: ""
+      CONFLUENCE_RETRIEVAL_ENABLED: "false"
+      SHAREPOINT_RETRIEVAL_ENABLED: "false"
+      PROMPT_OVERRIDES_DIR: ""
+    secrets:
+      GOOGLE_API_KEY: GOOGLE_API_KEY
+      JIRA_API_TOKEN: JIRA_API_TOKEN
+      JIRA_USERNAME: JIRA_USERNAME
+      JIRA_URL: JIRA_URL
+      ZEPHYR_API_TOKEN: ZEPHYR_API_TOKEN
+      ZEPHYR_BASE_URL: ZEPHYR_BASE_URL
+      ATLASSIAN_MCP_SERVER_URL: ATLASSIAN_MCP_SERVER_URL
+      QDRANT_API_KEY: QDRANT_API_KEY
+
+  test-case-generation-agent:
+    version: "1.0"
+    env:
+      TEST_CASE_GENERATION_AGENT_VERSION: "{version}"
+      GOOGLE_CLOUD_LOGGING_ENABLED: "true"
+      AGENT_BASE_URL: ""
+      EXTERNAL_PORT: "443"
+      EMBEDDING_SERVICE_URL: ""
+      PROMPT_GUARD_SERVICE_URL: ""
+      PROMPT_OVERRIDES_DIR: ""
+    secrets:
+      GOOGLE_API_KEY: GOOGLE_API_KEY
+      JIRA_API_TOKEN: JIRA_API_TOKEN
+      JIRA_USERNAME: JIRA_USERNAME
+      JIRA_URL: JIRA_URL
+      ZEPHYR_API_TOKEN: ZEPHYR_API_TOKEN
+      ZEPHYR_BASE_URL: ZEPHYR_BASE_URL
+      ATLASSIAN_MCP_SERVER_URL: ATLASSIAN_MCP_SERVER_URL
+
+  test-case-classification-agent:
+    version: "1.0"
+    env:
+      TEST_CASE_CLASSIFICATION_AGENT_VERSION: "{version}"
+      GOOGLE_CLOUD_LOGGING_ENABLED: "true"
+      AGENT_BASE_URL: ""
+      EXTERNAL_PORT: "443"
+      EMBEDDING_SERVICE_URL: ""
+      PROMPT_GUARD_SERVICE_URL: ""
+      PROMPT_OVERRIDES_DIR: ""
+    secrets:
+      GOOGLE_API_KEY: GOOGLE_API_KEY
+      JIRA_API_TOKEN: JIRA_API_TOKEN
+      JIRA_USERNAME: JIRA_USERNAME
+      JIRA_URL: JIRA_URL
+      ZEPHYR_API_TOKEN: ZEPHYR_API_TOKEN
+      ZEPHYR_BASE_URL: ZEPHYR_BASE_URL
+      ATLASSIAN_MCP_SERVER_URL: ATLASSIAN_MCP_SERVER_URL
+
+  test-case-review-agent:
+    version: "1.0"
+    env:
+      TEST_CASE_REVIEW_AGENT_VERSION: "{version}"
+      GOOGLE_CLOUD_LOGGING_ENABLED: "true"
+      AGENT_BASE_URL: ""
+      EXTERNAL_PORT: "443"
+      # The duplicate check (WS17) indexes and searches the test-case collection.
+      EMBEDDING_SERVICE_URL: ""
+      QDRANT_URL: ""
+      PROMPT_GUARD_SERVICE_URL: ""
+      PROMPT_OVERRIDES_DIR: ""
+    secrets:
+      GOOGLE_API_KEY: GOOGLE_API_KEY
+      JIRA_API_TOKEN: JIRA_API_TOKEN
+      JIRA_USERNAME: JIRA_USERNAME
+      JIRA_URL: JIRA_URL
+      ZEPHYR_API_TOKEN: ZEPHYR_API_TOKEN
+      ZEPHYR_BASE_URL: ZEPHYR_BASE_URL
+      ATLASSIAN_MCP_SERVER_URL: ATLASSIAN_MCP_SERVER_URL
+      QDRANT_API_KEY: QDRANT_API_KEY
+      INTERNAL_SERVICE_API_KEY: INTERNAL_SERVICE_API_KEY
+
+  incident-creation-agent:
+    version: "1.0"
+    env:
+      INCIDENT_CREATION_AGENT_VERSION: "{version}"
+      GOOGLE_CLOUD_LOGGING_ENABLED: "true"
+      AGENT_BASE_URL: ""
+      EXTERNAL_PORT: "443"
+      EMBEDDING_SERVICE_URL: ""
+      PROMPT_GUARD_SERVICE_URL: ""
+      QDRANT_URL: ""
+      ATTACHMENTS_LOCAL_DESTINATION_FOLDER_PATH: /tmp
+      MCP_SERVER_ATTACHMENTS_FOLDER_PATH: /tmp
+      PROMPT_OVERRIDES_DIR: ""
+    secrets:
+      GOOGLE_API_KEY: GOOGLE_API_KEY
+      JIRA_API_TOKEN: JIRA_API_TOKEN
+      JIRA_USERNAME: JIRA_USERNAME
+      JIRA_URL: JIRA_URL
+      ZEPHYR_API_TOKEN: ZEPHYR_API_TOKEN
+      ZEPHYR_BASE_URL: ZEPHYR_BASE_URL
+      ATLASSIAN_MCP_SERVER_URL: ATLASSIAN_MCP_SERVER_URL
+      QDRANT_API_KEY: QDRANT_API_KEY
+
 environments:
   production:
     platform: gcp

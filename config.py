@@ -430,6 +430,20 @@ class RagSyncConfig:
     CALLBACK_URL = os.environ.get("SYNC_CALLBACK_ORCHESTRATOR_URL")
 
 
+class SharePointConfig:
+    """Microsoft Graph app-only access for the SharePoint document-library ingestion (WS18).
+
+    The least-privilege setup grants the ``Sites.Selected`` application permission to the
+    app for the specific sites; ``Files.Read.All`` is the tenant-wide fallback.
+    """
+
+    TENANT_ID = os.environ.get("SHAREPOINT_TENANT_ID")
+    CLIENT_ID = os.environ.get("SHAREPOINT_CLIENT_ID")
+    CLIENT_SECRET = os.environ.get("SHAREPOINT_CLIENT_SECRET")
+    # Overridable so a mocked Graph endpoint can serve the token request too (smoke).
+    AUTHORITY_URL = os.environ.get("SHAREPOINT_AUTHORITY_URL", "https://login.microsoftonline.com")
+
+
 class DocumentRagConfig:
     """Confluence document ingestion and the documents collection (WS9).
 

@@ -22,7 +22,7 @@
 x-agent-env: &agent-env
   PORT: "8001"
   EXTERNAL_PORT: "8001"
-  ATLASSIAN_MCP_SERVER_URL: "http://jira_mcp_mock:9000/sse"
+  ATLASSIAN_MCP_SERVER_URL: "http://jira_mcp_mock:9000/mcp"
   JIRA_URL: "http://jira_rest_mock:8080"
   JIRA_USERNAME: "smoke"
   JIRA_API_TOKEN: "smoke-token"
@@ -144,11 +144,31 @@ services:
       CONFLUENCE_URL: "http://confluence_mock:8095"
       CONFLUENCE_USERNAME: "smoke"
       CONFLUENCE_API_TOKEN: "smoke-token"
+      # WS18: the SharePoint sync runs against the Microsoft Graph mock.
+      SHAREPOINT_TENANT_ID: "smoke-tenant"
+      SHAREPOINT_CLIENT_ID: "smoke-client"
+      SHAREPOINT_CLIENT_SECRET: "smoke-secret"
+      SHAREPOINT_AUTHORITY_URL: "http://sharepoint_mock:8097"
       QDRANT_URL: "http://qdrant_mock:6333"
       EMBEDDING_SERVICE_URL: "http://qdrant_mock:6333"
     depends_on: *sync-dependencies
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8085/health')"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+
+  # WS18: Microsoft Graph recording mock for the SharePoint ingestion. Shares the
+  # mocks image; the rag_sync_local build creates it.
+  sharepoint_mock:
+    image: agentic-qa-mocks:latest
+    build:
+      context: tests/smoke
+      dockerfile: Dockerfile
+    command: ["uvicorn", "mocks.sharepoint_mock:app", "--host", "0.0.0.0", "--port", "8097"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8097/__recorded')"]
       interval: 5s
       timeout: 5s
       retries: 12
@@ -164,8 +184,9 @@ services:
       # WS3: proves prompt overrides reach the agent - the override file under
       # tests/smoke/overrides/ replaces the bundled main prompt template.
       PROMPT_OVERRIDES_DIR: "/prompt-overrides"
-      # WS10: retrieval enabled - the review grounds itself in the documents the
-      # concurrently running Confluence sync ingests into the mocked vector DB.
+      # WS10/WS18: retrieval enabled, Confluence-only - the review grounds itself in the
+      # documents the concurrently running Confluence sync ingests into the mocked vector DB.
+      CONFLUENCE_RETRIEVAL_ENABLED: "true"
       QDRANT_URL: "http://qdrant_mock:6333"
       EMBEDDING_SERVICE_URL: "http://qdrant_mock:6333"
     volumes:
@@ -203,7 +224,13 @@ services:
     environment:
       <<: *agent-env
       AGENT_BASE_URL: "http://test_case_review"
-    depends_on: *mock-dependencies
+      # WS17: the review indexes its batch into the test-case collection and searches it for duplicates.
+      QDRANT_URL: "http://qdrant_mock:6333"
+      EMBEDDING_SERVICE_URL: "http://qdrant_mock:6333"
+    depends_on:
+      <<: *mock-dependencies
+      qdrant_mock:
+        condition: service_healthy
     healthcheck: *agent-healthcheck
 
   incident_creation:
@@ -270,6 +297,8 @@ services:
       JIRA_URL: "http://jira_rest_mock:8080"
       JIRA_USERNAME: "smoke"
       JIRA_API_TOKEN: "smoke-token"
+      # WS18: Confluence-only retrieval configuration for the review flow.
+      CONFLUENCE_RETRIEVAL_ENABLED: "true"
       QDRANT_URL: "http://qdrant_mock:6333"
       EMBEDDING_SERVICE_URL: "http://qdrant_mock:6333"
       # WS8: local mode - the orchestrator forwards /update-jira-db to the local sync service.

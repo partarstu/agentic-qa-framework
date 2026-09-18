@@ -23,15 +23,30 @@
           ]
         },
         "dashboard-jwt": {
-          "description": "Monitoring dashboard endpoints require a signed JWT; tokens are rejected when the signing secret is unset.",
+          "description": "Monitoring dashboard endpoints require a signed JWT; login verifies the submitted password against the bcrypt hash DASHBOARD_PASSWORD_HASH on a worker thread (never plaintext) and is rate limited per client IP.",
           "requirements": [
             {
               "requirement-url": "https://quaia.finos.calm/controls/authentication.requirement.json",
               "config": {
                 "control-id": "quaia-dashboard-jwt",
                 "name": "Dashboard JWT",
-                "description": "Dashboard API access requires a valid JWT signed with DASHBOARD_JWT_SECRET.",
+                "description": "Dashboard API access requires a valid JWT signed with DASHBOARD_JWT_SECRET; the login verifies credentials against DASHBOARD_PASSWORD_HASH with bcrypt.",
                 "auth-method": "jwt",
+                "enforced": true
+              }
+            }
+          ]
+        },
+        "login-rate-limit": {
+          "description": "The login endpoint allows 5 attempts per minute per client IP, tracked in an in-process sliding window; exceeding it returns HTTP 429 with Retry-After.",
+          "requirements": [
+            {
+              "requirement-url": "https://quaia.finos.calm/controls/rate-limiting.requirement.json",
+              "config": {
+                "control-id": "quaia-login-rate-limit",
+                "name": "Login Rate Limit",
+                "description": "Login attempts per client IP are bounded to 5 per minute (application layer; a second layer is the platform load balancer's job).",
+                "rate-limit": "5/minute per client IP",
                 "enforced": true
               }
             }
@@ -239,7 +254,7 @@
       "unique-id": "llm-provider",
       "node-type": "system",
       "name": "LLM Provider",
-      "description": "Large-language-model provider used by the orchestrator and agents: Google Gemini by default, or a self-hosted OpenAI-compatible deployment (Qwen on Cloud Run, authenticated with an IAM identity token)."
+      "description": "External LLM provider(s): Google Gemini by default, with Anthropic Claude 5 family and self-hosted Qwen as configured model options. Provider HTTP clients carry transport-level retries, per-operation token metering feeds the dashboard, and max output tokens / thinking effort are resolved per provider."
     },
     {
       "unique-id": "execution-agents",
@@ -275,6 +290,12 @@
       "node-type": "system",
       "name": "Confluence",
       "description": "Atlassian Confluence Cloud, source of the documents ingested into the RAG vector DB."
+    },
+    {
+      "unique-id": "sharepoint",
+      "node-type": "system",
+      "name": "Microsoft SharePoint",
+      "description": "Microsoft SharePoint document libraries (drive items), source of the documents ingested into the RAG vector DB."
     }
   ],
   "relationships": [
@@ -297,7 +318,7 @@
     },
     {
       "unique-id": "rel-orchestrator-routes-execution-tasks",
-      "description": "Orchestrator routes test-execution tasks to the external UI/API execution agents over the A2A protocol.",
+      "description": "Orchestrator routes test-execution tasks to the external UI/API execution agents over the A2A protocol: batch execution groups from /execute-tests and single manually selected executions from /execute-test.",
       "protocol": "HTTPS",
       "relationship-type": {
         "connects": {
@@ -547,7 +568,7 @@
     },
     {
       "unique-id": "rel-requirements-review-qdrant",
-      "description": "Requirements Review Agent runs hybrid retrieval over the documents collection in Qdrant to ground the review in Confluence documentation.",
+      "description": "Requirements Review Agent runs hybrid retrieval over the per-source document collections (Confluence and SharePoint) in Qdrant to ground the review in reference documentation.",
       "protocol": "HTTPS",
       "controls": {
         "vector-db-api-key": {
@@ -815,7 +836,16 @@
       "unique-id": "rel-rag-sync-job-orchestrator-outcome",
       "description": "The sync job posts its authenticated terminal outcome callback to the orchestrator when configured.",
       "protocol": "HTTPS",
-      "relationship-type": { "connects": { "source": { "node": "rag-sync-job" }, "destination": { "node": "orchestrator" } } }
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "rag-sync-job"
+          },
+          "destination": {
+            "node": "orchestrator"
+          }
+        }
+      }
     },
     {
       "unique-id": "rel-rag-sync-job-embedding",
@@ -845,6 +875,117 @@
           },
           "destination": {
             "node": "embedding-service"
+          }
+        }
+      }
+    },
+    {
+      "unique-id": "rel-rag-sync-job-sharepoint",
+      "description": "RAG Sync Job reads SharePoint drive items through the Microsoft Graph API with app-only access.",
+      "protocol": "HTTPS",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "rag-sync-job"
+          },
+          "destination": {
+            "node": "sharepoint"
+          }
+        }
+      },
+      "controls": {
+        "graph-oauth-client-credentials": {
+          "description": "Graph access uses Entra app-only (client-credentials) tokens via MSAL; the least-privilege Sites.Selected application permission is granted per site.",
+          "requirements": [
+            {
+              "requirement-url": "https://quaia.finos.calm/controls/authentication.requirement.json",
+              "config": {
+                "control-id": "quaia-graph-oauth-client-credentials",
+                "name": "Graph OAuth Client Credentials",
+                "description": "Calls to Microsoft Graph authenticate with an app-only OAuth 2.0 client-credentials access token obtained through MSAL.",
+                "auth-method": "oauth2",
+                "enforced": true
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "rel-test-case-review-qdrant",
+      "description": "Test Case Review Agent runs hybrid search over the test-case collection in Qdrant for duplicate detection.",
+      "protocol": "HTTPS",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "test-case-review-agent"
+          },
+          "destination": {
+            "node": "qdrant"
+          }
+        }
+      },
+      "controls": {
+        "vector-db-api-key": {
+          "description": "Calls to Qdrant carry the shared QDRANT_API_KEY when one is configured.",
+          "requirements": [
+            {
+              "requirement-url": "https://quaia.finos.calm/controls/authentication.requirement.json",
+              "config": {
+                "control-id": "quaia-qdrant-api-key",
+                "name": "Qdrant API Key",
+                "description": "Every client into the vector database authenticates with the shared QDRANT_API_KEY when one is configured.",
+                "auth-method": "api-key",
+                "enforced": false
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "rel-test-case-review-embedding",
+      "description": "Test Case Review Agent requests embeddings from the embedding service to index and search the batch under review.",
+      "protocol": "HTTPS",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "test-case-review-agent"
+          },
+          "destination": {
+            "node": "embedding-service"
+          }
+        }
+      },
+      "controls": {
+        "internal-service-api-key": {
+          "description": "Calls to the embedding service carry the shared internal X-API-Key.",
+          "requirements": [
+            {
+              "requirement-url": "https://quaia.finos.calm/controls/authentication.requirement.json",
+              "config": {
+                "control-id": "quaia-internal-api-key-embedding",
+                "name": "Internal Service API Key",
+                "description": "Calls to the embedding service carry the shared X-API-Key (INTERNAL_SERVICE_API_KEY).",
+                "auth-method": "api-key",
+                "enforced": false
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "rel-rag-sync-job-zephyr",
+      "description": "RAG Sync Job lists the project's test cases (full resync) through the test management system's REST API.",
+      "protocol": "HTTPS",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "rag-sync-job"
+          },
+          "destination": {
+            "node": "zephyr"
           }
         }
       }

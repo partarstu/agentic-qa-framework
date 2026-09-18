@@ -842,6 +842,12 @@ class JiraSyncRequest(BaseModel):
     project_key: str = Field(min_length=1, pattern=r"^[A-Z][A-Z0-9_]*$")
 
 
+class SharePointSyncRequest(BaseModel):
+    drive_id: str = Field(min_length=1, max_length=200)
+    folder_path: str | None = Field(default=None, max_length=500)
+    attachment_name_pattern: str | None = Field(default=None, max_length=200)
+
+
 class ConfluenceSyncRequest(BaseModel):
     space_key: str = Field(min_length=1, pattern=r"^[~]?[A-Za-z0-9._~-]+$")
     page_id: int | None = Field(default=None, gt=0)
@@ -852,7 +858,8 @@ class ConfluenceSyncRequest(BaseModel):
 class ManualTestExecutionRequest(BaseModel):
     """Validated request for one explicitly selected unattended execution agent."""
 
-    test_case_key: str = Field(min_length=1, max_length=100, pattern=r"^[A-Z][A-Z0-9_]*-\d+$")
+    # Xray test cases are Jira issues (PROJ-42); Zephyr Scale keys carry a "T" (PROJ-T42).
+    test_case_key: str = Field(min_length=1, max_length=100, pattern=r"^[A-Z][A-Z0-9_]*-T?\d+$")
     agent_id: str = Field(min_length=1, max_length=100)
     project_key: str = Field(min_length=1, max_length=50, pattern=r"^[A-Z][A-Z0-9_]*$")
 
@@ -906,6 +913,23 @@ async def update_jira_db(request: JiraSyncRequest, api_key: str = Depends(_valid
 
 
 # noinspection PyUnusedLocal
+@orchestrator_app.post("/update-sharepoint-db")
+async def update_sharepoint_db(request: SharePointSyncRequest, api_key: str = Depends(_validate_api_key)):
+    """Triggers the SharePoint documents sync for the given drive (WS18)."""
+    if request.attachment_name_pattern:
+        try:
+            compile_name_pattern(request.attachment_name_pattern)
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e))
+    runner_args = ["--drive-id", request.drive_id]
+    if request.folder_path:
+        runner_args += ["--folder-path", request.folder_path]
+    if request.attachment_name_pattern:
+        runner_args += ["--attachment-name-pattern", request.attachment_name_pattern]
+    result = await _trigger_rag_sync("sharepoint", request.drive_id, runner_args)
+    return _sync_response(result)
+
+
 @orchestrator_app.post("/update-confluence-db")
 async def update_confluence_db(request: ConfluenceSyncRequest, api_key: str = Depends(_validate_api_key)):
     """Triggers the Confluence documents sync for the given scope (ingestion ships next)."""
@@ -1490,7 +1514,7 @@ class _LogStreamState:
 def _build_logs_artifact(log_lines: list[str]) -> Artifact:
     """Collapse streamed log lines into ONE text/plain file part.
 
-    The filename contains "logs" and ends ".txt" so utils.get_execution_logs_from_artifacts
+    The filename contains "logs" and ends ".md" so utils.get_execution_logs_from_artifacts
     matches it and incident creation receives a single consolidated log file.
     """
     data = "\n".join(log_lines).encode("utf-8")

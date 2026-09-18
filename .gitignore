@@ -22,3 +22,4 @@ test-results.xml
 /logs
 IMPLEMENTATION_PLAN.md
 IMPLEMENTATION_PLAN_2.md  
+/deploy/rendered/

@@ -11,7 +11,7 @@ one text attachment, handed back the way the real server does - as a base64 embe
 resource over the protocol, with no shared attachment volume - and records every
 ``jira_add_comment`` call for the smoke assertions.
 
-The MCP SSE transport is served under ``/sse`` (+ ``/messages/``); a plain
+The stateless Streamable HTTP transport is served under ``/mcp``; a plain
 ``GET /__recorded`` HTTP route is mounted alongside it for introspection.
 """
 
@@ -207,6 +207,6 @@ app = Starlette(
     routes=[
         Route("/__recorded", _recorded_endpoint),
         Route("/__seeded_story", _seeded_story_endpoint),
-        Mount("/", app=mcp.sse_app()),
+        Mount("/", app=mcp.streamable_http_app()),
     ]
 )

@@ -4,10 +4,8 @@
 
 """Tests for the self-healing, per-request Atlassian MCP toolset."""
 
-from unittest.mock import AsyncMock, MagicMock
-from urllib.parse import urlparse
-
 import logging
+from unittest.mock import AsyncMock, MagicMock
 from urllib.parse import urlparse
 
 import anyio

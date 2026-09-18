@@ -11,6 +11,7 @@ from qdrant_client import models
 from qdrant_client.http.exceptions import UnexpectedResponse
 
 from common.models import VectorizableBaseModel
+from common.services import vector_db_service as vector_db_service_module
 from common.services.vector_db_service import VectorDbService
 
 
@@ -25,10 +26,23 @@ class DummyModel(VectorizableBaseModel):
         return self.content
 
 
+def _collection_info(
+    vectors: dict[str, models.VectorParams] | models.VectorParams | None = None,
+    sparse_vectors: dict[str, models.SparseVectorParams] | None = None,
+) -> MagicMock:
+    """A collection description as get_collection returns it; defaults to the active embedding mode."""
+    params = models.CollectionParams(
+        vectors=vectors if vectors is not None else {"dense": models.VectorParams(size=3, distance="Cosine")},
+        sparse_vectors=sparse_vectors if sparse_vectors is not None else {"sparse": models.SparseVectorParams()},
+    )
+    return MagicMock(config=MagicMock(params=params))
+
+
 @pytest.fixture
 def mock_qdrant_client():
     with patch("common.services.vector_db_service.AsyncQdrantClient") as mock:
         client_instance = AsyncMock()
+        client_instance.get_collection.return_value = _collection_info()
         mock.return_value = client_instance
         yield client_instance
 
@@ -131,6 +145,101 @@ async def test_ensure_collection_creates_named_dense_and_sparse_vectors(
     assert dense.size == 3
     assert dense.distance == models.Distance.COSINE
     assert create_kwargs["sparse_vectors_config"]["sparse"].modifier == models.Modifier.IDF
+
+
+class TestSchemaValidation:
+    """WS19: an existing collection is checked against the active embedding mode once, at first use."""
+
+    async def test_an_existing_collection_matching_the_mode_passes(self, vector_db_service, mock_qdrant_client):
+        _mock_collections_exist(mock_qdrant_client, "test_collection", exists=True)
+
+        await vector_db_service.ensure_collection()
+
+        mock_qdrant_client.get_collection.assert_awaited_once_with("test_collection")
+
+    @pytest.mark.parametrize(
+        ("info", "expected_problem"),
+        [
+            (
+                _collection_info(vectors=models.VectorParams(size=3, distance="Cosine")),
+                "the named dense vector 'dense' is missing",
+            ),
+            (
+                _collection_info(vectors={"dense": models.VectorParams(size=768, distance="Cosine")}),
+                "the dense vector has size 768 instead of 3",
+            ),
+            (
+                _collection_info(vectors={"dense": models.VectorParams(size=3, distance="Dot")}),
+                "the dense vector uses Dot distance instead of cosine",
+            ),
+            (_collection_info(sparse_vectors={}), "the named sparse vector 'sparse' is missing"),
+        ],
+        ids=["unnamed-dense", "wrong-size", "wrong-distance", "no-sparse"],
+    )
+    async def test_a_mismatch_names_the_collection_the_mode_and_the_problem(
+        self, vector_db_service, mock_qdrant_client, info, expected_problem
+    ):
+        _mock_collections_exist(mock_qdrant_client, "test_collection", exists=True)
+        mock_qdrant_client.get_collection.return_value = info
+
+        with pytest.raises(vector_db_service_module.VectorCollectionSchemaError) as raised:
+            await vector_db_service.ensure_collection()
+
+        message = str(raised.value)
+        assert "Collection 'test_collection' does not match the active embedding mode" in message
+        assert "named dense vector 'dense' of size 3 with cosine distance" in message
+        assert expected_problem in message
+        assert "Recreate the collection and resync its source" in message
+        mock_qdrant_client.create_payload_index.assert_not_called()
+
+    async def test_every_problem_is_reported_at_once(self, vector_db_service, mock_qdrant_client):
+        _mock_collections_exist(mock_qdrant_client, "test_collection", exists=True)
+        mock_qdrant_client.get_collection.return_value = _collection_info(
+            vectors={"dense": models.VectorParams(size=5, distance="Euclid")}, sparse_vectors={}
+        )
+
+        with pytest.raises(vector_db_service_module.VectorCollectionSchemaError) as raised:
+            await vector_db_service.ensure_collection()
+
+        assert "size 5 instead of 3" in str(raised.value)
+        assert "Euclid distance" in str(raised.value)
+        assert "sparse vector 'sparse' is missing" in str(raised.value)
+
+    async def test_a_search_validates_with_the_query_embedding_before_querying(
+        self, vector_db_service, mock_qdrant_client
+    ):
+        mock_qdrant_client.get_collection.return_value = _collection_info(sparse_vectors={})
+
+        with pytest.raises(vector_db_service_module.VectorCollectionSchemaError):
+            await vector_db_service.hybrid_search("text")
+
+        mock_qdrant_client.query_points.assert_not_called()
+
+    async def test_validation_runs_once_per_service_instance(self, vector_db_service, mock_qdrant_client):
+        _mock_collections_exist(mock_qdrant_client, "test_collection", exists=True)
+        mock_qdrant_client.query_points.return_value = MagicMock(points=[])
+
+        await vector_db_service.hybrid_search("first")
+        await vector_db_service.hybrid_search("second")
+        await vector_db_service.ensure_collection()
+
+        mock_qdrant_client.get_collection.assert_awaited_once()
+
+    async def test_a_newly_created_collection_needs_no_validation(self, vector_db_service, mock_qdrant_client):
+        _mock_collections_exist(mock_qdrant_client, "test_collection", exists=False)
+        mock_qdrant_client.query_points.return_value = MagicMock(points=[])
+
+        await vector_db_service.ensure_collection()
+        await vector_db_service.hybrid_search("query")
+
+        mock_qdrant_client.get_collection.assert_not_called()
+
+    async def test_a_missing_collection_on_search_still_returns_empty(self, vector_db_service, mock_qdrant_client):
+        mock_qdrant_client.get_collection.side_effect = UnexpectedResponse(
+            404, "Not Found", b"missing collection", httpx.Headers()
+        )
+
+        assert await vector_db_service.hybrid_search("text") == []
 
 
 @pytest.mark.asyncio
@@ -370,3 +479,124 @@ async def test_retrieve_accepts_payload_selector(vector_db_service, mock_qdrant_
     await vector_db_service.retrieve(["1"], with_payload=selector)
 
     assert mock_qdrant_client.retrieve.call_args.kwargs["with_payload"] == selector
+
+
+class TestQdrantRetries:
+    """The WS19 retry helper: transport failures retry, gateway 5xx retry, 4xx untouched."""
+
+    @pytest.mark.asyncio
+    async def test_a_gateway_502_is_retried_and_then_succeeds(self, vector_db_service, monkeypatch):
+        from common.services import vector_db_service as module
+
+        monkeypatch.setattr(module, "_QDRANT_RETRY_ATTEMPTS", 3)
+        monkeypatch.setattr(module.asyncio, "sleep", AsyncMock())
+        attempts = []
+
+        async def flaky(**kwargs):
+            attempts.append(1)
+            if len(attempts) == 1:
+                raise module.UnexpectedResponse(status_code=502, reason_phrase="bad gateway", content=b"", headers={})
+            return MagicMock(points=[])
+
+        vector_db_service.client = MagicMock()
+        vector_db_service.client.query_points = flaky
+        monkeypatch.setattr(vector_db_service, "_embed_texts", AsyncMock(return_value=([([0.0], [0], [0.0])], "m")))
+        monkeypatch.setattr(vector_db_service, "_verify_model_identity", AsyncMock())
+        monkeypatch.setattr(vector_db_service, "_validate_schema", AsyncMock())
+
+        results = await vector_db_service.hybrid_search("text")
+
+        assert results == []
+        assert len(attempts) == 2
+
+    @pytest.mark.asyncio
+    async def test_a_4xx_is_never_retried(self, vector_db_service, monkeypatch):
+        from common.services import vector_db_service as module
+
+        monkeypatch.setattr(module.asyncio, "sleep", AsyncMock())
+        attempts = []
+
+        async def forbidden(**kwargs):
+            attempts.append(1)
+            raise module.UnexpectedResponse(status_code=400, reason_phrase="bad request", content=b"", headers={})
+
+        vector_db_service.client = MagicMock()
+        vector_db_service.client.query_points = forbidden
+        monkeypatch.setattr(vector_db_service, "_embed_texts", AsyncMock(return_value=([([0.0], [0], [0.0])], "m")))
+        monkeypatch.setattr(vector_db_service, "_verify_model_identity", AsyncMock())
+        monkeypatch.setattr(vector_db_service, "_validate_schema", AsyncMock())
+
+        with pytest.raises(module.UnexpectedResponse):
+            await vector_db_service.hybrid_search("text")
+
+        assert len(attempts) == 1
+
+    @pytest.mark.asyncio
+    async def test_a_transport_failure_is_retried(self, vector_db_service, monkeypatch):
+        from common.services import vector_db_service as module
+
+        monkeypatch.setattr(module.asyncio, "sleep", AsyncMock())
+        attempts = []
+
+        async def flaky(**kwargs):
+            attempts.append(1)
+            if len(attempts) == 1:
+                raise module.ResponseHandlingException(ConnectionError("reset"))
+            return MagicMock(points=[])
+
+        vector_db_service.client = MagicMock()
+        vector_db_service.client.query_points = flaky
+        monkeypatch.setattr(vector_db_service, "_embed_texts", AsyncMock(return_value=([([0.0], [0], [0.0])], "m")))
+        monkeypatch.setattr(vector_db_service, "_verify_model_identity", AsyncMock())
+        monkeypatch.setattr(vector_db_service, "_validate_schema", AsyncMock())
+
+        await vector_db_service.hybrid_search("text")
+
+        assert len(attempts) == 2
+
+
+class TestEmbeddingStatusRetries:
+    """WS19: the embedding service retries 429/502/503/504 honouring Retry-After."""
+
+    @pytest.mark.asyncio
+    async def test_a_503_is_retried_and_then_succeeds(self, vector_db_service, monkeypatch):
+        import httpx
+
+        sleeps = []
+        monkeypatch.setattr(vector_db_service_module.asyncio, "sleep", AsyncMock(side_effect=lambda s: sleeps.append(s)))
+        error_response = httpx.Response(503, request=httpx.Request("POST", "http://embeddings/embed"))
+        ok_response = httpx.Response(
+            200,
+            json={
+                "embeddings": [{"dense": [0.1], "sparse": {"indices": [0], "values": [0.1]}}],
+                "model": "m",
+            },
+            request=httpx.Request("POST", "http://embeddings/embed"),
+        )
+        vector_db_service._embedding_max_retries = 3
+        vector_db_service._embedding_retry_backoff_cap = 32.0
+        vector_db_service._http_client.post = AsyncMock(side_effect=[error_response, ok_response])
+
+        _embeddings, model = await vector_db_service._embed_texts(["text"])
+
+        assert model == "m"
+        assert len(sleeps) == 1
+        assert vector_db_service._http_client.post.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_a_400_fails_fast(self, vector_db_service, monkeypatch):
+        import httpx
+
+        monkeypatch.setattr(vector_db_service_module.asyncio, "sleep", AsyncMock())
+        error_response = httpx.Response(400, request=httpx.Request("POST", "http://embeddings/embed"))
+        error_response.raise_for_status = lambda: (_ for _ in ()).throw(
+            httpx.HTTPStatusError("bad request", request=error_response.request, response=error_response)
+        )
+        vector_db_service._embedding_max_retries = 3
+        vector_db_service._embedding_retry_backoff_cap = 32.0
+        vector_db_service._http_client.post = AsyncMock(return_value=error_response)
+
+        with pytest.raises(httpx.HTTPStatusError):
+            await vector_db_service._embed_texts(["text"])
+
+        assert vector_db_service._http_client.post.await_count == 1

@@ -234,6 +234,37 @@ async def test_sse_hub_events_emits_auth_error_when_token_expired():
     assert events[0].event == "auth_error"
 
 
+@pytest.mark.parametrize("test_case_key", ["SMOKE-T100", "PROJ-42"], ids=["zephyr", "xray"])
+async def test_execute_test_accepts_test_case_keys_of_both_systems_and_creates_no_incident(test_case_key):
+    result = MagicMock()
+    result.model_dump.return_value = {"testCaseKey": test_case_key, "testExecutionStatus": "failed"}
+    with (
+        patch("orchestrator.main.get_test_management_client") as mock_client,
+        patch("orchestrator.main._execute_single_test", new_callable=AsyncMock, return_value=result) as mock_execute,
+        patch("orchestrator.main._generate_test_report", new_callable=AsyncMock) as mock_report,
+        patch("orchestrator.main._request_incident_creation", new_callable=AsyncMock) as mock_incident,
+    ):
+        response = client.post(
+            "/execute-test", json={"test_case_key": test_case_key, "agent_id": "agent-1", "project_key": "SMOKE"}
+        )
+
+    assert response.status_code == 200
+    assert response.json()["testCaseKey"] == test_case_key
+    mock_client.return_value.fetch_test_case_by_key.assert_called_once_with(test_case_key)
+    assert mock_execute.await_args.kwargs["selected_agent_id"] == "agent-1"
+    mock_report.assert_awaited_once()
+    mock_incident.assert_not_awaited()
+
+
+@pytest.mark.parametrize("test_case_key", ["smoke-t1", "SMOKE-X1", "SMOKE-T", "SMOKE"])
+def test_execute_test_rejects_a_malformed_test_case_key(test_case_key):
+    response = client.post(
+        "/execute-test", json={"test_case_key": test_case_key, "agent_id": "agent-1", "project_key": "SMOKE"}
+    )
+
+    assert response.status_code == 422
+
+
 @pytest.mark.asyncio
 async def test_sse_hub_events_emits_auth_error_even_with_incoming_events():
     expired = datetime.now(UTC) - timedelta(seconds=1)

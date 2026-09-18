@@ -166,3 +166,21 @@ async def test_get_agents_status_reports_the_agent_version():
     agents = await service.get_agents_status()
 
     assert [agent["version"] for agent in agents] == ["2.5"]
+
+
+def test_parse_agent_logs_reads_structured_fields_through_the_shared_renderer(mock_dashboard_service):
+    line = (
+        '{"timestamp": "2026-05-04T10:33:56+00:00", "level": "error", "message": "Failed", "logger": "ui_agent", '
+        '"task_id": "remote-task", "agent_id": null, "agent_name": "UI Agent", "exception": "Traceback: boom"}'
+    )
+
+    parsed = mock_dashboard_service._parse_agent_logs([line], "task-1", "agent-1")
+
+    assert len(parsed) == 1
+    assert parsed[0].timestamp == "2026-05-04T10:33:56+00:00"
+    assert parsed[0].level == "ERROR"
+    assert parsed[0].logger_name == "ui_agent"
+    assert parsed[0].message == "Failed\nTraceback: boom"
+    assert parsed[0].task_id == "remote-task"
+    assert parsed[0].agent_id == "agent-1"
+    assert parsed[0].to_dict()["agent_name"] == "UI Agent"

@@ -2,9 +2,9 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
-import pytest
 from unittest.mock import patch
 
+import pytest
 from pydantic_ai.usage import RunUsage
 
 import config

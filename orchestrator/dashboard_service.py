@@ -6,7 +6,6 @@
 Dashboard service for aggregating orchestrator state for the Web UI.
 """
 
-import json
 import re
 from datetime import UTC, datetime
 from typing import Any
@@ -261,19 +260,17 @@ class OrchestratorDashboardService:
                 if not line.strip():
                     continue
 
-                try:
-                    structured = json.loads(line)
-                except json.JSONDecodeError:
-                    structured = None
-                if isinstance(structured, dict) and "message" in structured:
+                structured = utils.parse_log_record(line)
+                if structured is not None:
                     entries.append(
                         LogEntry(
                             timestamp=str(structured.get("timestamp", "")),
                             level=str(structured.get("level", "INFO")).upper(),
                             logger_name=str(structured.get("logger", f"agent.{agent_id}")),
-                            message=str(structured["message"]),
+                            message=utils.render_log_message(structured),
                             task_id=str(structured.get("task_id") or task_id),
                             agent_id=str(structured.get("agent_id") or agent_id),
+                            agent_name=structured.get("agent_name"),
                         )
                     )
                     continue

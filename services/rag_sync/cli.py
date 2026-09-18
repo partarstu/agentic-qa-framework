@@ -40,6 +40,23 @@ async def _run(args: argparse.Namespace) -> int:
         print(f"Jira sync completed: {result.model_dump()}")
         return 0
 
+    if args.source == "sharepoint":
+        from rag_sync.sharepoint_sync import SharePointRagSyncRunner
+
+        try:
+            result = await SharePointRagSyncRunner().sync_drive(
+                drive_id=args.drive_id,
+                folder_path=args.folder_path,
+                file_name_pattern=args.attachment_name_pattern,
+                lock_token=args.lock_token,
+            )
+        except Exception as exc:
+            await report_terminal_outcome("sharepoint", args.drive_id, error=exc)
+            raise
+        await report_terminal_outcome("sharepoint", args.drive_id, result=result)
+        print(f"SharePoint sync completed: {result.model_dump()}")
+        return 0
+
     if args.source == "test-cases":
         from rag_sync.test_case_sync import TestCaseRagSyncRunner
 
@@ -74,6 +91,14 @@ def main() -> int:
     jira_parser = subparsers.add_parser("jira", help="Sync a Jira project's issues into the RAG vector DB.")
     jira_parser.add_argument("--project-key", required=True, help="The Jira project key to synchronize.")
     jira_parser.add_argument("--lock-token", help="Holder token issued by the orchestrator, if any.")
+
+    sharepoint_parser = subparsers.add_parser(
+        "sharepoint", help="Sync a SharePoint drive (or one folder of it) into the documents collection."
+    )
+    sharepoint_parser.add_argument("--drive-id", required=True, help="The drive ID to synchronize.")
+    sharepoint_parser.add_argument("--folder-path", help="Restrict the sync to one folder's descendants.")
+    sharepoint_parser.add_argument("--attachment-name-pattern", help="Regex filtering file names.")
+    sharepoint_parser.add_argument("--lock-token", help="Holder token issued by the orchestrator, if any.")
 
     test_cases_parser = subparsers.add_parser(
         "test-cases", help="Full-resync the test cases of a project into the RAG vector DB."

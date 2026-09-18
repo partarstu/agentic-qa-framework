@@ -2,18 +2,21 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
-"""Unit tests for the document retrieval module (WS10)."""
+"""Unit tests for the document retrieval module (WS10, WS18 per-source retrieval)."""
 
 import base64
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pydantic_ai.messages import BinaryContent
 from qdrant_client import models
 
 from common.services.document_retrieval import (
+    CONFLUENCE_SOURCE,
+    SHAREPOINT_SOURCE,
     RetrievalScope,
     RetrievedPage,
+    _scope_filter,
     assemble_retrieved_parts,
     retrieve_documents,
 )
@@ -21,12 +24,14 @@ from common.services.document_retrieval import (
 
 def _attachment_payload(**overrides) -> dict:
     payload = {
+        "source": "confluence",
         "space_key": "DOC",
         "page_id": "111",
         "page_title": "Spec page",
         "page_url": "https://confluence/pages/111",
         "attachment_id": "att-1",
         "attachment_name": "spec.pdf",
+        "media_type": "application/pdf",
         "content_kind": "attachment",
         "document_name": "spec.pdf",
         "breadcrumb": "Spec page > spec.pdf > page 1",
@@ -41,12 +46,14 @@ def _attachment_payload(**overrides) -> dict:
 
 def _body_payload(**overrides) -> dict:
     payload = {
+        "source": "confluence",
         "space_key": "DOC",
         "page_id": "222",
         "page_title": "Design page",
         "page_url": "https://confluence/pages/222",
         "attachment_id": None,
         "attachment_name": None,
+        "media_type": None,
         "content_kind": "page_body",
         "document_name": "Design page",
         "breadcrumb": "Design page",
@@ -77,88 +84,121 @@ def documents_db() -> MagicMock:
     return db
 
 
-@pytest.mark.asyncio
-async def test_no_hits_yield_no_pages(documents_db):
-    assert await retrieve_documents(documents_db, "query") == []
-    documents_db.hybrid_search.assert_awaited_once()
+@pytest.fixture
+def sharepoint_db() -> MagicMock:
+    db = MagicMock()
+    db.collection_name = "sharepoint_documents"
+    db.client = MagicMock()
+    db.client.scroll = AsyncMock(return_value=([], None))
+    db.hybrid_search = AsyncMock(return_value=[])
+    db.retrieve = AsyncMock(return_value=[])
+    return db
+
+
+@pytest.fixture
+def confluence_only(documents_db):
+    """Confluence retrieval on, SharePoint off: the pre-WS18 single-source setup."""
+    with (
+        patch.object(config_documentrag(), "CONFLUENCE_RETRIEVAL_ENABLED", True),
+        patch.object(config_documentrag(), "SHAREPOINT_RETRIEVAL_ENABLED", False),
+    ):
+            yield documents_db
+
+
+def config_documentrag():
+    from config import DocumentRagConfig
+
+    return DocumentRagConfig
 
 
 @pytest.mark.asyncio
-async def test_scope_becomes_exact_payload_filter(documents_db):
-    await retrieve_documents(documents_db, "query", RetrievalScope(space_key="DOC", page_id="111"))
-    _, kwargs = documents_db.hybrid_search.await_args
+async def test_no_hits_yield_no_pages(confluence_only):
+    result = await retrieve_documents(confluence_only, "query")
+    assert result.pages == []
+    assert result.unavailable_sources == []
+    confluence_only.hybrid_search.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_scope_becomes_exact_payload_filter_pinned_to_the_source(confluence_only):
+    await retrieve_documents(confluence_only, "query", RetrievalScope(space_key="DOC", page_id="111"))
+    _, kwargs = confluence_only.hybrid_search.await_args
     query_filter = kwargs["query_filter"]
     keys = [condition.key for condition in query_filter.must]
-    assert keys == ["space_key", "page_id"]
+    # The source discriminator is pinned on every query, even though the collection implies it.
+    assert keys == ["source", "space_key", "page_id"]
+    assert query_filter.must[0].match.value == CONFLUENCE_SOURCE
 
 
 @pytest.mark.asyncio
-async def test_name_pattern_with_no_match_returns_early(documents_db):
-    documents_db.client.scroll = AsyncMock(return_value=([MagicMock(payload={"document_name": "spec.pdf"})], None))
-
-    pages = await retrieve_documents(documents_db, "query", RetrievalScope(document_name_pattern="nomatch"))
-
-    assert pages == []
-    documents_db.hybrid_search.assert_not_awaited()
+async def test_every_query_pins_the_source_discriminator(confluence_only):
+    await retrieve_documents(confluence_only, "query")
+    _, kwargs = confluence_only.hybrid_search.await_args
+    (source_condition,) = kwargs["query_filter"].must
+    assert source_condition.key == "source"
+    assert source_condition.match.value == CONFLUENCE_SOURCE
 
 
 @pytest.mark.asyncio
-async def test_name_pattern_scrolls_then_filters_by_matched_names(documents_db):
+async def test_name_pattern_with_no_match_returns_early(confluence_only):
+    confluence_only.client.scroll = AsyncMock(return_value=([MagicMock(payload={"document_name": "spec.pdf"})], None))
+
+    result = await retrieve_documents(confluence_only, "query", RetrievalScope(document_name_pattern="nomatch"))
+
+    assert result.pages == []
+    confluence_only.hybrid_search.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_name_pattern_scrolls_then_filters_by_matched_names(confluence_only):
     async def scroll(**kwargs):
         if kwargs.get("offset") is None:
             return [MagicMock(payload={"document_name": "spec.pdf"})], MagicMock()
         return [MagicMock(payload={"document_name": "other.pdf"})], None
 
-    documents_db.client.scroll = AsyncMock(side_effect=scroll)
-    documents_db.hybrid_search = AsyncMock(return_value=[_hit(_attachment_payload())])
+    confluence_only.client.scroll = AsyncMock(side_effect=scroll)
+    confluence_only.hybrid_search = AsyncMock(return_value=[_hit(_attachment_payload())])
 
-    pages = await retrieve_documents(documents_db, "query", RetrievalScope(document_name_pattern="spec"))
+    result = await retrieve_documents(confluence_only, "query", RetrievalScope(document_name_pattern="spec"))
 
-    _, kwargs = documents_db.hybrid_search.await_args
+    _, kwargs = confluence_only.hybrid_search.await_args
     name_conditions = [c for c in kwargs["query_filter"].must if c.key == "document_name"]
     assert len(name_conditions) == 1
     assert name_conditions[0].match.any == ["spec.pdf"]
-    assert len(pages) == 1
+    assert len(result.pages) == 1
 
 
 @pytest.mark.asyncio
-async def test_hits_group_per_page_and_best_rank_wins(documents_db):
+async def test_hits_group_per_page_and_best_rank_wins(confluence_only):
     hits = [
         _hit(_attachment_payload(part_index=2, text="page 1 part 2"), score=0.9),
         _hit(_attachment_payload(part_index=3, text="page 1 part 3"), score=0.8),
         _hit(_attachment_payload(page_number=2, part_index=2, text="page 2"), score=0.7),
         _hit(_body_payload(), score=0.6),
     ]
-    documents_db.hybrid_search = AsyncMock(return_value=hits)
-    documents_db.retrieve = AsyncMock(return_value=[])
+    confluence_only.hybrid_search = AsyncMock(return_value=hits)
+    confluence_only.retrieve = AsyncMock(return_value=[])
 
-    pages = await retrieve_documents(documents_db, "query")
+    result = await retrieve_documents(confluence_only, "query")
 
-    assert [page.part.text for page in pages] == ["page 1 part 2", "page 2", "design body text"]
+    assert [page.part.text for page in result.pages] == ["page 1 part 2", "page 2", "design body text"]
     # The page image of each attachment page is fetched via its deterministic part-0 vector ID.
-    assert documents_db.retrieve.await_count == 2
-    for call in documents_db.retrieve.await_args_list:
+    assert confluence_only.retrieve.await_count == 2
+    for call in confluence_only.retrieve.await_args_list:
         assert len(call.args[0]) == 1
 
 
 @pytest.mark.asyncio
-async def test_page_image_is_decoded_from_part_zero(documents_db):
+async def test_page_image_is_decoded_from_part_zero(confluence_only):
     image_b64 = base64.b64encode(b"png-bytes").decode()
-    documents_db.hybrid_search = AsyncMock(return_value=[_hit(_attachment_payload())])
+    confluence_only.hybrid_search = AsyncMock(return_value=[_hit(_attachment_payload())])
     part0_record = MagicMock()
     part0_record.payload = {"image": image_b64}
-    documents_db.retrieve = AsyncMock(return_value=[part0_record])
+    confluence_only.retrieve = AsyncMock(return_value=[part0_record])
 
-    pages = await retrieve_documents(documents_db, "query")
+    result = await retrieve_documents(confluence_only, "query")
 
-    assert pages[0].image == b"png-bytes"
-
-
-def _page(image: bytes | None = None, **overrides) -> RetrievedPage:
-    from common.models import DocumentPagePart
-
-    part = DocumentPagePart.model_validate(_attachment_payload(**overrides))
-    return RetrievedPage(part, image)
+    assert result.pages[0].image == b"png-bytes"
 
 
 def test_assemble_parts_prefers_image_over_text():
@@ -173,17 +213,113 @@ def test_assemble_parts_falls_back_to_text():
     assert parts[1] == "breadcrumb plus content"
 
 
-def test_assemble_parts_omits_page_without_content():
+def _page(image: bytes | None = None, **overrides) -> RetrievedPage:
     from common.models import DocumentPagePart
 
-    body = DocumentPagePart.model_validate(_body_payload(text=""))
-    parts = assemble_retrieved_parts([RetrievedPage(body, None)])
-    assert parts == ["Reference documentation: Design page (https://confluence/pages/222)"]
+    part = DocumentPagePart.model_validate(_attachment_payload(**overrides))
+    return RetrievedPage(part, image)
 
 
-def test_scope_filter_handles_missing_scope():
-    from common.services.document_retrieval import _scope_filter
+class TestPerSourceRetrieval:
+    @pytest.mark.asyncio
+    async def test_sharepoint_scope_fields_reach_only_the_sharepoint_query(self, documents_db, sharepoint_db):
+        with (
+            patch.object(config_documentrag(), "CONFLUENCE_RETRIEVAL_ENABLED", True),
+            patch.object(config_documentrag(), "SHAREPOINT_RETRIEVAL_ENABLED", True),
+        ):
+                sharepoint_db.hybrid_search = AsyncMock(
+                    return_value=[_hit(_attachment_payload(source="sharepoint", space_key="", page_id=""))]
+                )
+                result = await retrieve_documents(
+                    documents_db, "query", RetrievalScope(drive_id="drive1"), sharepoint_db=sharepoint_db
+                )
 
-    assert _scope_filter(None) is None
-    assert _scope_filter(RetrievalScope()) is None
-    assert isinstance(_scope_filter(RetrievalScope(space_key="DOC")), models.Filter)
+        confluence_filter = documents_db.hybrid_search.await_args.kwargs["query_filter"]
+        assert [c.key for c in confluence_filter.must] == ["source"]
+        sharepoint_filter = sharepoint_db.hybrid_search.await_args.kwargs["query_filter"]
+        keys = [c.key for c in sharepoint_filter.must]
+        assert keys == ["source", "drive_id"]
+        assert sharepoint_filter.must[0].match.value == SHAREPOINT_SOURCE
+        assert len(result.pages) == 1
+
+    @pytest.mark.asyncio
+    async def test_sources_are_merged_by_rank_interleaving(self, documents_db, sharepoint_db):
+        with (
+            patch.object(config_documentrag(), "CONFLUENCE_RETRIEVAL_ENABLED", True),
+            patch.object(config_documentrag(), "SHAREPOINT_RETRIEVAL_ENABLED", True),
+        ):
+                documents_db.hybrid_search = AsyncMock(
+                    return_value=[_hit(_body_payload(text="c1"), 0.9), _hit(_body_payload(page_id="223", text="c2"), 0.8)]
+                )
+                sharepoint_db.hybrid_search = AsyncMock(
+                    return_value=[_hit(_body_payload(source="sharepoint", space_key="", page_id="", text="s1"), 0.95)]
+                )
+
+                result = await retrieve_documents(documents_db, "query", sharepoint_db=sharepoint_db)
+
+        # Rank interleaving, not fused score: s1 outranks c1 despite the higher similarity, because
+        # scores are not comparable across collections; each source's first page comes first.
+        assert [page.part.text for page in result.pages] == ["c1", "s1", "c2"]
+
+    @pytest.mark.asyncio
+    async def test_a_failing_source_is_skipped_and_reported_unavailable(self, documents_db, sharepoint_db):
+        with (
+            patch.object(config_documentrag(), "CONFLUENCE_RETRIEVAL_ENABLED", True),
+            patch.object(config_documentrag(), "SHAREPOINT_RETRIEVAL_ENABLED", True),
+        ):
+                documents_db.hybrid_search = AsyncMock(return_value=[_hit(_body_payload(text="c1"), 0.9)])
+                sharepoint_db.hybrid_search = AsyncMock(side_effect=RuntimeError("collection gone"))
+
+                result = await retrieve_documents(documents_db, "query", sharepoint_db=sharepoint_db)
+
+        assert [page.part.text for page in result.pages] == ["c1"]
+        assert result.unavailable_sources == ["sharepoint"]
+
+    @pytest.mark.asyncio
+    async def test_all_sources_failing_raises(self, documents_db, sharepoint_db):
+        with (
+            patch.object(config_documentrag(), "CONFLUENCE_RETRIEVAL_ENABLED", True),
+            patch.object(config_documentrag(), "SHAREPOINT_RETRIEVAL_ENABLED", True),
+        ):
+                documents_db.hybrid_search = AsyncMock(side_effect=RuntimeError("down"))
+                sharepoint_db.hybrid_search = AsyncMock(side_effect=RuntimeError("down"))
+
+                with pytest.raises(RuntimeError, match="All document sources failed"):
+                    await retrieve_documents(documents_db, "query", sharepoint_db=sharepoint_db)
+
+    @pytest.mark.asyncio
+    async def test_no_enabled_source_yields_an_empty_result(self, documents_db):
+        with (
+            patch.object(config_documentrag(), "CONFLUENCE_RETRIEVAL_ENABLED", False),
+            patch.object(config_documentrag(), "SHAREPOINT_RETRIEVAL_ENABLED", False),
+        ):
+                result = await retrieve_documents(documents_db, "query")
+
+        assert result.pages == []
+        documents_db.hybrid_search.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_an_enabled_source_without_a_collection_service_fails_that_source(self, sharepoint_db):
+        with (
+            patch.object(config_documentrag(), "CONFLUENCE_RETRIEVAL_ENABLED", False),
+            patch.object(config_documentrag(), "SHAREPOINT_RETRIEVAL_ENABLED", True),
+            pytest.raises(RuntimeError, match="All document sources failed"),
+        ):
+            await retrieve_documents(MagicMock(), "query", sharepoint_db=None)
+
+
+class TestScopeFilterIsolation:
+    def test_confluence_scope_ignores_sharepoint_fields(self):
+        scope = RetrievalScope(space_key="DOC", drive_id="drive1", folder_path="Docs")
+        confluence_filter = _scope_filter(scope, CONFLUENCE_SOURCE)
+        assert [c.key for c in confluence_filter.must] == ["source", "space_key"]
+
+    def test_sharepoint_scope_ignores_confluence_fields(self):
+        scope = RetrievalScope(space_key="DOC", drive_id="drive1")
+        sharepoint_filter = _scope_filter(scope, SHAREPOINT_SOURCE)
+        assert [c.key for c in sharepoint_filter.must] == ["source", "drive_id"]
+
+    def test_the_discriminator_is_pinned_even_without_a_scope(self):
+        for source in (CONFLUENCE_SOURCE, SHAREPOINT_SOURCE):
+            (condition,) = _scope_filter(None, source).must
+            assert condition.key == "source" and condition.match.value == source

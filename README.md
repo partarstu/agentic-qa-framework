@@ -222,10 +222,6 @@ URL.
 
 ### Environment Variables
 
-### Deployment manifest
-
-`deploy/manifest.yaml` is the source of truth for declared runtime configuration and secret names. Render a service locally with `uv run scripts/render_deployment_config.py orchestrator production`; it produces an env YAML file, a separate Cloud Run secret mapping, and a stable configuration marker. Runtime overrides must use `QUAIA_DEPLOY_OVERRIDE_<DECLARED_KEY>`; undeclared keys fail rendering and empty overrides preserve manifest defaults. Secret values never enter rendered env files.
-
 Create a `.env` file in the project root and configure the following environment variables. These variables control the
 behavior of the orchestrator and agents.
 
@@ -259,9 +255,11 @@ LOG_DIR=logs # Default: a "logs" directory next to config.py. Directory for the 
 # Prompt Overrides
 PROMPT_OVERRIDES_DIR= # Optional. Directory holding prompt template overrides. When set, a file in this directory
                                  # replaces the bundled template at the same repository-relative path (e.g.
-                                 # agents/requirements_review/system_prompts/main_prompt_template.txt or
-                                 # prompts/routing_instruction_template.txt). Startup fails fast when the directory is
+                                 # agents/requirements_review/system_prompts/main_prompt_template.md or
+                                 # prompts/routing_instruction_template.md). Startup fails fast when the directory is
                                  # missing or when an override's named placeholders differ from the bundled template's.
+                                 # Templates are Markdown; in a template with {placeholders}, literal braces (e.g. in
+                                 # a JSON example) must be escaped as {{ and }}.
                                  # Every container that loads prompts (orchestrator and agents) needs the directory,
                                  # e.g. as a Cloud Run volume mount.
 
@@ -306,6 +304,19 @@ DASHBOARD_LOG_RETENTION_DAYS=1
 DASHBOARD_HISTORY_RETENTION_DAYS=7
 DASHBOARD_MAINTENANCE_INTERVAL_SECONDS=3600
 SYNC_CALLBACK_ORCHESTRATOR_URL= # Optional authenticated /sync-outcome callback target for sync-job completion.
+MCP_SERVER_TIMEOUT_SECONDS=30 # Client-side MCP timeout applied to both the connection and the read timeout. Must stay <= the Atlassian MCP server's request timeout.
+MCP_SESSION_LIFECYCLE_TIMEOUT_SECONDS=30 # Bounded, cancellation-shielded window for MCP session set-up/tear-down during a recovery retry.
+ANTHROPIC_API_KEY= # Required when a Claude model is configured (MODEL_NAME starting with anthropic: or claude-).
+TEST_CASE_INDEX_STATUSES= # Comma-separated list of test-case statuses eligible for indexing; empty indexes every status. Recommended: exclude deprecated/obsolete statuses.
+TEST_CASE_DUPLICATE_MIN_SCORE=0.8 # Minimum dense similarity for test-case duplicate candidates.
+TEST_CASE_DUPLICATE_MAX_CANDIDATES=5 # Maximum duplicate candidates judged per reviewed test case.
+LOGIN_RATE_LIMIT_ATTEMPTS=5 # Login attempts allowed per client IP per window.
+LOGIN_RATE_LIMIT_WINDOW_SECONDS=60 # Sliding-window length for the login rate limit.
+LOGIN_RATE_LIMIT_TRUSTED_PROXY_HOPS=0 # How many X-Forwarded-For entries from the right are trusted (0 = the socket peer).
+SHAREPOINT_TENANT_ID= # Entra tenant ID for SharePoint app-only access (Sites.Selected permission recommended).
+SHAREPOINT_CLIENT_ID= # Entra app registration client ID.
+SHAREPOINT_CLIENT_SECRET= # Entra app registration client secret. Store in a secret manager, never in the repo.
+QDRANT_SHAREPOINT_COLLECTION_NAME=sharepoint_documents # Per-source SharePoint document collection.
 
 ### RAG sync outcomes
 
@@ -322,6 +333,9 @@ XRAY_BASE_URL=YOUR_XRAY_BASE_URL # Required if TEST_MANAGEMENT_SYSTEM=xray. The 
 XRAY_CLIENT_ID=YOUR_XRAY_CLIENT_ID # Required if TEST_MANAGEMENT_SYSTEM=xray. Xray API client ID.
 XRAY_CLIENT_SECRET=YOUR_XRAY_CLIENT_SECRET # Required if TEST_MANAGEMENT_SYSTEM=xray. Xray API client secret.
 XRAY_PRECONDITIONS_FIELD_ID=Pre-conditions # Default: Pre-conditions. Jira field ID/name holding a test case's preconditions.
+                                 # The field id is PROJECT-SCOPED: a value belonging to another project degrades
+                                 # silently (the preconditions end up embedded in the description instead of the
+                                 # dedicated field). Each environment must point at its own project's field.
 
 # Agent Configuration
 AGENT_BASE_URL=http://localhost # Default: http://localhost. Base URL for agents.
@@ -590,6 +604,18 @@ start.bat
 This will build the React application, copy the static files to `orchestrator/static/` for serving by the
 orchestrator, and then start the dev server on top of that build.
 
+### Model Settings and the pydantic-ai Version
+
+Provider-specific request settings (Claude 5 thinking and effort, Qwen reasoning, the maximum output tokens and the
+transport-level retries) are resolved in one place, `common/model_factory.py`, on **pydantic-ai 1.89.0**.
+
+An upgrade to pydantic-ai 2.x was evaluated and deliberately **not** done (decision of 2026-09-18). The 2.x line would
+bring native Claude 5 handling, the unified MCP toolset and the renamed retry transport, but it also replaces the
+per-transport MCP clients and the `Agent(...)` options with capabilities, and its `mcp` 2.x dependency moves the HTTP
+stack to `httpx2` - a migration across every agent, the MCP session recovery and the Qwen provider, with no change in
+behaviour. The explicit settings path on 1.89.0 produces the same requests (adaptive thinking and effort for Claude 5,
+never a sampling parameter or a thinking budget), so the version stays pinned until a release requires the upgrade.
+
 ### Token Budget and Cost Oversight
 
 Every LLM call made by the agents and the orchestrator is metered. After each agent run, the consumed token counts
@@ -642,7 +668,8 @@ you run any of the commands below.
    gcloud compute routers create ROUTER_NAME --network=NETWORK_NAME --region=REGION
    gcloud compute routers nats create NAT_GATEWAY_NAME --router=ROUTER_NAME --region=REGION --nat-all-subnet-ip-ranges 
     ```
-4. The following **secrets in the Google Secrets Manager** with corresponding values need to be added:
+4. The following **secrets in the Google Secrets Manager** with corresponding values need to be added (the full list
+   is the `secrets` section of `deploy/manifest.yaml`):
     * `GOOGLE_API_KEY`
     * `JIRA_API_TOKEN`
     * `JIRA_USERNAME`
@@ -653,14 +680,47 @@ you run any of the commands below.
     * `ORCHESTRATOR_API_KEY`
     * `QDRANT_API_KEY`
     * `DASHBOARD_USERNAME`
-    * `DASHBOARD_PASSWORD`
+    * `DASHBOARD_PASSWORD_HASH`
     * `DASHBOARD_JWT_SECRET`
     * `AGENT_AUTH_TOKEN` (mapped to the orchestrator's `REMOTE_EXECUTION_AGENT_AUTH_TOKEN`)
     * `CONFLUENCE_URL`, `CONFLUENCE_USERNAME`, `CONFLUENCE_API_TOKEN` (RAG sync job and Atlassian MCP server)
-    * `INTERNAL_SERVICE_API_KEY` (RAG sync job, for the embedding service)
+    * `INTERNAL_SERVICE_API_KEY` (RAG sync job and Test Case Review agent, for the embedding service)
+    * `SHAREPOINT_TENANT_ID`, `SHAREPOINT_CLIENT_ID`, `SHAREPOINT_CLIENT_SECRET` (RAG sync job; placeholder values
+      are enough while no SharePoint drive is synced)
 5. Cloud Storage bucket for general operations (with all needed folders created, see "Substitution Variables").
 6. Cloud Storage bucket for storing and publicly serving test execution reports (this bucket needs to have public
    access)
+
+#### Deployment manifest and redeploy gate
+
+`deploy/manifest.yaml` is the source of truth for what every deployed workload is configured with: per service its
+environment keys with their defaults, its secret names (only names - Cloud Run resolves the values through the
+workload's identity) and its version, plus each environment's target (project, region) and overrides. Resource sizing,
+image tags, request timeouts and container ports stay in `cloudbuild.yaml`, because they must line up with deploy-time
+settings the manifest does not own.
+
+`scripts/render_deployment_config.py` resolves one service for one environment. The precedence chain, later layers
+winning, is: shared defaults and the service's own defaults -> values derived from the deployment target
+(`GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_REGION` and the `{project}`, `{region}`, `{version}` placeholders) -> the
+environment's overrides -> runtime overrides (`QUAIA_DEPLOY_OVERRIDE_<KEY>` variables). An override may only set a
+key the manifest declares, an empty value never beats a default, a key without a value is not deployed, and a secret
+name the manifest doesn't declare fails the rendering. Run the same command locally to see exactly what a deployment
+would apply:
+
+```bash
+PROJECT_ID=my-project uv run scripts/render_deployment_config.py orchestrator production
+```
+
+It writes `deploy/rendered/<service>.env.yaml` (for `--env-vars-file`), `deploy/rendered/<service>.secrets.txt` (the
+`--set-secrets` value) and `deploy/rendered/<service>.marker`, and prints the marker. The build renders every
+workload once, passing its substitutions as runtime overrides, and every deploy step consumes its rendered files.
+
+The marker combines the service's version with a hash of its rendered configuration and is stored as the
+`quaia_deploy_marker` label on the deployed service or job. Before deploying, `deploy/redeploy_gate.sh` reads the label
+and skips the deployment when the marker is unchanged: a configuration-only change redeploys the service on its own,
+and an unchanged service is not redeployed. **Bump a service's `version` in the manifest to roll out a code change
+whose configuration is unchanged.** The third-party images take their version from the `_ATLASSIAN_MCP_IMAGE_TAG` and
+`_QDRANT_IMAGE_TAG` substitutions, so a new tag redeploys them.
 
 #### Deployment:
 
@@ -706,7 +766,9 @@ gcloud builds submit --config 'path/to/your/cloudbuild.yaml' --substitutions "`^
 * `_RAG_SYNC_MEMORY` / `_RAG_SYNC_CPU`: Memory and CPU of the sync job. Defaults: `4Gi` / `2`.
 * `_QDRANT_DOCUMENTS_COLLECTION_NAME`, `_RAG_OFFICE_CONVERSION_ENABLED`, `_RAG_MAX_ATTACHMENT_BYTES`,
   `_RAG_MAX_PAGES_PER_DOCUMENT`, `_RAG_RENDER_DPI`, `_RAG_MAX_IMAGE_PIXELS`: The sync job's settings of the same names
-  (see *Environment Variables*).
+  (see *Environment Variables*); `_QDRANT_DOCUMENTS_COLLECTION_NAME` sets `QDRANT_CONFLUENCE_COLLECTION_NAME`.
+* `_ATLASSIAN_MCP_IMAGE_TAG` / `_QDRANT_IMAGE_TAG`: The image tags of the Atlassian MCP server and of Qdrant, which
+  are also their redeploy versions. Defaults: `0.21.1` / `v1.16.3`.
 * `_PROMPT_OVERRIDES_DIR` / `_PROMPT_OVERRIDES_BUCKET` / `_PROMPT_OVERRIDES_FOLDER`: Optional prompt overrides. When
   `_PROMPT_OVERRIDES_DIR` is set, the folder `_PROMPT_OVERRIDES_FOLDER` of the bucket `_PROMPT_OVERRIDES_BUCKET` is
   mounted at that path into the orchestrator and every agent, and `PROMPT_OVERRIDES_DIR` points to it.
@@ -742,12 +804,24 @@ each mocked boundary:
 * **Test-case generation** (`POST /story-ready-for-test-case-generation`) → real test cases (name + steps) reach Zephyr,
   linked back to the originating story.
 * **Test-case classification** (same webhook) → labels reach Zephyr.
-* **Test-case review** (same webhook) → a non-empty "Review Comments" value and the "Review Complete" status reach Zephyr.
+* **Test-case review** (same webhook) → a non-empty "Review Comments" value and the "Review Complete" status reach Zephyr;
+  every comment carries the "Duplicate check" section after the batch was indexed and searched per test case within
+  its project (the Qdrant mock answers test-case queries with the stored points, so the judge runs end to end), and
+  the usage artifact carries per-operation counters.
 * **Test execution / incident creation** (`POST /execute-tests`) → a failed automated test drives a real Bug issue into
   the seeded Jira project, the failed execution is reported to Zephyr inside a fresh test cycle, the bug is linked to
-  that execution, and the duplicate search consulted the vector DB.
+  that execution, and the duplicate search consulted the vector DB with the project filter. The typed (`api`) test
+  case reaches the execution agent while the seeded untyped one is skipped with a warning.
+* **Manual execution** (`POST /execute-test`) → one result for the chosen mock agent reaches Zephyr and no bug is
+  created.
+* **Structured logging** → the requirements review's log lines carry the agent's name and task id.
+* **Dashboard** → the login answers `429` with `Retry-After` after the configured attempts, and the task history
+  survives an orchestrator restart. The restart check runs last and calls `docker compose -f docker-compose.smoke.yml
+  restart orchestrator` (override the file with `SMOKE_COMPOSE_FILE`), so the Docker CLI must be available where
+  pytest runs.
 * **Jira DB update** (`POST /update-jira-db`) → the orchestrator forwards to the local sync service, which pushes the seeded Jira story into the mocked vector DB
-  (collection creation with the named dense + sparse schema, and a point upsert carrying both vectors).
+  (collection creation with the named dense + sparse schema, and a point upsert carrying both vectors), and also a
+  seeded issue in the `Closed` status.
 * **Confluence DB update** (`POST /update-confluence-db`) → the local sync service ingests the seeded Confluence page
   (space lookup, page listing, body fetch, breadcrumb-prefixed chunks upserted into the documents collection) and its
   PDF and image attachments (page records with the reconciliation chain and a page image); a second
@@ -865,6 +939,22 @@ You can trigger the execution of automated tests for a specific project.
   ```
   The results will be reported back to Zephyr and an Allure report will be generated.
 
+* **Execute a single test case manually:**
+  Send a POST request to `/execute-test` with the `test_case_key`, the `agent_id` of an
+  explicitly chosen unattended execution agent and the `project_key`. The agent is reserved
+  directly (404 unknown, 409 busy, 503 broken) with no LLM routing; the result is uploaded to
+  the test management system and the report is regenerated. A manual run never creates
+  incidents.
+  ```json
+  {"test_case_key": "SCRUM-42", "agent_id": "ui-execution-agent", "project_key": "SCRUM"}
+  ```
+
+  `/execute-tests` groups test cases only by the recognized test-type labels derived from the
+  `TestCaseType` enumeration in `common/models.py` (`ui`, `api`, `security`, `performance`,
+  `load`, `stress`); test cases without such a label are skipped with a warning. The
+  "automated" label that marks test cases as executable is `AUTOMATED_TC_LABEL` in
+  `config.py` (`OrchestratorConfig`).
+
 ### Updating the RAG Vector Database
 
 The RAG sync runs in its own deployable image (a Cloud Run Job in production, a local
@@ -889,6 +979,16 @@ lock TTL.
 * **Update the Jira issues collection:**
   Send a POST request to `/update-jira-db` with a JSON payload containing the `project_key`
   of the Jira project. The sync runs programmatically — no LLM agent is involved.
+  ```json
+  {"project_key": "SCRUM"}
+  ```
+
+* **Update the test-case collection:**
+  Send a POST request to `/update-test-case-db` with a JSON payload containing the
+  `project_key`. Every run is a full resync (the test-management systems offer no cheap
+  "changed since" query): all eligible test cases (`TEST_CASE_INDEX_STATUSES`; empty means
+  every status) are re-rendered and upserted, unchanged content skips re-embedding, and
+  stored points absent from the listing are deleted.
   ```json
   {"project_key": "SCRUM"}
   ```
@@ -931,18 +1031,37 @@ lock TTL.
   page count is kept. Running the sync runtime outside its image needs
   `uv sync --extra rag-sync` and, for office formats, LibreOffice (`soffice`) on the `PATH`.
 
+* **Update the SharePoint documents collection:**
+  Send a POST request to `/update-sharepoint-db` with a JSON payload containing the
+  `drive_id`, and optionally a `folder_path` (restricting the sync to that folder's
+  descendants) and an `attachment_name_pattern` (case-insensitive regex). Access is
+  app-only through Microsoft Entra (client-credentials via MSAL; the least-privilege
+  setup grants `Sites.Selected` per site). Change detection uses delta enumeration on
+  the drive root: a drive-scoped run resumes from the stored delta link, a folder-scoped
+  run performs a full enumeration filtered to the folder and never advances the drive's
+  delta link, an expired delta link (`410 Gone`) restarts a full enumeration, and
+  `cTag`/`eTag` distinguish content changes from renames or moves. Files are processed
+  by the same ingestion pipeline as Confluence attachments.
+  ```json
+  {"drive_id": "b!abc123", "folder_path": "Specs", "attachment_name_pattern": "^spec.*\.pdf$"}
+  ```
+
 The command-line runner executes one sync for one scope to completion and is what the
 Cloud Run Job invokes:
 ```bash
 python -m services.rag_sync.cli jira --project-key SCRUM
 python -m services.rag_sync.cli confluence --space-key DEV
+python -m services.rag_sync.cli test-cases --project-key SCRUM
+python -m services.rag_sync.cli sharepoint --drive-id b!abc123 --folder-path Specs
 ```
 
 The exit code reflects the outcome: `0` for a clean run, `2` for a Confluence run that completed with errors, `3` when
 the runner lost its lock and `1` for any other failure.
 
 **Model and schema changes.** Every collection records the embedding model that produced its vectors; syncs and
-retrieval refuse to write or query with a different model. After changing the model or the vector schema, delete the
+retrieval refuse to write or query with a different model, and an existing collection whose vector schema doesn't
+match the active embedding mode fails at first use with an actionable error (see
+[Migrating a vector collection](#migrating-a-vector-collection)). After changing the model or the vector schema, delete the
 affected collection. Each project's or space's next sync then finds none of its points in the collection, resets that
 scope's sync state (the Jira cursor or the Confluence fingerprints) and re-ingests everything, even when another scope's
 sync has already recreated the shared collection.
@@ -971,6 +1090,26 @@ log at startup and the review uses the issue and its attachments only.
 * Retrieved text passes the prompt-injection guard like any other model input. Page images cannot be screened by the
   text classifier; since Confluence content is editable by many users, treat ingested spaces as part of the attack
   surface and restrict ingestion to trusted spaces.
+
+### Duplicate Check in Test Case Reviews
+
+The Test Case Review agent checks every reviewed test case for duplicate coverage among the existing test cases of the
+same project, using the test-case collection (`QDRANT_TEST_CASES_COLLECTION_NAME`):
+
+1. The batch under review is indexed first, through the same rendering the test-case sync uses, so the check also sees
+   test cases created minutes earlier.
+2. Per test case, a hybrid query searches the same project, excluding the test case itself, with
+   `TEST_CASE_DUPLICATE_MIN_SCORE` on the dense branch and at most `TEST_CASE_DUPLICATE_MAX_CANDIDATES` results;
+   candidates are de-duplicated by test case key.
+3. When candidates exist, a dedicated judge sub-agent (`test_case_duplicate_judge`, prompt
+   `agents/test_case_review/system_prompts/test_case_duplicate_judge_prompt.md`) decides which of them genuinely
+   overlap in **coverage** - not in topic - and explains each overlap.
+4. The verdict is rendered in code as a "Duplicate check" section and appended to the test case's review comment by
+   the comment-writing tool ("No duplicate test cases found." or the overlapping keys with their explanation). It is
+   also returned in the review feedback (`duplicate_check`).
+
+The check fails loudly: an indexing, search or judge failure is logged with the test case and project keys and aborts
+the review, so nobody reads "no duplicates" for a check that never ran.
 
 ### Dashboard API Endpoints
 
@@ -1129,6 +1268,49 @@ schedulers before upgrading:
 6. **New cloud resources are required:** the RAG sync Cloud Run job, the IAM binding letting the orchestrator run
    it with overrides (`run.jobs.runWithOverrides`), and the Confluence secrets (`CONFLUENCE_URL`,
    `CONFLUENCE_USERNAME`, `CONFLUENCE_API_TOKEN`) on the sync job and the MCP server.
+
+7. **`DASHBOARD_PASSWORD` is replaced by `DASHBOARD_PASSWORD_HASH`** (bcrypt). There is no default password: the
+   orchestrator refuses to start without `DASHBOARD_USERNAME`, a well-formed `DASHBOARD_PASSWORD_HASH` and
+   `DASHBOARD_JWT_SECRET`. Generate the hash with
+   `python -c "import bcrypt; print(bcrypt.hashpw(b'password', bcrypt.gensalt()).decode())"` and escape `$` as
+   `$$` in compose files.
+8. **The `load_stress` test-case label is replaced by separate `load` and `stress` labels**, matching the
+   `TestCaseType` enumeration. Relabel affected test cases; unlabelled ones are skipped with a warning by
+   `/execute-tests`.
+9. **`JIRA_VALID_STATUSES` is removed.** The Jira sync ingests every issue regardless of workflow status. Reset
+   the Jira sync cursor once (delete the `sync-state:jira:<project>` record or the whole metadata collection) so
+   the next run re-ingests the issues the old allow-list skipped.
+10. **The documents collection is renamed per source:** `QDRANT_CONFLUENCE_COLLECTION_NAME` (default
+    `confluence_documents`) and `QDRANT_SHAREPOINT_COLLECTION_NAME` (default `sharepoint_documents`), plus the
+    new `test_cases` collection. Recreate or rename existing collections and re-sync.
+11. **The Atlassian MCP endpoint moves from `/sse` to `/mcp`** with stateless Streamable HTTP. Update every URL
+    setting, start script and compose file.
+12. **`IncidentCreationInput` gains a required project key** (internal contract between orchestrator and agent).
+13. **Prompt template files are renamed from `.txt` to `.md`.** Override paths pointing at the old files must be
+    updated.
+14. **The pydantic-ai model layer resolves provider-specific settings.** Gemini and Claude calls now go through
+    explicitly built provider models with transport-level retries; `GOOGLE_API_KEY`/`ANTHROPIC_API_KEY` are read
+    from the environment. Claude deployments should set `MAX_OUTPUT_TOKENS` explicitly (unset means
+    pydantic-ai's own 4096 default for Anthropic).
+15. **Test-case point ids are derived from the test management system and the test case key.** Run
+    `/update-test-case-db` once per project: the full resync writes the new points and deletes the old ones.
+16. **The Test Case Review agent needs the vector database and the embedding service** (`QDRANT_URL`,
+    `EMBEDDING_SERVICE_URL`, `INTERNAL_SERVICE_API_KEY`) for its duplicate check. Without them every review fails
+    instead of reporting "no duplicates".
+
+### Migrating a vector collection
+
+Every service validates an existing collection's vector schema once, at first use, against the active embedding
+mode: a named dense vector (`dense`) of the embedding model's size with cosine distance, plus a named sparse vector
+(`sparse`). A mismatch - e.g. a collection created by an older release with a single unnamed dense vector, or a new
+embedding model with another dimension - fails with an error naming the collection, the expected mode and every
+missing or incompatible vector. To migrate:
+
+1. Delete the collection named in the error (e.g. `curl -X DELETE "$QDRANT_URL/collections/<name>"`).
+2. Resync its source: `/update-jira-db` per project for `jira_issues`, `/update-confluence-db` per space and
+   `/update-sharepoint-db` per drive for the document collections, `/update-test-case-db` per project for
+   `test_cases`. A sync that finds none of its scope's points in the collection resets that scope's sync state
+   itself and re-ingests everything.
 
 ---
 

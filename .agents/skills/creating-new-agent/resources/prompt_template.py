@@ -25,7 +25,7 @@ def _get_prompts_root() -> Path:
 class <AgentName>SystemPrompt(PromptBase):
     """Loads the main system prompt template of the <Agent Name> agent."""
 
-    def __init__(self, template_file_name: str = "main_prompt_template.txt"):
+    def __init__(self, template_file_name: str = "main_prompt_template.md"):
         super().__init__(template_file_name)
 
     def get_script_dir(self) -> Path:

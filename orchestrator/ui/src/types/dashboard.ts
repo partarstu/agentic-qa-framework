@@ -25,6 +25,19 @@ export interface DashboardSummary {
   orchestrator_version: string;
 }
 
+/** Usage of one operation (the main agent or one sub-agent) inside a task run. */
+export interface OperationUsage {
+  operation: string;
+  model_name: string;
+  requests: number;
+  uncached_input_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  output_tokens: number;
+  tool_calls: number;
+  cost_usd: number | null;
+}
+
 export interface TokenUsage {
   model_name: string;
   input_tokens: number;
@@ -34,6 +47,8 @@ export interface TokenUsage {
   requests: number;
   tool_calls: number;
   cost_usd: number | null;
+  /** Absent for external agents emitting the older usage shape. */
+  operations?: OperationUsage[];
 }
 
 export interface AgentCapabilities {
@@ -91,6 +106,7 @@ export interface LogEntry {
   message: string;
   task_id?: string | null;
   agent_id?: string | null;
+  agent_name?: string | null;
 }
 
 export interface RagSyncOutcome {

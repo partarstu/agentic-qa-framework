@@ -100,6 +100,7 @@ class IncidentCreationAgent(AgentBase):
         Args:
             incident_description: Description of the incident including the error description,
                                 test case name, test step where the issue occurred, steps to reproduce, system info etc.
+            project_key: Exactly the project key given in the input; never inferred or altered.
 
         Returns:
             List of JiraIssue objects representing potential duplicate incidents.

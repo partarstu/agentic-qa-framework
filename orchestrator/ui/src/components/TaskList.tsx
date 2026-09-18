@@ -2,10 +2,10 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-only
 
-import { useState } from 'react';
-import { ClipboardList, CheckCircle, XCircle, Clock, Loader2 } from 'lucide-react';
+import { Fragment, useState } from 'react';
+import { ClipboardList, CheckCircle, XCircle, Clock, Loader2, ChevronDown, ChevronRight } from 'lucide-react';
 import { LogModal } from './LogModal';
-import type { TaskInfo, TaskLiveState } from '../types/dashboard';
+import type { OperationUsage, TaskInfo, TaskLiveState } from '../types/dashboard';
 
 interface TaskListProps {
   tasks: TaskInfo[] | undefined;
@@ -13,8 +13,54 @@ interface TaskListProps {
   liveTaskStates?: Record<string, TaskLiveState>;
 }
 
+const formatTokens = (tokens: number) => {
+  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(2)}M`;
+  if (tokens >= 1_000) return `${(tokens / 1_000).toFixed(1)}k`;
+  return `${tokens}`;
+};
+
+const formatCost = (cost: number | null | undefined) => {
+  if (cost === null || cost === undefined) return '-';
+  return `$${cost.toFixed(4)}`;
+};
+
+/** The token detail view of one task: the counters of every operation (main agent and sub-agents). */
+function OperationUsageTable({ operations }: { operations: OperationUsage[] }) {
+  return (
+    <table className="w-full text-xs">
+      <thead>
+        <tr className="text-slate-500 text-left">
+          <th className="pb-2 font-medium">Operation</th>
+          <th className="pb-2 font-medium">Model</th>
+          <th className="pb-2 font-medium">Requests</th>
+          <th className="pb-2 font-medium">Uncached input</th>
+          <th className="pb-2 font-medium">Cache read</th>
+          <th className="pb-2 font-medium">Cache write</th>
+          <th className="pb-2 font-medium">Output</th>
+          <th className="pb-2 font-medium">Cost</th>
+        </tr>
+      </thead>
+      <tbody>
+        {operations.map((operation) => (
+          <tr key={`${operation.operation}-${operation.model_name}`} className="text-slate-300">
+            <td className="py-1">{operation.operation}</td>
+            <td className="py-1 text-slate-400">{operation.model_name}</td>
+            <td className="py-1">{operation.requests}</td>
+            <td className="py-1">{formatTokens(operation.uncached_input_tokens)}</td>
+            <td className="py-1">{formatTokens(operation.cache_read_tokens)}</td>
+            <td className="py-1">{formatTokens(operation.cache_write_tokens)}</td>
+            <td className="py-1">{formatTokens(operation.output_tokens)}</td>
+            <td className="py-1 text-teal-400">{formatCost(operation.cost_usd)}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
 export function TaskList({ tasks, isLoading, liveTaskStates }: TaskListProps) {
   const [selectedTask, setSelectedTask] = useState<string | null>(null);
+  const [expandedTask, setExpandedTask] = useState<string | null>(null);
 
   const formatDuration = (ms: number | null) => {
     if (ms === null) return '-';
@@ -25,17 +71,6 @@ export function TaskList({ tasks, isLoading, liveTaskStates }: TaskListProps) {
 
   const formatTime = (isoString: string) => {
     return new Date(isoString).toLocaleTimeString();
-  };
-
-  const formatTokens = (tokens: number) => {
-    if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(2)}M`;
-    if (tokens >= 1_000) return `${(tokens / 1_000).toFixed(1)}k`;
-    return `${tokens}`;
-  };
-
-  const formatCost = (cost: number | null | undefined) => {
-    if (cost === null || cost === undefined) return '-';
-    return `$${cost.toFixed(4)}`;
   };
 
   const getStatusIcon = (status: string) => {
@@ -105,38 +140,72 @@ export function TaskList({ tasks, isLoading, liveTaskStates }: TaskListProps) {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-700/50">
-                {tasks.map((task) => (
-                  <tr 
-                    key={task.task_id} 
-                    className="hover:bg-slate-700/30 transition-colors cursor-pointer"
-                    onClick={() => setSelectedTask(task.task_id)}
-                  >
-                    <td className="py-3">
-                      <div className="flex items-center gap-2">
-                        {getStatusIcon(task.status)}
-                        <span className={`px-2 py-0.5 text-xs rounded border ${getStatusBadgeClass(task.status)}`}>
-                          {task.status}
-                        </span>
-                      </div>
-                    </td>
-                    <td className="py-3 max-w-xs text-slate-200" title={task.description}>
-                      <div className="truncate">{task.description}</div>
-                      {task.status === 'RUNNING' && liveTaskStates?.[task.task_id]?.current_activity && (
-                        <div className="text-xs text-indigo-300 flex items-center gap-1 mt-0.5">
-                          <Loader2 className="w-3 h-3 animate-spin flex-shrink-0" />
-                          <span className="truncate">{liveTaskStates[task.task_id].current_activity}</span>
-                        </div>
+                {tasks.map((task) => {
+                  const operations = task.token_usage?.operations ?? [];
+                  const isExpanded = expandedTask === task.task_id;
+                  return (
+                    <Fragment key={task.task_id}>
+                      <tr
+                        className="hover:bg-slate-700/30 transition-colors cursor-pointer"
+                        onClick={() => setSelectedTask(task.task_id)}
+                      >
+                        <td className="py-3">
+                          <div className="flex items-center gap-2">
+                            {getStatusIcon(task.status)}
+                            <span className={`px-2 py-0.5 text-xs rounded border ${getStatusBadgeClass(task.status)}`}>
+                              {task.status}
+                            </span>
+                          </div>
+                        </td>
+                        <td className="py-3 max-w-xs text-slate-200" title={task.description}>
+                          <div className="truncate">{task.description}</div>
+                          {task.status === 'RUNNING' && liveTaskStates?.[task.task_id]?.current_activity && (
+                            <div className="text-xs text-indigo-300 flex items-center gap-1 mt-0.5">
+                              <Loader2 className="w-3 h-3 animate-spin flex-shrink-0" />
+                              <span className="truncate">{liveTaskStates[task.task_id].current_activity}</span>
+                            </div>
+                          )}
+                        </td>
+                        <td className="py-3 text-slate-300">{task.agent_name}</td>
+                        <td className="py-3 text-slate-400">{formatTime(task.start_time)}</td>
+                        <td className="py-3 text-slate-400">{formatDuration(task.duration_ms)}</td>
+                        <td className="py-3 text-slate-400">
+                          {!task.token_usage ? (
+                            '-'
+                          ) : operations.length > 0 ? (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setExpandedTask(isExpanded ? null : task.task_id);
+                              }}
+                              aria-expanded={isExpanded}
+                              aria-label={`${isExpanded ? 'Hide' : 'Show'} token usage per operation`}
+                              className="flex items-center gap-1 hover:text-slate-200"
+                            >
+                              {isExpanded ? (
+                                <ChevronDown className="w-3 h-3" aria-hidden="true" />
+                              ) : (
+                                <ChevronRight className="w-3 h-3" aria-hidden="true" />
+                              )}
+                              {formatTokens(task.token_usage.total_tokens)}
+                            </button>
+                          ) : (
+                            formatTokens(task.token_usage.total_tokens)
+                          )}
+                        </td>
+                        <td className="py-3 text-teal-400">{formatCost(task.token_usage?.cost_usd)}</td>
+                      </tr>
+                      {isExpanded && (
+                        <tr className="bg-slate-900/40">
+                          <td colSpan={7} className="px-4 py-3">
+                            <OperationUsageTable operations={operations} />
+                          </td>
+                        </tr>
                       )}
-                    </td>
-                    <td className="py-3 text-slate-300">{task.agent_name}</td>
-                    <td className="py-3 text-slate-400">{formatTime(task.start_time)}</td>
-                    <td className="py-3 text-slate-400">{formatDuration(task.duration_ms)}</td>
-                    <td className="py-3 text-slate-400">
-                      {task.token_usage ? formatTokens(task.token_usage.total_tokens) : '-'}
-                    </td>
-                    <td className="py-3 text-teal-400">{formatCost(task.token_usage?.cost_usd)}</td>
-                  </tr>
-                ))}
+                    </Fragment>
+                  );
+                })}
               </tbody>
             </table>
           </div>

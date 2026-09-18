@@ -21,6 +21,7 @@ import os
 import time
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 import httpx
 import pytest
@@ -35,6 +36,7 @@ JIRA_MCP_SEEDED_STORY_URL = os.environ.get("SMOKE_JIRA_MCP_STORY_URL", "http://l
 ZEPHYR_RECORDED_URL = os.environ.get("SMOKE_ZEPHYR_RECORDED_URL", "http://localhost:8090/__recorded")
 QDRANT_RECORDED_URL = os.environ.get("SMOKE_QDRANT_RECORDED_URL", "http://localhost:6333/__recorded")
 CONFLUENCE_RECORDED_URL = os.environ.get("SMOKE_CONFLUENCE_RECORDED_URL", "http://localhost:8095/__recorded")
+SHAREPOINT_RECORDED_URL = os.environ.get("SMOKE_SHAREPOINT_RECORDED_URL", "http://localhost:8097/__recorded")
 
 # Fixed test credentials, matching docker-compose.smoke.yml.
 ORCHESTRATOR_API_KEY = "smoke-api-key"
@@ -48,6 +50,16 @@ SEEDED_ISSUE_ID = 10001
 SEEDED_PROJECT_KEY = "SMOKE"
 # The ready-for-execution test case seeded by the Zephyr mock (zephyr_mock._EXECUTABLE_TC_KEY).
 SEEDED_EXECUTABLE_TC_KEY = "SMOKE-T100"
+# Its test-type label, one of the TestCaseType labels.
+SEEDED_EXECUTABLE_TC_TYPE_LABEL = "api"
+# The automated test case without a test-type label seeded by the Zephyr mock (zephyr_mock._UNTYPED_TC_KEY).
+SEEDED_UNTYPED_TC_KEY = "SMOKE-T101"
+# The issue in a formerly excluded status seeded by the Jira REST mock (jira_rest_mock._SEEDED_CLOSED_ISSUE).
+SEEDED_CLOSED_ISSUE_KEY = "SMOKE-2"
+# The compose file of the running stack, for the orchestrator restart check.
+SMOKE_COMPOSE_FILE = os.environ.get(
+    "SMOKE_COMPOSE_FILE", str(Path(__file__).resolve().parents[2] / "docker-compose.smoke.yml")
+)
 # The collection the RAG sync stores Jira issues in; tracks config as the source of truth.
 TICKETS_COLLECTION_NAME = config.QdrantConfig.TICKETS_COLLECTION_NAME
 # The collection the Confluence sync stores document parts in; tracks config.
@@ -75,6 +87,13 @@ HEALTHY_AGENT_STATUSES = {"AVAILABLE", "BUSY"}
 
 # The status the review flow moves a reviewed test case to; tracks config as the source of truth.
 REVIEW_COMPLETE_STATUS = config.TestCaseReviewAgentConfig.REVIEW_COMPLETE_STATUS_NAME
+# The collection the test cases are indexed in; tracks config as the source of truth.
+TEST_CASES_COLLECTION_NAME = config.QdrantConfig.TEST_CASES_COLLECTION_NAME
+# Login attempts allowed per window; the smoke stack keeps the default.
+LOGIN_RATE_LIMIT_ATTEMPTS = config.DashboardAuthConfig.LOGIN_RATE_LIMIT_ATTEMPTS
+# Heading of the duplicate-check section of a review comment; must match
+# agents.test_case_review.main.DUPLICATE_CHECK_HEADING (not imported: importing it starts the agent).
+DUPLICATE_CHECK_HEADING = "Duplicate check"
 
 # Agents the /execute-tests + incident-creation flow needs (beyond the core four).
 EXECUTION_FLOW_AGENT_NAMES: set[str] = {EXECUTION_AGENT_NAME, config.IncidentCreationAgentConfig.OWN_NAME}
@@ -182,6 +201,8 @@ _WEBHOOKS: dict[str, tuple[str, dict[str, str]]] = {
     "execute_tests": ("/execute-tests", {"project_key": SEEDED_PROJECT_KEY}),
     "update_jira_db": ("/update-jira-db", {"project_key": SEEDED_PROJECT_KEY}),
     "update_confluence_db": ("/update-confluence-db", {"space_key": SEEDED_SPACE_KEY}),
+    "update_test_case_db": ("/update-test-case-db", {"project_key": SEEDED_PROJECT_KEY}),
+    "update_sharepoint_db": ("/update-sharepoint-db", {"drive_id": "drive-smoke"}),
 }
 
 
@@ -223,3 +244,13 @@ def update_jira_db_response(webhook_responses: dict[str, httpx.Response]) -> htt
 @pytest.fixture(scope="session")
 def update_confluence_db_response(webhook_responses: dict[str, httpx.Response]) -> httpx.Response:
     return webhook_responses["update_confluence_db"]
+
+
+@pytest.fixture(scope="session")
+def update_test_case_db_response(webhook_responses: dict[str, httpx.Response]) -> httpx.Response:
+    return webhook_responses["update_test_case_db"]
+
+
+@pytest.fixture(scope="session")
+def update_sharepoint_db_response(webhook_responses: dict[str, httpx.Response]) -> httpx.Response:
+    return webhook_responses["update_sharepoint_db"]

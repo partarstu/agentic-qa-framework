@@ -2,14 +2,23 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-only
 
-import { useState, useRef, useLayoutEffect } from 'react';
+import { useState, useRef, useLayoutEffect, useEffect } from 'react';
 import DOMPurify from 'dompurify';
 import { Server, Wifi, WifiOff, Loader2, RefreshCw } from 'lucide-react';
 import { useQueryClient } from '@tanstack/react-query';
+import { getServerErrorMessage } from '../api/client';
 import { dashboardApi } from '../api/dashboardApi';
 import { LogModal } from './LogModal';
+import { Toast } from './Toast';
 import type { AgentInfo } from '../types/dashboard';
 import type { TaskLiveState } from '../types/dashboard';
+
+const DISCOVERY_TOAST_DURATION_MS = 6000;
+
+interface DiscoveryToast {
+  message: string;
+  variant: 'error' | 'success';
+}
 
 interface AgentGridProps {
   agents: AgentInfo[] | undefined;
@@ -67,15 +76,23 @@ function AgentDescription({ text }: { text: string }) {
 export function AgentGrid({ agents, isLoading, liveTaskStates }: AgentGridProps) {
   const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
   const [isDiscovering, setIsDiscovering] = useState(false);
+  const [discoveryToast, setDiscoveryToast] = useState<DiscoveryToast | null>(null);
   const queryClient = useQueryClient();
+
+  useEffect(() => {
+    if (!discoveryToast) return;
+    const timer = setTimeout(() => setDiscoveryToast(null), DISCOVERY_TOAST_DURATION_MS);
+    return () => clearTimeout(timer);
+  }, [discoveryToast]);
 
   const handleDiscoverAgents = async () => {
     setIsDiscovering(true);
     try {
-      await dashboardApi.triggerDiscovery();
+      const result = await dashboardApi.triggerDiscovery();
+      setDiscoveryToast({ message: result.message, variant: 'success' });
       await queryClient.invalidateQueries({ queryKey: ['agents'] });
     } catch (error) {
-      console.error('Discovery failed:', error);
+      setDiscoveryToast({ message: `Agent discovery failed: ${getServerErrorMessage(error)}`, variant: 'error' });
     } finally {
       setIsDiscovering(false);
     }
@@ -221,6 +238,8 @@ export function AgentGrid({ agents, isLoading, liveTaskStates }: AgentGridProps)
           title="Agent Execution Logs"
         />
       )}
+
+      {discoveryToast && <Toast message={discoveryToast.message} variant={discoveryToast.variant} />}
     </div>
   );
 }

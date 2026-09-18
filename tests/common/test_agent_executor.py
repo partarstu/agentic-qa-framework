@@ -4,6 +4,7 @@
 
 import asyncio
 import contextlib
+import json
 import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -11,6 +12,7 @@ import pytest
 from a2a.server.agent_execution import RequestContext
 from a2a.types import Message, TaskArtifactUpdateEvent, TaskState, TaskStatusUpdateEvent
 
+from common import utils
 from common.agent_executor import DefaultAgentExecutor
 from common.agent_log_capture import AgentLogCaptureHandler
 from common.streaming import current_log_handler
@@ -245,6 +247,37 @@ async def test_contextvars_set_during_run_and_reset_after(mock_agent, mock_conte
 
     assert isinstance(handler_during_run, AgentLogCaptureHandler)
     assert current_log_handler.get() is None
+
+
+@pytest.mark.asyncio
+async def test_captured_log_lines_carry_the_agent_name_and_task_id(mock_agent, mock_context, mock_event_queue):
+    """WS23: the run's log lines are stamped with the agent's and the task's identity without call-site changes."""
+    mock_agent.agent_name = "Stamped Agent"
+    executor = DefaultAgentExecutor(mock_agent)
+    mock_context.message = MagicMock()
+    agent_logger = utils.get_logger("stamped_agent")
+
+    async def log_during_run(_message):
+        agent_logger.info("Working on the task")
+        result = MagicMock()
+        result.parts = []
+        return result
+
+    mock_agent.run.side_effect = log_during_run
+
+    with patch("common.agent_executor._LOG_FLUSH_INTERVAL_SECONDS", 100):
+        await executor.execute(mock_context, mock_event_queue)
+
+    log_chunks = [
+        call[0][0].artifact.parts[0].raw.decode("utf-8")
+        for call in mock_event_queue.enqueue_event.call_args_list
+        if isinstance(call[0][0], TaskArtifactUpdateEvent) and call[0][0].artifact.name == "logs"
+    ]
+    records = [json.loads(line) for chunk in log_chunks for line in chunk.splitlines()]
+    working = next(record for record in records if record["message"] == "Working on the task")
+    assert working["agent_name"] == "Stamped Agent"
+    assert working["task_id"] == "test-task-123"
+    assert utils.log_context.get() is None
 
 
 # ---------------------------------------------------------------------------

@@ -8,6 +8,7 @@ import hashlib
 import uuid
 from datetime import UTC, datetime
 
+import config
 from common.models import ListedTestCase, VectorizableBaseModel
 
 
@@ -15,6 +16,7 @@ class IndexedTestCase(VectorizableBaseModel):
     """The payload and embedding content for one test-case index point."""
 
     source: str = "test_case"
+    test_management_system: str
     project_key: str
     test_case_key: str
     name: str
@@ -26,8 +28,10 @@ class IndexedTestCase(VectorizableBaseModel):
     indexed_at: str
 
     def get_vector_id(self) -> str:
-        """Return a stable UUID scoped to the configured test-management identity."""
-        return str(uuid.uuid5(uuid.NAMESPACE_URL, f"quaia:test-case:{self.test_case_key}"))
+        """Return a stable UUID derived from the test-management system and the test case key."""
+        return str(
+            uuid.uuid5(uuid.NAMESPACE_URL, f"quaia:test-case:{self.test_management_system}:{self.test_case_key}")
+        )
 
     def get_embedding_content(self) -> str:
         """Return the compact human-readable test-case representation."""
@@ -45,6 +49,7 @@ def render_test_case(project_key: str, listed: ListedTestCase) -> IndexedTestCas
         part for part in (f"Name: {test_case.name}", f"Objective: {test_case.summary}", f"Preconditions: {test_case.preconditions or ''}", steps) if part
     )
     return IndexedTestCase(
+        test_management_system=config.TEST_MANAGEMENT_SYSTEM,
         project_key=project_key, test_case_key=test_case.key or "", name=test_case.name, status=listed.status,
         labels=test_case.labels, parent_issue_key=test_case.parent_issue_key, text=text,
         content_hash=hashlib.sha256(text.encode("utf-8")).hexdigest(), indexed_at=datetime.now(UTC).isoformat(),

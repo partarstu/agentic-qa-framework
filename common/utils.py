@@ -8,6 +8,7 @@ import mimetypes
 import os
 import re
 import sys
+from collections.abc import Mapping
 from contextvars import ContextVar
 from datetime import UTC, datetime
 from pathlib import Path
@@ -82,13 +83,36 @@ class StructuredJsonFormatter(logging.Formatter):
         return json.dumps(payload, default=str)
 
 
-def render_log_record(line: str) -> str:
-    """Render a structured log line for reports while tolerating legacy text lines."""
+def parse_log_record(line: str) -> dict[str, object] | None:
+    """Parse one structured (JSON) log line; None for a plain-text line of another format."""
     try:
         record = json.loads(line)
     except json.JSONDecodeError:
+        return None
+    return record if isinstance(record, dict) and "message" in record else None
+
+
+def render_log_message(record: Mapping[str, object]) -> str:
+    """The readable message of a structured record, followed by its exception text when it has one."""
+    message = str(record.get("message", ""))
+    exception = record.get("exception")
+    return f"{message}\n{exception}" if exception else message
+
+
+def render_log_record(line: str) -> str:
+    """Render a structured log line as a readable line while leaving lines of other formats untouched."""
+    record = parse_log_record(line)
+    if record is None:
         return line
-    return f"{record.get('timestamp', '')} - {record.get('logger', '')} - {record.get('level', '')} - {record.get('message', '')}"
+    return (
+        f"{record.get('timestamp', '')} - {record.get('logger', '')} - {record.get('level', '')} - "
+        f"{render_log_message(record)}"
+    )
+
+
+def render_log_text(text: str) -> str:
+    """Render every line of a log chunk, so reports never show raw machine output."""
+    return "\n".join(render_log_record(line) for line in text.splitlines())
 
 
 def _initialize_logging():
@@ -159,7 +183,7 @@ def get_execution_logs_from_artifacts(artifacts: list[FileArtifact], log_filenam
         if (
             artifact.name
             and (log_filename_pattern.lower() in artifact.name.lower())
-            and (artifact.name.endswith(".txt") or artifact.name.endswith(".log"))
+            and (artifact.name.endswith(".txt") or artifact.name.endswith(".log") or artifact.name.endswith(".md"))
             and artifact.raw
         ):
             try:

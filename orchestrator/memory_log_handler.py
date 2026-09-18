@@ -25,6 +25,7 @@ class LogEntry:
     message: str
     task_id: str | None = None
     agent_id: str | None = None
+    agent_name: str | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -34,6 +35,7 @@ class LogEntry:
             "message": self.message,
             "task_id": self.task_id,
             "agent_id": self.agent_id,
+            "agent_name": self.agent_name,
         }
 
 
@@ -73,6 +75,7 @@ class MemoryLogHandler(logging.Handler):
                 message=record.getMessage(),
                 task_id=getattr(record, "task_id", None),
                 agent_id=getattr(record, "agent_id", None),
+                agent_name=getattr(record, "agent_name", None),
             )
             with self._buffer_lock:
                 self._buffer.append(entry)

@@ -112,6 +112,7 @@ async def test_prompt_injection_screens_text_inside_mixed_text_and_binary_conten
 async def test_request_records_usage_under_operation_name(mock_wrapped_model):
     from pydantic_ai.messages import TextPart, ToolCallPart
     from pydantic_ai.usage import RequestUsage
+
     from common.token_usage import OperationMeter, operation_meter
 
     with patch("common.custom_llm_wrapper.build_model", return_value=mock_wrapped_model):
@@ -161,6 +162,7 @@ async def test_streaming_request_records_usage_after_the_stream_closes(mock_wrap
     from contextlib import asynccontextmanager
 
     from pydantic_ai.usage import RequestUsage
+
     from common.token_usage import OperationMeter, operation_meter
 
     with patch("common.custom_llm_wrapper.build_model", return_value=mock_wrapped_model):

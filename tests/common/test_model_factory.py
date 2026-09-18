@@ -2,10 +2,10 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
+import logging
 from unittest.mock import MagicMock, patch
 
 import httpx
-import logging
 import pytest
 from pydantic_ai.models import Model
 from pydantic_ai.models.anthropic import AnthropicModel
@@ -135,7 +135,7 @@ def test_retry_transport_retries_retryable_status_and_logs_the_attempt(caplog, m
 
     assert response.status_code == 200
     assert len(calls) == 2
-    retry_line = [record for record in caplog.records if "HTTP 503" in record.message][0]
+    retry_line = next(record for record in caplog.records if "HTTP 503" in record.message)
     assert "attempt 1/3" in retry_line.message
     assert "retrying in" in retry_line.message
 

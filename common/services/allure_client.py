@@ -47,7 +47,7 @@ class AllureClient(TestReportingClientBase):
 
         # Extract logs from artifacts if available using the common utility
         logs_list = utils.get_execution_logs_from_artifacts(test_execution_result.artifacts)
-        logs = "\n\n".join(logs_list) if logs_list else None
+        logs = "\n\n".join(utils.render_log_text(chunk) for chunk in logs_list) if logs_list else None
 
         # Map test status
         if test_execution_result.testExecutionStatus == "passed":

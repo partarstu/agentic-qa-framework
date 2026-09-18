@@ -3,12 +3,13 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 
 import asyncio
+import random
 import time
 import uuid
 
 import httpx
 from qdrant_client import AsyncQdrantClient, models
-from qdrant_client.http.exceptions import UnexpectedResponse
+from qdrant_client.http.exceptions import ResponseHandlingException, UnexpectedResponse
 
 import config
 from common import utils
@@ -19,6 +20,11 @@ logger = utils.get_logger("vector_db_service")
 # Named vectors on every collection this service manages: dense + learned-sparse.
 DENSE_VECTOR_NAME = "dense"
 SPARSE_VECTOR_NAME = "sparse"
+
+# Gateway statuses the database sits behind (a serverless front end) which are worth
+# retrying; every other UnexpectedResponse, 4xx included, propagates untouched.
+_QDRANT_RETRYABLE_STATUSES = frozenset({502, 503, 504})
+_QDRANT_RETRY_ATTEMPTS = 3
 
 
 # Payload fields indexed per collection kind after creation (WS7 plan table):
@@ -39,6 +45,57 @@ _METADATA_INDEXED_FIELDS = {
     "scope": models.PayloadSchemaType.KEYWORD,
     "kind": models.PayloadSchemaType.KEYWORD,
 }
+_TEST_CASES_INDEXED_FIELDS = {
+    "project_key": models.PayloadSchemaType.KEYWORD,
+    "test_case_key": models.PayloadSchemaType.KEYWORD,
+    "status": models.PayloadSchemaType.KEYWORD,
+}
+
+
+async def _retry_qdrant(operation: str, run):
+    """Runs one asynchronous vector-database call with bounded retries (WS19).
+
+    Only genuine transport failures (``ResponseHandlingException`` wraps connection errors
+    and timeouts) and the gateway statuses 502/503/504 are retried, with exponential
+    back-off and jitter. Every operation is idempotent (deterministic ids), so a retry
+    cannot duplicate data. Each retry logs the operation, the reason and the delay.
+    """
+    for attempt in range(_QDRANT_RETRY_ATTEMPTS):
+        try:
+            return await run()
+        except ResponseHandlingException as e:
+            error, reason, retryable = e, type(e.__cause__).__name__ if e.__cause__ else type(e).__name__, True
+        except UnexpectedResponse as e:
+            error, reason, retryable = e, f"HTTP {e.status_code}", e.status_code in _QDRANT_RETRYABLE_STATUSES
+        if not retryable or attempt == _QDRANT_RETRY_ATTEMPTS - 1:
+            raise error
+        delay = min(2**attempt + random.uniform(0, 0.5), 30)
+        logger.warning(
+            f"Vector-database {operation} failed (attempt {attempt + 1}/{_QDRANT_RETRY_ATTEMPTS}, "
+            f"reason: {reason}); retrying in {delay:.1f}s"
+        )
+        await asyncio.sleep(delay)
+
+
+class VectorCollectionSchemaError(RuntimeError):
+    """An existing collection's vector configuration doesn't match the active embedding mode."""
+
+
+def _schema_problems(params: models.CollectionParams, dense_size: int) -> list[str]:
+    """The missing or incompatible vectors of a collection, compared with the active embedding mode."""
+    problems: list[str] = []
+    named_vectors = params.vectors if isinstance(params.vectors, dict) else {}
+    dense = named_vectors.get(DENSE_VECTOR_NAME)
+    if dense is None:
+        problems.append(f"the named dense vector '{DENSE_VECTOR_NAME}' is missing")
+    else:
+        if dense.size != dense_size:
+            problems.append(f"the dense vector has size {dense.size} instead of {dense_size}")
+        if dense.distance != models.Distance.COSINE:
+            problems.append(f"the dense vector uses {dense.distance.value} distance instead of cosine")
+    if SPARSE_VECTOR_NAME not in (params.sparse_vectors or {}):
+        problems.append(f"the named sparse vector '{SPARSE_VECTOR_NAME}' is missing")
+    return problems
 
 
 def _record_uuid(record_id: str) -> str:
@@ -85,6 +142,8 @@ class VectorDbService:
         # One ensure per collection per service instance is enough: index creation is
         # idempotent, and re-listing collections on every upsert/query wastes a round trip.
         self._ensured = False
+        # The existing collection's vector schema is validated once per instance, at first use (WS19).
+        self._schema_validated = False
 
     async def close(self):
         """Close the embedding HTTP client and Qdrant connection pool."""
@@ -138,8 +197,21 @@ class VectorDbService:
                 )
                 await asyncio.sleep(wait_time)
             except httpx.HTTPStatusError as e:
-                logger.exception(f"HTTP error from embedding service: {e.response.status_code} - {e.response.text}")
-                raise
+                status = e.response.status_code
+                if status not in (429, 502, 503, 504) or attempt == max_retries - 1:
+                    logger.exception(f"HTTP error from embedding service: {status} - {e.response.text}")
+                    raise
+                retry_after = e.response.headers.get("Retry-After")
+                wait_time = (
+                    min(float(retry_after), self._embedding_retry_backoff_cap)
+                    if retry_after
+                    else min(2**attempt, self._embedding_retry_backoff_cap)
+                )
+                logger.warning(
+                    f"Attempt {attempt + 1}/{max_retries} got HTTP {status} from the embedding service; "
+                    f"retrying in {wait_time:.1f}s"
+                )
+                await asyncio.sleep(wait_time)
             except Exception:
                 logger.exception("Error calling embedding service")
                 raise
@@ -160,13 +232,21 @@ class VectorDbService:
 
         The dense size is detected from the embedding service. The model that produced
         the vectors is recorded in the metadata collection, and later writes/queries
-        refuse to run with a different model. Payload indexes are (re-)ensured
+        refuse to run with a different model. An existing collection's vector schema is
+        validated against the active embedding mode first. Payload indexes are (re-)ensured
         idempotently, so a collection created before its indexes existed still gets
         them on the next ensure.
+
+        Raises:
+            VectorCollectionSchemaError: When the existing collection's vectors don't match
+                the active embedding mode.
         """
         if self._ensured:
             return
         if await self._collection_exists():
+            if not self._schema_validated:
+                embeddings, _ = await self._embed_texts(["test"])
+                await self._validate_schema(len(embeddings[0][0]))
             await self._ensure_payload_indexes()
             self._ensured = True
             return
@@ -195,7 +275,35 @@ class VectorDbService:
 
         if self._metadata_db is not None:
             await self._metadata_db._store_model_identity(self.collection_name, model)
+        self._schema_validated = True
         self._ensured = True
+
+    async def _validate_schema(self, dense_size: int) -> None:
+        """Fails with an actionable error when the collection's vectors don't fit the active embedding mode.
+
+        The active mode is a named dense vector of the embedding model's size with cosine
+        distance plus a named sparse vector. Without this check a collection created by an
+        older schema (e.g. a single unnamed dense vector) fails with an opaque error deep
+        inside the first write or query.
+
+        Raises:
+            VectorCollectionSchemaError: Naming the collection, the expected mode and every
+                missing or incompatible vector.
+        """
+        if self._schema_validated:
+            return
+        info = await _retry_qdrant(
+            f"schema read of {self.collection_name}", lambda: self.client.get_collection(self.collection_name)
+        )
+        problems = _schema_problems(info.config.params, dense_size)
+        if problems:
+            raise VectorCollectionSchemaError(
+                f"Collection '{self.collection_name}' does not match the active embedding mode (named dense vector "
+                f"'{DENSE_VECTOR_NAME}' of size {dense_size} with cosine distance, and named sparse vector "
+                f"'{SPARSE_VECTOR_NAME}'): {'; '.join(problems)}. Recreate the collection and resync its source "
+                f"to migrate (see 'Migrating a vector collection' in the README)."
+            )
+        self._schema_validated = True
 
     def _indexed_fields(self) -> dict[str, models.PayloadSchemaType]:
         """The payload fields this collection should have indexes on (WS7), by collection name."""
@@ -205,6 +313,8 @@ class VectorDbService:
             return _METADATA_INDEXED_FIELDS
         if self.collection_name == config.DocumentRagConfig.DOCUMENTS_COLLECTION_NAME:
             return _DOCUMENTS_INDEXED_FIELDS
+        if self.collection_name == config.QdrantConfig.TEST_CASES_COLLECTION_NAME:
+            return _TEST_CASES_INDEXED_FIELDS
         return {}
 
     async def _ensure_payload_indexes(self) -> None:
@@ -304,6 +414,7 @@ class VectorDbService:
         try:
             embeddings, model = await self._embed_texts([query_text], query=True)
             dense, sparse_indices, sparse_values = embeddings[0]
+            await self._validate_schema(len(dense))
             await self._verify_model_identity(model)
 
             dense_prefetch = models.Prefetch(
@@ -319,12 +430,15 @@ class VectorDbService:
                 limit=limit,
                 filter=query_filter,
             )
-            response = await self.client.query_points(
-                collection_name=self.collection_name,
-                prefetch=[dense_prefetch, sparse_prefetch],
-                query=models.FusionQuery(fusion=models.Fusion.RRF),
-                limit=limit,
-                with_payload=with_payload,
+            response = await _retry_qdrant(
+                f"hybrid search in {self.collection_name}",
+                lambda: self.client.query_points(
+                    collection_name=self.collection_name,
+                    prefetch=[dense_prefetch, sparse_prefetch],
+                    query=models.FusionQuery(fusion=models.Fusion.RRF),
+                    limit=limit,
+                    with_payload=with_payload,
+                ),
             )
             return response.points
         except UnexpectedResponse as exc:
@@ -394,7 +508,10 @@ class VectorDbService:
                             payload=item.model_dump(),
                         )
                     )
-                await self.client.upsert(collection_name=self.collection_name, points=points)
+                await _retry_qdrant(
+                    f"upsert into {self.collection_name}",
+                    lambda points=points: self.client.upsert(collection_name=self.collection_name, points=points),
+                )
                 logger.info(f"Upserted batch of {len(points)} point(s) to collection {self.collection_name}")
         except Exception:
             logger.exception("Error batch-upserting to Vector DB")
@@ -419,10 +536,13 @@ class VectorDbService:
         """
         try:
             await self.ensure_collection()
-            return await self.client.retrieve(
-                collection_name=self.collection_name,
-                ids=point_ids,
-                with_payload=with_payload,
+            return await _retry_qdrant(
+                f"retrieve from {self.collection_name}",
+                lambda: self.client.retrieve(
+                    collection_name=self.collection_name,
+                    ids=point_ids,
+                    with_payload=with_payload,
+                ),
             )
         except Exception:
             logger.exception("Error retrieving from Vector DB")
@@ -435,8 +555,11 @@ class VectorDbService:
             Exception: If deletion from Vector DB fails.
         """
         try:
-            await self.client.delete(
-                collection_name=self.collection_name, points_selector=models.PointIdsList(points=point_ids)
+            await _retry_qdrant(
+                f"delete from {self.collection_name}",
+                lambda: self.client.delete(
+                    collection_name=self.collection_name, points_selector=models.PointIdsList(points=point_ids)
+                ),
             )
             logger.info(f"Deleted documents with IDs {point_ids} from collection {self.collection_name}")
         except Exception:

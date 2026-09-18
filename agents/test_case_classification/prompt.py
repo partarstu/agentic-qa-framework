@@ -5,6 +5,7 @@
 from pathlib import Path
 
 from common import utils
+from common.models import TestCaseType
 from common.prompt_base import PromptBase
 
 logger = utils.get_logger("test_case_classification_prompt")
@@ -18,5 +19,7 @@ class TestCaseClassificationSystemPrompt(PromptBase):
         super().__init__(template_file_name)
 
     def get_prompt(self) -> str:
+        """Returns the prompt with the test types rendered from the TestCaseType enumeration (WS15)."""
         logger.info("Generating test case classification system prompt")
-        return self.template
+        test_types = "\n".join(f"- `{test_type.value}`: label `{test_type.label}`" for test_type in TestCaseType)
+        return self.template.format(test_types=test_types)

@@ -6,10 +6,10 @@
 
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader
+from pydantic_ai.usage import RunUsage
 
 from common import telemetry
 from common.token_usage import OperationMeter, OperationUsage
-from pydantic_ai.usage import RunUsage
 
 
 def _reader_meter(monkeypatch) -> InMemoryMetricReader:

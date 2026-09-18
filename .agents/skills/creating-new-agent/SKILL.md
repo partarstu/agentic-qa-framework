@@ -31,7 +31,7 @@ agents/<agent_name>/
 ├── main.py
 ├── prompt.py
 └── system_prompts/
-    └── main_prompt_template.txt
+    └── main_prompt_template.md
 ```
 
 ## 1. Config class
@@ -56,8 +56,9 @@ It must inherit `BaseAgentResult`, which carries `llm_comments` for the model to
 ## 3. Prompt classes and system prompt
 
 - `agents/<agent_name>/prompt.py` from [resources/prompt_template.py](resources/prompt_template.py).
-- `agents/<agent_name>/system_prompts/main_prompt_template.txt` from
-  [resources/system_prompt_template.txt](resources/system_prompt_template.txt): a numbered task sequence, tools
+- `agents/<agent_name>/system_prompts/main_prompt_template.md` from
+  [resources/system_prompt_template.md](resources/system_prompt_template.md): Markdown with headings, a numbered
+  task sequence and fenced examples (escape literal braces as `{{`/`}}` when the prompt class formats placeholders), tools
   described by purpose, and an explicit instruction for what to return when a tool is missing or fails.
 - `AgentBase` appends the `report_activity` tool and its instruction automatically. Do not mention it in the template.
 

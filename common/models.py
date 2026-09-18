@@ -11,6 +11,7 @@ from typing import Literal, Optional
 
 from a2a.types import Part
 from pydantic import BaseModel, Field
+from pydantic.json_schema import SkipJsonSchema
 
 
 @dataclass(slots=True)
@@ -115,9 +116,11 @@ class DocumentPagePart(VectorizableBaseModel):
     """
 
     source: str = Field(default="confluence", description="Source system of the document")
-    space_key: str = Field(description="Key of the Confluence space")
-    page_id: str = Field(description="ID of the Confluence page")
-    page_title: str = Field(description="Title of the Confluence page")
+    space_key: str = Field(default="", description="Key of the Confluence space")
+    page_id: str = Field(default="", description="ID of the Confluence page")
+    page_title: str = Field(default="", description="Title of the Confluence page")
+    drive_id: str | None = Field(default=None, description="ID of the SharePoint drive")
+    folder_path: str | None = Field(default=None, description="Folder path of the SharePoint file")
     page_url: str | None = Field(default=None, description="Web UI link of the page")
     attachment_id: str | None = Field(default=None, description="ID of the attachment, for attachment pages")
     attachment_name: str | None = Field(default=None, description="File name of the attachment")
@@ -276,13 +279,40 @@ class TestCaseReviewRequest(JsonSerializableModel):
     test_cases: list[TestCase]
 
 
+class OverlappingTestCase(JsonSerializableModel):
+    """An existing test case whose coverage overlaps the reviewed one (WS17)."""
+
+    test_case_key: str = Field(description="The key of the candidate test case which overlaps in coverage")
+    overlap_explanation: str = Field(description="What exactly both test cases cover in common")
+
+
+class TestCaseDuplicateJudgement(BaseAgentResult):
+    """The duplicate judge's verdict over the duplicate candidates of one reviewed test case."""
+
+    __test__ = False
+    overlapping_test_cases: list[OverlappingTestCase] = Field(
+        description="Only the candidates which genuinely overlap in coverage with the reviewed test case; "
+        "empty when none of them does"
+    )
+
+
+class TestCaseDuplicateCheck(JsonSerializableModel):
+    """The outcome of the duplicate check of one reviewed test case; empty means no duplicates were found."""
+
+    __test__ = False
+    overlapping_test_cases: list[OverlappingTestCase] = Field(default_factory=list)
+
+
 class TestCaseReviewFeedback(BaseAgentResult):
     __test__ = False
     test_case_id: str = Field(description="The ID or key of the test case which was reviewed")
     review_feedback: list[str] = Field(description="List of improvements suggested by the test case review")
+    # Filled in by code, never by a model, so it is hidden from the output schema the LLM sees.
+    duplicate_check: SkipJsonSchema[TestCaseDuplicateCheck | None] = None
 
 
 class TestCaseReviewFeedbacks(BaseAgentResult):
+    __test__ = False
     review_feedbacks: list[TestCaseReviewFeedback] = Field(description="A list of test case review feedbacks")
 
 

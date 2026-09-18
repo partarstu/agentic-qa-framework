@@ -8,50 +8,596 @@
     "nodes": {
       "type": "array",
       "allOf": [
-        { "contains": { "properties": { "unique-id": { "const": "orchestrator" } }, "required": ["unique-id"] } },
-        { "contains": { "properties": { "unique-id": { "const": "requirements-review-agent" } }, "required": ["unique-id"] } },
-        { "contains": { "properties": { "unique-id": { "const": "test-case-generation-agent" } }, "required": ["unique-id"] } },
-        { "contains": { "properties": { "unique-id": { "const": "test-case-classification-agent" } }, "required": ["unique-id"] } },
-        { "contains": { "properties": { "unique-id": { "const": "test-case-review-agent" } }, "required": ["unique-id"] } },
-        { "contains": { "properties": { "unique-id": { "const": "incident-creation-agent" } }, "required": ["unique-id"] } },
-        { "contains": { "properties": { "unique-id": { "const": "prompt-guard-service" } }, "required": ["unique-id"] } },
-        { "contains": { "properties": { "unique-id": { "const": "embedding-service" } }, "required": ["unique-id"] } },
-        { "contains": { "properties": { "unique-id": { "const": "qdrant" } }, "required": ["unique-id"] } },
-        { "contains": { "properties": { "unique-id": { "const": "atlassian-mcp-server" } }, "required": ["unique-id"] } },
-        { "contains": { "properties": { "unique-id": { "const": "execution-agents" } }, "required": ["unique-id"] } },
-        { "contains": { "properties": { "unique-id": { "const": "rag-sync-job" } }, "required": ["unique-id"] } },
-        { "contains": { "properties": { "unique-id": { "const": "confluence" } }, "required": ["unique-id"] } },
-
-        { "contains": { "properties": { "unique-id": { "const": "orchestrator" }, "controls": { "required": ["orchestrator-api-key", "dashboard-jwt"] } }, "required": ["controls"] } },
-        { "contains": { "properties": { "unique-id": { "const": "requirements-review-agent" }, "controls": { "required": ["prompt-injection-guard"] } }, "required": ["controls"] } },
-        { "contains": { "properties": { "unique-id": { "const": "test-case-generation-agent" }, "controls": { "required": ["prompt-injection-guard"] } }, "required": ["controls"] } },
-        { "contains": { "properties": { "unique-id": { "const": "test-case-classification-agent" }, "controls": { "required": ["prompt-injection-guard"] } }, "required": ["controls"] } },
-        { "contains": { "properties": { "unique-id": { "const": "test-case-review-agent" }, "controls": { "required": ["prompt-injection-guard"] } }, "required": ["controls"] } },
-        { "contains": { "properties": { "unique-id": { "const": "incident-creation-agent" }, "controls": { "required": ["prompt-injection-guard"] } }, "required": ["controls"] } },
-        { "contains": { "properties": { "unique-id": { "const": "embedding-service" }, "controls": { "required": ["internal-service-api-key"] } }, "required": ["controls"] } },
-        { "contains": { "properties": { "unique-id": { "const": "prompt-guard-service" }, "controls": { "required": ["internal-service-api-key"] } }, "required": ["controls"] } }
+        {
+          "contains": {
+            "properties": {
+              "unique-id": {
+                "const": "orchestrator"
+              }
+            },
+            "required": [
+              "unique-id"
+            ]
+          }
+        },
+        {
+          "contains": {
+            "properties": {
+              "unique-id": {
+                "const": "requirements-review-agent"
+              }
+            },
+            "required": [
+              "unique-id"
+            ]
+          }
+        },
+        {
+          "contains": {
+            "properties": {
+              "unique-id": {
+                "const": "test-case-generation-agent"
+              }
+            },
+            "required": [
+              "unique-id"
+            ]
+          }
+        },
+        {
+          "contains": {
+            "properties": {
+              "unique-id": {
+                "const": "test-case-classification-agent"
+              }
+            },
+            "required": [
+              "unique-id"
+            ]
+          }
+        },
+        {
+          "contains": {
+            "properties": {
+              "unique-id": {
+                "const": "test-case-review-agent"
+              }
+            },
+            "required": [
+              "unique-id"
+            ]
+          }
+        },
+        {
+          "contains": {
+            "properties": {
+              "unique-id": {
+                "const": "incident-creation-agent"
+              }
+            },
+            "required": [
+              "unique-id"
+            ]
+          }
+        },
+        {
+          "contains": {
+            "properties": {
+              "unique-id": {
+                "const": "prompt-guard-service"
+              }
+            },
+            "required": [
+              "unique-id"
+            ]
+          }
+        },
+        {
+          "contains": {
+            "properties": {
+              "unique-id": {
+                "const": "embedding-service"
+              }
+            },
+            "required": [
+              "unique-id"
+            ]
+          }
+        },
+        {
+          "contains": {
+            "properties": {
+              "unique-id": {
+                "const": "qdrant"
+              }
+            },
+            "required": [
+              "unique-id"
+            ]
+          }
+        },
+        {
+          "contains": {
+            "properties": {
+              "unique-id": {
+                "const": "atlassian-mcp-server"
+              }
+            },
+            "required": [
+              "unique-id"
+            ]
+          }
+        },
+        {
+          "contains": {
+            "properties": {
+              "unique-id": {
+                "const": "execution-agents"
+              }
+            },
+            "required": [
+              "unique-id"
+            ]
+          }
+        },
+        {
+          "contains": {
+            "properties": {
+              "unique-id": {
+                "const": "rag-sync-job"
+              }
+            },
+            "required": [
+              "unique-id"
+            ]
+          }
+        },
+        {
+          "contains": {
+            "properties": {
+              "unique-id": {
+                "const": "confluence"
+              }
+            },
+            "required": [
+              "unique-id"
+            ]
+          }
+        },
+        {
+          "contains": {
+            "properties": {
+              "unique-id": {
+                "const": "orchestrator"
+              },
+              "controls": {
+                "required": [
+                  "orchestrator-api-key",
+                  "dashboard-jwt"
+                ]
+              }
+            },
+            "required": [
+              "controls"
+            ]
+          }
+        },
+        {
+          "contains": {
+            "properties": {
+              "unique-id": {
+                "const": "requirements-review-agent"
+              },
+              "controls": {
+                "required": [
+                  "prompt-injection-guard"
+                ]
+              }
+            },
+            "required": [
+              "controls"
+            ]
+          }
+        },
+        {
+          "contains": {
+            "properties": {
+              "unique-id": {
+                "const": "test-case-generation-agent"
+              },
+              "controls": {
+                "required": [
+                  "prompt-injection-guard"
+                ]
+              }
+            },
+            "required": [
+              "controls"
+            ]
+          }
+        },
+        {
+          "contains": {
+            "properties": {
+              "unique-id": {
+                "const": "test-case-classification-agent"
+              },
+              "controls": {
+                "required": [
+                  "prompt-injection-guard"
+                ]
+              }
+            },
+            "required": [
+              "controls"
+            ]
+          }
+        },
+        {
+          "contains": {
+            "properties": {
+              "unique-id": {
+                "const": "test-case-review-agent"
+              },
+              "controls": {
+                "required": [
+                  "prompt-injection-guard"
+                ]
+              }
+            },
+            "required": [
+              "controls"
+            ]
+          }
+        },
+        {
+          "contains": {
+            "properties": {
+              "unique-id": {
+                "const": "incident-creation-agent"
+              },
+              "controls": {
+                "required": [
+                  "prompt-injection-guard"
+                ]
+              }
+            },
+            "required": [
+              "controls"
+            ]
+          }
+        },
+        {
+          "contains": {
+            "properties": {
+              "unique-id": {
+                "const": "embedding-service"
+              },
+              "controls": {
+                "required": [
+                  "internal-service-api-key"
+                ]
+              }
+            },
+            "required": [
+              "controls"
+            ]
+          }
+        },
+        {
+          "contains": {
+            "properties": {
+              "unique-id": {
+                "const": "prompt-guard-service"
+              },
+              "controls": {
+                "required": [
+                  "internal-service-api-key"
+                ]
+              }
+            },
+            "required": [
+              "controls"
+            ]
+          }
+        },
+        {
+          "contains": {
+            "properties": {
+              "unique-id": {
+                "const": "sharepoint"
+              }
+            },
+            "required": [
+              "unique-id"
+            ]
+          },
+          "required": [
+            "unique-id"
+          ]
+        }
       ]
     },
     "relationships": {
       "type": "array",
       "allOf": [
-        { "contains": { "properties": { "unique-id": { "const": "rel-orchestrator-routes-tasks" } }, "required": ["unique-id"] } },
-        { "contains": { "properties": { "unique-id": { "const": "rel-orchestrator-routes-execution-tasks" }, "controls": { "required": ["execution-agent-bearer-token"] } }, "required": ["controls"] } },
-        { "contains": { "properties": { "unique-id": { "const": "rel-jira-webhook-orchestrator" }, "controls": { "required": ["jira-webhook-hmac"] } }, "required": ["controls"] } },
-        { "contains": { "properties": { "unique-id": { "const": "rel-incident-agent-qdrant" }, "controls": { "required": ["vector-db-api-key"] } }, "required": ["controls"] } },
-        { "contains": { "properties": { "unique-id": { "const": "rel-orchestrator-qdrant" }, "controls": { "required": ["vector-db-api-key"] } }, "required": ["controls"] } },
-        { "contains": { "properties": { "unique-id": { "const": "rel-orchestrator-rag-sync-job" }, "controls": { "required": ["job-invocation-iam"] } }, "required": ["controls"] } },
-        { "contains": { "properties": { "unique-id": { "const": "rel-rag-sync-job-qdrant" }, "controls": { "required": ["vector-db-api-key"] } }, "required": ["controls"] } },
-        { "contains": { "properties": { "unique-id": { "const": "rel-rag-sync-job-jira" } }, "required": ["unique-id"] } },
-        { "contains": { "properties": { "unique-id": { "const": "rel-requirements-review-jira" }, "controls": { "required": ["jira-credential-origin-scope"] } }, "required": ["controls"] } },
-        { "contains": { "properties": { "unique-id": { "const": "rel-test-case-generation-jira" }, "controls": { "required": ["jira-credential-origin-scope"] } }, "required": ["controls"] } },
-        { "contains": { "properties": { "unique-id": { "const": "rel-test-case-review-jira" }, "controls": { "required": ["jira-credential-origin-scope"] } }, "required": ["controls"] } },
-        { "contains": { "properties": { "unique-id": { "const": "rel-rag-sync-job-confluence" } }, "required": ["unique-id"] } },
-        { "contains": { "properties": { "unique-id": { "const": "rel-rag-sync-job-embedding" }, "controls": { "required": ["internal-service-api-key"] } }, "required": ["controls"] } },
-        { "contains": { "properties": { "unique-id": { "const": "rel-rag-sync-job-orchestrator-outcome" } }, "required": ["unique-id"] } },
-        { "contains": { "properties": { "unique-id": { "const": "rel-deployed-in-cloud-run" } }, "required": ["unique-id"] } }
+        {
+          "contains": {
+            "properties": {
+              "unique-id": {
+                "const": "rel-orchestrator-routes-tasks"
+              }
+            },
+            "required": [
+              "unique-id"
+            ]
+          }
+        },
+        {
+          "contains": {
+            "properties": {
+              "unique-id": {
+                "const": "rel-orchestrator-routes-execution-tasks"
+              },
+              "controls": {
+                "required": [
+                  "execution-agent-bearer-token"
+                ]
+              }
+            },
+            "required": [
+              "controls"
+            ]
+          }
+        },
+        {
+          "contains": {
+            "properties": {
+              "unique-id": {
+                "const": "rel-jira-webhook-orchestrator"
+              },
+              "controls": {
+                "required": [
+                  "jira-webhook-hmac"
+                ]
+              }
+            },
+            "required": [
+              "controls"
+            ]
+          }
+        },
+        {
+          "contains": {
+            "properties": {
+              "unique-id": {
+                "const": "rel-incident-agent-qdrant"
+              },
+              "controls": {
+                "required": [
+                  "vector-db-api-key"
+                ]
+              }
+            },
+            "required": [
+              "controls"
+            ]
+          }
+        },
+        {
+          "contains": {
+            "properties": {
+              "unique-id": {
+                "const": "rel-orchestrator-qdrant"
+              },
+              "controls": {
+                "required": [
+                  "vector-db-api-key"
+                ]
+              }
+            },
+            "required": [
+              "controls"
+            ]
+          }
+        },
+        {
+          "contains": {
+            "properties": {
+              "unique-id": {
+                "const": "rel-orchestrator-rag-sync-job"
+              },
+              "controls": {
+                "required": [
+                  "job-invocation-iam"
+                ]
+              }
+            },
+            "required": [
+              "controls"
+            ]
+          }
+        },
+        {
+          "contains": {
+            "properties": {
+              "unique-id": {
+                "const": "rel-rag-sync-job-qdrant"
+              },
+              "controls": {
+                "required": [
+                  "vector-db-api-key"
+                ]
+              }
+            },
+            "required": [
+              "controls"
+            ]
+          }
+        },
+        {
+          "contains": {
+            "properties": {
+              "unique-id": {
+                "const": "rel-rag-sync-job-jira"
+              }
+            },
+            "required": [
+              "unique-id"
+            ]
+          }
+        },
+        {
+          "contains": {
+            "properties": {
+              "unique-id": {
+                "const": "rel-requirements-review-jira"
+              },
+              "controls": {
+                "required": [
+                  "jira-credential-origin-scope"
+                ]
+              }
+            },
+            "required": [
+              "controls"
+            ]
+          }
+        },
+        {
+          "contains": {
+            "properties": {
+              "unique-id": {
+                "const": "rel-test-case-generation-jira"
+              },
+              "controls": {
+                "required": [
+                  "jira-credential-origin-scope"
+                ]
+              }
+            },
+            "required": [
+              "controls"
+            ]
+          }
+        },
+        {
+          "contains": {
+            "properties": {
+              "unique-id": {
+                "const": "rel-test-case-review-jira"
+              },
+              "controls": {
+                "required": [
+                  "jira-credential-origin-scope"
+                ]
+              }
+            },
+            "required": [
+              "controls"
+            ]
+          }
+        },
+        {
+          "contains": {
+            "properties": {
+              "unique-id": {
+                "const": "rel-rag-sync-job-confluence"
+              }
+            },
+            "required": [
+              "unique-id"
+            ]
+          }
+        },
+        {
+          "contains": {
+            "properties": {
+              "unique-id": {
+                "const": "rel-rag-sync-job-embedding"
+              },
+              "controls": {
+                "required": [
+                  "internal-service-api-key"
+                ]
+              }
+            },
+            "required": [
+              "controls"
+            ]
+          }
+        },
+        {
+          "contains": {
+            "properties": {
+              "unique-id": {
+                "const": "rel-rag-sync-job-orchestrator-outcome"
+              }
+            },
+            "required": [
+              "unique-id"
+            ]
+          }
+        },
+        {
+          "contains": {
+            "properties": {
+              "unique-id": {
+                "const": "rel-deployed-in-cloud-run"
+              }
+            },
+            "required": [
+              "unique-id"
+            ]
+          }
+        },
+        {
+          "contains": {
+            "properties": {
+              "unique-id": {
+                "const": "rel-rag-sync-job-sharepoint"
+              },
+              "controls": {
+                "required": [
+                  "graph-oauth-client-credentials"
+                ]
+              }
+            },
+            "required": [
+              "unique-id",
+              "controls"
+            ]
+          },
+          "required": [
+            "unique-id"
+          ]
+        },
+        {
+          "contains": {
+            "properties": {
+              "unique-id": {
+                "const": "rel-test-case-review-qdrant"
+              },
+              "controls": {
+                "required": [
+                  "vector-db-api-key"
+                ]
+              }
+            },
+            "required": [
+              "unique-id",
+              "controls"
+            ]
+          },
+          "required": [
+            "unique-id"
+          ]
+        }
       ]
     }
   },
-  "required": ["nodes", "relationships"]
+  "required": [
+    "nodes",
+    "relationships"
+  ]
 }

@@ -52,6 +52,15 @@ class JiraSyncRequest(BaseModel):
     lock_token: str | None = Field(default=None, description="Holder token issued by the orchestrator, if any.")
 
 
+class SharePointSyncRequest(BaseModel):
+    drive_id: str = Field(min_length=1, description="The drive ID to synchronize.")
+    folder_path: str | None = Field(default=None, description="Restrict the sync to one folder's descendants.")
+    attachment_name_pattern: str | None = Field(
+        default=None, description="Regex filtering file names, compiled case-insensitively."
+    )
+    lock_token: str | None = Field(default=None, description="Holder token issued by the orchestrator, if any.")
+
+
 class ConfluenceSyncRequest(BaseModel):
     space_key: str = Field(min_length=1, description="The Confluence space key (may start with '~').")
     page_id: int | None = Field(default=None, description="Restrict the sync to one page of the space.")
@@ -90,6 +99,28 @@ async def sync_test_cases(request: JiraSyncRequest, _: None = Depends(_require_s
         raise HTTPException(status_code=409, detail=str(e)) from e
     await report_terminal_outcome("test_cases", request.project_key, result=result)
     return {"message": f"Test-case sync {result.status}.", "details": result.model_dump()}
+
+
+@app.post("/sync/sharepoint")
+async def sync_sharepoint(request: SharePointSyncRequest, _: None = Depends(_require_service_auth)):
+    """Runs the SharePoint sync inline and returns the result (WS18)."""
+    from rag_sync.outcome_reporting import report_terminal_outcome
+    from rag_sync.sharepoint_sync import SharePointRagSyncRunner
+
+    try:
+        if request.attachment_name_pattern:
+            compile_name_pattern(request.attachment_name_pattern)
+        result = await SharePointRagSyncRunner().sync_drive(
+            drive_id=request.drive_id,
+            folder_path=request.folder_path,
+            file_name_pattern=request.attachment_name_pattern,
+            lock_token=request.lock_token,
+        )
+    except RuntimeError as e:
+        await report_terminal_outcome("sharepoint", request.drive_id, error=e)
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    await report_terminal_outcome("sharepoint", request.drive_id, result=result)
+    return {"message": f"SharePoint sync {result.status}.", "details": result.model_dump()}
 
 
 @app.post("/sync/confluence")

@@ -54,20 +54,37 @@ def _get_issue_message_parts(issue_key: str, jira_issue_content: str) -> list[st
 
 class RequirementsReviewAgent(AgentBase):
     def __init__(self):
-        retrieval_enabled = bool(config.QdrantConfig.EMBEDDING_SERVICE_URL)
+        # Startup validation is per source (WS18): a source whose retrieval switch is on
+        # without a configured embedding service fails fast, naming that source.
+        for source in ("Confluence", "SharePoint"):
+            enabled = getattr(config.DocumentRagConfig, f"{source.upper()}_RETRIEVAL_ENABLED")
+            if enabled and not config.QdrantConfig.EMBEDDING_SERVICE_URL:
+                raise ValueError(
+                    f"{source} retrieval is enabled but EMBEDDING_SERVICE_URL is not configured. "
+                    f"Disable {source.upper()}_RETRIEVAL_ENABLED or configure the embedding service."
+                )
+        self.confluence_retrieval_enabled = config.DocumentRagConfig.CONFLUENCE_RETRIEVAL_ENABLED
+        self.sharepoint_retrieval_enabled = config.DocumentRagConfig.SHAREPOINT_RETRIEVAL_ENABLED
+        retrieval_enabled = self.confluence_retrieval_enabled or self.sharepoint_retrieval_enabled
         self.retrieval_enabled = retrieval_enabled
-        if retrieval_enabled:
+        self.documents_db = None
+        self.sharepoint_db = None
+        if self.confluence_retrieval_enabled:
             # The metadata collection makes retrieval refuse to query vectors of a different model (WS6).
             self.documents_db = VectorDbService(
                 config.DocumentRagConfig.DOCUMENTS_COLLECTION_NAME,
                 metadata_collection_name=config.QdrantConfig.METADATA_COLLECTION_NAME,
             )
-        else:
+        if self.sharepoint_retrieval_enabled:
+            self.sharepoint_db = VectorDbService(
+                config.QdrantConfig.SHAREPOINT_COLLECTION_NAME,
+                metadata_collection_name=config.QdrantConfig.METADATA_COLLECTION_NAME,
+            )
+        if not retrieval_enabled:
             logger.info(
-                "Document retrieval is disabled: EMBEDDING_SERVICE_URL is not configured. "
+                "Document retrieval is disabled: no source has retrieval enabled. "
                 "The review proceeds on the issue and its attachments only."
             )
-            self.documents_db = None
 
         # Create a sub-agent for reviewing with attachments
         self.review_agent = CustomLlmWrapper.create_agent(
@@ -139,10 +156,12 @@ class RequirementsReviewAgent(AgentBase):
         space_key: str | None = None,
         page_id: str | None = None,
         document_name_pattern: str | None = None,
+        drive_id: str | None = None,
+        folder_path: str | None = None,
     ) -> RequirementsReviewFeedback:
         """
-        Reviews a Jira issue, taking into account all its attachments and the Confluence
-        reference documentation matching the retrieval query.
+        Reviews a Jira issue, taking into account all its attachments and the reference
+        documentation matching the retrieval query across every enabled source.
 
         Args:
             jira_issue_key: The key of the Jira issue (e.g. PROJ-123), used to download its attachments.
@@ -168,11 +187,23 @@ class RequirementsReviewAgent(AgentBase):
             space_key=_capped(space_key),
             page_id=_capped(page_id),
             document_name_pattern=_capped(document_name_pattern),
+            drive_id=_capped(drive_id),
+            folder_path=_capped(folder_path),
         )
-        pages = await retrieve_documents(self.documents_db, retrieval_query, scope)
+        result = await retrieve_documents(self.documents_db, retrieval_query, scope, sharepoint_db=self.sharepoint_db)
+        for source in result.unavailable_sources:
+            # The review must say that a source could not be consulted, so nobody mistakes a
+            # partial result for the full knowledge base.
+            user_message_parts.append(
+                f"Note: the {source} knowledge base was unavailable during this review; "
+                f"its documents could not be consulted."
+            )
         # Reference documentation comes after the issue content and the Jira attachments.
-        user_message_parts.extend(assemble_retrieved_parts(pages))
-        logger.info("Retrieved %d reference documentation page(s) for issue %s", len(pages), jira_issue_key)
+        user_message_parts.extend(assemble_retrieved_parts(result.pages))
+        logger.info(
+            "Retrieved %d reference documentation page(s) for issue %s (unavailable sources: %s)",
+            len(result.pages), jira_issue_key, result.unavailable_sources or "none",
+        )
         return await self._run_review(user_message_parts)
 
     async def _run_review(self, user_message_parts: list[str | BinaryContent]) -> RequirementsReviewFeedback:

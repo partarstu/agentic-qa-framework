@@ -136,6 +136,36 @@ def test_generate_report_failed(mock_logger_cls, allure_client):
         assert test_result.statusDetails.trace == logs_content
 
 
+def test_generate_report_renders_structured_log_lines_readably(mock_logger_cls, allure_client):
+    mock_logger = mock_logger_cls.return_value
+    structured = '{"timestamp": "2026-05-04T10:33:56+00:00", "level": "ERROR", "message": "Click failed", "logger": "ui"}'
+    results = [
+        TestExecutionResult(
+            stepResults=[],
+            testCaseKey="TEST-3",
+            testCaseName="TC3",
+            testExecutionStatus="error",
+            generalErrorMessage="Broken",
+            start_timestamp="2023-01-01T10:00:00Z",
+            end_timestamp="2023-01-01T10:01:00Z",
+            artifacts=[
+                FileArtifact(
+                    name="execution_logs.md",
+                    raw=f"{structured}\nplain line".encode(),
+                    media_type="text/plain",
+                )
+            ],
+        )
+    ]
+
+    with patch("subprocess.run"):
+        allure_client.generate_report(results)
+
+    trace = mock_logger.report_result.call_args[0][0].statusDetails.trace
+    assert trace == "2026-05-04T10:33:56+00:00 - ui - ERROR - Click failed\nplain line"
+    assert "{" not in trace
+
+
 def test_generate_html_call(allure_client):
     # Verify subprocess call structure
     with patch("subprocess.run") as mock_run:

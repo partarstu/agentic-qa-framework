@@ -62,3 +62,21 @@ class TestCaseReviewWithAttachmentsPrompt(PromptBase):
             "Generating system prompt for sub-agent which performs test case review with all attachments included"
         )
         return self.template
+
+
+class TestCaseDuplicateJudgePrompt(PromptBase):
+    """Prompt for the sub-agent which judges the coverage overlap of duplicate candidates (WS17)."""
+
+    __test__ = False
+
+    def get_script_dir(self) -> Path:
+        return _get_prompts_root()
+
+    def __init__(self, template_file_name: str = "test_case_duplicate_judge_prompt.md"):
+        """Initializes the duplicate judge prompt from its template file."""
+        super().__init__(template_file_name)
+
+    def get_prompt(self) -> str:
+        """Returns the prompt as a string."""
+        logger.info("Generating system prompt for the test case duplicate judge sub-agent")
+        return self.template

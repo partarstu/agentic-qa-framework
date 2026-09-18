@@ -92,3 +92,34 @@ def test_parse_timestamp_normalizes_to_the_same_utc_instant(timestamp_str):
 
 def test_parse_timestamp_returns_none_for_invalid_value():
     assert utils.parse_timestamp("not-a-timestamp", "step execution start timestamp") is None
+
+
+_STRUCTURED_LINE = (
+    '{"timestamp": "2026-05-04T10:33:56+00:00", "level": "INFO", "severity": "INFO", "message": "Step done", '
+    '"logger": "ui_agent", "module": "main", "line": 7, "agent_name": "UI Agent", "task_id": "t-1", "agent_id": null}'
+)
+
+
+def test_render_log_record_turns_a_structured_line_into_a_readable_line():
+    assert utils.render_log_record(_STRUCTURED_LINE) == "2026-05-04T10:33:56+00:00 - ui_agent - INFO - Step done"
+
+
+def test_render_log_record_appends_the_exception_text():
+    line = '{"timestamp": "t", "level": "ERROR", "message": "Failed", "logger": "a", "exception": "Traceback: boom"}'
+
+    assert utils.render_log_record(line) == "t - a - ERROR - Failed\nTraceback: boom"
+
+
+@pytest.mark.parametrize(
+    "line",
+    ["2026-01-01 12:00:00,000 - agent - INFO - legacy text", "12:00:00.123 INFO Logger - logback", "[1, 2]", "{}"],
+    ids=["python-text", "logback", "json-non-record", "json-without-message"],
+)
+def test_render_log_record_leaves_lines_of_other_formats_untouched(line):
+    assert utils.render_log_record(line) == line
+
+
+def test_render_log_text_renders_every_line_of_a_mixed_chunk():
+    chunk = f"{_STRUCTURED_LINE}\nplain text line"
+
+    assert utils.render_log_text(chunk) == "2026-05-04T10:33:56+00:00 - ui_agent - INFO - Step done\nplain text line"
