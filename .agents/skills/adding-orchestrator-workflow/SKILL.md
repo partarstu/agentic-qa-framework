@@ -12,8 +12,9 @@ on the closest existing one:
 |-------------------------------------------------|---------------------------------------------------------------------------|
 | Jira webhook → one agent                        | `review_jira_requirements` (`/new-requirements-available`)                |
 | Sequential multi-agent flow                     | `trigger_test_case_generation_workflow` (`/story-ready-for-test-case-generation`) |
-| JSON request model, non-agent service           | `update_jira_db` (`/update-jira-db`), `update_confluence_db` (`/update-confluence-db`) |
+| JSON request model, non-agent service           | `update_jira_db` (`/update-jira-db`), `update_confluence_db` (`/update-confluence-db`), `update_sharepoint_db` (`/update-sharepoint-db`), `update_test_case_db` (`/update-test-case-db`) |
 | Exclusive run and parallel fan-out to agents    | `execute_tests` (`/execute-tests`) with `_request_all_test_cases_execution` |
+| Explicitly chosen agent, no LLM routing         | `execute_test` (`/execute-test`), reserving the agent under the selection lock |
 
 Copy this checklist and track progress:
 

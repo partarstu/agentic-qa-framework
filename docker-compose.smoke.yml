@@ -31,6 +31,7 @@ x-agent-env: &agent-env
   TEST_MANAGEMENT_SYSTEM: "zephyr"
   PROMPT_INJECTION_CHECK_ENABLED: "false"
   GOOGLE_API_KEY: "${GOOGLE_API_KEY}"
+  MODEL_NAME: "google-gla:gemini-3.8-flash"
 
 # Agents serve their A2A card as soon as they are ready to take tasks.
 x-agent-healthcheck: &agent-healthcheck
@@ -295,6 +296,7 @@ services:
       DASHBOARD_JWT_SECRET: "smoke-jwt-secret"
       PROMPT_INJECTION_CHECK_ENABLED: "false"
       GOOGLE_API_KEY: "${GOOGLE_API_KEY}"
+      MODEL_NAME: "google-gla:gemini-3.8-flash"
       # WS4: proves the additional Jira custom fields instruction reaches the agents:
       # the Jira MCP mock records that jira_get_issue was asked for these field IDs.
       JIRA_ADDITIONAL_FIELD_IDS: "customfield_10101,customfield_10202"

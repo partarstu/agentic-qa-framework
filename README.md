@@ -796,7 +796,8 @@ once, then identify the assigned URL of each service, update the substitution va
 
 The smoke suite is a self-contained integration test, independent of any Cloud Run deployment. It runs the real
 orchestrator and the QA agents (requirements review, test-case generation, classification, review and incident creation)
-under `docker-compose.smoke.yml`, driven by a real Gemini model, with only the external boundaries replaced by mocks
+under `docker-compose.smoke.yml`, driven by a real Gemini model (`gemini-3.8-flash`, set as `MODEL_NAME` in the compose
+file), with only the external boundaries replaced by mocks
 under `tests/smoke/mocks/` (Jira MCP, Jira REST, Zephyr, Qdrant + embedding, and
 Confluence REST). A mock test-execution agent stands in for the
 VM-hosted real executors. It drives the system through the orchestrator's public webhooks and asserts on what reaches
@@ -889,8 +890,8 @@ SMOKE_BASELINE_NAME=gemini SMOKE_RUN_LABEL=qwen3-vl-32b uv run pytest tests/smok
 | --- | --- | --- |
 | `SMOKE_BASELINE_NAME` | `default` | Which snapshot under `tests/smoke/baselines/` to compare against. |
 | `SMOKE_WRITE_BASELINE` | unset | When set, the run is saved as that baseline instead of being compared. |
-| `SMOKE_RUN_LABEL` | `MODEL_NAME` | What the candidate run is called in the report (the stack's own model is configured in compose). |
-| `SMOKE_JUDGE_MODEL` | `google-gla:gemini-3.7-flash` | The judge, deliberately independent of the model under test. |
+| `SMOKE_RUN_LABEL` | `google-gla:gemini-3.8-flash` | What the candidate run is called in the report (the stack's own model is configured in compose). |
+| `SMOKE_JUDGE_MODEL` | `google-gla:gemini-3.8-flash` | The judge, the same model the smoke stack runs on. |
 
 The committed `tests/smoke/baselines/default.json` is an **authored reference**, not a recording of a run: its review,
 test cases, review comments and bug report were written by hand for the seeded `SMOKE-1` story, so the bar is a

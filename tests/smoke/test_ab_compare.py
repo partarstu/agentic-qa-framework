@@ -50,9 +50,9 @@ pytestmark = [pytest.mark.smoke, pytest.mark.ab]
 BASELINE_NAME = os.environ.get("SMOKE_BASELINE_NAME", "default")
 BASELINE_PATH = Path(__file__).parent / "baselines" / f"{BASELINE_NAME}.json"
 WRITE_BASELINE = os.environ.get("SMOKE_WRITE_BASELINE", "").lower() in ("true", "1", "t")
-# What this run is called in the report. The stack's own model is configured in compose, so the
-# test process can only guess at it; name the run explicitly when the two differ.
-RUN_LABEL = os.environ.get("SMOKE_RUN_LABEL", config.DEFAULT_MODEL_NAME)
+# What this run is called in the report. The default is the model docker-compose.smoke.yml configures
+# for the stack; name the run explicitly when the two differ.
+RUN_LABEL = os.environ.get("SMOKE_RUN_LABEL", "google-gla:gemini-3.8-flash")
 REPORT_PATH = Path(config.LOG_DIR) / "smoke_ab_report.md"
 CAPTURE_HINT = f"SMOKE_WRITE_BASELINE=1 SMOKE_BASELINE_NAME={BASELINE_NAME} uv run pytest tests/smoke -m smoke"
 

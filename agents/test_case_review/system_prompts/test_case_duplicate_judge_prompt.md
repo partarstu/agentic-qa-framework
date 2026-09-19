@@ -32,19 +32,3 @@ You receive:
 - Never return the test case under review as its own duplicate.
 - If you're missing any information required to execute your tasks, return an empty list and describe the missing
   information in your comments.
-
-# Example
-
-For a test case under review verifying a login with valid credentials and two candidates, one verifying the same
-login flow and one verifying the password reset, the result is:
-
-```json
-{
-  "overlapping_test_cases": [
-    {
-      "test_case_key": "PROJ-T12",
-      "overlap_explanation": "Both verify that a user with valid credentials is logged in and lands on the dashboard."
-    }
-  ]
-}
-```

@@ -20,9 +20,9 @@ from pydantic_ai import Agent
 from common.model_factory import build_model
 from tests.smoke.artifacts import DIMENSIONS, RunSnapshot, render_for_judge, story_context
 
-# The judge is pinned to a model independent of the one under test, so that a candidate is
-# never scored by itself. Overridable for a stack that cannot reach Gemini.
-JUDGE_MODEL_NAME = os.environ.get("SMOKE_JUDGE_MODEL", "google-gla:gemini-3.7-flash")
+# The judge runs the same model the smoke stack is configured with in docker-compose.smoke.yml.
+# Overridable for a stack that cannot reach Gemini.
+JUDGE_MODEL_NAME = os.environ.get("SMOKE_JUDGE_MODEL", "google-gla:gemini-3.8-flash")
 
 # How far below the baseline a candidate may score before it counts as a regression. The
 # judge re-scores identical inputs about a point apart, so a smaller gap says nothing.
