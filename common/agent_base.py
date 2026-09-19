@@ -245,10 +245,11 @@ class AgentBase(ABC):
         """Record and log the token usage and estimated cost of a completed run."""
         if result is None:
             return
-        self.latest_token_usage = TokenUsage.from_run_usage(result.usage(), self.model_name)
         meter = operation_meter.get()
         if meter is not None:
-            self.latest_token_usage.operations = meter.entries()
+            self.latest_token_usage = TokenUsage.from_operations(meter.entries(), self.model_name)
+        else:
+            self.latest_token_usage = TokenUsage.from_run_usage(result.usage(), self.model_name)
         logger.info(self.latest_token_usage.summary_line())
 
     def _log_llm_comments_if_result_incomplete(self, output: BaseModel | None | str) -> None:

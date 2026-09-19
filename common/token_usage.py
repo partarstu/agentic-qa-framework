@@ -49,6 +49,27 @@ class TokenUsage(JsonSerializableModel):
             ),
         )
 
+    @classmethod
+    def from_operations(cls, entries: list["OperationUsage"], model_name: str) -> "TokenUsage":
+        """Totals of every LLM call metered for a task, nested sub-agent calls included.
+
+        The cost is ``None`` when any operation is unpriced, so a partial sum is never reported as the total.
+        """
+        input_tokens = sum(e.uncached_input_tokens + e.cache_read_tokens + e.cache_write_tokens for e in entries)
+        output_tokens = sum(e.output_tokens for e in entries)
+        costs = [e.cost_usd for e in entries if e.cost_usd is not None]
+        return cls(
+            model_name=model_name,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            total_tokens=input_tokens + output_tokens,
+            cache_read_tokens=sum(e.cache_read_tokens for e in entries),
+            requests=sum(e.requests for e in entries),
+            tool_calls=sum(e.tool_calls for e in entries),
+            cost_usd=sum(costs) if len(costs) == len(entries) else None,
+            operations=entries,
+        )
+
     def summary_line(self) -> str:
         """One-line, log-friendly summary of the consumed tokens and estimated cost."""
         cost = f"${self.cost_usd:.4f}" if self.cost_usd is not None else "n/a"

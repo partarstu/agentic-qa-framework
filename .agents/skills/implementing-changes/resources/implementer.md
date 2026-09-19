@@ -1,8 +1,9 @@
 # Implementer (IMPLEMENT and FIX phases)
 
-In these phases you do the following:
+In these phases you, the lead agent, do the following in your own context:
 - implement the work package from its package file, based on the implementation plan text it holds (IMPLEMENT phase)
 - address the review findings and the test report of the package from the ledger (FIX phase)
+- write the changes file of the round, the handover for the headless reviewer and tester
 
 `AGENTS.md` is already in your context: follow it. Consult `PYTHON_GUIDELINES.md` section by section for the code you write (find the heading with Grep and read that range), not as a whole.
 
@@ -12,8 +13,9 @@ Every turn re-reads everything you have read so far. Read only what the package 
 
 - The package file is your whole task. Do not read the full implementation plan or the other packages.
 - Read a file over about 300 lines with Grep and ranged reads (offset and limit), not whole. Never print several files at once.
-- Run only the tests of the modules you changed while you work, with `-q --tb=short`; run the whole unit test suite once, at the end of the IMPLEMENT phase.
+- Run only the tests of the modules you changed while you work, with `-q --tb=short`; run the whole unit test suite once, at the end of the IMPLEMENT phase, with its output redirected to a log file in the run directory.
 - Do not re-read a file after editing it.
+- Read the reports of the headless phases, not their logs or raw JSON output.
 
 ## Project rules in these phases
 
@@ -44,19 +46,39 @@ Fix the failing unit tests from the test report with the `running-unit-tests` sk
 ## Rules
 
 - Change only what the package or the ledger requires. Leave unrelated code alone, and never revert, reformat or overwrite uncommitted changes that existed before the task.
-- Never commit or push, and never spawn subagents.
+- Never commit or push. Never spawn subagents: the only other agents of the loop are the headless reviewer and tester that `SKILL.md` describes.
+
+## Changes file
+
+At the end of the phase write `<run dir>/rounds/P<n>R<r>-changes.md`, the handover for the reviewer and the tester of round `<r>`. They start without any context and read this file first, so it must let them go straight to the changed spots instead of reloading the package. Be concrete: name files, functions and classes, and say why, not only what. Leave out the sections that do not apply to the mode.
+
+```
+# Changes P<n> round <r> (<IMPLEMENT | FIX>)
+## Built (round 1)
+- <plan item>: <path>::<function or class> - <what it does and any decision taken>
+## Deviations from the plan
+- <what differs and why>, or: none
+## Findings (FIX rounds)
+- <ID>: FIXED - <path>::<function>: <the exact change>
+- <ID>: SKIPPED - <evidence>
+## Test fixes (FIX rounds)
+- <test>: <what was wrong, what changed>
+## Tests added or changed
+- <test file>::<test>: <what it covers>
+## Not done
+- <what the package asks for that is not done, and why>, or: none
+```
+
+The `Findings` section is also the answer of the FIX phase: every finding is answered with `FIXED`, or with `SKIPPED` and evidence; a skip without evidence is not accepted.
 
 ## Report
 
-Write this report into the ledger at the end of the phase and show it in the conversation, leaving out the sections that do not apply to the mode:
+Record in the ledger at the end of the phase, and show in the conversation:
 
 ```
 STATUS: DONE | BLOCKED
-CHANGED FILES:
-- <path>: <what changed>
-FINDINGS:
-- <ID>: FIXED - <changed paths>: <what changed>
-- <ID>: SKIPPED - <evidence>
+CHANGES FILE: rounds/P<n>R<r>-changes.md
+CHANGED FILES: <paths>
 TESTS RUN:
 - <command>: <result>
 BLOCKER: <for BLOCKED>

@@ -187,6 +187,7 @@ class BudgetConfig:
     # pricing. Models absent from this table report a null cost.
     MODEL_PRICING: dict[str, dict[str, float]] = {
         "gemini-3.5-flash": {"input": 0.30, "output": 2.50},
+        "gemini-3.8-flash": {"input": 0.75, "output": 3.75, "cache_read": 0.075},
         "claude-opus-5": {"input": 5.0, "output": 25.0, "cache_read": 0.5, "cache_write": 6.25},
         "claude-sonnet-5": {"input": 2.0, "output": 10.0, "cache_read": 0.2, "cache_write": 2.5},
     }

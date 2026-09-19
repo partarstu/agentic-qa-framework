@@ -8,7 +8,7 @@ import pytest
 from pydantic_ai.usage import RunUsage
 
 import config
-from common.token_usage import TokenUsage, estimate_cost_usd
+from common.token_usage import OperationUsage, TokenUsage, estimate_cost_usd
 
 _PRICED_MODEL = "test:priced-model"
 _PRICING = {_PRICED_MODEL: {"input": 1.0, "output": 2.0}}
@@ -97,3 +97,50 @@ def test_operation_meter_cost_uses_the_cache_rates(monkeypatch):
     entry = meter.entries()[0]
     expected = (100 * 2.0 + 7 * 0.2 + 3 * 2.5 + 10 * 10.0) / 1_000_000
     assert entry.cost_usd == pytest.approx(expected)
+
+
+def test_from_operations_sums_every_operation():
+    entries = [
+        OperationUsage(
+            operation="main",
+            model_name=_PRICED_MODEL,
+            requests=2,
+            uncached_input_tokens=100,
+            cache_read_tokens=20,
+            cache_write_tokens=5,
+            output_tokens=30,
+            tool_calls=3,
+            cost_usd=0.25,
+        ),
+        OperationUsage(
+            operation="sub_agent",
+            model_name=_PRICED_MODEL,
+            requests=4,
+            uncached_input_tokens=50,
+            cache_read_tokens=10,
+            output_tokens=15,
+            tool_calls=1,
+            cost_usd=0.5,
+        ),
+    ]
+
+    token_usage = TokenUsage.from_operations(entries, _PRICED_MODEL)
+
+    assert token_usage.model_name == _PRICED_MODEL
+    assert token_usage.input_tokens == 185
+    assert token_usage.output_tokens == 45
+    assert token_usage.total_tokens == 230
+    assert token_usage.cache_read_tokens == 30
+    assert token_usage.requests == 6
+    assert token_usage.tool_calls == 4
+    assert token_usage.cost_usd == pytest.approx(0.75)
+    assert token_usage.operations == entries
+
+
+def test_from_operations_cost_is_none_when_any_operation_is_unpriced():
+    entries = [
+        OperationUsage(operation="main", model_name=_PRICED_MODEL, requests=1, cost_usd=0.1),
+        OperationUsage(operation="sub_agent", model_name="unknown:model", requests=1, cost_usd=None),
+    ]
+
+    assert TokenUsage.from_operations(entries, _PRICED_MODEL).cost_usd is None

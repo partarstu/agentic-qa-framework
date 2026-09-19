@@ -17,12 +17,16 @@ from dataclasses import dataclass
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent
 
+from common import utils
 from common.model_factory import build_model
+from common.token_usage import TokenUsage
 from tests.smoke.artifacts import DIMENSIONS, RunSnapshot, render_for_judge, story_context
 
 # The judge runs the same model the smoke stack is configured with in docker-compose.smoke.yml.
 # Overridable for a stack that cannot reach Gemini.
 JUDGE_MODEL_NAME = os.environ.get("SMOKE_JUDGE_MODEL", "google-gla:gemini-3.8-flash")
+
+logger = utils.get_logger("smoke_judge")
 
 # How far below the baseline a candidate may score before it counts as a regression. The
 # judge re-scores identical inputs about a point apart, so a smaller gap says nothing.
@@ -116,4 +120,6 @@ def _score(agent: Agent, dimension: str, requirement: str, output_a: str, output
         f"--- OUTPUT A ---\n{output_a or '(nothing was produced)'}\n\n"
         f"--- OUTPUT B ---\n{output_b or '(nothing was produced)'}"
     )
-    return agent.run_sync(prompt).output
+    result = agent.run_sync(prompt)
+    logger.info(f"Judge [{dimension}]: {TokenUsage.from_run_usage(result.usage(), JUDGE_MODEL_NAME).summary_line()}")
+    return result.output

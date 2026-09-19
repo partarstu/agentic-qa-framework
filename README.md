@@ -1212,7 +1212,7 @@ this executor will not emit it; the dashboard falls back to polling for logs.
 #### `agent_usage` (OPTIONAL)
 
 A single `application/json` artifact (name `agent_usage`) emitted by `DefaultAgentExecutor` once a run completes,
-carrying the run's token usage and estimated cost. The orchestrator records it on the task and aggregates it for the
+carrying the run's token usage and estimated cost, including the LLM calls of its nested sub-agents. The orchestrator records it on the task and aggregates it for the
 dashboard. Missing it is not an error.
 
 ```json

@@ -22,6 +22,7 @@ from common.agent_base import AgentBase
 from common.agent_log_capture import AgentLogCaptureHandler
 from common.models import AgentSkillDeclaration, JsonSerializableModel
 from common.streaming import reset_current_log_handler, set_current_log_handler
+from common.token_usage import OperationMeter, operation_meter
 
 
 class TestAgent(AgentBase):
@@ -154,6 +155,26 @@ async def test_agent_run_success(test_agent_instance):
     assert test_agent_instance.latest_token_usage is not None
     assert test_agent_instance.latest_token_usage.input_tokens == 20
     assert test_agent_instance.latest_token_usage.total_tokens == 28
+
+
+def test_token_usage_includes_nested_calls_recorded_in_the_operation_meter(test_agent_instance):
+    meter = OperationMeter()
+    meter.add("main", "openai:test-model", RunUsage(requests=1, input_tokens=20, output_tokens=8))
+    meter.add("sub_agent", "openai:test-model", RunUsage(requests=3, input_tokens=40, output_tokens=12))
+    main_run_result = MagicMock()
+    main_run_result.usage.return_value = RunUsage(requests=1, input_tokens=20, output_tokens=8)
+
+    token = operation_meter.set(meter)
+    try:
+        test_agent_instance._capture_token_usage(main_run_result)
+    finally:
+        operation_meter.reset(token)
+
+    token_usage = test_agent_instance.latest_token_usage
+    assert token_usage.requests == 4
+    assert token_usage.input_tokens == 60
+    assert token_usage.total_tokens == 80
+    assert token_usage.operations == meter.entries()
 
 
 @pytest.mark.asyncio

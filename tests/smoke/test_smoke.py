@@ -280,16 +280,22 @@ def test_usage_artifact_carries_per_operation_counters(
     test_case_flow_response: httpx.Response, http_client: httpx.Client, auth_headers: dict[str, str]
 ) -> None:
     """WS13: the review task's usage artifact breaks the tokens down per operation (the main agent
-    and its review sub-agent) with the cached/uncached split."""
+    and its review sub-agent) with the cached/uncached split, and its totals include every operation."""
     tasks = _completed_tasks_of(http_client, auth_headers, config.TestCaseReviewAgentConfig.OWN_NAME)
     assert tasks, "No completed test-case review task is listed on the dashboard."
-    operations = (tasks[0].get("token_usage") or {}).get("operations") or []
+    token_usage = tasks[0].get("token_usage") or {}
+    operations = token_usage.get("operations") or []
     by_name = {operation["operation"]: operation for operation in operations}
     assert {"main", "review_test_cases_with_attachments"} <= set(by_name), f"Operations: {operations}"
     for operation in by_name.values():
         assert operation["requests"] >= 1, operation
         for counter in ("uncached_input_tokens", "cache_read_tokens", "cache_write_tokens", "output_tokens"):
             assert counter in operation, f"The operation lacks the {counter} counter: {operation}"
+    assert token_usage["requests"] == sum(o["requests"] for o in operations), token_usage
+    assert token_usage["input_tokens"] == sum(
+        o["uncached_input_tokens"] + o["cache_read_tokens"] + o["cache_write_tokens"] for o in operations
+    ), token_usage
+    assert token_usage["output_tokens"] == sum(o["output_tokens"] for o in operations), token_usage
 
 
 def test_agent_read_source_story_from_jira(
