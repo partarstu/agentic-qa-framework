@@ -73,7 +73,7 @@ class SharePointRagSyncRunner:
         scope = scope_key(SHAREPOINT_SCOPE, drive_id)
         if lock_token:
             if not await self._lock_store.mark_started(scope, lock_token):
-                logger.warning(f"Runner no longer holds the lock for {scope}; aborting without writes.")
+                logger.warning("Runner no longer holds the lock for %s; aborting without writes.", scope)
                 raise PermissionError(f"Lock for scope {scope} was taken over before the run started.")
         else:
             state = await self._lock_store.acquire(scope)
@@ -85,7 +85,7 @@ class SharePointRagSyncRunner:
         finally:
             released = await self._lock_store.release(scope, lock_token)
             if not released:
-                logger.warning(f"Lock for {scope} was not released by this runner; it was taken over.")
+                logger.warning("Lock for %s was not released by this runner; it was taken over.", scope)
             await self.close()
 
     async def _run_sync(
@@ -96,7 +96,7 @@ class SharePointRagSyncRunner:
         scope: str,
         lock_token: str,
     ) -> RagUpdateResult:
-        logger.info(f"Starting SharePoint sync for drive {drive_id} (folder: {folder_path or 'root'}).")
+        logger.info("Starting SharePoint sync for drive %s (folder: %s).", drive_id, folder_path or "root")
         client = SharePointClient()
         stored = await self._fingerprints.load_scope(scope)
         state = await self._state_store.get_cursor(scope) or {}
@@ -121,7 +121,7 @@ class SharePointRagSyncRunner:
         if folder_scope:
             scope_folder_id = self._resolve_folder_id(folders, drive_id, folder_path)
             if scope_folder_id is None:
-                logger.warning(f"Folder {folder_path!r} not found in drive {drive_id}; nothing to sync.")
+                logger.warning("Folder %r not found in drive %s; nothing to sync.", folder_path, drive_id)
                 return RagUpdateResult(status="completed", processed_count=0)
             items = [
                 item for item in items if self._is_file(item) and scope_folder_id in self._ancestor_ids(item, folders)
@@ -154,10 +154,10 @@ class SharePointRagSyncRunner:
                 raise
             except AttachmentSkippedError as skip:
                 skipped += 1
-                logger.warning(f"Skipping SharePoint item {item['id']} in drive {drive_id}: {skip}")
+                logger.warning("Skipping SharePoint item %s in drive %s: %s", item["id"], drive_id, skip)
             except Exception as e:
                 failed += 1
-                logger.exception(f"Failed to sync SharePoint item {item['id']} in drive {drive_id}: {e}")
+                logger.exception("Failed to sync SharePoint item %s in drive %s: %s", item["id"], drive_id, e)
 
         # Reconciliation deletes what a complete full enumeration of the whole drive proves gone;
         # an incremental delta or a folder-scoped run cannot know that.
@@ -178,8 +178,13 @@ class SharePointRagSyncRunner:
 
         status = "completed-with-errors" if failed else "completed"
         logger.info(
-            f"SharePoint sync for drive {drive_id} finished ({status}): {processed} processed, {skipped} skipped, "
-            f"{failed} failed, {deleted} deleted."
+            "SharePoint sync for drive %s finished (%s): %s processed, %s skipped, %s failed, %s deleted.",
+            drive_id,
+            status,
+            processed,
+            skipped,
+            failed,
+            deleted,
         )
         return RagUpdateResult(status=status, processed_count=processed)
 
@@ -286,7 +291,7 @@ class SharePointRagSyncRunner:
                         scope, item, folders, stored_fingerprint, lock_token
                     )
                 else:
-                    logger.debug(f"Skipping {item_key}: cTag unchanged.")
+                    logger.debug("Skipping %s: cTag unchanged.", item_key)
                 return False
 
         format_skip_reason = skip_reason(name)
@@ -326,7 +331,7 @@ class SharePointRagSyncRunner:
             item_key,
             self._fingerprint(item, folders, hash_value, point_ids=[part.get_vector_id() for part in parts]),
         )
-        logger.info(f"Ingested {len(parts)} part(s) of {item_key} ({name}).")
+        logger.info("Ingested %s part(s) of %s (%s).", len(parts), item_key, name)
         return True
 
     def _fingerprint(self, item: dict, folders: dict[str, dict], hash_value: str, point_ids: list[str]) -> dict:
@@ -410,7 +415,7 @@ class SharePointRagSyncRunner:
             "etag": item.get("eTag"),
         }
         await self._fingerprints.save(scope, f"file:{item['id']}", fingerprint)
-        logger.info(f"Payload-only update of {name} ({len(stored_fingerprint.get('point_ids', []))} point(s)).")
+        logger.info("Payload-only update of %s (%s point(s)).", name, len(stored_fingerprint.get("point_ids", [])))
         return fingerprint
 
     async def _delete_item_tree(self, scope: str, item: dict, stored: dict[str, dict], lock_token: str) -> int:
@@ -430,7 +435,7 @@ class SharePointRagSyncRunner:
         if point_ids:
             await self._documents_db.delete(point_ids)
         await self._fingerprints.delete(scope, item_key)
-        logger.info(f"Deleted removed SharePoint item {item_key} ({len(point_ids)} point(s)).")
+        logger.info("Deleted removed SharePoint item %s (%s point(s)).", item_key, len(point_ids))
 
     async def _verify_holder_or_abort(self, scope: str, lock_token: str) -> None:
         """Stops at once, without further writes, when the runner no longer holds the lock."""

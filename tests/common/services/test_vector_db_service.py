@@ -61,7 +61,7 @@ def mock_httpx_client():
                 "embeddings": [
                     {"dense": [0.1, 0.2, 0.3], "sparse": {"indices": [1, 2], "values": [0.5, 0.6]}}
                     for _ in (json or {}).get("texts", [])
-                ]
+                ],
             }
             return mock_response
 
@@ -312,7 +312,9 @@ async def test_hybrid_search_composes_prefetches_with_rrf(vector_db_service, moc
     mock_qdrant_client.query_points.return_value = mock_response
 
     query_filter = models.Filter(must=[models.FieldCondition(key="issue_type", match=models.MatchValue(value="Bug"))])
-    results = await vector_db_service.hybrid_search("incident text", limit=7, score_threshold=0.7, query_filter=query_filter)
+    results = await vector_db_service.hybrid_search(
+        "incident text", limit=7, score_threshold=0.7, query_filter=query_filter
+    )
 
     assert len(results) == 1
     call = mock_qdrant_client.query_points.call_args
@@ -333,7 +335,9 @@ async def test_hybrid_search_composes_prefetches_with_rrf(vector_db_service, moc
 
 
 @pytest.mark.asyncio
-async def test_hybrid_search_without_threshold_keeps_prefetch_unfiltered(vector_db_service, mock_qdrant_client, mock_httpx_client):
+async def test_hybrid_search_without_threshold_keeps_prefetch_unfiltered(
+    vector_db_service, mock_qdrant_client, mock_httpx_client
+):
     """The sparse-no-match edge case (qdrant#4937) is mitigated by the dense-only threshold:
     without a threshold the sparse branch may surface unrelated points, which the caller opts into."""
     _mock_collections_exist(mock_qdrant_client, "test_collection", exists=True)
@@ -575,7 +579,9 @@ class TestEmbeddingStatusRetries:
         import httpx
 
         sleeps = []
-        monkeypatch.setattr(vector_db_service_module.asyncio, "sleep", AsyncMock(side_effect=lambda s: sleeps.append(s)))
+        monkeypatch.setattr(
+            vector_db_service_module.asyncio, "sleep", AsyncMock(side_effect=lambda s: sleeps.append(s))
+        )
         error_response = httpx.Response(503, request=httpx.Request("POST", "http://embeddings/embed"))
         ok_response = httpx.Response(
             200,

@@ -66,7 +66,9 @@ class FingerprintStore:
         return {
             payload["item_key"]: payload
             for payload in records
-            if payload.get("kind") == FINGERPRINT_RECORD_KIND and payload.get("scope") == scope and payload.get("item_key")
+            if payload.get("kind") == FINGERPRINT_RECORD_KIND
+            and payload.get("scope") == scope
+            and payload.get("item_key")
         }
 
     async def save(self, scope: str, item_key: str, fingerprint: dict) -> None:

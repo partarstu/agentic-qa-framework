@@ -28,9 +28,25 @@ logger = utils.get_logger("confluence_normalizer")
 _CONTENT_MACROS = {"panel", "info", "note", "warning", "tip", "expand", "section", "column", "layout"}
 # Non-content macros that only render dynamic navigation or listings of other content.
 _DROP_MACROS = {
-    "toc", "table-of-contents", "children", "page-tree", "pagetree", "attachments",
-    "jiraissues", "jira", "recently-updated", "recentlyupdated", "listlabels", "contentbylabel",
-    "blog-posts", "spacejump", "spaceslist", "nav", "navigation", "tasklist", "action",
+    "toc",
+    "table-of-contents",
+    "children",
+    "page-tree",
+    "pagetree",
+    "attachments",
+    "jiraissues",
+    "jira",
+    "recently-updated",
+    "recentlyupdated",
+    "listlabels",
+    "contentbylabel",
+    "blog-posts",
+    "spacejump",
+    "spaceslist",
+    "nav",
+    "navigation",
+    "tasklist",
+    "action",
 }
 # Inline macros rendered as their visible parameter text.
 _INLINE_TEXT_MACROS = {"status", "date"}
@@ -122,8 +138,8 @@ def _extract_inner(fragment: str, start: int, tag: str) -> tuple[str, int]:
     Nested same-name tags (lists inside lists, tables inside cells) are honoured by
     counting depth.
     """
-    open_re = re.compile(fr"<{tag}\b[^>]*/?>", re.IGNORECASE)
-    close_re = re.compile(fr"</{tag}\s*>", re.IGNORECASE)
+    open_re = re.compile(rf"<{tag}\b[^>]*/?>", re.IGNORECASE)
+    close_re = re.compile(rf"</{tag}\s*>", re.IGNORECASE)
     depth = 1
     cursor = start
     while True:
@@ -225,7 +241,7 @@ def _render_macro(attrs: str, inner: str) -> str:
     if plain_body:
         text = _strip_cdata(unescape(plain_body.group(1))).strip()
         return f"\n\n{text}\n\n" if text else ""
-    logger.debug(f"Dropping unknown macro '{name}' without a content body.")
+    logger.debug("Dropping unknown macro '%s' without a content body.", name)
     return ""
 
 
@@ -252,8 +268,7 @@ def _render_list(inner: str, ordered: bool, indent: str = "") -> str:
         # Multi-line item content (nested lists) is indented under the item marker.
         rendered = rendered.replace("\n\n", "\n")
         rendered = "\n".join(
-            line if line_index == 0 else f"{indent}    {line}"
-            for line_index, line in enumerate(rendered.split("\n"))
+            line if line_index == 0 else f"{indent}    {line}" for line_index, line in enumerate(rendered.split("\n"))
         )
         lines.append(f"{indent}{marker}{rendered}")
     if not lines:
@@ -283,8 +298,8 @@ def _render_table(inner: str) -> str:
 
 def _top_level_items(fragment: str, tag: str) -> list[str]:
     """Inner content of every top-level ``<tag>`` element, honouring nesting depth."""
-    open_re = re.compile(fr"<{tag}\b[^>]*>", re.IGNORECASE)
-    close_re = re.compile(fr"</{tag}\s*>", re.IGNORECASE)
+    open_re = re.compile(rf"<{tag}\b[^>]*>", re.IGNORECASE)
+    close_re = re.compile(rf"</{tag}\s*>", re.IGNORECASE)
     items: list[str] = []
     depth = 0
     start: int | None = None

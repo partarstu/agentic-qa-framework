@@ -141,7 +141,7 @@ class SelfHealingAtlassianToolset(WrapperToolset[AgentDepsT]):
             if not _is_recoverable(e):
                 raise
             if not repeatable:
-                logger.warning(f"Not repeating {operation}: the server may already have applied it.")
+                logger.warning("Not repeating %s: the server may already have applied it.", operation)
                 raise
             return await self._retry_on_isolated_session(operation, run)
 
@@ -151,7 +151,7 @@ class SelfHealingAtlassianToolset(WrapperToolset[AgentDepsT]):
         """Retry ``run`` against a fresh session owned by this task (WS21)."""
         # A cancelled task stops here instead of firing another request.
         await anyio.lowlevel.checkpoint()
-        logger.warning(f"Atlassian MCP session broke while serving {operation}; retrying on a fresh session.")
+        logger.warning("Atlassian MCP session broke while serving %s; retrying on a fresh session.", operation)
         fresh = build_atlassian_mcp_server()
         timeout_seconds = config.MCP_SESSION_LIFECYCLE_TIMEOUT_SECONDS
         try:
@@ -168,7 +168,7 @@ class SelfHealingAtlassianToolset(WrapperToolset[AgentDepsT]):
                 with anyio.fail_after(timeout_seconds, shield=True):
                     await fresh.__aexit__(None, None, None)
             except Exception as teardown_error:
-                logger.warning(f"Atlassian MCP session tear-down after {operation} failed: {teardown_error}")
+                logger.warning("Atlassian MCP session tear-down after %s failed: %s", operation, teardown_error)
 
 
 def build_atlassian_mcp_server() -> MCPServerStreamableHTTP:

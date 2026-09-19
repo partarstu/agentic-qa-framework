@@ -64,9 +64,7 @@ def retrieval(retrieved_page):
 
     with ExitStack() as stack:
         patches = [
-            stack.enter_context(
-                patch("agents.requirements_review.main.download_issue_attachments", return_value={})
-            ),
+            stack.enter_context(patch("agents.requirements_review.main.download_issue_attachments", return_value={})),
             stack.enter_context(
                 patch(
                     "agents.requirements_review.main.retrieve_documents",

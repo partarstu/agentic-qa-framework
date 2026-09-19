@@ -716,7 +716,7 @@ async def _extract_with_retry(
         except Exception as e:
             last_failure = f"{type(e).__name__}: {e}"
         logger.warning(
-            f"Extraction attempt {attempt}/{len(attempt_prompts)} of '{task_description}' failed: {last_failure}"
+            "Extraction attempt %s/%s of '%s' failed: %s", attempt, len(attempt_prompts), task_description, last_failure
         )
     raise RuntimeError(f"Extraction of '{task_description}' failed after {len(attempt_prompts)} attempts.")
 
@@ -904,7 +904,7 @@ def _sync_response(result: Any) -> Any:
 @orchestrator_app.post("/update-test-case-db")
 async def update_test_case_db(request: JiraSyncRequest, api_key: str = Depends(_validate_api_key)):
     """Triggers the test-case full resync for the given project (WS17)."""
-    logger.info(f"Triggering test-case RAG sync for project {request.project_key}")
+    logger.info("Triggering test-case RAG sync for project %s", request.project_key)
     result = await _trigger_rag_sync("test_cases", request.project_key, ["--project-key", request.project_key])
     return _sync_response(result)
 
@@ -913,7 +913,7 @@ async def update_test_case_db(request: JiraSyncRequest, api_key: str = Depends(_
 @orchestrator_app.post("/update-jira-db")
 async def update_jira_db(request: JiraSyncRequest, api_key: str = Depends(_validate_api_key)):
     """Triggers the RAG Vector DB update for the given Jira project (WS8)."""
-    logger.info(f"Triggering RAG sync for Jira project {request.project_key}")
+    logger.info("Triggering RAG sync for Jira project %s", request.project_key)
     result = await _trigger_rag_sync("jira", request.project_key, ["--project-key", request.project_key])
     return _sync_response(result)
 
@@ -1038,7 +1038,7 @@ async def _generate_test_report(all_execution_results, project_key, test_managem
             )
             if test_cycle_key:
                 logger.info(
-                    f"Uploading {len(all_execution_results)} test execution result(s) to test management system."
+                    "Uploading %s test execution result(s) to test management system.", len(all_execution_results)
                 )
                 await asyncio.to_thread(
                     test_management_client.create_test_execution, all_execution_results, project_key, test_cycle_key
@@ -1143,7 +1143,7 @@ async def _select_execution_agents_for_each_test_label(labels: list[str]) -> dic
             label_agent_mapping[label] = []
         elif result:
             hosts = [_get_agent_host(await agent_registry.get_card(agent_id)) for agent_id in result]
-            logger.info(f"Selected agent(s) {result} on host(s) {hosts} for label '{label}'.")
+            logger.info("Selected agent(s) %s on host(s) %s for label '%s'.", result, hosts, label)
             label_agent_mapping[label] = result
         else:
             logger.warning(f"No suitable agents found for label '{label}'.")
@@ -1209,7 +1209,7 @@ async def _execute_test_group(
 
 def _unexecuted_test_result(test_case: TestCase) -> TestExecutionResult:
     """The result of a test case left in the queue after every execution agent of its group has gone."""
-    logger.error(f"Test case {test_case.key} was not executed: no execution agent remained available.")
+    logger.error("Test case %s was not executed: no execution agent remained available.", test_case.key)
     now = datetime.now(UTC).isoformat()
     return TestExecutionResult(
         stepResults=[],
@@ -1250,7 +1250,7 @@ async def _agent_worker(
                     results.append(result)
             except Exception as e:
                 agent_card = await agent_registry.get_card(agent_id)
-                logger.exception(f"Error in worker for agent {agent_id} on host '{_get_agent_host(agent_card)}'.")
+                logger.exception("Error in worker for agent %s on host '%s'.", agent_id, _get_agent_host(agent_card))
                 # The send-task path may already have marked the agent BROKEN together with the id of the
                 # task it got stuck on; re-marking it here would destroy that tracked id.
                 if await agent_registry.get_status(agent_id) != AgentStatus.BROKEN:
@@ -1958,8 +1958,11 @@ async def reserve_agent_waiting_if_needed(
                         await agent_registry.update_status(agent_id, AgentStatus.BUSY)
                         agent_name = await agent_registry.get_name(agent_id)
                         logger.info(
-                            f"Reserved agent '{agent_name}' (ID: {agent_id}) on host "
-                            f"'{_get_agent_host(agent_card)}' for task '{task_description}'",
+                            "Reserved agent '%s' (ID: %s) on host '%s' for task '%s'",
+                            agent_name,
+                            agent_id,
+                            _get_agent_host(agent_card),
+                            task_description,
                             extra={"task_id": task_id, "agent_id": agent_id},
                         )
                         return agent_id, agent_card
@@ -2081,8 +2084,11 @@ The list of all registered with you agents:
     if not valid_agent_ids or len(valid_agent_ids) < len(selected_agent_ids):
         # WS1: the justification explains why the selection came up empty or partial.
         logger.warning(
-            f"Routing decision for task '{task_description}': selected {len(valid_agent_ids)} of "
-            f"{len(selected_agent_ids)} agent(s); justification: {result.output.justification}"
+            "Routing decision for task '%s': selected %s of %s agent(s); justification: %s",
+            task_description,
+            len(valid_agent_ids),
+            len(selected_agent_ids),
+            result.output.justification,
         )
 
     for agent_id in valid_agent_ids:
@@ -2163,9 +2169,12 @@ The list of all registered with you agents:
         await agent_registry.get_name(decision.selected_agent_id) if decision.selected_agent_id else "Unknown"
     )
     logger.info(
-        f"Routing decision for task '{task_description}': outcome={decision.outcome.value}, "
-        f"selected_agent_name={selected_agent_name}, selected_agent_id={decision.selected_agent_id}, "
-        f"justification: {decision.justification}",
+        "Routing decision for task '%s': outcome=%s, selected_agent_name=%s, selected_agent_id=%s, justification: %s",
+        task_description,
+        decision.outcome.value,
+        selected_agent_name,
+        decision.selected_agent_id,
+        decision.justification,
         extra={"task_id": task_id},
     )
     return decision
@@ -2211,15 +2220,19 @@ def _selected_agent_if_available(
     selected_agent_id = decision.selected_agent_id
     if not selected_agent_id:
         logger.warning(
-            f"Routing returned outcome '{RoutingOutcome.AGENT_SELECTED.value}' without an agent ID for "
-            f"task '{task_description}': {decision.justification}",
+            "Routing returned outcome '%s' without an agent ID for task '%s': %s",
+            RoutingOutcome.AGENT_SELECTED.value,
+            task_description,
+            decision.justification,
             extra={"task_id": task_id},
         )
         return None
     if selected_agent_id not in available_agent_ids:
         logger.warning(
-            f"Routing selected invalid or unavailable agent ID '{selected_agent_id}' for "
-            f"task '{task_description}': {decision.justification}",
+            "Routing selected invalid or unavailable agent ID '%s' for task '%s': %s",
+            selected_agent_id,
+            task_description,
+            decision.justification,
             extra={"task_id": task_id},
         )
         return None

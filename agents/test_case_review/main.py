@@ -187,20 +187,20 @@ class TestCaseReviewAgent(AgentBase):
                 f"Other test cases created for the same Jira issue (context only):\n```{other_test_cases}```",
                 *attachment_parts,
             ]
-            logger.info(f"Reviewing test case {index}/{len(test_cases)}")
+            logger.info("Reviewing test case %s/%s", index, len(test_cases))
             result = await self.review_agent.run(
                 user_message_parts, usage=review_usage, usage_limits=review_usage_limits
             )
             if result.output.llm_comments:
                 logger.warning(
-                    f"Review of test case '{result.output.test_case_id}' reported: {result.output.llm_comments}"
+                    "Review of test case '%s' reported: %s", result.output.test_case_id, result.output.llm_comments
                 )
             duplicate_check = await self._check_duplicates(project_key, record, review_usage, review_usage_limits)
             checks[record.test_case_key] = duplicate_check
             result.output.duplicate_check = duplicate_check
             feedbacks.append(result.output)
 
-        logger.info(f"Generated review feedbacks for {len(feedbacks)} test cases")
+        logger.info("Generated review feedbacks for %s test cases", len(feedbacks))
         return TestCaseReviewFeedbacks(review_feedbacks=feedbacks)
 
     async def _index_review_batch(self, project_key: str, test_cases: list[TestCase]) -> list[IndexedTestCase]:

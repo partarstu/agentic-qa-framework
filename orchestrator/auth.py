@@ -90,7 +90,9 @@ class AuthService:
             "exp": expires_at,
             "iat": datetime.now(UTC),
         }
-        token = jwt.encode(payload, config.DashboardAuthConfig.JWT_SECRET, algorithm=config.DashboardAuthConfig.JWT_ALGORITHM)
+        token = jwt.encode(
+            payload, config.DashboardAuthConfig.JWT_SECRET, algorithm=config.DashboardAuthConfig.JWT_ALGORITHM
+        )
         return TokenResponse(
             access_token=token,
             expires_at=expires_at.isoformat(),

@@ -47,7 +47,7 @@ def get_engine() -> Any | None:
             )
             logger.info("OCR engine initialized (RapidOCR PP-OCRv6, packaged offline models).")
         except Exception as error:
-            logger.warning(f"OCR is unavailable; image-only pages get no OCR text: {error}")
+            logger.warning("OCR is unavailable; image-only pages get no OCR text: %s", error)
         return _engine
 
 

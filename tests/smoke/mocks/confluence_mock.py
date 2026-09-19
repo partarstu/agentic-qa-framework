@@ -107,9 +107,7 @@ async def list_pages(space_id: str, request: Request) -> dict:
     if space_id != SEEDED_SPACE_ID:
         return {"results": [], "_links": {"next": None}}
     return {
-        "results": [
-            {key: value for key, value in _SEEDED_PAGE.items() if key not in ("body",)}
-        ],
+        "results": [{key: value for key, value in _SEEDED_PAGE.items() if key not in ("body",)}],
         "_links": {"next": None},
     }
 
@@ -124,9 +122,7 @@ async def get_page(page_id: str, request: Request) -> dict:
 
 @app.get("/wiki/api/v2/pages/{page_id}/attachments")
 async def list_attachments(page_id: str, request: Request) -> dict:
-    _recorded["attachment_listings"].append(
-        {"page_id": page_id, "filename": request.query_params.get("filename")}
-    )
+    _recorded["attachment_listings"].append({"page_id": page_id, "filename": request.query_params.get("filename")})
     if page_id != SEEDED_PAGE_ID:
         return {"results": [], "_links": {"next": None}}
     return {"results": _SEEDED_ATTACHMENTS, "_links": {"next": None}}

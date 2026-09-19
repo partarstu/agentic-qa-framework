@@ -122,7 +122,9 @@ class RagSyncTrigger:
                 # The Admin API rejected the request, so no execution exists: the lock
                 # is released immediately instead of waiting out the start allowance.
                 await self.release_on_definite_failure(source, scope_id)
-                raise SyncTriggerError(f"Failed to start the RAG sync for scope {scope}: {e}", start_confirmed=True) from e
+                raise SyncTriggerError(
+                    f"Failed to start the RAG sync for scope {scope}: {e}", start_confirmed=True
+                ) from e
             # The start failed; whether an execution exists is unconfirmed. The lock is
             # kept so the start allowance can expire before a takeover.
             raise SyncTriggerError(f"Failed to start the RAG sync for scope {scope}: {e}", start_confirmed=False) from e
@@ -151,7 +153,7 @@ class RagSyncTrigger:
         )
         operation = await jobs_client.run_job(request=request)
         execution_name = operation.operation.name if operation else None
-        logger.info(f"Started RAG sync job execution {execution_name} for scope {source}.")
+        logger.info("Started RAG sync job execution %s for scope %s.", execution_name, source)
         return {"status_code": 202, "execution": execution_name}
 
     async def _run_locally(self, source: str, runner_args: list[str], token: str):
@@ -163,7 +165,9 @@ class RagSyncTrigger:
         if config.INTERNAL_SERVICE_API_KEY:
             headers["X-API-Key"] = config.INTERNAL_SERVICE_API_KEY
         async with httpx.AsyncClient(timeout=config.RagSyncConfig.JOB_TASK_TIMEOUT_SECONDS) as client:
-            response = await client.post(f"{config.RagSyncConfig.SERVICE_URL}/sync/{source}", json=payload, headers=headers)
+            response = await client.post(
+                f"{config.RagSyncConfig.SERVICE_URL}/sync/{source}", json=payload, headers=headers
+            )
         if response.status_code >= 500:
             raise SyncTriggerError(
                 f"The local sync service failed: {response.status_code} {response.text}", start_confirmed=False

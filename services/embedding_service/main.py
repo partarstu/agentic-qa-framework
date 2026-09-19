@@ -38,7 +38,7 @@ _WARM_UP_TASKS: list[asyncio.Task] = []
 
 async def _warm_up_backends() -> None:
     """Load every enabled backend in the background, so requests can arrive during warm-up."""
-    logger.info(f"Starting warm-up of embedding backends: {_registry.enabled_names}")
+    logger.info("Starting warm-up of embedding backends: %s", _registry.enabled_names)
     _WARM_UP_TASKS.append(asyncio.create_task(_registry.warm_up()))
 
 
@@ -107,7 +107,7 @@ async def _is_backend_ready(name: str) -> bool:
         await _registry.get_loaded(name)
         return True
     except Exception:
-        logger.exception(f"Backend '{name}' failed to load.")
+        logger.exception("Backend '%s' failed to load.", name)
         return False
 
 

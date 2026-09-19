@@ -63,7 +63,7 @@ class TestCaseRagSyncRunner:
         scope = scope_key(TEST_CASES_SCOPE, project_key)
         if lock_token:
             if not await self._lock_store.mark_started(scope, lock_token):
-                logger.warning(f"Runner no longer holds the lock for {scope}; aborting without writes.")
+                logger.warning("Runner no longer holds the lock for %s; aborting without writes.", scope)
                 raise PermissionError(f"Lock for scope {scope} was taken over before the run started.")
         else:
             state = await self._lock_store.acquire(scope)
@@ -76,11 +76,11 @@ class TestCaseRagSyncRunner:
         finally:
             released = await self._lock_store.release(scope, lock_token)
             if not released:
-                logger.warning(f"Lock for {scope} was not released by this runner; it was taken over.")
+                logger.warning("Lock for %s was not released by this runner; it was taken over.", scope)
             await self.close()
 
     async def _run_sync(self, project_key: str, scope: str, lock_token: str) -> RagUpdateResult:
-        logger.info(f"Starting test-case RAG sync for project {project_key}.")
+        logger.info("Starting test-case RAG sync for project %s.", project_key)
         run_started = datetime.now(UTC)
 
         # A failed listing raises before any write, leaving the stored index untouched.
@@ -88,8 +88,10 @@ class TestCaseRagSyncRunner:
         listed = await asyncio.to_thread(client.fetch_test_cases_by_project, project_key)
         eligible = _eligible_for_indexing(listed)
         logger.info(
-            f"Listed {len(listed)} test case(s), {len(eligible)} eligible for indexing "
-            f"(status filter: {config.QdrantConfig.TEST_CASE_INDEX_STATUSES or 'all'})."
+            "Listed %s test case(s), %s eligible for indexing (status filter: %s).",
+            len(listed),
+            len(eligible),
+            config.QdrantConfig.TEST_CASE_INDEX_STATUSES or "all",
         )
         rendered = [render_test_case(project_key, item) for item in eligible]
 
@@ -106,7 +108,7 @@ class TestCaseRagSyncRunner:
             batch = changed[start : start + config.QdrantConfig.UPSERT_BATCH_SIZE]
             await self._verify_holder_or_abort(scope, lock_token)
             await self._test_cases_db.upsert_batch(batch, ensure=False)
-        logger.info(f"Upserted {len(changed)} new or changed test case(s) for project {project_key}.")
+        logger.info("Upserted %s new or changed test case(s) for project %s.", len(changed), project_key)
 
         stale_ids = [
             point_id
@@ -116,9 +118,9 @@ class TestCaseRagSyncRunner:
         if stale_ids:
             await self._verify_holder_or_abort(scope, lock_token)
             await self._test_cases_db.delete(stale_ids)
-            logger.info(f"Deleted {len(stale_ids)} stale test case(s) for project {project_key}.")
+            logger.info("Deleted %s stale test case(s) for project %s.", len(stale_ids), project_key)
 
-        logger.info(f"Test-case RAG sync for project {project_key} completed; indexed {len(rendered)}.")
+        logger.info("Test-case RAG sync for project %s completed; indexed %s.", project_key, len(rendered))
         return RagUpdateResult(status="completed", processed_count=len(rendered))
 
     async def _verify_holder_or_abort(self, scope: str, lock_token: str) -> None:
@@ -171,5 +173,5 @@ def _indexed_before(record: dict, run_started: datetime) -> bool:
     try:
         return datetime.fromisoformat(indexed_at) < run_started
     except ValueError:
-        logger.warning(f"Stored test-case point has an unparsable indexed_at ({indexed_at!r}); treating as stale.")
+        logger.warning("Stored test-case point has an unparsable indexed_at (%r); treating as stale.", indexed_at)
         return True

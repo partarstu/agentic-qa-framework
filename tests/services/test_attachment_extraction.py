@@ -117,7 +117,9 @@ class TestAttachmentExtraction:
 
     def test_pdf_page_cap_retains_true_page_count(self):
         with patch("config.DocumentRagConfig.MAX_PAGES_PER_DOCUMENT", 1):
-            document = extract_attachment("guide.pdf", _pdf_bytes("First long native page.", "Second long native page."))
+            document = extract_attachment(
+                "guide.pdf", _pdf_bytes("First long native page.", "Second long native page.")
+            )
 
         assert document.total_page_count == 2
         assert len(document.pages) == 1
@@ -199,9 +201,7 @@ class TestAttachmentExtraction:
             ),
             patch("config.DocumentRagConfig.MAX_PAGES_PER_DOCUMENT", 1),
         ):
-            document = await extract_attachment_async(
-                "slides.pptx", _pptx_bytes("First slide", "Second slide")
-            )
+            document = await extract_attachment_async("slides.pptx", _pptx_bytes("First slide", "Second slide"))
 
         assert document.total_page_count == 2
         assert len(document.pages) == 1
@@ -253,7 +253,7 @@ class TestAttachmentExtraction:
         page = MagicMock()
         page.get_images.return_value = [(7,), (7,)]
         page.parent.extract_image.return_value = {"image": _image_bytes()}
-        with patch("rag_sync.ocr.extract_text", side_effect=["full page", "embedded"] ) as extract_text:
+        with patch("rag_sync.ocr.extract_text", side_effect=["full page", "embedded"]) as extract_text:
             assert _page_text_with_ocr(page, "", b"page") == "full page"
             native = "This native text is comfortably above the OCR threshold."
             combined = _page_text_with_ocr(page, native, b"page")
@@ -265,10 +265,13 @@ class TestAttachmentExtraction:
 
 class TestOfficeConversion:
     async def test_timeout_is_reported_as_conversion_error(self):
-        with patch(
-            "rag_sync.office_conversion._run_soffice",
-            side_effect=subprocess.TimeoutExpired("soffice", 1),
-        ), pytest.raises(OfficeConversionError, match="timed out"):
+        with (
+            patch(
+                "rag_sync.office_conversion._run_soffice",
+                side_effect=subprocess.TimeoutExpired("soffice", 1),
+            ),
+            pytest.raises(OfficeConversionError, match="timed out"),
+        ):
             await office_conversion.convert_to_pdf(b"source", "guide.docx")
 
     async def test_filename_is_sanitized_inside_the_temporary_directory(self):

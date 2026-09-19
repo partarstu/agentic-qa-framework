@@ -26,6 +26,7 @@ def _optional_positive_int(name: str) -> int | None:
         raise ValueError(f"{name} must be a positive integer.")
     return value
 
+
 # Logging
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
 GOOGLE_CLOUD_LOGGING_ENABLED = os.environ.get("GOOGLE_CLOUD_LOGGING_ENABLED", "False").lower() in ("true", "1", "t")
@@ -377,7 +378,9 @@ class QdrantConfig:
     TEST_CASES_COLLECTION_NAME = os.environ.get("QDRANT_TEST_CASES_COLLECTION_NAME", "test_cases")
     CONFLUENCE_COLLECTION_NAME = os.environ.get("QDRANT_CONFLUENCE_COLLECTION_NAME", "confluence_documents")
     SHAREPOINT_COLLECTION_NAME = os.environ.get("QDRANT_SHAREPOINT_COLLECTION_NAME", "sharepoint_documents")
-    TEST_CASE_INDEX_STATUSES = tuple(item.strip() for item in os.environ.get("TEST_CASE_INDEX_STATUSES", "").split(",") if item.strip())
+    TEST_CASE_INDEX_STATUSES = tuple(
+        item.strip() for item in os.environ.get("TEST_CASE_INDEX_STATUSES", "").split(",") if item.strip()
+    )
     TEST_CASE_DUPLICATE_MIN_SCORE = float(os.environ.get("TEST_CASE_DUPLICATE_MIN_SCORE", "0.8"))
     TEST_CASE_DUPLICATE_MAX_CANDIDATES = int(os.environ.get("TEST_CASE_DUPLICATE_MAX_CANDIDATES", "5"))
     BUG_ISSUE_TYPE = os.environ.get("JIRA_BUG_ISSUE_TYPE", "Bug")
@@ -423,9 +426,7 @@ class RagSyncConfig:
     JOB_TASK_TIMEOUT_SECONDS = int(os.environ.get("RAG_SYNC_JOB_TASK_TIMEOUT_SECONDS", "3600"))
     # Lock expiry. Defaults to the task timeout plus a safety margin, so a live job never
     # outlives its lock and a crashed job frees the scope after the TTL.
-    LOCK_TTL_SECONDS = int(
-        os.environ.get("RAG_SYNC_LOCK_TTL_SECONDS", str(JOB_TASK_TIMEOUT_SECONDS + 300))
-    )
+    LOCK_TTL_SECONDS = int(os.environ.get("RAG_SYNC_LOCK_TTL_SECONDS", str(JOB_TASK_TIMEOUT_SECONDS + 300)))
     # How long an unconfirmed job start keeps the lock before the next request may take over.
     START_ALLOWANCE_SECONDS = int(os.environ.get("RAG_SYNC_START_ALLOWANCE_SECONDS", "300"))
     CALLBACK_URL = os.environ.get("SYNC_CALLBACK_ORCHESTRATOR_URL")

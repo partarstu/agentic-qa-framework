@@ -21,9 +21,10 @@ def test_build_jira_client_raises_on_missing_config():
 
 
 def test_build_jira_client_passes_basic_auth():
-    with patch("common.services.jira_client.config") as mock_config, patch(
-        "common.services.jira_client.JIRA"
-    ) as mock_jira:
+    with (
+        patch("common.services.jira_client.config") as mock_config,
+        patch("common.services.jira_client.JIRA") as mock_jira,
+    ):
         mock_config.JIRA_BASE_URL = "https://jira.example.com"
         mock_config.JIRA_USER = "user"
         mock_config.JIRA_TOKEN = "token"

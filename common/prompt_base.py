@@ -78,7 +78,7 @@ class PromptBase(ABC):
             return None
         if not override_path.is_relative_to(override_root):
             raise ValueError(f"Resolved override path '{override_path}' escapes '{override_root}'.")
-        logger.info(f"Using prompt override '{override_path}' instead of '{bundled_path}'.")
+        logger.info("Using prompt override '%s' instead of '%s'.", override_path, bundled_path)
         return override_path
 
     def _load_template(self, bundled_path: Path) -> str:

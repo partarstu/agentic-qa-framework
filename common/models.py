@@ -135,9 +135,7 @@ class DocumentPagePart(VectorizableBaseModel):
     page_number: int | None = Field(default=None, description="1-based page number within the attachment")
     page_count: int | None = Field(default=None, description="True total page count of the attachment")
     part_index: int = Field(description="0-based index of this part within its page or chunk sequence")
-    image: str | None = Field(
-        default=None, description="Base64 PNG of the page image, stored on part 0 only"
-    )
+    image: str | None = Field(default=None, description="Base64 PNG of the page image, stored on part 0 only")
 
     def get_vector_id(self) -> str:
         """Deterministic UUID derived from content identity: source, item, page and part index."""

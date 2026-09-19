@@ -313,7 +313,7 @@ class AgentBase(ABC):
     @asynccontextmanager
     async def _lifespan(self, app: FastAPI):
         logger.info(f"{self.agent_name} started.")
-        logger.info(f"Using following MCP server: {self._get_mcp_server_description()}")
+        logger.info("Using following MCP server: %s", self._get_mcp_server_description())
         yield
         if self.vector_db_service:
             await self.vector_db_service.close()

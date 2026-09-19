@@ -95,7 +95,9 @@ class SharePointClient:
                 if response.status_code in (429, 502, 503, 504) and attempt < MAX_RETRIES - 1:
                     retry_after = response.headers.get("Retry-After")
                     delay = float(retry_after) if retry_after else min(2**attempt, 32)
-                    logger.warning(f"Graph {method} {url} returned {response.status_code}; retrying in {delay:.0f}s.")
+                    logger.warning(
+                        "Graph %s %s returned %s; retrying in %.0fs.", method, url, response.status_code, delay
+                    )
                     time.sleep(delay)
                     continue
                 response.raise_for_status()

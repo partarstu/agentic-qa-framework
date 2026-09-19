@@ -73,8 +73,11 @@ async def _run(args: argparse.Namespace) -> int:
 
     try:
         result = await ConfluenceRagSyncRunner().sync_space(
-            space_key=args.space_key, page_id=args.page_id, attachment_name_pattern=args.attachment_name_pattern,
-            skip_page_body=args.skip_page_body, lock_token=args.lock_token,
+            space_key=args.space_key,
+            page_id=args.page_id,
+            attachment_name_pattern=args.attachment_name_pattern,
+            skip_page_body=args.skip_page_body,
+            lock_token=args.lock_token,
         )
     except Exception as exc:
         await report_terminal_outcome("confluence", args.space_key, error=exc)
@@ -106,7 +109,9 @@ def main() -> int:
     test_cases_parser.add_argument("--project-key", required=True, help="The Jira project key to synchronize.")
     test_cases_parser.add_argument("--lock-token", help="Holder token issued by the orchestrator, if any.")
 
-    confluence_parser = subparsers.add_parser("confluence", help="Sync a Confluence space into the documents collection.")
+    confluence_parser = subparsers.add_parser(
+        "confluence", help="Sync a Confluence space into the documents collection."
+    )
     confluence_parser.add_argument("--space-key", required=True, help="The Confluence space key (may start with '~').")
     confluence_parser.add_argument("--page-id", help="Restrict the sync to one page of the space.")
     confluence_parser.add_argument("--attachment-name-pattern", help="Regex filtering attachment file names.")

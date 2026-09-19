@@ -64,9 +64,7 @@ def test_bundled_prompt_loads_when_no_override_set(no_override_dir):
 
 def test_override_replaces_bundled_template(override_dir):
     (override_dir / "prompts").mkdir()
-    (override_dir / "prompts" / "routing_instruction_template.md").write_text(
-        "OVERRIDDEN ROUTING", encoding="utf-8"
-    )
+    (override_dir / "prompts" / "routing_instruction_template.md").write_text("OVERRIDDEN ROUTING", encoding="utf-8")
     prompt = RealBundledPrompt("routing_instruction_template.md")
     assert prompt.get_prompt() == "OVERRIDDEN ROUTING"
     assert prompt.template_path == (override_dir / "prompts" / "routing_instruction_template.md").resolve()
@@ -112,9 +110,7 @@ def test_override_with_same_placeholders_loads(override_dir):
 
     (override_dir / "agents" / "incident_creation").mkdir(parents=True)
     override_file = override_dir / "agents" / "incident_creation" / "prompt_template.md"
-    override_file.write_text(
-        "Custom incident prompt {PRIORITY_VALUES} and {TERMINAL_STATUSES}", encoding="utf-8"
-    )
+    override_file.write_text("Custom incident prompt {PRIORITY_VALUES} and {TERMINAL_STATUSES}", encoding="utf-8")
     prompt = IncidentPrompt("prompt_template.md")
     assert prompt.get_prompt() == "Custom incident prompt {PRIORITY_VALUES} and {TERMINAL_STATUSES}"
 

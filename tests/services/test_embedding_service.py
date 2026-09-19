@@ -33,8 +33,12 @@ def mock_text_backend():
     backend.name = "text"
     backend.is_loaded.return_value = True
     backend.model_name.return_value = "test-model"
-    backend.embed_document_texts.return_value = [TextEmbedding(dense=[0.1, 0.2], sparse=SparseVector(indices=[5], values=[0.9]))]
-    backend.embed_query_texts.return_value = [TextEmbedding(dense=[0.3, 0.4], sparse=SparseVector(indices=[7], values=[0.8]))]
+    backend.embed_document_texts.return_value = [
+        TextEmbedding(dense=[0.1, 0.2], sparse=SparseVector(indices=[5], values=[0.9]))
+    ]
+    backend.embed_query_texts.return_value = [
+        TextEmbedding(dense=[0.3, 0.4], sparse=SparseVector(indices=[7], values=[0.8]))
+    ]
     return backend
 
 

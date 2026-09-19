@@ -80,8 +80,12 @@ async def _retry_qdrant(operation: str, run):
             raise error
         delay = min(2**attempt + random.uniform(0, 0.5), 30)
         logger.warning(
-            f"Vector-database {operation} failed (attempt {attempt + 1}/{_QDRANT_RETRY_ATTEMPTS}, "
-            f"reason: {reason}); retrying in {delay:.1f}s"
+            "Vector-database %s failed (attempt %s/%s, reason: %s); retrying in %.1fs",
+            operation,
+            attempt + 1,
+            _QDRANT_RETRY_ATTEMPTS,
+            reason,
+            delay,
         )
         await asyncio.sleep(delay)
 
@@ -114,6 +118,7 @@ def _record_uuid(record_id: str) -> str:
     keeps records addressable across processes and safe in local mode alike.
     """
     return str(uuid.uuid5(uuid.NAMESPACE_URL, f"quaia:{record_id}"))
+
 
 class VectorDbService:
     def __init__(
@@ -150,7 +155,9 @@ class VectorDbService:
         # can be passed in so callers that also hold their own metadata service don't duplicate
         # clients against the same collection.
         self._metadata_db = metadata_db or (
-            VectorDbService(metadata_collection_name) if metadata_collection_name and metadata_collection_name != collection_name else None
+            VectorDbService(metadata_collection_name)
+            if metadata_collection_name and metadata_collection_name != collection_name
+            else None
         )
         self._upsert_batch_size = int(getattr(config.QdrantConfig, "UPSERT_BATCH_SIZE", 64))
         # One ensure per collection per service instance is enough: index creation is
@@ -182,7 +189,7 @@ class VectorDbService:
 
         endpoint = "/embed-query-text" if query else "/embed-document-text"
         max_retries = self._embedding_max_retries
-        logger.info(f"Calling embedding service{endpoint} ({len(texts)} text(s))...")
+        logger.info("Calling embedding service%s (%s text(s))...", endpoint, len(texts))
         start = time.monotonic()
 
         for attempt in range(max_retries):
@@ -194,8 +201,7 @@ class VectorDbService:
                 response.raise_for_status()
                 body = response.json()
                 embeddings = [
-                    (item["dense"], item["sparse"]["indices"], item["sparse"]["values"])
-                    for item in body["embeddings"]
+                    (item["dense"], item["sparse"]["indices"], item["sparse"]["values"]) for item in body["embeddings"]
                 ]
                 logger.info(f"Embedding service call completed in {time.monotonic() - start:.3f}s")
                 return embeddings, body.get("model")
@@ -213,7 +219,7 @@ class VectorDbService:
             except httpx.HTTPStatusError as e:
                 status = e.response.status_code
                 if status not in (429, 502, 503, 504) or attempt == max_retries - 1:
-                    logger.exception(f"HTTP error from embedding service: {status} - {e.response.text}")
+                    logger.exception("HTTP error from embedding service: %s - %s", status, e.response.text)
                     raise
                 retry_after = e.response.headers.get("Retry-After")
                 wait_time = (
@@ -222,8 +228,11 @@ class VectorDbService:
                     else min(2**attempt, self._embedding_retry_backoff_cap)
                 )
                 logger.warning(
-                    f"Attempt {attempt + 1}/{max_retries} got HTTP {status} from the embedding service; "
-                    f"retrying in {wait_time:.1f}s"
+                    "Attempt %s/%s got HTTP %s from the embedding service; retrying in %.1fs",
+                    attempt + 1,
+                    max_retries,
+                    status,
+                    wait_time,
                 )
                 await asyncio.sleep(wait_time)
             except Exception:
@@ -273,15 +282,15 @@ class VectorDbService:
                 vectors_config={
                     DENSE_VECTOR_NAME: models.VectorParams(size=vector_size, distance=models.Distance.COSINE)
                 },
-                sparse_vectors_config={
-                    SPARSE_VECTOR_NAME: models.SparseVectorParams(modifier=models.Modifier.IDF)
-                },
+                sparse_vectors_config={SPARSE_VECTOR_NAME: models.SparseVectorParams(modifier=models.Modifier.IDF)},
             )
-            logger.info(f"Created collection {self.collection_name} with named dense({vector_size}) + sparse vectors.")
+            logger.info(
+                "Created collection %s with named dense(%s) + sparse vectors.", self.collection_name, vector_size
+            )
         except Exception as e:
             # Handle race condition where collection is created concurrently
             if "already exists" in str(e).lower() or "conflict" in str(e).lower():
-                logger.info(f"Collection {self.collection_name} already exists (race condition handled).")
+                logger.info("Collection %s already exists (race condition handled).", self.collection_name)
             else:
                 raise e
 
@@ -345,10 +354,10 @@ class VectorDbService:
                     field_name=field_name,
                     field_schema=field_type,
                 )
-                logger.info(f"Created payload index on {field_name} in {self.collection_name}.")
+                logger.info("Created payload index on %s in %s.", field_name, self.collection_name)
             except Exception as e:
                 if "already exists" in str(e).lower():
-                    logger.info(f"Payload index on {field_name} in {self.collection_name} already exists.")
+                    logger.info("Payload index on %s in %s already exists.", field_name, self.collection_name)
                 else:
                     raise
 
@@ -426,7 +435,7 @@ class VectorDbService:
         Returns:
             Fused scored points.
         """
-        logger.info(f"Starting hybrid search in '{self.collection_name}' (limit {limit})...")
+        logger.info("Starting hybrid search in '%s' (limit %s)...", self.collection_name, limit)
         try:
             embeddings, model = await self._embed_texts([query_text], query=True)
             dense, sparse_indices, sparse_values = embeddings[0]
@@ -528,7 +537,7 @@ class VectorDbService:
                     f"upsert into {self.collection_name}",
                     lambda points=points: self.client.upsert(collection_name=self.collection_name, points=points),
                 )
-                logger.info(f"Upserted batch of {len(points)} point(s) to collection {self.collection_name}")
+                logger.info("Upserted batch of %s point(s) to collection %s", len(points), self.collection_name)
         except Exception:
             logger.exception("Error batch-upserting to Vector DB")
             raise
@@ -601,12 +610,14 @@ class VectorDbService:
             await self.client.delete(
                 collection_name=self.collection_name, points_selector=models.FilterSelector(filter=scope_filter)
             )
-            logger.info(f"Deleted points matching filter from collection {self.collection_name}")
+            logger.info("Deleted points matching filter from collection %s", self.collection_name)
         except Exception:
             logger.exception("Error deleting by filter from Vector DB")
             raise
 
-    async def set_payload(self, payload: dict, point_ids: list[int | str] | None = None, scope_filter: models.Filter | None = None):
+    async def set_payload(
+        self, payload: dict, point_ids: list[int | str] | None = None, scope_filter: models.Filter | None = None
+    ):
         """Payload-only update for metadata changes without re-embedding."""
         try:
             selector = (
@@ -619,7 +630,11 @@ class VectorDbService:
                 payload=payload,
                 points=selector,
             )
-            logger.info(f"Updated payload on {len(point_ids) if point_ids else 'filtered'} point(s) in {self.collection_name}")
+            logger.info(
+                "Updated payload on %s point(s) in %s",
+                len(point_ids) if point_ids else "filtered",
+                self.collection_name,
+            )
         except Exception:
             logger.exception("Error updating payload in Vector DB")
             raise
@@ -672,7 +687,7 @@ class VectorDbService:
                 points=[models.PointStruct(id=_record_uuid(record_id), vector={}, payload=payload)],
             )
         except Exception:
-            logger.exception(f"Error storing record {record_id} in {self.collection_name}")
+            logger.exception("Error storing record %s in %s", record_id, self.collection_name)
             raise
 
     async def get_payload_record(self, record_id: str) -> dict | None:
@@ -686,7 +701,7 @@ class VectorDbService:
                 return points[0].payload
             return None
         except Exception:
-            logger.exception(f"Error reading record {record_id} from {self.collection_name}")
+            logger.exception("Error reading record %s from %s", record_id, self.collection_name)
             raise
 
     async def get_payload_record_if_exists(self, record_id: str) -> dict | None:
@@ -707,7 +722,9 @@ class VectorDbService:
         """
         try:
             await self.ensure_payload_collection()
-            must = [models.FieldCondition(key=key, match=models.MatchValue(value=value)) for key, value in filter_by.items()]
+            must = [
+                models.FieldCondition(key=key, match=models.MatchValue(value=value)) for key, value in filter_by.items()
+            ]
             records: list[dict] = []
             offset = None
             while True:
@@ -724,7 +741,7 @@ class VectorDbService:
                     return records
                 offset = next_offset
         except Exception:
-            logger.exception(f"Error scrolling records matching {filter_by} in {self.collection_name}")
+            logger.exception("Error scrolling records matching %s in %s", filter_by, self.collection_name)
             raise
 
     async def delete_payload_record(self, record_id: str) -> None:
@@ -735,7 +752,7 @@ class VectorDbService:
                 points_selector=models.PointIdsList(points=[_record_uuid(record_id)]),
             )
         except Exception:
-            logger.exception(f"Error deleting record {record_id} from {self.collection_name}")
+            logger.exception("Error deleting record %s from %s", record_id, self.collection_name)
             raise
 
     async def ensure_payload_collection(self) -> None:
@@ -752,10 +769,10 @@ class VectorDbService:
                 collection_name=self.collection_name,
                 vectors_config={},
             )
-            logger.info(f"Created vectorless metadata collection {self.collection_name}.")
+            logger.info("Created vectorless metadata collection %s.", self.collection_name)
         except Exception as e:
             if "already exists" in str(e).lower() or "conflict" in str(e).lower():
-                logger.info(f"Collection {self.collection_name} already exists (race condition handled).")
+                logger.info("Collection %s already exists (race condition handled).", self.collection_name)
             else:
                 raise e
         await self._ensure_payload_indexes()

@@ -96,4 +96,3 @@ def is_supported_mime_type(mime_type: str | None) -> bool:
     if not mime_type:
         return False
     return mime_type in SUPPORTED_MIME_TYPES
-

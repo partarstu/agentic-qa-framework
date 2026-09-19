@@ -243,7 +243,7 @@ async def _extract_office(file_name: str, content: bytes, extension: str) -> Ext
     except OfficeConversionError:
         if extension not in CONVERT_WITH_FALLBACK_EXTENSIONS:
             raise
-        logger.warning(f"Converting '{file_name}' failed; falling back to its native text-only reader.")
+        logger.warning("Converting '%s' failed; falling back to its native text-only reader.", file_name)
         return await asyncio.to_thread(_extract_office_native, extension, content)
 
     include_images = extension not in TEXT_ONLY_CONVERTED_EXTENSIONS
@@ -270,9 +270,7 @@ def _extract_office_native(extension: str, content: bytes) -> ExtractedDocument:
             for slide_number, slide in enumerate(presentation.slides):
                 if slide_number >= page_limit:
                     break
-                text = "\n".join(
-                    shape.text for shape in slide.shapes if getattr(shape, "has_text_frame", False)
-                )
+                text = "\n".join(shape.text for shape in slide.shapes if getattr(shape, "has_text_frame", False))
                 pages.append(PageContent(_normalize_extracted_text(text), None))
             return ExtractedDocument(pages, total_page_count)
         case _:
@@ -334,4 +332,4 @@ def _extension_of(file_name: str) -> str:
 
 def _log_truncation(kind: str, total_page_count: int, page_limit: int) -> None:
     if total_page_count > page_limit:
-        logger.warning(f"{kind} has {total_page_count} pages; ingesting only the first {page_limit}.")
+        logger.warning("%s has %s pages; ingesting only the first %s.", kind, total_page_count, page_limit)

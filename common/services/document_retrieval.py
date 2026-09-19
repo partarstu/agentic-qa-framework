@@ -156,7 +156,7 @@ async def _matching_document_names(
             break
         offset = next_offset
     matched = sorted({name for name in names if pattern.search(name)})
-    logger.info(f"Document-name pattern matched {len(matched)} of {len(names)} distinct {source} name(s).")
+    logger.info("Document-name pattern matched %s of %s distinct %s name(s).", len(matched), len(names), source)
     return matched
 
 
@@ -207,7 +207,7 @@ async def retrieve_documents(
     failed = 0
     for source, result in zip(sources, results, strict=True):
         if isinstance(result, BaseException):
-            logger.exception(f"{source} document retrieval failed; the source is unavailable for this review.")
+            logger.exception("%s document retrieval failed; the source is unavailable for this review.", source)
             unavailable.append(source)
             failed += 1
         else:
@@ -218,7 +218,9 @@ async def retrieve_documents(
     interleaved = _interleave(merged_lists)
     pages = interleaved[:limit]
     for page in pages:
-        page.image = await _fetch_page_image(documents_db if page.part.source == CONFLUENCE_SOURCE else sharepoint_db, page.part)
+        page.image = await _fetch_page_image(
+            documents_db if page.part.source == CONFLUENCE_SOURCE else sharepoint_db, page.part
+        )
     return RetrievalResult(pages, unavailable)
 
 
@@ -240,7 +242,7 @@ async def _retrieve_source(
     if pattern is not None:
         matched_names = await _matching_document_names(documents_db, scope, source, pattern)
         if not matched_names:
-            logger.info(f"No {source} document names match the pattern; returning an empty result without a query.")
+            logger.info("No %s document names match the pattern; returning an empty result without a query.", source)
             return []
         name_condition = models.FieldCondition(key="document_name", match=models.MatchAny(any=matched_names))
         query_filter = models.Filter(must=[*query_filter.must, name_condition])
@@ -295,7 +297,7 @@ async def _fetch_page_image(documents_db: VectorDbService | None, part: Document
     try:
         records = await documents_db.retrieve([part0.get_vector_id()])
     except Exception:
-        logger.exception(f"Failed to fetch the page image of {part.breadcrumb}.")
+        logger.exception("Failed to fetch the page image of %s.", part.breadcrumb)
         raise
     if not records or not records[0].payload:
         return None

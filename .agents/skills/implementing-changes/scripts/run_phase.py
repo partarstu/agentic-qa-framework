@@ -28,7 +28,7 @@ def _absolute_rule_path(directory: Path) -> str:
     """Return the directory in the ``//`` form the permission rules use for absolute paths."""
     resolved = directory.resolve()
     if resolved.drive:
-        return f"//{resolved.drive[0].lower()}{resolved.as_posix()[len(resolved.drive):]}"
+        return f"//{resolved.drive[0].lower()}{resolved.as_posix()[len(resolved.drive) :]}"
     return f"/{resolved.as_posix()}"
 
 
@@ -57,18 +57,28 @@ def main() -> None:
     run_dir = arguments.run_dir.resolve()
     allowed_tools = [f"Edit({_absolute_rule_path(run_dir)}/**)", *ROLE_TOOLS[arguments.role]]
     command = [
-        claude, "-p",
-        "--model", arguments.model,
-        "--effort", arguments.effort,
-        "--append-system-prompt-file", str(SKILL_DIR / "resources" / f"{arguments.role}.md"),
-        "--add-dir", str(run_dir),
-        "--permission-mode", "dontAsk",
-        "--permission-prompts", "none",
-        "--allowedTools", *allowed_tools,
+        claude,
+        "-p",
+        "--model",
+        arguments.model,
+        "--effort",
+        arguments.effort,
+        "--append-system-prompt-file",
+        str(SKILL_DIR / "resources" / f"{arguments.role}.md"),
+        "--add-dir",
+        str(run_dir),
+        "--permission-mode",
+        "dontAsk",
+        "--permission-prompts",
+        "none",
+        "--allowedTools",
+        *allowed_tools,
         # The allow rules are written for Bash; the PowerShell tool would only be denied.
-        "--disallowedTools", "PowerShell",
+        "--disallowedTools",
+        "PowerShell",
         "--no-session-persistence",
-        "--output-format", "json",
+        "--output-format",
+        "json",
     ]
     completed = subprocess.run(
         command,

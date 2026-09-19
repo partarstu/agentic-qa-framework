@@ -56,7 +56,7 @@ class TestNormalization:
     def test_code_macro_body_kept_with_language(self):
         raw = (
             '<ac:structured-macro ac:name="code" ac:schema-version="1">'
-            '<ac:default-parameter>python</ac:default-parameter>'
+            "<ac:default-parameter>python</ac:default-parameter>"
             "<ac:plain-text-body><![CDATA[print('hi')]]></ac:plain-text-body>"
             "</ac:structured-macro>"
         )
@@ -83,7 +83,7 @@ class TestNormalization:
         assert "Kept." in markdown
 
     def test_placeholders_dropped(self):
-        raw = '<p>Before<ac:placeholder>Screenshot here</ac:placeholder>After.</p>'
+        raw = "<p>Before<ac:placeholder>Screenshot here</ac:placeholder>After.</p>"
         markdown = normalize_page_body(raw, "T")
         assert "Screenshot here" not in markdown
         assert "BeforeAfter." in markdown
@@ -119,9 +119,7 @@ class TestNormalization:
 
 class TestChunking:
     def test_chunks_carry_breadcrumbs(self):
-        markdown = (
-            "# Page\n\nIntro.\n\n## Alpha\n\nAlpha text.\n\n## Beta\n\n### Gamma\n\nGamma text.\n"
-        )
+        markdown = "# Page\n\nIntro.\n\n## Alpha\n\nAlpha text.\n\n## Beta\n\n### Gamma\n\nGamma text.\n"
         chunks = chunk_page_body(markdown, "Page")
         breadcrumbs = [chunk.breadcrumb for chunk in chunks]
         assert "Page" in breadcrumbs
@@ -145,8 +143,9 @@ class TestChunking:
         assert any("Short after." in chunk.text for chunk in chunks)
 
     def test_budget_includes_breadcrumb(self):
-        with patch("config.DocumentRagConfig.CHUNK_MAX_TOKENS", 10), patch(
-            "config.DocumentRagConfig.CHARACTERS_PER_TOKEN", 4
+        with (
+            patch("config.DocumentRagConfig.CHUNK_MAX_TOKENS", 10),
+            patch("config.DocumentRagConfig.CHARACTERS_PER_TOKEN", 4),
         ):
             markdown = "# Page\n\n## S\n\n" + ("word " * 200)
             chunks = chunk_page_body(markdown, "Page")
@@ -300,9 +299,7 @@ def runner():
         lock_store.mark_started = AsyncMock(return_value=True)
         lock_store.is_holder = AsyncMock(return_value=True)
         lock_store.release = AsyncMock(return_value=True)
-        lock_store.acquire = AsyncMock(
-            return_value=MagicMock(acquired=True, lock_info={"holder_token": "test-token"})
-        )
+        lock_store.acquire = AsyncMock(return_value=MagicMock(acquired=True, lock_info={"holder_token": "test-token"}))
         mock_lock_cls.return_value = lock_store
 
         state_store = MagicMock()
@@ -353,9 +350,7 @@ class TestConfluenceSyncRunner:
         runner_obj, documents_db, _, _, fingerprints = runner
         page = _page()
         stored_hash = content_hash("<p>Hello.</p>", "Home", "1")
-        fingerprints.load_scope = AsyncMock(
-            return_value={"page:111": _fingerprint_payload(3, stored_hash)}
-        )
+        fingerprints.load_scope = AsyncMock(return_value={"page:111": _fingerprint_payload(3, stored_hash)})
         client = _client_mock()
         client.get_space_id_by_key = AsyncMock(return_value="555")
         client.list_pages_in_space = AsyncMock(return_value=[page])
@@ -579,9 +574,7 @@ class TestConfluenceSyncRunner:
                 ),
                 "page:222": _fingerprint_payload(4, "hash", point_ids=["p-222"]),
                 "attachment:att-8": {
-                    **_attachment_fingerprint(
-                        attachment_id="att-8", attachment_name="other.md", point_ids=["p-att-8"]
-                    ),
+                    **_attachment_fingerprint(attachment_id="att-8", attachment_name="other.md", point_ids=["p-att-8"]),
                     "page_id": "222",
                 },
             }
@@ -715,9 +708,7 @@ class TestConfluenceSyncRunner:
         runner_obj, documents_db, _, _, fingerprints = runner
         page = _page()
         attachment = _attachment()
-        fingerprints.load_scope = AsyncMock(
-            return_value={"attachment:att-1": _attachment_fingerprint()}
-        )
+        fingerprints.load_scope = AsyncMock(return_value={"attachment:att-1": _attachment_fingerprint()})
         client = _client_mock()
         client.get_space_id_by_key = AsyncMock(return_value="555")
         client.list_pages_in_space = AsyncMock(return_value=[page])
@@ -737,9 +728,7 @@ class TestConfluenceSyncRunner:
         page = _page(title="Renamed Home")
         attachment = _attachment(title="renamed.md")
         fingerprints.load_scope = AsyncMock(
-            return_value={
-                "attachment:att-1": _attachment_fingerprint(point_ids=["point-1"])
-            }
+            return_value={"attachment:att-1": _attachment_fingerprint(point_ids=["point-1"])}
         )
         client = _client_mock()
         client.get_space_id_by_key = AsyncMock(return_value="555")
@@ -812,9 +801,7 @@ class TestConfluenceSyncRunner:
         client.close = AsyncMock()
 
         with patch("rag_sync.confluence_sync.ConfluenceClient", return_value=client):
-            result = await runner_obj.sync_space(
-                "DEV", attachment_name_pattern="wanted", skip_page_body=True
-            )
+            result = await runner_obj.sync_space("DEV", attachment_name_pattern="wanted", skip_page_body=True)
 
         assert result.processed_count == 1
         documents_db.delete.assert_awaited_once_with(["delete"])
@@ -847,9 +834,7 @@ class TestConfluenceSyncRunner:
         )
 
         with patch("config.DocumentRagConfig.CHUNK_MAX_TOKENS", 20):
-            parts = runner_obj._build_attachment_parts(
-                "DEV", _page(), _attachment(title="guide.pdf"), extracted
-            )
+            parts = runner_obj._build_attachment_parts("DEV", _page(), _attachment(title="guide.pdf"), extracted)
 
         assert len(parts) > 1
         assert all(part.page_count == 3 for part in parts)

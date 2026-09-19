@@ -65,12 +65,19 @@ def changed_line_coverage(repo: Path, report_file: Path, diff_file: Path) -> dic
     json_report = diff_file.parent / DIFF_COVER_REPORT_NAME
     subprocess.run(
         [
-            sys.executable, "-m", "diff_cover.diff_cover_tool", str(report_file),
-            "--diff-file", str(diff_file),
-            "--format", f"json:{json_report}",
+            sys.executable,
+            "-m",
+            "diff_cover.diff_cover_tool",
+            str(report_file),
+            "--diff-file",
+            str(diff_file),
+            "--format",
+            f"json:{json_report}",
             "--quiet",
         ],
-        cwd=repo, check=True, timeout=DIFF_COVER_TIMEOUT_SECONDS,
+        cwd=repo,
+        check=True,
+        timeout=DIFF_COVER_TIMEOUT_SECONDS,
     )
     return json.loads(json_report.read_text(encoding="utf-8"))
 

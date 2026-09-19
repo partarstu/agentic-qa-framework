@@ -93,9 +93,7 @@ def _run_soffice(source: Path, output_directory: Path) -> Path:
         except subprocess.TimeoutExpired:
             raise
         if result.returncode != 0:
-            raise OfficeConversionError(
-                f"soffice exited with {result.returncode}: {result.stderr.strip()}"
-            )
+            raise OfficeConversionError(f"soffice exited with {result.returncode}: {result.stderr.strip()}")
 
     produced = output_directory / f"{source.stem}.pdf"
     if not produced.exists():

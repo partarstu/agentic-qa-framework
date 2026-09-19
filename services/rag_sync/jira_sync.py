@@ -86,7 +86,7 @@ class JiraRagSyncRunner:
         scope = scope_key(JIRA_SCOPE, project_key)
         if lock_token:
             if not await self._lock_store.mark_started(scope, lock_token):
-                logger.warning(f"Runner no longer holds the lock for {scope}; aborting without writes.")
+                logger.warning("Runner no longer holds the lock for %s; aborting without writes.", scope)
                 raise PermissionError(f"Lock for scope {scope} was taken over before the run started.")
         else:
             state = await self._lock_store.acquire(scope)
@@ -99,11 +99,11 @@ class JiraRagSyncRunner:
         finally:
             released = await self._lock_store.release(scope, lock_token)
             if not released:
-                logger.warning(f"Lock for {scope} was not released by this runner; it was taken over.")
+                logger.warning("Lock for %s was not released by this runner; it was taken over.", scope)
             await self.close()
 
     async def _run_sync(self, project_key: str, scope: str, lock_token: str) -> RagUpdateResult:
-        logger.info(f"Starting RAG sync for project {project_key}.")
+        logger.info("Starting RAG sync for project %s.", project_key)
         # The cursor is taken at run start, BEFORE querying Jira (the WS8 fix).
         run_started_epoch = time.time()
         jira_client = await asyncio.to_thread(self._create_jira_client)
@@ -118,7 +118,7 @@ class JiraRagSyncRunner:
 
         last_update = await self._get_last_update_timestamp(project_key)
         issues = await asyncio.to_thread(self._fetch_issues_updated_since, jira_client, project_key, last_update)
-        logger.info(f"Fetched {len(issues)} issue(s) updated since {last_update} for project {project_key}.")
+        logger.info("Fetched %s issue(s) updated since %s for project %s.", len(issues), last_update, project_key)
 
         await self._verify_holder_or_abort(scope, lock_token)
         processed_count = await self._sync_issues(issues, scope, lock_token)
@@ -133,7 +133,7 @@ class JiraRagSyncRunner:
             scope, {"last_update": cursor_timestamp, "processed_count": processed_count}
         )
 
-        logger.info(f"RAG sync for project {project_key} completed; processed {processed_count} issue(s).")
+        logger.info("RAG sync for project %s completed; processed %s issue(s).", project_key, processed_count)
         return RagUpdateResult(status="completed", processed_count=processed_count)
 
     async def _verify_holder_or_abort(self, scope: str, lock_token: str) -> None:
@@ -149,7 +149,7 @@ class JiraRagSyncRunner:
         if stale_ids:
             await self._verify_holder_or_abort(scope, lock_token)
             await self._issues_db.delete(stale_ids)
-            logger.info(f"Deleted {len(stale_ids)} stale issue(s) for project {project_key}.")
+            logger.info("Deleted %s stale issue(s) for project %s.", len(stale_ids), project_key)
 
     async def _sync_issues(self, issues: list[JiraIssue], scope: str, lock_token: str) -> int:
         """Upsert every issue regardless of Jira workflow status."""
@@ -170,7 +170,7 @@ class JiraRagSyncRunner:
         model changes (WS7), so the decision is taken per project: a surviving cursor, or the legacy
         watermark it falls back to, would otherwise skip every issue not updated since the last run.
         """
-        logger.info(f"No stored issues for {scope}; resetting its sync state for a full re-ingest.")
+        logger.info("No stored issues for %s; resetting its sync state for a full re-ingest.", scope)
         await self._state_store.reset(scope)
         legacy_id = ProjectMetadata(project_key=project_key, last_update=DEFAULT_LAST_UPDATE).get_vector_id()
         await self._metadata_db.delete_payload_record(legacy_id)
@@ -201,9 +201,7 @@ class JiraRagSyncRunner:
 
     def _fetch_issues_updated_since(self, jira_client: JIRA, project_key: str, last_update: str) -> list[JiraIssue]:
         jql = f'project = "{project_key}" AND updated >= "{_to_jql_timestamp(last_update)}"'
-        issues = jira_client.search_issues(
-            jql, fields="summary,description,status,issuetype,updated", maxResults=False
-        )
+        issues = jira_client.search_issues(jql, fields="summary,description,status,issuetype,updated", maxResults=False)
         return [self._to_jira_issue(issue, project_key) for issue in issues]
 
     @staticmethod

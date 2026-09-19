@@ -77,6 +77,7 @@ def _all_test_cases() -> dict[str, dict]:
     """Generation-created cases plus the pre-seeded executable case."""
     return {**_executable_test_cases, **_test_cases}
 
+
 _STATUSES = [
     {"id": 1, "name": "Draft", "archived": False},
     {"id": 2, "name": "Approved", "archived": False},

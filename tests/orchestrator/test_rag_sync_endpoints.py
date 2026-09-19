@@ -53,7 +53,13 @@ class TestUpdateJiraDb:
         monkeypatch.setattr(main.config.RagSyncConfig, "SERVICE_URL", "http://local-sync:8080")
         _mock_trigger(
             monkeypatch,
-            start_result={"status_code": 200, "response": {"message": "Jira sync completed.", "details": {"status": "completed", "processed_count": 2}}},
+            start_result={
+                "status_code": 200,
+                "response": {
+                    "message": "Jira sync completed.",
+                    "details": {"status": "completed", "processed_count": 2},
+                },
+            },
         )
 
         response = client.post("/update-jira-db", json={"project_key": "PROJ"})
@@ -146,9 +152,12 @@ class TestUpdateConfluenceDb:
             "confluence",
             "~dev",
             [
-                "--space-key", "~dev",
-                "--page-id", "12345",
-                "--attachment-name-pattern", "^report.*\\.pdf$",
+                "--space-key",
+                "~dev",
+                "--page-id",
+                "12345",
+                "--attachment-name-pattern",
+                "^report.*\\.pdf$",
                 "--skip-page-body",
             ],
             "lock-token",
@@ -194,7 +203,11 @@ class TestTriggerModes:
         state.acquired = True
         state.lock_info = {"holder_token": "tok"}
         lock_store.acquire.return_value = state
-        monkeypatch.setattr(trigger_obj._config.JOB_NAME if hasattr(trigger_obj, "_config") else main.config.RagSyncConfig, "JOB_NAME", None)
+        monkeypatch.setattr(
+            trigger_obj._config.JOB_NAME if hasattr(trigger_obj, "_config") else main.config.RagSyncConfig,
+            "JOB_NAME",
+            None,
+        )
         monkeypatch.setattr(main.config.RagSyncConfig, "SERVICE_URL", "http://local-sync:8080")
 
         response = MagicMock()

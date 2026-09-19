@@ -397,16 +397,15 @@ async def test_execute_cancelled_swallowed_and_emits_canceled_event(mock_agent, 
 
     calls = mock_event_queue.enqueue_event.call_args_list
     canceled_calls = [
-        call[0][0] for call in calls
+        call[0][0]
+        for call in calls
         if isinstance(call[0][0], TaskStatusUpdateEvent) and call[0][0].status.state == TaskState.TASK_STATE_CANCELED
     ]
     assert len(canceled_calls) == 1
 
 
 @pytest.mark.asyncio
-async def test_task_start_log_names_model_and_agent_version(
-    mock_agent, mock_context, mock_event_queue, caplog
-):
+async def test_task_start_log_names_model_and_agent_version(mock_agent, mock_context, mock_event_queue, caplog):
     """Every task start must be traceable to the agent version and the model that served it."""
     executor = DefaultAgentExecutor(mock_agent)
     mock_context.message = MagicMock(spec=Message)

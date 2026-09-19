@@ -88,8 +88,8 @@ def build_claude_5_settings(
             if model_name not in _logged_thinking_fallbacks:
                 _logged_thinking_fallbacks.add(model_name)
                 logger.warning(
-                    f"Model '{model_name}' rejects disabled thinking; "
-                    f"falling back to adaptive thinking at effort 'low'."
+                    "Model '%s' rejects disabled thinking; falling back to adaptive thinking at effort 'low'.",
+                    model_name,
                 )
             settings["anthropic_thinking"] = {"type": "adaptive"}
             settings["anthropic_effort"] = "low"
@@ -202,9 +202,12 @@ def _log_retry_attempt(model_name: str):
             reason = type(exception).__name__ if exception is not None else "unknown"
         delay = retry_state.next_action.sleep if retry_state.next_action else 0
         logger.warning(
-            f"LLM provider request for '{model_name}' failed (attempt "
-            f"{retry_state.attempt_number}/{config.RetryConfig.MAX_RETRIES}, reason: {reason}); "
-            f"retrying in {delay:.1f}s"
+            "LLM provider request for '%s' failed (attempt %s/%s, reason: %s); retrying in %.1fs",
+            model_name,
+            retry_state.attempt_number,
+            config.RetryConfig.MAX_RETRIES,
+            reason,
+            delay,
         )
 
     return log_attempt

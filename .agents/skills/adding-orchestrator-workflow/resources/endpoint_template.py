@@ -18,7 +18,7 @@ async def <endpoint_function_name>(request: <RequestModel>, api_key: str = Depen
     <What the workflow does and who triggers it>.
     """
     try:
-        logger.info(f"Received a request for <workflow description>: {request}")
+        logger.info("Received a request for <workflow description>: %s", request)
         task_description = f"<Description the orchestrator uses to select the agent>"
         completed_task = await _send_task_to_agent(request.model_dump_json(), task_description)
         artifacts = _get_artifacts_from_task(completed_task, task_description)

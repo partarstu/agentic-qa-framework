@@ -121,5 +121,5 @@ def _score(agent: Agent, dimension: str, requirement: str, output_a: str, output
         f"--- OUTPUT B ---\n{output_b or '(nothing was produced)'}"
     )
     result = agent.run_sync(prompt)
-    logger.info(f"Judge [{dimension}]: {TokenUsage.from_run_usage(result.usage(), JUDGE_MODEL_NAME).summary_line()}")
+    logger.info("Judge [%s]: %s", dimension, TokenUsage.from_run_usage(result.usage(), JUDGE_MODEL_NAME).summary_line())
     return result.output

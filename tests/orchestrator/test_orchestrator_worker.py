@@ -130,9 +130,7 @@ async def test_agent_worker_enqueues_recovery_when_task_fails(mock_registry, moc
         results = []
         await _agent_worker("agent-1", mock_queue, results, ["agent-1"])
 
-        mock_registry.update_status.assert_awaited_with(
-            "agent-1", AgentStatus.BROKEN, BrokenReason.TASK_STUCK
-        )
+        mock_registry.update_status.assert_awaited_with("agent-1", AgentStatus.BROKEN, BrokenReason.TASK_STUCK)
         mock_cancellation_queue.put.assert_awaited_once()
         enqueued_agent_id, _ = mock_cancellation_queue.put.await_args.args[0]
         assert enqueued_agent_id == "agent-1"
@@ -220,9 +218,7 @@ async def test_agent_worker_requeues_and_leaves_cancellation_to_the_recovery_tas
     """With another agent alive the case is re-queued; freeing the stuck task is the recovery task's job."""
     test_case = _test_case()
     mock_queue.get.side_effect = [(test_case, "UI")]
-    mock_registry.get_status = AsyncMock(
-        side_effect=[AgentStatus.AVAILABLE, AgentStatus.BROKEN, AgentStatus.AVAILABLE]
-    )
+    mock_registry.get_status = AsyncMock(side_effect=[AgentStatus.AVAILABLE, AgentStatus.BROKEN, AgentStatus.AVAILABLE])
     mock_registry.update_status = AsyncMock()
     mock_registry.get_broken_context = AsyncMock(return_value=(BrokenReason.TASK_STUCK, "stuck-task-1"))
 
@@ -374,7 +370,9 @@ async def test_incident_fan_out_records_and_reraises_cancellation():
         test_case=_test_case(),
     )
     with (
-        patch("orchestrator.main._request_incident_creation", new_callable=AsyncMock, side_effect=asyncio.CancelledError),
+        patch(
+            "orchestrator.main._request_incident_creation", new_callable=AsyncMock, side_effect=asyncio.CancelledError
+        ),
         patch("orchestrator.main._record_error") as mock_record_error,
         pytest.raises(asyncio.CancelledError),
     ):

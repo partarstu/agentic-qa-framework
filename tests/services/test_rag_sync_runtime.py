@@ -90,8 +90,14 @@ class TestLockAcquire:
         # A stored lock whose expiry lies in the past can be taken over.
         await metadata_db.upsert_payload_record(
             f"{LOCK_RECORD_KIND}-jira:PROJ",
-            {"kind": LOCK_RECORD_KIND, "scope": "jira:PROJ", "holder_token": "old",
-             "acquired_at": time.time() - 7200, "expires_at": time.time() - 1, "started": True},
+            {
+                "kind": LOCK_RECORD_KIND,
+                "scope": "jira:PROJ",
+                "holder_token": "old",
+                "acquired_at": time.time() - 7200,
+                "expires_at": time.time() - 1,
+                "started": True,
+            },
         )
 
         state = await lock_store.acquire("jira:PROJ")
@@ -208,8 +214,13 @@ class TestJiraRunner:
         from common.models import JiraIssue
 
         return JiraIssue(
-            id=issue_id, key=f"PROJ-{issue_id}", summary="s", description="d",
-            issue_type="Story", status=status, project_key="PROJ",
+            id=issue_id,
+            key=f"PROJ-{issue_id}",
+            summary="s",
+            description="d",
+            issue_type="Story",
+            status=status,
+            project_key="PROJ",
         )
 
     async def test_token_runner_marks_started_and_releases(self, runner):
@@ -218,9 +229,11 @@ class TestJiraRunner:
         lock_store.is_holder = AsyncMock(return_value=True)
         lock_store.release = AsyncMock(return_value=True)
 
-        with patch.object(runner_obj, "_create_jira_client", return_value=MagicMock()), \
-             patch.object(runner_obj, "_fetch_issues_updated_since", return_value=[]), \
-             patch.object(runner_obj, "_get_last_update_timestamp", AsyncMock(return_value="1970-01-01T00:00:00Z")):
+        with (
+            patch.object(runner_obj, "_create_jira_client", return_value=MagicMock()),
+            patch.object(runner_obj, "_fetch_issues_updated_since", return_value=[]),
+            patch.object(runner_obj, "_get_last_update_timestamp", AsyncMock(return_value="1970-01-01T00:00:00Z")),
+        ):
             result = await runner_obj.sync_project("PROJ", lock_token="tok")
 
         assert result.status == "completed"
@@ -244,10 +257,12 @@ class TestJiraRunner:
         lock_store.release = AsyncMock(return_value=True)
 
         run_started = time.time()
-        with patch.object(runner_obj, "_create_jira_client", return_value=MagicMock()), \
-             patch.object(runner_obj, "_fetch_issues_updated_since", return_value=[]), \
-             patch.object(runner_obj, "_get_last_update_timestamp", AsyncMock(return_value="1970-01-01T00:00:00Z")), \
-             patch("rag_sync.jira_sync.EXECUTION_DELAY_SECONDS", 60):
+        with (
+            patch.object(runner_obj, "_create_jira_client", return_value=MagicMock()),
+            patch.object(runner_obj, "_fetch_issues_updated_since", return_value=[]),
+            patch.object(runner_obj, "_get_last_update_timestamp", AsyncMock(return_value="1970-01-01T00:00:00Z")),
+            patch("rag_sync.jira_sync.EXECUTION_DELAY_SECONDS", 60),
+        ):
             await runner_obj.sync_project("PROJ", lock_token="tok")
 
         call = state_store.save_cursor.call_args
@@ -256,9 +271,7 @@ class TestJiraRunner:
 
         # The stored timestamp is UTC; parse it as UTC so the epoch comparison is sound.
         saved_dt = datetime.strptime(saved, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC).timestamp()
-        assert 55 <= run_started - saved_dt <= 65, (
-            f"Saved cursor {saved} should be run start {run_started} minus ~60s"
-        )
+        assert 55 <= run_started - saved_dt <= 65, f"Saved cursor {saved} should be run start {run_started} minus ~60s"
 
     async def test_holder_checked_between_write_batches(self, runner):
         runner_obj, issues_db, lock_store, _ = runner
@@ -267,10 +280,12 @@ class TestJiraRunner:
         lock_store.is_holder = AsyncMock(side_effect=[True, False, True, True, True])
         lock_store.release = AsyncMock(return_value=True)
 
-        with patch.object(runner_obj, "_create_jira_client", return_value=MagicMock()), \
-             patch.object(runner_obj, "_fetch_issues_updated_since", return_value=[self._issue()]), \
-             patch.object(runner_obj, "_get_last_update_timestamp", AsyncMock(return_value="1970-01-01T00:00:00Z")), \
-             pytest.raises(PermissionError):
+        with (
+            patch.object(runner_obj, "_create_jira_client", return_value=MagicMock()),
+            patch.object(runner_obj, "_fetch_issues_updated_since", return_value=[self._issue()]),
+            patch.object(runner_obj, "_get_last_update_timestamp", AsyncMock(return_value="1970-01-01T00:00:00Z")),
+            pytest.raises(PermissionError),
+        ):
             await runner_obj.sync_project("PROJ", lock_token="tok")
         issues_db.upsert_batch.assert_not_called()
 
@@ -288,9 +303,11 @@ class TestJiraRunner:
         lock_store.is_holder = AsyncMock(return_value=True)
         lock_store.release = AsyncMock(return_value=True)
 
-        with patch.object(runner_obj, "_create_jira_client", return_value=MagicMock()), \
-             patch.object(runner_obj, "_fetch_all_issue_ids", return_value=[]), \
-             patch.object(runner_obj, "_fetch_issues_updated_since", return_value=[]) as fetch_issues:
+        with (
+            patch.object(runner_obj, "_create_jira_client", return_value=MagicMock()),
+            patch.object(runner_obj, "_fetch_all_issue_ids", return_value=[]),
+            patch.object(runner_obj, "_fetch_issues_updated_since", return_value=[]) as fetch_issues,
+        ):
             await runner_obj.sync_project("PROJ", lock_token="tok")
 
         project_condition = issues_db.has_points.await_args.args[0].must[0]
@@ -305,9 +322,11 @@ class TestJiraRunner:
         lock_store.is_holder = AsyncMock(return_value=True)
         lock_store.release = AsyncMock(return_value=True)
 
-        with patch.object(runner_obj, "_create_jira_client", return_value=MagicMock()), \
-             patch.object(runner_obj, "_fetch_issues_updated_since", return_value=[]), \
-             patch.object(runner_obj, "_get_last_update_timestamp", AsyncMock(return_value="1970-01-01T00:00:00Z")):
+        with (
+            patch.object(runner_obj, "_create_jira_client", return_value=MagicMock()),
+            patch.object(runner_obj, "_fetch_issues_updated_since", return_value=[]),
+            patch.object(runner_obj, "_get_last_update_timestamp", AsyncMock(return_value="1970-01-01T00:00:00Z")),
+        ):
             await runner_obj.sync_project("PROJ", lock_token="tok")
 
         state_store.reset.assert_not_awaited()

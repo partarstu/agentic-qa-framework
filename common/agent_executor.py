@@ -48,7 +48,7 @@ class DefaultAgentExecutor(AgentExecutor):
     async def _execute_task(self, context: RequestContext, event_queue: EventQueue) -> None:
         task_id = context.task_id
         logger.info(
-            f"Executing task {task_id} with agent version {self.agent.version} using model {self.agent.model_name}"
+            "Executing task %s with agent version %s using model %s", task_id, self.agent.version, self.agent.model_name
         )
 
         updater = TaskUpdater(event_queue, task_id, context.context_id)

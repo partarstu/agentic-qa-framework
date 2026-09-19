@@ -160,9 +160,7 @@ def webhook_headers() -> dict[str, str]:
     return {"X-API-Key": ORCHESTRATOR_API_KEY}
 
 
-def _wait_for_agents_healthy(
-    http_client: httpx.Client, auth_headers: dict[str, str], expected_names: set[str]
-) -> None:
+def _wait_for_agents_healthy(http_client: httpx.Client, auth_headers: dict[str, str], expected_names: set[str]) -> None:
     """Wait until every expected agent is registered and healthy.
 
     Triggers a fresh discovery each cycle so the wait does not depend on the

@@ -114,7 +114,7 @@ class ConfluenceRagSyncRunner:
         scope = scope_key(CONFLUENCE_SCOPE, space_key)
         if lock_token:
             if not await self._lock_store.mark_started(scope, lock_token):
-                logger.warning(f"Runner no longer holds the lock for {scope}; aborting without writes.")
+                logger.warning("Runner no longer holds the lock for %s; aborting without writes.", scope)
                 raise PermissionError(f"Lock for scope {scope} was taken over before the run started.")
         else:
             state = await self._lock_store.acquire(scope)
@@ -123,13 +123,11 @@ class ConfluenceRagSyncRunner:
             lock_token = state.lock_info["holder_token"]
 
         try:
-            return await self._run_sync(
-                space_key, scope, lock_token, page_id, attachment_name_pattern, skip_page_body
-            )
+            return await self._run_sync(space_key, scope, lock_token, page_id, attachment_name_pattern, skip_page_body)
         finally:
             released = await self._lock_store.release(scope, lock_token)
             if not released:
-                logger.warning(f"Lock for {scope} was not released by this runner; it was taken over.")
+                logger.warning("Lock for %s was not released by this runner; it was taken over.", scope)
             await self.close()
 
     async def _run_sync(
@@ -152,7 +150,7 @@ class ConfluenceRagSyncRunner:
             attachments_complete, page_attachments = await self._list_attachments(client, pages)
             listing_complete = listing_complete and attachments_complete
             if not listing_complete:
-                logger.warning(f"Listing for scope {scope} was incomplete; nothing is deleted this run.")
+                logger.warning("Listing for scope %s was incomplete; nothing is deleted this run.", scope)
             stored = await self._fingerprints.load_scope(scope)
             if await self._has_lost_its_points(space_key, stored):
                 stored = await self._reset_fingerprints(scope, stored, lock_token)
@@ -180,9 +178,7 @@ class ConfluenceRagSyncRunner:
                         expected[item_key] = attachment
                         attachment_pages[item_key] = page_by_id[page_id_]
 
-            removed_keys = self._removed_items(
-                stored, expected, listing_complete, scope, existing_item_keys
-            )
+            removed_keys = self._removed_items(stored, expected, listing_complete, scope, existing_item_keys)
 
             await self._verify_holder_or_abort(scope, lock_token)
             for item_key, removed_payload in removed_keys.items():
@@ -215,24 +211,26 @@ class ConfluenceRagSyncRunner:
                     raise
                 except AttachmentSkippedError as skip:
                     skipped += 1
-                    logger.warning(f"Skipping Confluence item {item_key} in {space_key}: {skip}")
+                    logger.warning("Skipping Confluence item %s in %s: %s", item_key, space_key, skip)
                 except Exception as e:
                     failed += 1
-                    logger.exception(f"Failed to sync Confluence item {item_key} in {space_key}: {e}")
+                    logger.exception("Failed to sync Confluence item %s in %s: %s", item_key, space_key, e)
 
             status = "completed-with-errors" if failed or not listing_complete else "completed"
             logger.info(
-                f"Confluence sync of {scope} finished ({status}): "
-                f"{processed} processed, {skipped} skipped, {failed} failed."
+                "Confluence sync of %s finished (%s): %s processed, %s skipped, %s failed.",
+                scope,
+                status,
+                processed,
+                skipped,
+                failed,
             )
             if failed == 0 and listing_complete:
                 # The cursor records the last successful run; Confluence doesn't use it
                 # for skipping (versions + hashes decide), but the operating model
                 # reports it and a reset forces a full re-ingest.
                 await self._verify_holder_or_abort(scope, lock_token)
-                await self._state_store.save_cursor(
-                    scope, {"last_update": run_started, "processed_count": processed}
-                )
+                await self._state_store.save_cursor(scope, {"last_update": run_started, "processed_count": processed})
             return RagUpdateResult(status=status, processed_count=processed)
         finally:
             await client.close()
@@ -257,7 +255,7 @@ class ConfluenceRagSyncRunner:
         The surviving fingerprints would otherwise skip every unchanged item. Returns the now empty
         set of stored fingerprints.
         """
-        logger.info(f"Stored points of {scope} are missing; resetting its {len(stored)} fingerprint(s).")
+        logger.info("Stored points of %s are missing; resetting its %s fingerprint(s).", scope, len(stored))
         await self._verify_holder_or_abort(scope, lock_token)
         for item_key in stored:
             await self._fingerprints.delete(scope, item_key)
@@ -280,7 +278,7 @@ class ConfluenceRagSyncRunner:
                 try:
                     return str(page["id"]), await client.list_page_attachments(page["id"])
                 except Exception:
-                    logger.exception(f"Listing attachments of page {page['id']} failed; the run will delete nothing.")
+                    logger.exception("Listing attachments of page %s failed; the run will delete nothing.", page["id"])
                     return str(page["id"]), None
 
         results = await asyncio.gather(*(list_one(page) for page in pages))
@@ -312,7 +310,7 @@ class ConfluenceRagSyncRunner:
                 raise ConfluenceApiError(f"Page {page_id} does not belong to space {space_key}.")
             return True, [page]
         except Exception:
-            logger.exception(f"Listing pages for space {space_key} failed; the run will delete nothing.")
+            logger.exception("Listing pages for space %s failed; the run will delete nothing.", space_key)
             return False, []
 
     @staticmethod
@@ -336,7 +334,7 @@ class ConfluenceRagSyncRunner:
         existing = existing_item_keys if existing_item_keys is not None else set(expected)
         removed = {key: payload for key, payload in stored.items() if key not in existing}
         for key in removed:
-            logger.info(f"Item {key} of scope {scope} no longer exists; scheduling removal.")
+            logger.info("Item %s of scope %s no longer exists; scheduling removal.", key, scope)
         return removed
 
     async def _sync_page_body(
@@ -359,22 +357,28 @@ class ConfluenceRagSyncRunner:
                 and stored_fingerprint.get("schema_version") == INGESTION_SCHEMA_VERSION
             ):
                 if self._metadata_changed(stored_fingerprint, page):
-                    await self._update_metadata_only(
-                        scope, item_key, page, stored_fingerprint, lock_token
-                    )
+                    await self._update_metadata_only(scope, item_key, page, stored_fingerprint, lock_token)
                     return True
-                logger.debug(f"Skipping {item_key} in {space_key}: version unchanged ({version}).")
+                logger.debug("Skipping %s in %s: version unchanged (%s).", item_key, space_key, version)
                 return False
-            logger.info(f"Version changed for {item_key} in {space_key}: {stored_fingerprint.get('version')} -> {version}.")
+            logger.info(
+                "Version changed for %s in %s: %s -> %s.",
+                item_key,
+                space_key,
+                stored_fingerprint.get("version"),
+                version,
+            )
 
         # Check 2: raw-content hash, for new and version-changed items only. A
         # page-scoped run's listing already fetched the page WITH its body, so it is
         # reused; a space-scoped listing carries no bodies and fetches here.
         page_with_body = (
-            page if page.get("body", {}).get("storage", {}).get("value") is not None else await client.get_page(page["id"])
+            page
+            if page.get("body", {}).get("storage", {}).get("value") is not None
+            else await client.get_page(page["id"])
         )
         if page_with_body is None:
-            logger.info(f"Page {item_key} disappeared before its body was fetched; skipping.")
+            logger.info("Page %s disappeared before its body was fetched; skipping.", item_key)
             return False
         raw_body = page_with_body.get("body", {}).get("storage", {}).get("value", "")
         title = page_with_body.get("title", "")
@@ -401,15 +405,14 @@ class ConfluenceRagSyncRunner:
             await self._documents_db.delete(stale_ids)
         await self._verify_holder_or_abort(scope, lock_token)
         await self._fingerprints.save(scope, item_key, self._fingerprint(page_with_body, hash_value, parts))
-        logger.info(f"Ingested {len(parts)} chunk(s) of {item_key} in space {space_key}.")
+        logger.info("Ingested %s chunk(s) of %s in space %s.", len(parts), item_key, space_key)
         return True
 
     @staticmethod
     def _metadata_changed(stored_fingerprint: dict, page: dict) -> bool:
-        return (
-            stored_fingerprint.get("title") != page.get("title")
-            or stored_fingerprint.get("webui") != page.get("_links", {}).get("webui")
-        )
+        return stored_fingerprint.get("title") != page.get("title") or stored_fingerprint.get("webui") != page.get(
+            "_links", {}
+        ).get("webui")
 
     async def _update_metadata_only(
         self,
@@ -437,7 +440,7 @@ class ConfluenceRagSyncRunner:
         }
         await self._verify_holder_or_abort(scope, lock_token)
         await self._fingerprints.save(scope, item_key, fingerprint)
-        logger.info(f"Updated metadata of {item_key} in {scope} without re-embedding.")
+        logger.info("Updated metadata of %s in %s without re-embedding.", item_key, scope)
 
     @staticmethod
     def _fingerprint(page: dict, hash_value: str, parts: list[DocumentPagePart] | None = None) -> dict:
@@ -494,9 +497,7 @@ class ConfluenceRagSyncRunner:
                 stored_fingerprint.get("version") == version
                 and stored_fingerprint.get("schema_version") == INGESTION_SCHEMA_VERSION
             ):
-                if self._attachment_metadata_changed(
-                    stored_fingerprint, attachment, parent_page
-                ):
+                if self._attachment_metadata_changed(stored_fingerprint, attachment, parent_page):
                     await self._update_attachment_metadata_only(
                         scope,
                         item_key,
@@ -506,11 +507,14 @@ class ConfluenceRagSyncRunner:
                         lock_token,
                     )
                     return True
-                logger.debug(f"Skipping {item_key} in {space_key}: version unchanged ({version}).")
+                logger.debug("Skipping %s in %s: version unchanged (%s).", item_key, space_key, version)
                 return False
             logger.info(
-                f"Version or ingestion schema changed for {item_key} in {space_key}: "
-                f"{stored_fingerprint.get('version')} -> {version}."
+                "Version or ingestion schema changed for %s in %s: %s -> %s.",
+                item_key,
+                space_key,
+                stored_fingerprint.get("version"),
+                version,
             )
 
         format_skip_reason = skip_reason(attachment.get("title", ""))
@@ -526,9 +530,7 @@ class ConfluenceRagSyncRunner:
             raise ValueError(f"Attachment {attachment.get('id')} has no download link.")
         content = await client.download_attachment(download_link)
         if len(content) > config.DocumentRagConfig.MAX_ATTACHMENT_BYTES:
-            raise ValueError(
-                f"Attachment '{attachment.get('title', '')}' exceeded the size limit while downloading."
-            )
+            raise ValueError(f"Attachment '{attachment.get('title', '')}' exceeded the size limit while downloading.")
         hash_value = content_hash(content, str(INGESTION_SCHEMA_VERSION))
 
         if stored_fingerprint and stored_fingerprint.get("content_hash") == hash_value:
@@ -568,18 +570,15 @@ class ConfluenceRagSyncRunner:
                 point_ids=[part.get_vector_id() for part in parts],
             ),
         )
-        logger.info(f"Ingested {len(parts)} part(s) of {item_key} in space {space_key}.")
+        logger.info("Ingested %s part(s) of %s in space %s.", len(parts), item_key, space_key)
         return True
 
     @staticmethod
-    def _attachment_metadata_changed(
-        stored_fingerprint: dict, attachment: dict, parent_page: dict
-    ) -> bool:
+    def _attachment_metadata_changed(stored_fingerprint: dict, attachment: dict, parent_page: dict) -> bool:
         return (
             stored_fingerprint.get("page_id") != parent_page.get("id")
             or stored_fingerprint.get("title") != parent_page.get("title")
-            or stored_fingerprint.get("webui")
-            != parent_page.get("_links", {}).get("webui")
+            or stored_fingerprint.get("webui") != parent_page.get("_links", {}).get("webui")
             or stored_fingerprint.get("attachment_name") != attachment.get("title")
             or stored_fingerprint.get("media_type") != attachment.get("mediaType")
         )
@@ -593,9 +592,7 @@ class ConfluenceRagSyncRunner:
         stored_fingerprint: dict,
         lock_token: str,
     ) -> None:
-        await self._set_attachment_payload_metadata(
-            scope, attachment, parent_page, stored_fingerprint, lock_token
-        )
+        await self._set_attachment_payload_metadata(scope, attachment, parent_page, stored_fingerprint, lock_token)
         fingerprint = self._attachment_fingerprint(
             attachment,
             parent_page,
@@ -604,7 +601,7 @@ class ConfluenceRagSyncRunner:
         )
         await self._verify_holder_or_abort(scope, lock_token)
         await self._fingerprints.save(scope, item_key, fingerprint)
-        logger.info(f"Updated metadata of {item_key} in {scope} without re-embedding.")
+        logger.info("Updated metadata of %s in %s without re-embedding.", item_key, scope)
 
     async def _set_attachment_payload_metadata(
         self,
@@ -663,10 +660,7 @@ class ConfluenceRagSyncRunner:
         page_url = parent_page.get("_links", {}).get("webui")
         parts: list[DocumentPagePart] = []
         for page_number, page in enumerate(extracted.pages, start=1):
-            breadcrumb = (
-                f"{page_title} > {attachment_name} > page {page_number} "
-                f"of {extracted.total_page_count}"
-            )
+            breadcrumb = f"{page_title} > {attachment_name} > page {page_number} of {extracted.total_page_count}"
             text_parts = split_text_by_budget(page.text, breadcrumb) or [""]
             for part_index, text_part in enumerate(text_parts):
                 text = f"{breadcrumb}\n\n{text_part}" if text_part else breadcrumb
@@ -702,7 +696,7 @@ class ConfluenceRagSyncRunner:
         if point_ids:
             await self._documents_db.delete(point_ids)
         await self._fingerprints.delete(scope, item_key)
-        logger.info(f"Deleted removed item {item_key} of scope {scope} ({len(point_ids)} point(s)).")
+        logger.info("Deleted removed item %s of scope %s (%s point(s)).", item_key, scope, len(point_ids))
 
     async def _verify_holder_or_abort(self, scope: str, lock_token: str) -> None:
         """Stops at once, without further writes, when the runner no longer holds the lock."""

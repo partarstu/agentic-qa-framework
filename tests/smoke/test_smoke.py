@@ -107,23 +107,19 @@ def _has_jira_comment(data: dict[str, dict]) -> bool:
     """True once a non-empty comment is recorded on the seeded story, via REST or MCP."""
     rest_comments = data.get("rest", {}).get("comments", [])
     mcp_comments = data.get("mcp", {}).get("comments", [])
-    return any(
-        c.get("issue_key") == SEEDED_ISSUE_KEY and c.get("body", "").strip() for c in rest_comments
-    ) or any(c.get("issue_key") == SEEDED_ISSUE_KEY and c.get("comment", "").strip() for c in mcp_comments)
+    return any(c.get("issue_key") == SEEDED_ISSUE_KEY and c.get("body", "").strip() for c in rest_comments) or any(
+        c.get("issue_key") == SEEDED_ISSUE_KEY and c.get("comment", "").strip() for c in mcp_comments
+    )
 
 
-def test_review_comment_reached_jira(
-    requirements_review_response: httpx.Response, http_client: httpx.Client
-) -> None:
+def test_review_comment_reached_jira(requirements_review_response: httpx.Response, http_client: httpx.Client) -> None:
     """The agent must post a non-empty review comment to Jira, via REST or MCP."""
     data = wait_for_any_recorded(
         http_client,
         {"rest": JIRA_REST_RECORDED_URL, "mcp": JIRA_MCP_RECORDED_URL},
         _has_jira_comment,
     )
-    assert _has_jira_comment(data), (
-        f"No non-empty review comment reached Jira. REST={data['rest']}, MCP={data['mcp']}"
-    )
+    assert _has_jira_comment(data), f"No non-empty review comment reached Jira. REST={data['rest']}, MCP={data['mcp']}"
 
 
 def test_prompt_override_marker_reaches_jira_comment(
@@ -245,7 +241,9 @@ def test_confluence_only_configuration_queries_exactly_one_document_collection(
     assert SHAREPOINT_COLLECTION_NAME not in queried, f"The SharePoint collection was queried: {queried}"
     for query in [q for q in data["hybrid_queries"] if q.get("collection") == DOCUMENTS_COLLECTION_NAME]:
         for prefetch in query.get("prefetches", []):
-            must = {(c.get("key"), c.get("match", {}).get("value")) for c in (prefetch.get("filter") or {}).get("must", [])}
+            must = {
+                (c.get("key"), c.get("match", {}).get("value")) for c in (prefetch.get("filter") or {}).get("must", [])
+            }
             assert ("source", "confluence") in must, f"A document query does not pin the source: {query}"
 
 
@@ -317,14 +315,11 @@ def test_agent_read_source_story_from_jira(
 
 def test_test_case_flow_webhook_accepted(test_case_flow_response: httpx.Response) -> None:
     assert test_case_flow_response.status_code == 200, (
-        f"Test-case flow webhook failed: "
-        f"{test_case_flow_response.status_code} {test_case_flow_response.text}"
+        f"Test-case flow webhook failed: {test_case_flow_response.status_code} {test_case_flow_response.text}"
     )
 
 
-def test_real_test_cases_created_in_zephyr(
-    test_case_flow_response: httpx.Response, http_client: httpx.Client
-) -> None:
+def test_real_test_cases_created_in_zephyr(test_case_flow_response: httpx.Response, http_client: httpx.Client) -> None:
     """Generation must create real test cases (non-empty name + steps) in Zephyr."""
     data = wait_for_recorded(
         http_client,
@@ -349,9 +344,7 @@ def test_generated_test_cases_linked_to_story(
     assert links, f"No created test case was linked to the seeded story (id {SEEDED_ISSUE_ID}). Recorded: {data}"
 
 
-def test_classification_added_labels(
-    test_case_flow_response: httpx.Response, http_client: httpx.Client
-) -> None:
+def test_classification_added_labels(test_case_flow_response: httpx.Response, http_client: httpx.Client) -> None:
     """Classification must add labels to at least one test case in Zephyr."""
     data = wait_for_recorded(
         http_client,
@@ -362,15 +355,12 @@ def test_classification_added_labels(
     assert labelled, f"No test case received labels from classification. Recorded: {data}"
 
 
-def test_review_comment_added_to_zephyr(
-    test_case_flow_response: httpx.Response, http_client: httpx.Client
-) -> None:
+def test_review_comment_added_to_zephyr(test_case_flow_response: httpx.Response, http_client: httpx.Client) -> None:
     """Review must write a non-empty "Review Comments" value to every generated test case."""
     data = wait_for_recorded(
         http_client,
         ZEPHYR_RECORDED_URL,
-        lambda d: bool(d.get("test_cases"))
-        and all(tc.get("review_comments", "").strip() for tc in d["test_cases"]),
+        lambda d: bool(d.get("test_cases")) and all(tc.get("review_comments", "").strip() for tc in d["test_cases"]),
     )
     generated = data.get("test_cases", [])
     assert generated, f"No generated test case reached Zephyr at all. Recorded: {data}"
@@ -399,8 +389,10 @@ def test_review_comment_carries_the_duplicate_check(
     data = wait_for_recorded(
         http_client,
         ZEPHYR_RECORDED_URL,
-        lambda d: bool(d.get("test_cases"))
-        and all(DUPLICATE_CHECK_HEADING in tc.get("review_comments", "") for tc in d["test_cases"]),
+        lambda d: (
+            bool(d.get("test_cases"))
+            and all(DUPLICATE_CHECK_HEADING in tc.get("review_comments", "") for tc in d["test_cases"])
+        ),
     )
     missing = [
         tc["key"] for tc in data.get("test_cases", []) if DUPLICATE_CHECK_HEADING not in tc.get("review_comments", "")
@@ -420,12 +412,14 @@ def test_review_indexed_its_batch_and_searched_the_project_for_duplicates(
     data = wait_for_recorded(
         http_client,
         QDRANT_RECORDED_URL,
-        lambda d: generated_keys
-        <= {
-            p.get("payload", {}).get("test_case_key")
-            for p in d.get("upserted_points", [])
-            if p.get("collection") == TEST_CASES_COLLECTION_NAME
-        },
+        lambda d: (
+            generated_keys
+            <= {
+                p.get("payload", {}).get("test_case_key")
+                for p in d.get("upserted_points", [])
+                if p.get("collection") == TEST_CASES_COLLECTION_NAME
+            }
+        ),
     )
     queries = [q for q in data.get("hybrid_queries", []) if q.get("collection") == TEST_CASES_COLLECTION_NAME]
     excluded_keys = set()
@@ -463,8 +457,7 @@ def test_failed_execution_creates_bug_in_jira(
         and i.get("project_key") == SEEDED_PROJECT_KEY
     ]
     assert bugs, (
-        f"No Bug issue for project {SEEDED_PROJECT_KEY} reached Jira from the incident-creation flow. "
-        f"Recorded: {data}"
+        f"No Bug issue for project {SEEDED_PROJECT_KEY} reached Jira from the incident-creation flow. Recorded: {data}"
     )
 
 
@@ -496,9 +489,7 @@ def test_created_bug_carries_execution_traceability(
         )
 
 
-def test_failed_execution_reported_to_zephyr(
-    execute_tests_response: httpx.Response, http_client: httpx.Client
-) -> None:
+def test_failed_execution_reported_to_zephyr(execute_tests_response: httpx.Response, http_client: httpx.Client) -> None:
     """The reporting half of /execute-tests: a failed execution of the seeded case must reach
     Zephyr, inside a test cycle created for the seeded project, and no reporting step failed (WS15)."""
     assert execute_tests_response.json().get("reporting_failures") == [], execute_tests_response.json()
@@ -511,7 +502,9 @@ def test_failed_execution_reported_to_zephyr(
     assert executions, f"No test execution for {SEEDED_EXECUTABLE_TC_KEY} reached Zephyr. Recorded: {data}"
     failed = [e for e in executions if e.get("statusName") == "Fail"]
     assert failed, f"The execution of {SEEDED_EXECUTABLE_TC_KEY} was not reported as failed. Recorded: {executions}"
-    cycle_keys = {cycle.get("key") for cycle in data.get("test_cycles", []) if cycle.get("projectKey") == SEEDED_PROJECT_KEY}
+    cycle_keys = {
+        cycle.get("key") for cycle in data.get("test_cycles", []) if cycle.get("projectKey") == SEEDED_PROJECT_KEY
+    }
     assert any(e.get("testCycleKey") in cycle_keys for e in failed), (
         f"No failed execution belongs to a test cycle of project {SEEDED_PROJECT_KEY}. "
         f"Executions: {failed}, cycles: {data.get('test_cycles', [])}"
@@ -578,7 +571,9 @@ def test_incident_duplicate_query_is_scoped_to_the_project(
     assert queries, f"The incident flow issued no duplicate query. Recorded: {data}"
     for query in queries:
         for prefetch in query.get("prefetches", []):
-            must = {(c.get("key"), c.get("match", {}).get("value")) for c in (prefetch.get("filter") or {}).get("must", [])}
+            must = {
+                (c.get("key"), c.get("match", {}).get("value")) for c in (prefetch.get("filter") or {}).get("must", [])
+            }
             assert ("project_key", SEEDED_PROJECT_KEY) in must, f"A duplicate query is not project-scoped: {query}"
 
 
@@ -748,8 +743,7 @@ def test_confluence_page_chunks_reached_vector_db_with_breadcrumbs(
         http_client,
         QDRANT_RECORDED_URL,
         lambda d: any(
-            p.get("collection") == DOCUMENTS_COLLECTION_NAME
-            and p.get("payload", {}).get("content_kind") == "page_body"
+            p.get("collection") == DOCUMENTS_COLLECTION_NAME and p.get("payload", {}).get("content_kind") == "page_body"
             for p in d.get("upserted_points", [])
         ),
     )
@@ -795,15 +789,17 @@ def test_confluence_attachment_pages_reached_vector_db_with_chain_and_image(
     data = wait_for_recorded(
         http_client,
         QDRANT_RECORDED_URL,
-        lambda d: len(
-            {
-                p.get("payload", {}).get("attachment_name")
-                for p in d.get("upserted_points", [])
-                if p.get("collection") == DOCUMENTS_COLLECTION_NAME
-                and p.get("payload", {}).get("content_kind") == "attachment"
-            }
-        )
-        >= 2,
+        lambda d: (
+            len(
+                {
+                    p.get("payload", {}).get("attachment_name")
+                    for p in d.get("upserted_points", [])
+                    if p.get("collection") == DOCUMENTS_COLLECTION_NAME
+                    and p.get("payload", {}).get("content_kind") == "attachment"
+                }
+            )
+            >= 2
+        ),
     )
     attachment_payloads = [
         point["payload"]
@@ -840,8 +836,7 @@ def test_second_confluence_sync_reembeds_nothing(
         http_client,
         QDRANT_RECORDED_URL,
         lambda d: any(
-            p.get("collection") == DOCUMENTS_COLLECTION_NAME
-            and p.get("payload", {}).get("content_kind") == "page_body"
+            p.get("collection") == DOCUMENTS_COLLECTION_NAME and p.get("payload", {}).get("content_kind") == "page_body"
             for p in d.get("upserted_points", [])
         ),
     )
@@ -996,9 +991,7 @@ def test_login_is_rate_limited_after_the_configured_attempts(
     """WS22: the login endpoint answers 429 with Retry-After once a client exceeds the configured
     attempts in the window. Requests auth_headers first, so the session's own login is not blocked."""
     responses = [
-        http_client.post(
-            f"{ORCHESTRATOR_URL}/api/auth/login", json={"username": "smoke", "password": "wrong-password"}
-        )
+        http_client.post(f"{ORCHESTRATOR_URL}/api/auth/login", json={"username": "smoke", "password": "wrong-password"})
         for _ in range(LOGIN_RATE_LIMIT_ATTEMPTS + 1)
     ]
 
@@ -1036,9 +1029,7 @@ def test_routing_justifications_appear_in_dashboard_logs(
     decisions = [m for m in messages if "Routing decision" in m]
     assert decisions, "No 'Routing decision' entry reached the dashboard logs."
     justified = [m for m in decisions if "justification:" in m and "selected_agent_name=" in m]
-    assert justified, (
-        f"The routing decision log entries carry no justification or agent name. Entries: {decisions[:5]}"
-    )
+    assert justified, f"The routing decision log entries carry no justification or agent name. Entries: {decisions[:5]}"
 
 
 # --- SharePoint documents ingestion (WS18: local mode via the sync service) --------------
@@ -1082,9 +1073,7 @@ def test_sharepoint_document_reached_vector_db_with_reconciliation_chain(
             for p in d.get("upserted_points", [])
         ),
     )
-    upserts = [
-        p for p in data.get("upserted_points", []) if p.get("collection") == SHAREPOINT_COLLECTION_NAME
-    ]
+    upserts = [p for p in data.get("upserted_points", []) if p.get("collection") == SHAREPOINT_COLLECTION_NAME]
     assert upserts, f"No SharePoint document reached the vector DB. Recorded: {data}"
     payload = upserts[0]["payload"]
     assert payload.get("document_name") == SHAREPOINT_FILE_NAME, f"Wrong document ingested: {payload}"
@@ -1115,15 +1104,16 @@ def test_sharepoint_sync_downloaded_the_file_content(
 
 def test_update_test_case_db_webhook_accepted(update_test_case_db_response: httpx.Response) -> None:
     assert update_test_case_db_response.status_code == 200, (
-        f"Test-case-sync webhook failed: {update_test_case_db_response.status_code} "
-        f"{update_test_case_db_response.text}"
+        f"Test-case-sync webhook failed: {update_test_case_db_response.status_code} {update_test_case_db_response.text}"
     )
     details = update_test_case_db_response.json().get("details", {})
     assert details.get("processed_count", 0) >= 1, f"The test-case sync indexed nothing: {details}"
     assert details.get("status") == "completed", f"The test-case sync did not complete cleanly: {details}"
 
 
-def test_test_cases_reached_the_test_case_collection(update_test_case_db_response: httpx.Response, http_client: httpx.Client) -> None:
+def test_test_cases_reached_the_test_case_collection(
+    update_test_case_db_response: httpx.Response, http_client: httpx.Client
+) -> None:
     """The full resync pushes the seeded and generated test cases into the test_cases
     collection with the deterministic payload shape."""
     data = wait_for_recorded(
