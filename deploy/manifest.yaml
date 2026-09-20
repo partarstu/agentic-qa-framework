@@ -60,12 +60,15 @@ services:
     env:
       EMBEDDING_BACKENDS: text
       EMBEDDING_TEXT_MODEL: BAAI/bge-m3
-    secrets: {}
+    # Its callers send X-API-Key; without the key here _require_service_auth would fail open.
+    secrets:
+      INTERNAL_SERVICE_API_KEY: INTERNAL_SERVICE_API_KEY
 
   prompt-guard-service:
     version: "1.0"
     env: {}
-    secrets: {}
+    secrets:
+      INTERNAL_SERVICE_API_KEY: INTERNAL_SERVICE_API_KEY
 
   qdrant-vector-db:
     env: {}

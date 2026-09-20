@@ -26,14 +26,18 @@ import base64
 
 import config
 from common import utils
-from common.models import DocumentPagePart, RagUpdateResult
+from common.models import DocumentPagePart, RagUpdateResult, SyncStatus
 from common.services.sharepoint_client import DeltaResyncRequired, SharePointClient
-from common.services.sync_lock_store import SyncLockStore, SyncStateStore, scope_key
+from common.services.sync_lock_store import SyncLockHeldError, SyncLockStore, SyncStateStore, scope_key
 from common.services.vector_db_service import VectorDbService
-from rag_sync.attachment_extraction import ExtractedDocument, extract_attachment_async, skip_reason
+from rag_sync.attachment_extraction import (
+    AttachmentSkippedError,
+    ExtractedDocument,
+    extract_attachment_async,
+    skip_reason,
+)
 from rag_sync.chunking import split_text_by_budget
-from rag_sync.confluence_sync import INGESTION_SCHEMA_VERSION, AttachmentSkippedError
-from rag_sync.sync_state import FingerprintStore, content_hash
+from rag_sync.sync_state import INGESTION_SCHEMA_VERSION, FingerprintStore, content_hash
 
 logger = utils.get_logger("rag_sync")
 
@@ -78,7 +82,7 @@ class SharePointRagSyncRunner:
         else:
             state = await self._lock_store.acquire(scope)
             if not state.acquired:
-                raise RuntimeError(f"Another sync already holds the lock for {scope}.")
+                raise SyncLockHeldError(f"Another sync already holds the lock for {scope}.")
             lock_token = state.lock_info["holder_token"]
         try:
             return await self._run_sync(drive_id, folder_path, file_name_pattern, scope, lock_token)
@@ -122,7 +126,7 @@ class SharePointRagSyncRunner:
             scope_folder_id = self._resolve_folder_id(folders, drive_id, folder_path)
             if scope_folder_id is None:
                 logger.warning("Folder %r not found in drive %s; nothing to sync.", folder_path, drive_id)
-                return RagUpdateResult(status="completed", processed_count=0)
+                return RagUpdateResult(status=SyncStatus.COMPLETED, processed_count=0)
             items = [
                 item for item in items if self._is_file(item) and scope_folder_id in self._ancestor_ids(item, folders)
             ]
@@ -166,8 +170,12 @@ class SharePointRagSyncRunner:
                 if fingerprint.get("item_id") not in listed_ids:
                     await self._delete_points(scope, item_key, fingerprint, lock_token)
                     deleted += 1
+        elif folder_scope:
+            logger.debug("Folder-scoped run: deletions are left to the next drive-wide run.")
+        elif not full_enumeration:
+            logger.debug("Incremental delta run: deletions need a full enumeration.")
         else:
-            logger.warning("Delta enumeration was incomplete; skipping deletions for this run.")
+            logger.warning("Delta enumeration did not complete; skipping deletions for this run.")
 
         # The delta link advances only on a clean drive-scoped run: after a failure the next run must see
         # the failed files again, and a folder-scoped run must leave everything it filtered away to the
@@ -176,7 +184,7 @@ class SharePointRagSyncRunner:
         saved_delta_link = new_delta_link if advance else state.get("delta_link")
         await self._state_store.save_cursor(scope, {"delta_link": saved_delta_link, "folders": folders})
 
-        status = "completed-with-errors" if failed else "completed"
+        status = SyncStatus.COMPLETED_WITH_ERRORS if failed else SyncStatus.COMPLETED
         logger.info(
             "SharePoint sync for drive %s finished (%s): %s processed, %s skipped, %s failed, %s deleted.",
             drive_id,
@@ -204,10 +212,10 @@ class SharePointRagSyncRunner:
         while True:
             try:
                 page = await asyncio.to_thread(client.enumerate_delta, drive_id, link)
-            except DeltaResyncRequired:
+            except DeltaResyncRequired as resync:
                 if link is None:
                     raise
-                logger.warning("Stored SharePoint delta link expired; restarting a full enumeration.")
+                logger.warning("Stored SharePoint delta link unusable (%s); restarting a full enumeration.", resync)
                 items, folders = [], {}
                 link = None
                 full = True
@@ -304,7 +312,13 @@ class SharePointRagSyncRunner:
             )
         content = await asyncio.to_thread(client.download_item, drive_id, item["id"])
         if len(content) > config.DocumentRagConfig.MAX_ATTACHMENT_BYTES:
-            raise ValueError(f"File '{name}' exceeded the size limit while downloading.")
+            # Same condition as the pre-download check above (reached when the listed size is
+            # missing or wrong), so it is the same skip, not a failure that would keep the run
+            # completed-with-errors and re-download the file on every following run.
+            raise AttachmentSkippedError(
+                f"{item_key} ({name}) is {len(content)} bytes once downloaded, exceeding the "
+                f"{config.DocumentRagConfig.MAX_ATTACHMENT_BYTES}-byte limit"
+            )
         hash_value = content_hash(content, str(INGESTION_SCHEMA_VERSION))
         if stored_fingerprint and stored_fingerprint.get("content_hash") == hash_value:
             fingerprint = self._fingerprint(

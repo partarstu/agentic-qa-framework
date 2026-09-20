@@ -55,6 +55,15 @@ WRITE_BASELINE = os.environ.get("SMOKE_WRITE_BASELINE", "").lower() in ("true", 
 RUN_LABEL = os.environ.get("SMOKE_RUN_LABEL", "google-gla:gemini-3.8-flash")
 REPORT_PATH = Path(config.LOG_DIR) / "smoke_ab_report.md"
 CAPTURE_HINT = f"SMOKE_WRITE_BASELINE=1 SMOKE_BASELINE_NAME={BASELINE_NAME} uv run pytest tests/smoke -m smoke"
+# How a dimension's judged outcome reads in the report.
+_RESULT_LABELS: dict[judge.Outcome, str] = {
+    "much_better": "IMPROVED",
+    "better": "IMPROVED",
+    "same": "ok",
+    "worse": "REGRESSION",
+    "much_worse": "REGRESSION",
+    "inconsistent": "INCONSISTENT",
+}
 
 
 @dataclass(slots=True)
@@ -118,13 +127,24 @@ def test_output_metrics_did_not_regress(ab_result: _AbResult) -> None:
 
 
 def test_judged_output_quality_did_not_regress(ab_result: _AbResult) -> None:
-    """No dimension may be judged worse than the baseline: a run must not produce worse."""
+    """No dimension may be judged worse than the baseline in both orders: a run must not produce worse."""
     regressed = [comparison for comparison in ab_result.comparisons if comparison.regressed]
     assert not regressed, (
-        f"The judge scored this run below the '{BASELINE_NAME}' baseline on:\n"
-        + "\n".join(f"  - {comparison}\n    {comparison.rationale}" for comparison in regressed)
+        f"The judge found this run worse than the '{BASELINE_NAME}' baseline on:\n"
+        + "\n".join(
+            f"  - {comparison}\n" + "\n".join(f"    {line}" for line in _justification(comparison))
+            for comparison in regressed
+        )
         + f"\nFull report: {REPORT_PATH}"
     )
+
+
+def _justification(comparison: judge.Comparison) -> list[str]:
+    """The judge's evidence for each order's verdict, so a regression can be analysed from the output alone."""
+    return [
+        f"Candidate as Output B, judged {comparison.forward}: {comparison.forward_rationale}",
+        f"Candidate as Output A, judged {comparison.swapped}: {comparison.swapped_rationale}",
+    ]
 
 
 def _write_report(baseline: RunSnapshot, candidate: RunSnapshot, result: _AbResult) -> None:
@@ -152,18 +172,17 @@ def _write_report(baseline: RunSnapshot, candidate: RunSnapshot, result: _AbResu
         "",
         "## Judged quality",
         "",
-        "| Dimension | Baseline | Candidate | Verdict |",
-        "| --- | --- | --- | --- |",
+        "| Dimension | Candidate as Output B | Candidate as Output A | Outcome | Result |",
+        "| --- | --- | --- | --- | --- |",
     ]
     for comparison in result.comparisons:
-        verdict = "REGRESSION" if comparison.regressed else "ok"
         lines.append(
-            f"| {comparison.dimension} | {comparison.baseline_score:.1f} "
-            f"| {comparison.candidate_score:.1f} | {verdict} |"
+            f"| {comparison.dimension} | {comparison.forward} | {comparison.swapped} "
+            f"| {comparison.outcome} | {_RESULT_LABELS[comparison.outcome]} |"
         )
     lines.append("")
     for comparison in result.comparisons:
-        lines += [f"### {comparison.dimension}", "", comparison.rationale, ""]
+        lines += [f"### {comparison.dimension}", "", *(f"* {line}" for line in _justification(comparison)), ""]
     if result.metric_regressions:
         lines += ["## Metric regressions", ""] + [f"* {regression}" for regression in result.metric_regressions]
     REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)

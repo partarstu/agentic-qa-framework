@@ -10,8 +10,11 @@ and the service module never pulls ML libraries at import time.
 """
 
 import os
+from pathlib import Path
 
 from embedding_service.backends.base import EmbeddingBackend, SparseVector, TextEmbedding
+
+import config
 
 
 def _build_sparse(lexical_weights: dict) -> SparseVector:
@@ -64,17 +67,13 @@ class BgeM3TextBackend(EmbeddingBackend):
 
 
 def _configured_model_name() -> str:
-    import config
-
     return config.EmbeddingServiceConfig.TEXT_MODEL_NAME
 
 
 def _configured_model_path() -> str:
-    import config
-
     return config.EmbeddingServiceConfig.TEXT_MODEL_PATH
 
 
 def _model_available_locally() -> bool:
-    path = _configured_model_path()
-    return os.path.isdir(path) and bool(os.listdir(path))
+    path = Path(_configured_model_path())
+    return path.is_dir() and any(path.iterdir())

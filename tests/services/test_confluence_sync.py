@@ -25,7 +25,7 @@ if str(SERVICES_DIR) not in sys.path:
 
 from rag_sync.attachment_extraction import ExtractedDocument, PageContent  # noqa: E402
 from rag_sync.chunking import chunk_page_body  # noqa: E402
-from rag_sync.confluence_client import ConfluenceClient  # noqa: E402
+from rag_sync.confluence_client import ConfluenceApiError, ConfluenceClient  # noqa: E402
 from rag_sync.normalization import normalize_page_body  # noqa: E402
 from rag_sync.sync_state import content_hash  # noqa: E402
 
@@ -201,6 +201,35 @@ class TestConfluenceClient:
 
         assert content == b"file bytes"
         assert requested_urls == ["https://example.atlassian.net/wiki/download/attachments/111/guide.pdf?version=2"]
+
+    @pytest.mark.parametrize(
+        ("status_code", "body", "expects_deleted"),
+        [
+            (404, "Not Found", True),
+            (500, "gateway error, correlation id 404112", False),
+        ],
+        ids=["real_404_reads_as_deleted", "500_mentioning_404_does_not"],
+    )
+    async def test_get_page_reports_deletion_only_on_a_real_404(self, monkeypatch, status_code, body, expects_deleted):
+        """A page ID or an error body containing "404" must not read as "the page is gone"."""
+        monkeypatch.setattr("config.CONFLUENCE_URL", "https://example.atlassian.net/")
+        monkeypatch.setattr("config.CONFLUENCE_USERNAME", "user")
+        monkeypatch.setattr("config.CONFLUENCE_API_TOKEN", "token")
+        monkeypatch.setattr("config.DocumentRagConfig.CONFLUENCE_MAX_RETRIES", 1)
+
+        client = ConfluenceClient()
+        client._client = httpx.AsyncClient(
+            base_url="https://example.atlassian.net/wiki/api/v2",
+            transport=httpx.MockTransport(lambda request: httpx.Response(status_code, text=body)),
+        )
+        try:
+            if expects_deleted:
+                assert await client.get_page("404112") is None
+            else:
+                with pytest.raises(ConfluenceApiError):
+                    await client.get_page("404112")
+        finally:
+            await client.close()
 
 
 # --- The runner's classification and write order ------------------------------------------
@@ -467,7 +496,7 @@ class TestConfluenceSyncRunner:
         with patch("rag_sync.confluence_sync.ConfluenceClient", return_value=client):
             result = await runner_obj.sync_space("DEV")
 
-        assert result.status == "completed-with-errors"
+        assert result.status == "completed_with_errors"
         documents_db.delete.assert_not_called()
         state_store.save_cursor.assert_not_awaited()
 
@@ -485,7 +514,7 @@ class TestConfluenceSyncRunner:
         with patch("rag_sync.confluence_sync.ConfluenceClient", return_value=client):
             result = await runner_obj.sync_space("DEV")
 
-        assert result.status == "completed-with-errors"
+        assert result.status == "completed_with_errors"
         fingerprints.save.assert_not_called()  # failed items keep their old fingerprint
         state_store.save_cursor.assert_not_awaited()
 
@@ -536,7 +565,7 @@ class TestConfluenceSyncRunner:
 
         # The listing is incomplete (the page check failed), so nothing is removed
         # and the run reports errors.
-        assert result.status == "completed-with-errors"
+        assert result.status == "completed_with_errors"
         state_store.save_cursor.assert_not_awaited()
 
     async def test_page_scope_deletes_nothing_of_other_pages(self, runner):
@@ -780,6 +809,28 @@ class TestConfluenceSyncRunner:
         fingerprints.save.assert_not_called()
         state_store.save_cursor.assert_awaited_once()
 
+    async def test_an_attachment_only_the_download_reveals_as_oversized_is_skipped_too(self, runner):
+        """Confluence can omit or under-report fileSize; both checks are the same condition, so both skip."""
+        runner_obj, documents_db, _, state_store, fingerprints = runner
+        client = _client_mock()
+        client.get_space_id_by_key = AsyncMock(return_value="555")
+        client.list_pages_in_space = AsyncMock(return_value=[_page()])
+        client.list_page_attachments = AsyncMock(return_value=[_attachment(file_size=0)])
+        client.download_attachment = AsyncMock(return_value=b"x" * 99)
+        client.close = AsyncMock()
+
+        with (
+            patch("rag_sync.confluence_sync.ConfluenceClient", return_value=client),
+            patch("config.DocumentRagConfig.MAX_ATTACHMENT_BYTES", 10),
+        ):
+            result = await runner_obj.sync_space("DEV", skip_page_body=True)
+
+        assert result.status == "completed"
+        documents_db.upsert_batch.assert_not_called()
+        fingerprints.save.assert_not_called()
+        # The cursor still advances: a skip is not an item failure that must be retried.
+        state_store.save_cursor.assert_awaited_once()
+
     async def test_pattern_keeps_existing_nonmatching_attachment_but_removes_missing_one(self, runner):
         runner_obj, documents_db, _, _, fingerprints = runner
         page = _page()
@@ -821,7 +872,7 @@ class TestConfluenceSyncRunner:
         with patch("rag_sync.confluence_sync.ConfluenceClient", return_value=client):
             result = await runner_obj.sync_space("DEV", skip_page_body=True)
 
-        assert result.status == "completed-with-errors"
+        assert result.status == "completed_with_errors"
         documents_db.delete.assert_not_called()
         fingerprints.delete.assert_not_called()
         state_store.save_cursor.assert_not_awaited()

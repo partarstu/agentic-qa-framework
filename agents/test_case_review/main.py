@@ -167,8 +167,9 @@ class TestCaseReviewAgent(AgentBase):
             attachment_parts.append(binary_content)
 
         logger.info(
-            f"Starting review of {len(test_cases)} test case(s) referring to the Jira issue content "
-            f"and {len(attachment_parts) // 2} attachments."
+            "Starting review of %s test case(s) referring to the Jira issue content and %s attachments.",
+            len(test_cases),
+            len(attachment_parts) // 2,
         )
 
         # One sub-agent run per test case keeps the model focused on a single review target, while the

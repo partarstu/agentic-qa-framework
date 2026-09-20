@@ -292,6 +292,14 @@ async def test_embed_texts_returns_dense_and_sparse_per_text(vector_db_service, 
 
 
 @pytest.mark.asyncio
+async def test_embed_texts_raises_rather_than_returning_none_without_a_retry_budget(vector_db_service):
+    """Callers unpack the result, so an exhausted loop must raise, not return None."""
+    vector_db_service._embedding_max_retries = 0
+    with pytest.raises(RuntimeError, match="retries are configured"):
+        await vector_db_service._embed_texts(["one"])
+
+
+@pytest.mark.asyncio
 async def test_embed_texts_query_uses_query_endpoint(vector_db_service, mock_httpx_client):
     await vector_db_service._embed_texts(["query"], query=True)
     called_url = mock_httpx_client.post.call_args.args[0]

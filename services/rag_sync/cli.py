@@ -25,6 +25,18 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
+def _exit_code(result) -> int:
+    """The one exit-code mapping of a run's outcome, shared by every source.
+
+    0 for a clean run, 2 for a run that finished with item failures, so a job platform
+    sees a non-clean sync whichever source produced it.
+    """
+    # Deferred like every import in this module: the sys.path setup above has to run first.
+    from common.models import SyncStatus
+
+    return 0 if result.status == SyncStatus.COMPLETED else 2
+
+
 async def _run(args: argparse.Namespace) -> int:
     from rag_sync.outcome_reporting import report_terminal_outcome
 
@@ -38,7 +50,7 @@ async def _run(args: argparse.Namespace) -> int:
             raise
         await report_terminal_outcome("jira", args.project_key, result=result)
         print(f"Jira sync completed: {result.model_dump()}")
-        return 0
+        return _exit_code(result)
 
     if args.source == "sharepoint":
         from rag_sync.sharepoint_sync import SharePointRagSyncRunner
@@ -55,7 +67,7 @@ async def _run(args: argparse.Namespace) -> int:
             raise
         await report_terminal_outcome("sharepoint", args.drive_id, result=result)
         print(f"SharePoint sync completed: {result.model_dump()}")
-        return 0 if result.status == "completed" else 2
+        return _exit_code(result)
 
     if args.source == "test_cases":
         from rag_sync.test_case_sync import TestCaseRagSyncRunner
@@ -67,7 +79,7 @@ async def _run(args: argparse.Namespace) -> int:
             raise
         await report_terminal_outcome("test_cases", args.project_key, result=result)
         print(f"Test-case sync completed: {result.model_dump()}")
-        return 0
+        return _exit_code(result)
 
     from rag_sync.confluence_sync import ConfluenceRagSyncRunner
 
@@ -84,7 +96,7 @@ async def _run(args: argparse.Namespace) -> int:
         raise
     await report_terminal_outcome("confluence", args.space_key, result=result)
     print(f"Confluence sync completed: {result.model_dump()}")
-    return 0 if result.status == "completed" else 2
+    return _exit_code(result)
 
 
 def main() -> int:
@@ -118,14 +130,16 @@ def main() -> int:
     confluence_parser.add_argument("--skip-page-body", action="store_true", help="Ingest attachments only.")
     confluence_parser.add_argument("--lock-token", help="Holder token issued by the orchestrator, if any.")
 
+    from common.services.sync_lock_store import SyncLockHeldError
+
     args = parser.parse_args()
     try:
         return asyncio.run(_run(args))
     except PermissionError as e:
         print(f"Lock lost: {e}", file=sys.stderr)
         return 3
-    except RuntimeError as e:
-        print(f"Sync failed: {e}", file=sys.stderr)
+    except SyncLockHeldError as e:
+        print(f"Sync not started: {e}", file=sys.stderr)
         return 1
     except Exception:
         import traceback

@@ -89,6 +89,7 @@ def _xlsx_bytes() -> bytes:
     workbook.active.title = "First"
     workbook.active.append(["Name", "Value"])
     workbook.active.append(["Alpha", 1])
+    workbook.active.append([4711])  # a numeric-only row: content, not a page footer
     second = workbook.create_sheet("Second")
     second.append(["Beta", 2])
     buffer = io.BytesIO()
@@ -103,7 +104,8 @@ class TestAttachmentExtraction:
 
         assert extract_attachment("notes.md", content).pages[0].text == content.decode()
         assert extract_attachment("notes.md", content).pages[0].text == content.decode()
-        assert extract_attachment("notes.csv", content).pages[0].text == "kept\nwordwrapped"
+        # 12 is a CSV row, not a PDF page footer: it stays.
+        assert extract_attachment("notes.csv", content).pages[0].text == "kept\n12\nwordwrapped"
 
     def test_pdf_extracts_native_text_and_renders_each_page(self):
         document = extract_attachment(
@@ -156,6 +158,7 @@ class TestAttachmentExtraction:
         assert document.total_page_count == 2
         assert len(document.pages) == 1
         assert "Name Value" in document.pages[0].text
+        assert "4711" in document.pages[0].text
         assert document.pages[0].image is None
 
     @pytest.mark.parametrize(
@@ -244,10 +247,10 @@ class TestAttachmentExtraction:
         with pytest.raises(ExtractionError, match="extract_attachment_async"):
             extract_attachment("guide.docx", b"source")
 
-    def test_normalization_repairs_hyphenation_and_drops_page_numbers(self):
-        assert _normalize_extracted_text(" multi   space \n42\nhyphen-\nated\n\n\nend ") == (
-            "multi space\nhyphenated\n\nend"
-        )
+    def test_normalization_repairs_hyphenation_and_drops_page_numbers_only_when_asked(self):
+        text = " multi   space \n42\nhyphen-\nated\n\n\nend "
+        assert _normalize_extracted_text(text, strip_page_numbers=True) == "multi space\nhyphenated\n\nend"
+        assert _normalize_extracted_text(text) == "multi space\n42\nhyphenated\n\nend"
 
     def test_ocr_rules_use_full_page_for_image_only_and_embedded_images_for_text_pages(self):
         page = MagicMock()

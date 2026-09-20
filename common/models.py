@@ -107,6 +107,24 @@ class JiraIssue(VectorizableBaseModel):
         return f"{self.summary}\n\n{self.description}"
 
 
+DocumentSource = Literal["confluence", "sharepoint"]
+ContentKind = Literal["page_body", "attachment"]
+
+
+class SyncStatus(StrEnum):
+    """The one status vocabulary of a scoped sync, from the runner to the dashboard.
+
+    A ``StrEnum``, so it serialises and compares as the string that is already persisted
+    and rendered, while the members stop the producers and the consumers from spelling the
+    same status differently.
+    """
+
+    RUNNING = "running"
+    COMPLETED = "completed"
+    COMPLETED_WITH_ERRORS = "completed_with_errors"
+    FAILED = "failed"
+
+
 class DocumentPagePart(VectorizableBaseModel):
     """One part of a Confluence document stored in the documents collection (WS9).
 
@@ -115,7 +133,7 @@ class DocumentPagePart(VectorizableBaseModel):
     (``content_kind='attachment'``), with the page image on part 0 only.
     """
 
-    source: str = Field(default="confluence", description="Source system of the document")
+    source: DocumentSource = Field(description="Source system of the document")
     space_key: str = Field(default="", description="Key of the Confluence space")
     page_id: str = Field(default="", description="ID of the Confluence page")
     page_title: str = Field(default="", description="Title of the Confluence page")
@@ -125,7 +143,7 @@ class DocumentPagePart(VectorizableBaseModel):
     attachment_id: str | None = Field(default=None, description="ID of the attachment, for attachment pages")
     attachment_name: str | None = Field(default=None, description="File name of the attachment")
     media_type: str | None = Field(default=None, description="Media type of the attachment")
-    content_kind: str = Field(description="'page_body' for page-body chunks, 'attachment' for attachment pages")
+    content_kind: ContentKind = Field(description="'page_body' for page-body chunks, 'attachment' for attachment pages")
     document_name: str = Field(
         description="The name retrieval matches document-name patterns against: the attachment file "
         "name for attachments, the page title for page-body chunks"
@@ -162,8 +180,66 @@ class ProjectMetadata(VectorizableBaseModel):
 class RagUpdateResult(BaseAgentResult):
     """Result of RAG update operation."""
 
-    status: str = Field(description="Status of the RAG update operation")
+    status: SyncStatus = Field(description="Status of the RAG update operation")
     processed_count: int = Field(description="Number of items processed during the update")
+
+
+class SyncRequest(BaseModel, ABC):
+    """One validated RAG sync request, shared by the orchestrator and the sync runtime.
+
+    The same object is the endpoint's request body, the source of the runner's command-line
+    arguments in job mode and the forwarded payload in local mode, so the three can never
+    disagree about a scope. Every field that reaches a query language (JQL) or a REST path
+    is constrained here, once.
+    """
+
+    @abstractmethod
+    def to_cli_args(self) -> list[str]:
+        """The runner arguments AFTER the source, e.g. ``["--project-key", "PROJ"]``."""
+
+
+class JiraSyncRequest(SyncRequest):
+    """Scope of a Jira issue or test-case sync: one project."""
+
+    project_key: str = Field(min_length=1, pattern=r"^[A-Z][A-Z0-9_]*$")
+
+    def to_cli_args(self) -> list[str]:
+        return ["--project-key", self.project_key]
+
+
+class SharePointSyncRequest(SyncRequest):
+    """Scope of a SharePoint sync: one drive, optionally one folder of it."""
+
+    drive_id: str = Field(min_length=1, max_length=200)
+    folder_path: str | None = Field(default=None, max_length=500)
+    attachment_name_pattern: str | None = Field(default=None, max_length=200)
+
+    def to_cli_args(self) -> list[str]:
+        args = ["--drive-id", self.drive_id]
+        if self.folder_path:
+            args += ["--folder-path", self.folder_path]
+        if self.attachment_name_pattern:
+            args += ["--attachment-name-pattern", self.attachment_name_pattern]
+        return args
+
+
+class ConfluenceSyncRequest(SyncRequest):
+    """Scope of a Confluence sync: one space, optionally one page of it."""
+
+    space_key: str = Field(min_length=1, pattern=r"^[~]?[A-Za-z0-9._~-]+$")
+    page_id: int | None = Field(default=None, gt=0)
+    attachment_name_pattern: str | None = Field(default=None, max_length=200)
+    skip_page_body: bool = False
+
+    def to_cli_args(self) -> list[str]:
+        args = ["--space-key", self.space_key]
+        if self.page_id:
+            args += ["--page-id", str(self.page_id)]
+        if self.attachment_name_pattern:
+            args += ["--attachment-name-pattern", self.attachment_name_pattern]
+        if self.skip_page_body:
+            args += ["--skip-page-body"]
+        return args
 
 
 class SyncOutcome(JsonSerializableModel):
@@ -171,7 +247,7 @@ class SyncOutcome(JsonSerializableModel):
 
     sync_type: str = Field(min_length=1)
     scope: str = Field(min_length=1)
-    status: Literal["running", "completed", "completed_with_errors", "failed"]
+    status: SyncStatus
     processed_count: int = Field(default=0, ge=0)
     message: str = Field(default="", max_length=2000)
     started_at: str | None = None

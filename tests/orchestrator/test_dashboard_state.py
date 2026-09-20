@@ -119,6 +119,28 @@ class TestRehydrate:
         assert restored_logs[0].agent_name == "Agent 1"
 
     @pytest.mark.asyncio
+    async def test_a_naive_stored_at_at_the_retention_boundary_is_kept(self, fresh_state, monkeypatch):
+        """Pre-WS23 records carry naive timestamps, whose ISO string is a prefix of the aware cutoff's.
+
+        Compared as strings, the shorter one always sorts first, so a record exactly at the
+        boundary — not older than it — was discarded as expired.
+        """
+        _, _, log_handler = fresh_state
+        monkeypatch.setattr(config.DashboardPersistenceConfig, "LOG_RETENTION_DAYS", 1)
+        now = datetime.now(UTC)
+        at_the_cutoff = _stored("log", _log_payload(now, "naive at the boundary"))
+        at_the_cutoff["stored_at"] = (now - timedelta(days=1)).replace(tzinfo=None).isoformat()
+        service = AsyncMock()
+        service.scroll_payload_records.return_value = [at_the_cutoff]
+
+        with patch("orchestrator.dashboard_state.datetime") as clock:
+            clock.now.return_value = now
+            clock.fromisoformat = datetime.fromisoformat
+            await DashboardStateStore(service).rehydrate()
+
+        assert [entry.message for entry in log_handler.restore.call_args.args[0]] == ["naive at the boundary"]
+
+    @pytest.mark.asyncio
     async def test_a_failed_read_is_retried_by_the_maintenance_loop(self, fresh_state, monkeypatch):
         monkeypatch.setattr(config.DashboardPersistenceConfig, "MAINTENANCE_INTERVAL_SECONDS", 0)
         service = AsyncMock()

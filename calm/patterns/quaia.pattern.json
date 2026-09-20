@@ -559,7 +559,8 @@
               },
               "controls": {
                 "required": [
-                  "graph-oauth-client-credentials"
+                  "graph-oauth-client-credentials",
+                  "graph-credential-origin-scope"
                 ]
               }
             },

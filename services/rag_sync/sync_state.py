@@ -15,7 +15,6 @@ implementation plan's decisions table).
 """
 
 import hashlib
-import json
 
 from common.services.vector_db_service import VectorDbService
 
@@ -82,8 +81,3 @@ class FingerprintStore:
 
     async def delete(self, scope: str, item_key: str) -> None:
         await self._metadata_db.delete_payload_record(self.record_id(scope, item_key))
-
-
-def to_json(value: dict) -> str:
-    """Canonical JSON for hashing-adjacent storage; keys sorted for stability."""
-    return json.dumps(value, sort_keys=True, ensure_ascii=False)

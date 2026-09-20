@@ -332,6 +332,21 @@ class TestSizeCap:
         assert result.status == "completed"
         graph.download_item.assert_not_called()
 
+    @pytest.mark.asyncio
+    async def test_a_file_only_the_download_reveals_as_oversized_is_skipped_too(self, runner, graph):
+        """The listed size can be missing or wrong; both checks are the same condition, so both skip."""
+        with patch("config.DocumentRagConfig.MAX_ATTACHMENT_BYTES", 10):
+            item = _file("i-big", "huge.pdf", "root", size=0)
+            graph.enumerate_delta.return_value = {"value": [_folder("root", "", None), item], "@odata.deltaLink": "d"}
+            graph.download_item.return_value = b"x" * 99
+
+            result = await runner.sync_drive(DRIVE_ID)
+
+        assert result.status == "completed"
+        runner._documents_db.upsert_batch.assert_not_called()
+        # The delta link still advances: a skip is not an item failure.
+        runner._state_store.save_cursor.assert_awaited_once()
+
 
 class TestFailureIsolation:
     @pytest.mark.asyncio
@@ -345,7 +360,7 @@ class TestFailureIsolation:
 
         result = await runner.sync_drive(DRIVE_ID)
 
-        assert (result.status, result.processed_count) == ("completed-with-errors", 1)
+        assert (result.status, result.processed_count) == ("completed_with_errors", 1)
         # The next run must see the failed file again, so the delta link does not advance.
         saved = runner._state_store.save_cursor.await_args.args[1]
         assert saved["delta_link"] == "https://graph/stored-delta"

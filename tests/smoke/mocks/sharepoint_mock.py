@@ -72,9 +72,21 @@ async def delta(drive_id: str) -> JSONResponse:
     return JSONResponse(
         {
             "value": [_folder(ROOT_FOLDER_ID, "", None), _folder(DOCS_FOLDER_ID, "Docs", ROOT_FOLDER_ID), _pdf_file()],
-            "@odata.deltaLink": DELTA_LINK,
+            "@odata.deltaLink": _recorded.get("next_delta_link") or DELTA_LINK,
         }
     )
+
+
+@app.post("/__hand_out_delta_link")
+async def hand_out_delta_link(request: Request) -> JSONResponse:
+    """Makes the next enumeration store the given delta link (the credential-scope control's input).
+
+    The delta link is response data the sync persists and later requests with the Graph
+    bearer token attached, so the suite uses this to hand out one on another origin.
+    """
+    body = await request.json()
+    _recorded["next_delta_link"] = body.get("delta_link")
+    return JSONResponse({"delta_link": _recorded["next_delta_link"]})
 
 
 @app.get("/drives/{drive_id}/items/{item_id}/content")

@@ -261,11 +261,16 @@ class _CloudRunIdentityAuth(httpx.Auth):
 
     def __init__(self, audience: str) -> None:
         self._credentials = _identity_token_credentials(audience)
+        # The credentials object is read and refreshed across an await, so concurrent requests
+        # would otherwise all refresh at once and mutate it while another one reads it.
+        self._lock = asyncio.Lock()
 
     async def async_auth_flow(self, request: httpx.Request) -> AsyncIterator[httpx.Request]:
-        if not self._credentials.valid:
-            await asyncio.to_thread(self._credentials.refresh, GoogleAuthRequest())
-        request.headers["Authorization"] = f"Bearer {self._credentials.token}"
+        async with self._lock:
+            if not self._credentials.valid:
+                await asyncio.to_thread(self._credentials.refresh, GoogleAuthRequest())
+            token = self._credentials.token
+        request.headers["Authorization"] = f"Bearer {token}"
         yield request
 
 

@@ -2,7 +2,12 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
-"""Attachment extraction, rendering, normalization, and OCR for document RAG."""
+"""Attachment extraction, rendering, normalization, and OCR for document RAG.
+
+The format-specific readers (pymupdf, Pillow, openpyxl, python-docx, python-pptx, the OCR
+module) are imported inside the functions that use them: each is heavy, and a run only ever
+touches the formats it actually encounters.
+"""
 
 import asyncio
 import io
@@ -24,6 +29,12 @@ CONVERT_WITH_FALLBACK_EXTENSIONS = {".docx", ".pptx"}
 TEXT_ONLY_CONVERTED_EXTENSIONS = {".xls", ".ods"}
 OFFICE_EXTENSIONS = CONVERT_ONLY_EXTENSIONS | CONVERT_WITH_FALLBACK_EXTENSIONS
 
+# Text normalization patterns, compiled once (they run per line of every extracted page).
+_HYPHENATED_LINE_BREAK = re.compile(r"(?<=\w)-\n(?=\w)")
+_HORIZONTAL_WHITESPACE = re.compile(r"[ \t]+")
+_DIGITS_ONLY = re.compile(r"\d+")
+_BLANK_LINE_RUN = re.compile(r"\n{3,}")
+
 
 class UnsupportedFormatError(ValueError):
     """The attachment format is not supported by document ingestion."""
@@ -31,6 +42,14 @@ class UnsupportedFormatError(ValueError):
 
 class ExtractionError(RuntimeError):
     """The attachment could not be safely extracted."""
+
+
+class AttachmentSkippedError(Exception):
+    """An attachment is deliberately not ingested (unsupported format or over the size cap).
+
+    Unlike a failure, a skip doesn't mark the run completed-with-errors: retrying
+    can't succeed until the attachment itself changes.
+    """
 
 
 @dataclass(slots=True)
@@ -112,7 +131,7 @@ def _extract_pdf(content: bytes, include_images: bool = True) -> ExtractedDocume
                 native_text = page.get_text()
                 image = _render_page(page) if include_images else None
                 text = _page_text_with_ocr(page, native_text, image) if include_images else native_text
-                pages.append(PageContent(_normalize_extracted_text(text), image))
+                pages.append(PageContent(_normalize_extracted_text(text, strip_page_numbers=True), image))
             return ExtractedDocument(pages, total_page_count)
     except ExtractionError:
         raise
@@ -299,27 +318,33 @@ def _extract_xlsx(content: bytes) -> ExtractedDocument:
         workbook.close()
 
 
-def _normalize_extracted_text(text: str) -> str:
-    """Normalizes extracted text while retaining paragraph boundaries and content order."""
+def _normalize_extracted_text(text: str, strip_page_numbers: bool = False) -> str:
+    """Normalizes extracted text while retaining paragraph boundaries and content order.
+
+    ``strip_page_numbers`` drops lines that are nothing but digits. That is a PDF page-footer
+    rule: in a spreadsheet or a CSV, a row whose only non-empty cell is a number is content
+    (an ID, a version, a metric), so the callers of those formats leave it off.
+    """
     text = text.replace("\r\n", "\n").replace("\r", "\n")
-    text = re.sub(r"(?<=\w)-\n(?=\w)", "", text)
+    text = _HYPHENATED_LINE_BREAK.sub("", text)
     lines = []
     for line in text.split("\n"):
-        cleaned = re.sub(r"[ \t]+", " ", line).strip()
-        if re.fullmatch(r"\d+", cleaned):
+        cleaned = _HORIZONTAL_WHITESPACE.sub(" ", line).strip()
+        if strip_page_numbers and _DIGITS_ONLY.fullmatch(cleaned):
             continue
         lines.append(cleaned)
-    return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
+    return _BLANK_LINE_RUN.sub("\n\n", "\n".join(lines)).strip()
 
 
 def _decode_text(content: bytes) -> str:
     """Decodes text with BOM awareness and a deterministic single-byte fallback."""
-    for encoding in ("utf-8-sig", "utf-8", "latin-1"):
+    for encoding in ("utf-8-sig", "utf-8"):
         try:
             return content.decode(encoding)
         except UnicodeDecodeError:
             continue
-    return content.decode("utf-8", errors="replace")
+    # latin-1 maps every byte, so this is the fallback that cannot fail.
+    return content.decode("latin-1")
 
 
 def _extension_of(file_name: str) -> str:

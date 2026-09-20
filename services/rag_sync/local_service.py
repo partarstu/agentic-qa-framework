@@ -6,6 +6,10 @@
 
 Runs the sync inline and returns the result. It mutates the vector database, so it
 requires the internal-service API key like the other internal services.
+
+Each handler imports its runner inside the function: a runner constructs vector-database
+clients, so importing all four at module level would build them for every startup whatever
+the request asks for.
 """
 
 import argparse
@@ -25,6 +29,10 @@ from pydantic import BaseModel, Field
 
 import config
 from common import utils
+from common.models import ConfluenceSyncRequest as SharedConfluenceSyncRequest
+from common.models import JiraSyncRequest as SharedJiraSyncRequest
+from common.models import SharePointSyncRequest as SharedSharePointSyncRequest
+from common.services.sync_lock_store import SyncLockHeldError
 from common.utils import compile_name_pattern
 
 logger = utils.get_logger("rag_sync_local_service")
@@ -47,28 +55,22 @@ def _require_service_auth(x_api_key: str | None = Header(default=None)) -> None:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 
-class JiraSyncRequest(BaseModel):
-    project_key: str = Field(min_length=1, description="The Jira project key to synchronize.")
+# The scopes are the orchestrator's validated ones (the constraints guarding JQL and the REST
+# paths live there, once); this service only adds the holder token the orchestrator issues.
+class _LockedSyncRequest(BaseModel):
     lock_token: str | None = Field(default=None, description="Holder token issued by the orchestrator, if any.")
 
 
-class SharePointSyncRequest(BaseModel):
-    drive_id: str = Field(min_length=1, description="The drive ID to synchronize.")
-    folder_path: str | None = Field(default=None, description="Restrict the sync to one folder's descendants.")
-    attachment_name_pattern: str | None = Field(
-        default=None, description="Regex filtering file names, compiled case-insensitively."
-    )
-    lock_token: str | None = Field(default=None, description="Holder token issued by the orchestrator, if any.")
+class JiraSyncRequest(SharedJiraSyncRequest, _LockedSyncRequest):
+    pass
 
 
-class ConfluenceSyncRequest(BaseModel):
-    space_key: str = Field(min_length=1, description="The Confluence space key (may start with '~').")
-    page_id: int | None = Field(default=None, description="Restrict the sync to one page of the space.")
-    attachment_name_pattern: str | None = Field(
-        default=None, description="Regex filtering attachment file names, compiled case-insensitively."
-    )
-    skip_page_body: bool = Field(default=False, description="Ingest attachments only.")
-    lock_token: str | None = Field(default=None, description="Holder token issued by the orchestrator, if any.")
+class SharePointSyncRequest(SharedSharePointSyncRequest, _LockedSyncRequest):
+    pass
+
+
+class ConfluenceSyncRequest(SharedConfluenceSyncRequest, _LockedSyncRequest):
+    pass
 
 
 @app.post("/sync/jira")
@@ -79,6 +81,9 @@ async def sync_jira(request: JiraSyncRequest, _: None = Depends(_require_service
 
     try:
         result = await JiraRagSyncRunner().sync_project(request.project_key, lock_token=request.lock_token)
+    except SyncLockHeldError as e:
+        await report_terminal_outcome("jira", request.project_key, error=e)
+        raise HTTPException(status_code=409, detail=str(e)) from e
     except Exception as exc:
         await report_terminal_outcome("jira", request.project_key, error=exc)
         raise
@@ -94,9 +99,12 @@ async def sync_test_cases(request: JiraSyncRequest, _: None = Depends(_require_s
 
     try:
         result = await TestCaseRagSyncRunner().sync_project(request.project_key, lock_token=request.lock_token)
-    except RuntimeError as e:
+    except SyncLockHeldError as e:
         await report_terminal_outcome("test_cases", request.project_key, error=e)
         raise HTTPException(status_code=409, detail=str(e)) from e
+    except Exception as exc:
+        await report_terminal_outcome("test_cases", request.project_key, error=exc)
+        raise
     await report_terminal_outcome("test_cases", request.project_key, result=result)
     return {"message": f"Test-case sync {result.status}.", "details": result.model_dump()}
 
@@ -116,9 +124,12 @@ async def sync_sharepoint(request: SharePointSyncRequest, _: None = Depends(_req
             file_name_pattern=request.attachment_name_pattern,
             lock_token=request.lock_token,
         )
-    except RuntimeError as e:
+    except SyncLockHeldError as e:
         await report_terminal_outcome("sharepoint", request.drive_id, error=e)
         raise HTTPException(status_code=409, detail=str(e)) from e
+    except Exception as exc:
+        await report_terminal_outcome("sharepoint", request.drive_id, error=exc)
+        raise
     await report_terminal_outcome("sharepoint", request.drive_id, result=result)
     return {"message": f"SharePoint sync {result.status}.", "details": result.model_dump()}
 
@@ -139,9 +150,12 @@ async def sync_confluence(request: ConfluenceSyncRequest, _: None = Depends(_req
             skip_page_body=request.skip_page_body,
             lock_token=request.lock_token,
         )
-    except RuntimeError as e:
+    except SyncLockHeldError as e:
         await report_terminal_outcome("confluence", request.space_key, error=e)
         raise HTTPException(status_code=409, detail=str(e)) from e
+    except Exception as exc:
+        await report_terminal_outcome("confluence", request.space_key, error=exc)
+        raise
     await report_terminal_outcome("confluence", request.space_key, result=result)
     return {"message": f"Confluence sync {result.status}.", "details": result.model_dump()}
 

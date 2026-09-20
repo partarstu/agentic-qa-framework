@@ -24,10 +24,21 @@ from common import utils
 logger = utils.get_logger("confluence_client")
 
 RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
+# Upper bound of any back-off wait, including one taken from a Retry-After header.
+RETRY_BACKOFF_CAP_SECONDS = 30.0
 
 
 class ConfluenceApiError(RuntimeError):
-    """A Confluence REST call failed after retries."""
+    """A Confluence REST call failed after retries.
+
+    ``status_code`` carries the response status when there was one, so callers decide on
+    the status itself instead of matching the message text (which embeds the request path
+    and the response body, both of which can contain any digits).
+    """
+
+    def __init__(self, message: str, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
 
 
 class ConfluenceClient:
@@ -58,14 +69,18 @@ class ConfluenceClient:
             except httpx.TimeoutException as e:
                 if attempt == max_retries - 1:
                     raise ConfluenceApiError(f"Confluence request to {path} timed out: {e}") from e
-                await asyncio.sleep(min(2**attempt, 30))
+                await asyncio.sleep(min(2**attempt, RETRY_BACKOFF_CAP_SECONDS))
                 continue
             if response.status_code in RETRYABLE_STATUS_CODES and attempt < max_retries - 1:
-                retry_after = response.headers.get("Retry-After")
-                await asyncio.sleep(float(retry_after) if retry_after else min(2**attempt, 30))
+                await asyncio.sleep(
+                    utils.retry_delay(response.headers.get("Retry-After"), attempt, RETRY_BACKOFF_CAP_SECONDS)
+                )
                 continue
             if response.status_code >= 400:
-                raise ConfluenceApiError(f"Confluence request to {path} failed: {response.status_code} {response.text}")
+                raise ConfluenceApiError(
+                    f"Confluence request to {path} failed: {response.status_code} {response.text}",
+                    status_code=response.status_code,
+                )
             return response.json()
         raise ConfluenceApiError(f"Confluence request to {path} failed after {max_retries} attempts.")
 
@@ -103,7 +118,7 @@ class ConfluenceClient:
         try:
             return await self._get(f"/pages/{page_id}", {"body-format": "storage"})
         except ConfluenceApiError as e:
-            if "404" in str(e):
+            if e.status_code == 404:
                 return None
             raise
 
@@ -136,13 +151,16 @@ class ConfluenceClient:
             except httpx.TimeoutException as e:
                 if attempt == max_retries - 1:
                     raise ConfluenceApiError(f"Attachment download timed out: {e}") from e
-                await asyncio.sleep(min(2**attempt, 30))
+                await asyncio.sleep(min(2**attempt, RETRY_BACKOFF_CAP_SECONDS))
                 continue
             if response.status_code in RETRYABLE_STATUS_CODES and attempt < max_retries - 1:
-                retry_after = response.headers.get("Retry-After")
-                await asyncio.sleep(float(retry_after) if retry_after else min(2**attempt, 30))
+                await asyncio.sleep(
+                    utils.retry_delay(response.headers.get("Retry-After"), attempt, RETRY_BACKOFF_CAP_SECONDS)
+                )
                 continue
             if response.status_code >= 400:
-                raise ConfluenceApiError(f"Attachment download failed: {response.status_code}")
+                raise ConfluenceApiError(
+                    f"Attachment download failed: {response.status_code}", status_code=response.status_code
+                )
             return response.content
         raise ConfluenceApiError("Attachment download failed after retries.")

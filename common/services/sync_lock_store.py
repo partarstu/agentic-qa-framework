@@ -12,6 +12,7 @@ TTL being longer than the job's task timeout.
 
 import secrets
 import time
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from common import utils
@@ -33,12 +34,20 @@ def _record_id(record_kind: str, scope: str) -> str:
     return f"{record_kind}-{scope}"
 
 
+class SyncLockHeldError(Exception):
+    """Another sync already holds this scope's lock.
+
+    The one vocabulary for a lock conflict across the orchestrator and the sync runtime, so
+    that neither has to recognise it by matching an error message.
+    """
+
+
+@dataclass(frozen=True, slots=True)
 class LockState:
     """Outcome of one lock acquisition attempt."""
 
-    def __init__(self, acquired: bool, lock_info: dict | None = None):
-        self.acquired = acquired
-        self.lock_info = lock_info
+    acquired: bool
+    lock_info: dict | None = None
 
 
 class SyncLockStore:
@@ -60,7 +69,7 @@ class SyncLockStore:
         An in-process mutex (held by the caller, the orchestrator) serializes
         acquisitions; this method performs the check-then-write against the store.
         """
-        existing = await self._read_lock(scope)
+        existing = await self.read(scope)
         now = time.time()
         if existing and not self._is_takeable(existing, now):
             return LockState(acquired=False, lock_info=existing)
@@ -85,7 +94,7 @@ class SyncLockStore:
 
     async def is_holder(self, scope: str, token: str) -> bool:
         """Whether ``token`` still owns the lock (checked before every write batch)."""
-        lock = await self._read_lock(scope)
+        lock = await self.read(scope)
         return bool(lock) and lock.get("holder_token") == token
 
     async def mark_started(self, scope: str, token: str) -> bool:
@@ -93,9 +102,10 @@ class SyncLockStore:
 
         Time spent waiting for the job to start doesn't shorten the lock.
         """
-        if not await self.is_holder(scope, token):
+        # One read, so a takeover between a check and a re-read cannot turn this into an error.
+        lock = await self.read(scope)
+        if not lock or lock.get("holder_token") != token:
             return False
-        lock = await self._read_lock(scope)
         lock["started"] = True
         lock["expires_at"] = time.time() + self._ttl_seconds
         await self._metadata_db.upsert_payload_record(_record_id(LOCK_RECORD_KIND, scope), lock)
@@ -108,7 +118,11 @@ class SyncLockStore:
         await self._metadata_db.delete_payload_record(_record_id(LOCK_RECORD_KIND, scope))
         return True
 
-    async def _read_lock(self, scope: str) -> dict | None:
+    async def read(self, scope: str) -> dict | None:
+        """The scope's lock record, or None when no lock is stored.
+
+        Public so callers never restate this store's record-ID format.
+        """
         return await self._metadata_db.get_payload_record(_record_id(LOCK_RECORD_KIND, scope))
 
 

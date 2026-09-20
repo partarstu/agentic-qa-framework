@@ -1099,6 +1099,38 @@ def test_sharepoint_sync_downloaded_the_file_content(
     assert data.get("downloads"), f"The drive file was never downloaded. Recorded: {data}"
 
 
+def test_a_delta_link_on_another_origin_is_never_requested_with_the_graph_token(
+    update_sharepoint_db_response: httpx.Response, http_client: httpx.Client, webhook_headers: dict[str, str]
+) -> None:
+    """The credential-scope control: the stored delta link is response data, and requesting it
+    attaches the app-only Graph token, so a link naming another origin must be refused and the
+    drive enumerated in full instead."""
+    foreign_link = "http://attacker.invalid/drives/drive-smoke/root/delta?token=stolen"
+    mock_base = SHAREPOINT_RECORDED_URL.removesuffix("/__recorded")
+    handed_out = http_client.post(f"{mock_base}/__hand_out_delta_link", json={"delta_link": foreign_link})
+    assert handed_out.status_code == 200, f"Could not arm the Graph mock: {handed_out.text}"
+    try:
+        # One run to store the foreign link, a second one that would follow it.
+        for _ in range(2):
+            response = httpx.post(
+                f"{ORCHESTRATOR_URL}/update-sharepoint-db",
+                headers=webhook_headers,
+                json={"drive_id": SHAREPOINT_DRIVE_ID},
+                timeout=httpx.Timeout(300.0),
+            )
+            assert response.status_code == 200, f"The SharePoint sync failed: {response.status_code} {response.text}"
+            assert response.json().get("details", {}).get("status") == "completed", (
+                f"The sync did not fall back to a full enumeration: {response.text}"
+            )
+    finally:
+        http_client.post(f"{mock_base}/__hand_out_delta_link", json={"delta_link": None})
+
+    data = http_client.get(SHAREPOINT_RECORDED_URL).json()
+    assert all(call.get("drive_id") == SHAREPOINT_DRIVE_ID for call in data.get("delta_calls", [])), (
+        f"An enumeration left the configured drive. Recorded: {data.get('delta_calls')}"
+    )
+
+
 # --- Test-case index sync (WS17: local mode via the sync service) ------------------------
 
 

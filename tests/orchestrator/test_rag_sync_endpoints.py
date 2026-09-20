@@ -15,8 +15,10 @@ import pytest
 from fastapi.testclient import TestClient
 
 import orchestrator.main as main
+from common.models import ConfluenceSyncRequest, JiraSyncRequest
+from common.services.sync_lock_store import SyncLockHeldError
 from orchestrator.main import _validate_api_key, orchestrator_app
-from orchestrator.rag_sync_trigger import SyncTriggerError
+from orchestrator.rag_sync_trigger import SyncStartResult, SyncTriggerError
 
 
 @pytest.fixture
@@ -53,13 +55,13 @@ class TestUpdateJiraDb:
         monkeypatch.setattr(main.config.RagSyncConfig, "SERVICE_URL", "http://local-sync:8080")
         _mock_trigger(
             monkeypatch,
-            start_result={
-                "status_code": 200,
-                "response": {
+            start_result=SyncStartResult(
+                status_code=200,
+                response={
                     "message": "Jira sync completed.",
                     "details": {"status": "completed", "processed_count": 2},
                 },
-            },
+            ),
         )
 
         response = client.post("/update-jira-db", json={"project_key": "PROJ"})
@@ -68,13 +70,28 @@ class TestUpdateJiraDb:
         assert response.json()["details"]["processed_count"] == 2
         trigger = main._rag_sync_trigger
         trigger.acquire.assert_awaited_once_with("jira", "PROJ")
-        trigger.start.assert_awaited_once_with("jira", "PROJ", ["--project-key", "PROJ"], "lock-token")
+        trigger.start.assert_awaited_once_with("jira", "PROJ", JiraSyncRequest(project_key="PROJ"), "lock-token")
+
+    def test_local_mode_rejection_reaches_the_caller_with_its_status(
+        self, client, monkeypatch, reset_trigger_singleton
+    ):
+        """A local sync service answering 401/409/422 must not be reported as a completed sync."""
+        monkeypatch.setattr(main.config.RagSyncConfig, "JOB_NAME", None)
+        monkeypatch.setattr(main.config.RagSyncConfig, "SERVICE_URL", "http://local-sync:8080")
+        _mock_trigger(monkeypatch, start_result=SyncStartResult(status_code=401, response={"detail": "Unauthorized"}))
+
+        response = client.post("/update-jira-db", json={"project_key": "PROJ"})
+
+        assert response.status_code == 401
+        assert response.json()["detail"] == {"detail": "Unauthorized"}
 
     def test_job_mode_returns_202_with_execution(self, client, monkeypatch, reset_trigger_singleton):
         monkeypatch.setattr(main.config.RagSyncConfig, "JOB_NAME", "projects/p/locations/us-central1/jobs/rag-sync")
         _mock_trigger(
             monkeypatch,
-            start_result={"status_code": 202, "execution": "projects/p/locations/us-central1/executions/abc123"},
+            start_result=SyncStartResult(
+                status_code=202, execution="projects/p/locations/us-central1/executions/abc123"
+            ),
         )
 
         response = client.post("/update-jira-db", json={"project_key": "PROJ"})
@@ -89,9 +106,8 @@ class TestUpdateJiraDb:
     def test_live_lock_conflicts_with_409(self, client, reset_trigger_singleton):
         _mock_trigger(
             None,
-            acquire_error=SyncTriggerError(
-                "A sync is already running for scope jira:PROJ (started at 1, lock expires at 2).",
-                start_confirmed=True,
+            acquire_error=SyncLockHeldError(
+                "A sync is already running for scope jira:PROJ (started at 1, lock expires at 2)."
             ),
         )
 
@@ -132,39 +148,32 @@ class TestUpdateJiraDb:
 class TestUpdateConfluenceDb:
     def test_scope_options_forwarded_as_runner_args(self, client, monkeypatch, reset_trigger_singleton):
         monkeypatch.setattr(main.config.RagSyncConfig, "JOB_NAME", "projects/p/locations/us-central1/jobs/rag-sync")
-        _mock_trigger(
-            monkeypatch,
-            start_result={"status_code": 202, "execution": "exec-1"},
-        )
+        _mock_trigger(monkeypatch, start_result=SyncStartResult(status_code=202, execution="exec-1"))
 
-        response = client.post(
-            "/update-confluence-db",
-            json={
-                "space_key": "~dev",
-                "page_id": 12345,
-                "attachment_name_pattern": "^report.*\\.pdf$",
-                "skip_page_body": True,
-            },
-        )
+        scope = {
+            "space_key": "~dev",
+            "page_id": 12345,
+            "attachment_name_pattern": "^report.*\\.pdf$",
+            "skip_page_body": True,
+        }
+        response = client.post("/update-confluence-db", json=scope)
 
         assert response.status_code == 202
         main._rag_sync_trigger.start.assert_awaited_once_with(
-            "confluence",
-            "~dev",
-            [
-                "--space-key",
-                "~dev",
-                "--page-id",
-                "12345",
-                "--attachment-name-pattern",
-                "^report.*\\.pdf$",
-                "--skip-page-body",
-            ],
-            "lock-token",
+            "confluence", "~dev", ConfluenceSyncRequest(**scope), "lock-token"
         )
+        assert ConfluenceSyncRequest(**scope).to_cli_args() == [
+            "--space-key",
+            "~dev",
+            "--page-id",
+            "12345",
+            "--attachment-name-pattern",
+            "^report.*\\.pdf$",
+            "--skip-page-body",
+        ]
 
     def test_personal_space_key_accepted(self, client, reset_trigger_singleton):
-        _mock_trigger(None, start_result={"status_code": 202, "execution": "exec-1"})
+        _mock_trigger(None, start_result=SyncStartResult(status_code=202, execution="exec-1"))
         response = client.post("/update-confluence-db", json={"space_key": "~john.doe"})
         assert response.status_code == 202
 
@@ -220,9 +229,9 @@ class TestTriggerModes:
             client_cls.return_value.__aenter__ = AsyncMock(return_value=http)
             client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
 
-            result = await trigger_obj.trigger("jira", "PROJ", ["--project-key", "PROJ"])
+            result = await trigger_obj.trigger("jira", "PROJ", JiraSyncRequest(project_key="PROJ"))
 
-        assert result["status_code"] == 200
+        assert result.status_code == 200
         http.post.assert_awaited_once_with(
             "http://local-sync:8080/sync/jira", json={"project_key": "PROJ", "lock_token": "tok"}, headers={}
         )
@@ -233,7 +242,7 @@ class TestTriggerModes:
         monkeypatch.setattr(main.config.RagSyncConfig, "SERVICE_URL", None)
 
         with pytest.raises(SyncTriggerError, match="No RAG sync runtime is configured"):
-            await trigger_obj.trigger("jira", "PROJ", ["--project-key", "PROJ"])
+            await trigger_obj.trigger("jira", "PROJ", JiraSyncRequest(project_key="PROJ"))
 
     async def test_live_lock_raises_with_lock_info(self, trigger):
         trigger_obj, lock_store = trigger
@@ -244,8 +253,8 @@ class TestTriggerModes:
         state.lock_info = {"acquired_at": 100.0, "expires_at": 200.0}
         lock_store.acquire.return_value = state
 
-        with pytest.raises(SyncTriggerError, match="already running"):
-            await trigger_obj.trigger("jira", "PROJ", ["--project-key", "PROJ"])
+        with pytest.raises(SyncLockHeldError, match="already running"):
+            await trigger_obj.trigger("jira", "PROJ", JiraSyncRequest(project_key="PROJ"))
         main.config.RagSyncConfig.JOB_NAME = None
 
     async def test_definite_job_failure_releases_the_lock(self, trigger):
@@ -258,7 +267,7 @@ class TestTriggerModes:
         state.acquired = True
         state.lock_info = {"holder_token": "tok"}
         lock_store.acquire.return_value = state
-        trigger_obj._metadata_db.get_payload_record = AsyncMock(return_value={"holder_token": "tok"})
+        lock_store.read = AsyncMock(return_value={"holder_token": "tok"})
         lock_store.release = AsyncMock(return_value=True)
 
         with (
@@ -268,10 +277,10 @@ class TestTriggerModes:
             ),
             pytest.raises(SyncTriggerError) as exc_info,
         ):
-            await trigger_obj.trigger("jira", "PROJ", ["--project-key", "PROJ"])
+            await trigger_obj.trigger("jira", "PROJ", JiraSyncRequest(project_key="PROJ"))
 
         assert exc_info.value.start_confirmed is True
-        trigger_obj._metadata_db.get_payload_record.assert_awaited_with("sync-lock-jira:PROJ")
+        lock_store.read.assert_awaited_with("jira:PROJ")
         lock_store.release.assert_called_once()
         main.config.RagSyncConfig.JOB_NAME = None
 
@@ -291,7 +300,7 @@ class TestTriggerModes:
             ),
             pytest.raises(SyncTriggerError) as exc_info,
         ):
-            await trigger_obj.trigger("jira", "PROJ", ["--project-key", "PROJ"])
+            await trigger_obj.trigger("jira", "PROJ", JiraSyncRequest(project_key="PROJ"))
 
         assert exc_info.value.start_confirmed is False
         lock_store.release.assert_not_called()

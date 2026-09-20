@@ -37,10 +37,15 @@ from qdrant_client import models
 
 import config
 from common import utils
-from common.models import DocumentPagePart, RagUpdateResult
-from common.services.sync_lock_store import SyncLockStore, SyncStateStore, scope_key
+from common.models import DocumentPagePart, RagUpdateResult, SyncStatus
+from common.services.sync_lock_store import SyncLockHeldError, SyncLockStore, SyncStateStore, scope_key
 from common.services.vector_db_service import VectorDbService
-from rag_sync.attachment_extraction import ExtractedDocument, extract_attachment_async, skip_reason
+from rag_sync.attachment_extraction import (
+    AttachmentSkippedError,
+    ExtractedDocument,
+    extract_attachment_async,
+    skip_reason,
+)
 from rag_sync.chunking import chunk_page_body, split_text_by_budget
 from rag_sync.confluence_client import ConfluenceApiError, ConfluenceClient
 from rag_sync.normalization import normalize_page_body
@@ -53,14 +58,6 @@ CONFLUENCE_SCOPE = "confluence"
 # Bounded concurrency for per-page attachment listings: enough to hide per-request
 # latency, small enough to stay polite to the Confluence API.
 ATTACHMENT_LISTING_CONCURRENCY = 4
-
-
-class AttachmentSkippedError(Exception):
-    """An attachment is deliberately not ingested (unsupported format or over the size cap).
-
-    Unlike a failure, a skip doesn't mark the run completed-with-errors: retrying
-    can't succeed until the attachment itself changes.
-    """
 
 
 class ConfluenceRagSyncRunner:
@@ -109,7 +106,7 @@ class ConfluenceRagSyncRunner:
 
         Raises:
             PermissionError: When the runner no longer holds the lock at a write point.
-            RuntimeError: When a tokenless runner cannot acquire the lock.
+            SyncLockHeldError: When a tokenless runner cannot acquire the lock.
         """
         scope = scope_key(CONFLUENCE_SCOPE, space_key)
         if lock_token:
@@ -119,7 +116,7 @@ class ConfluenceRagSyncRunner:
         else:
             state = await self._lock_store.acquire(scope)
             if not state.acquired:
-                raise RuntimeError(f"Another sync already holds the lock for {scope}.")
+                raise SyncLockHeldError(f"Another sync already holds the lock for {scope}.")
             lock_token = state.lock_info["holder_token"]
 
         try:
@@ -216,7 +213,7 @@ class ConfluenceRagSyncRunner:
                     failed += 1
                     logger.exception("Failed to sync Confluence item %s in %s: %s", item_key, space_key, e)
 
-            status = "completed-with-errors" if failed or not listing_complete else "completed"
+            status = SyncStatus.COMPLETED_WITH_ERRORS if failed or not listing_complete else SyncStatus.COMPLETED
             logger.info(
                 "Confluence sync of %s finished (%s): %s processed, %s skipped, %s failed.",
                 scope,
@@ -399,7 +396,8 @@ class ConfluenceRagSyncRunner:
             await self._verify_holder_or_abort(scope, lock_token)
             await self._documents_db.upsert_batch(parts, ensure=True)
         previous = stored_fingerprint.get("point_ids", []) if stored_fingerprint else []
-        stale_ids = [pid for pid in previous if pid not in {p.get_vector_id() for p in parts}]
+        current_ids = {part.get_vector_id() for part in parts}
+        stale_ids = [point_id for point_id in previous if point_id not in current_ids]
         if stale_ids:
             await self._verify_holder_or_abort(scope, lock_token)
             await self._documents_db.delete(stale_ids)
@@ -465,6 +463,7 @@ class ConfluenceRagSyncRunner:
         webui = page.get("_links", {}).get("webui")
         return [
             DocumentPagePart(
+                source=CONFLUENCE_SCOPE,
                 space_key=space_key,
                 page_id=page.get("id"),
                 page_title=title,
@@ -530,7 +529,13 @@ class ConfluenceRagSyncRunner:
             raise ValueError(f"Attachment {attachment.get('id')} has no download link.")
         content = await client.download_attachment(download_link)
         if len(content) > config.DocumentRagConfig.MAX_ATTACHMENT_BYTES:
-            raise ValueError(f"Attachment '{attachment.get('title', '')}' exceeded the size limit while downloading.")
+            # Same condition as the pre-download check above (reached when Confluence omits or
+            # under-reports fileSize), so it is the same skip, not a failure that would keep the
+            # run completed-with-errors and re-download the attachment on every following run.
+            raise AttachmentSkippedError(
+                f"it is {len(content)} bytes once downloaded, exceeding the "
+                f"{config.DocumentRagConfig.MAX_ATTACHMENT_BYTES}-byte limit"
+            )
         hash_value = content_hash(content, str(INGESTION_SCHEMA_VERSION))
 
         if stored_fingerprint and stored_fingerprint.get("content_hash") == hash_value:
@@ -669,6 +674,7 @@ class ConfluenceRagSyncRunner:
                     image = base64.b64encode(page.image).decode("ascii")
                 parts.append(
                     DocumentPagePart(
+                        source=CONFLUENCE_SCOPE,
                         space_key=space_key,
                         page_id=str(parent_page.get("id")),
                         page_title=page_title,

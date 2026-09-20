@@ -78,7 +78,7 @@ def documents_db() -> MagicMock:
     db = MagicMock()
     db.collection_name = "documents"
     db.client = MagicMock()
-    db.client.scroll = AsyncMock(return_value=([], None))
+    db.scroll_points = AsyncMock(return_value=[])
     db.hybrid_search = AsyncMock(return_value=[])
     db.retrieve = AsyncMock(return_value=[])
     return db
@@ -89,7 +89,7 @@ def sharepoint_db() -> MagicMock:
     db = MagicMock()
     db.collection_name = "sharepoint_documents"
     db.client = MagicMock()
-    db.client.scroll = AsyncMock(return_value=([], None))
+    db.scroll_points = AsyncMock(return_value=[])
     db.hybrid_search = AsyncMock(return_value=[])
     db.retrieve = AsyncMock(return_value=[])
     return db
@@ -141,7 +141,7 @@ async def test_every_query_pins_the_source_discriminator(confluence_only):
 
 @pytest.mark.asyncio
 async def test_name_pattern_with_no_match_returns_early(confluence_only):
-    confluence_only.client.scroll = AsyncMock(return_value=([MagicMock(payload={"document_name": "spec.pdf"})], None))
+    confluence_only.scroll_points = AsyncMock(return_value=[MagicMock(payload={"document_name": "spec.pdf"})])
 
     result = await retrieve_documents(confluence_only, "query", RetrievalScope(document_name_pattern="nomatch"))
 
@@ -151,12 +151,12 @@ async def test_name_pattern_with_no_match_returns_early(confluence_only):
 
 @pytest.mark.asyncio
 async def test_name_pattern_scrolls_then_filters_by_matched_names(confluence_only):
-    async def scroll(**kwargs):
-        if kwargs.get("offset") is None:
-            return [MagicMock(payload={"document_name": "spec.pdf"})], MagicMock()
-        return [MagicMock(payload={"document_name": "other.pdf"})], None
-
-    confluence_only.client.scroll = AsyncMock(side_effect=scroll)
+    confluence_only.scroll_points = AsyncMock(
+        return_value=[
+            MagicMock(payload={"document_name": "spec.pdf"}),
+            MagicMock(payload={"document_name": "other.pdf"}),
+        ]
+    )
     confluence_only.hybrid_search = AsyncMock(return_value=[_hit(_attachment_payload())])
 
     result = await retrieve_documents(confluence_only, "query", RetrievalScope(document_name_pattern="spec"))
@@ -182,23 +182,40 @@ async def test_hits_group_per_page_and_best_rank_wins(confluence_only):
     result = await retrieve_documents(confluence_only, "query")
 
     assert [page.part.text for page in result.pages] == ["page 1 part 2", "page 2", "design body text"]
-    # The page image of each attachment page is fetched via its deterministic part-0 vector ID.
-    assert confluence_only.retrieve.await_count == 2
-    for call in confluence_only.retrieve.await_args_list:
-        assert len(call.args[0]) == 1
+    # The page images are fetched by their deterministic part-0 vector IDs, in one batched call
+    # covering both attachment pages (the page-body hit has no image).
+    confluence_only.retrieve.assert_awaited_once()
+    assert len(confluence_only.retrieve.await_args.args[0]) == 2
 
 
 @pytest.mark.asyncio
 async def test_page_image_is_decoded_from_part_zero(confluence_only):
+    from common.models import DocumentPagePart
+
     image_b64 = base64.b64encode(b"png-bytes").decode()
     confluence_only.hybrid_search = AsyncMock(return_value=[_hit(_attachment_payload())])
+    part0_id = DocumentPagePart.model_validate({**_attachment_payload(), "part_index": 0}).get_vector_id()
     part0_record = MagicMock()
+    part0_record.id = part0_id
     part0_record.payload = {"image": image_b64}
     confluence_only.retrieve = AsyncMock(return_value=[part0_record])
 
     result = await retrieve_documents(confluence_only, "query")
 
+    assert confluence_only.retrieve.await_args.args[0] == [part0_id]
     assert result.pages[0].image == b"png-bytes"
+
+
+@pytest.mark.asyncio
+async def test_a_failing_page_image_fetch_leaves_the_page_on_its_text(confluence_only):
+    """A broken image read must not fail the whole grounded review (module isolation contract)."""
+    confluence_only.hybrid_search = AsyncMock(return_value=[_hit(_attachment_payload())])
+    confluence_only.retrieve = AsyncMock(side_effect=RuntimeError("qdrant down"))
+
+    result = await retrieve_documents(confluence_only, "query")
+
+    assert len(result.pages) == 1
+    assert result.pages[0].image is None
 
 
 def test_assemble_parts_prefers_image_over_text():

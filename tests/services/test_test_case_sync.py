@@ -60,7 +60,7 @@ def runner():
         db.delete = AsyncMock()
         db.ensure_collection = AsyncMock()
         db.client = AsyncMock()
-        db.client.scroll.return_value = ([], None)
+        db.scroll_points = AsyncMock(return_value=[])
         metadata_db = MagicMock()
         metadata_db.close = AsyncMock()
         lock_store = MagicMock()
@@ -88,13 +88,10 @@ def _scroll_result(points: list[tuple[str, str, str]]):
             self.id = point_id
             self.payload = payload
 
-    return (
-        [
-            Point(point_id, {"content_hash": content_hash, "indexed_at": indexed_at})
-            for point_id, content_hash, indexed_at in points
-        ],
-        None,
-    )
+    return [
+        Point(point_id, {"content_hash": content_hash, "indexed_at": indexed_at})
+        for point_id, content_hash, indexed_at in points
+    ]
 
 
 class TestFullResync:
@@ -104,7 +101,7 @@ class TestFullResync:
             _listed("SMOKE-1"),
             _listed("SMOKE-2", status="Approved"),
         ]
-        runner._db.client.scroll.return_value = _scroll_result([])
+        runner._db.scroll_points.return_value = _scroll_result([])
 
         result = await runner.sync_project(PROJECT_KEY)
 
@@ -120,11 +117,11 @@ class TestFullResync:
         calls: list[str] = []
         runner._db.ensure_collection.side_effect = lambda: calls.append("ensure")
 
-        async def _scroll(**kwargs):
+        async def _scroll(*args, **kwargs):
             calls.append("scroll")
             return _scroll_result([])
 
-        runner._db.client.scroll.side_effect = _scroll
+        runner._db.scroll_points.side_effect = _scroll
         runner._tms.return_value.fetch_test_cases_by_project.return_value = [_listed("SMOKE-1")]
 
         await runner.sync_project(PROJECT_KEY)
@@ -138,7 +135,7 @@ class TestFullResync:
         listed = [_listed("SMOKE-1")]
         stored_record = render_test_case(PROJECT_KEY, listed[0])
         runner._tms.return_value.fetch_test_cases_by_project.return_value = listed
-        runner._db.client.scroll.return_value = _scroll_result(
+        runner._db.scroll_points.return_value = _scroll_result(
             [(_point_id("SMOKE-1"), stored_record.content_hash, "2026-01-01T00:00:00+00:00")]
         )
 
@@ -152,7 +149,7 @@ class TestFullResync:
     async def test_a_changed_test_case_is_upserted_again(self, runner):
         listed = [_listed("SMOKE-1")]
         runner._tms.return_value.fetch_test_cases_by_project.return_value = listed
-        runner._db.client.scroll.return_value = _scroll_result(
+        runner._db.scroll_points.return_value = _scroll_result(
             [(_point_id("SMOKE-1"), "different-hash", "2026-01-01T00:00:00+00:00")]
         )
 
@@ -164,7 +161,7 @@ class TestFullResync:
     @pytest.mark.asyncio
     async def test_a_test_case_absent_from_the_listing_is_deleted(self, runner):
         runner._tms.return_value.fetch_test_cases_by_project.return_value = [_listed("SMOKE-1")]
-        runner._db.client.scroll.return_value = _scroll_result(
+        runner._db.scroll_points.return_value = _scroll_result(
             [
                 (_point_id("SMOKE-1"), "anything", "2026-01-01T00:00:00+00:00"),
                 (_point_id("SMOKE-GONE"), "anything", "2026-01-01T00:00:00+00:00"),
@@ -178,7 +175,7 @@ class TestFullResync:
     @pytest.mark.asyncio
     async def test_a_failed_listing_aborts_without_any_deletion(self, runner):
         runner._tms.return_value.fetch_test_cases_by_project.side_effect = RuntimeError("TMS down")
-        runner._db.client.scroll.return_value = _scroll_result(
+        runner._db.scroll_points.return_value = _scroll_result(
             [(_point_id("SMOKE-1"), "h", "2026-01-01T00:00:00+00:00")]
         )
 
@@ -194,7 +191,7 @@ class TestIndexedAtGuard:
     async def test_a_point_indexed_after_the_run_started_is_never_deleted(self, runner):
         runner._tms.return_value.fetch_test_cases_by_project.return_value = []
         fresh_indexed_at = (datetime.now(UTC) + timedelta(minutes=5)).isoformat()
-        runner._db.client.scroll.return_value = _scroll_result([(_point_id("SMOKE-FRESH"), "h", fresh_indexed_at)])
+        runner._db.scroll_points.return_value = _scroll_result([(_point_id("SMOKE-FRESH"), "h", fresh_indexed_at)])
 
         await runner.sync_project(PROJECT_KEY)
 
@@ -203,7 +200,7 @@ class TestIndexedAtGuard:
     @pytest.mark.asyncio
     async def test_a_point_indexed_before_the_run_started_is_deleted_when_absent(self, runner):
         runner._tms.return_value.fetch_test_cases_by_project.return_value = []
-        runner._db.client.scroll.return_value = _scroll_result(
+        runner._db.scroll_points.return_value = _scroll_result(
             [(_point_id("SMOKE-OLD"), "h", "2026-01-01T00:00:00+00:00")]
         )
 
@@ -223,7 +220,7 @@ class TestStatusFilter:
             _listed("SMOKE-1", status="Draft"),
             _listed("SMOKE-2", status="Approved"),
         ]
-        runner._db.client.scroll.return_value = _scroll_result([])
+        runner._db.scroll_points.return_value = _scroll_result([])
         with patch("config.QdrantConfig.TEST_CASE_INDEX_STATUSES", ("Approved",)):
             result = await runner.sync_project(PROJECT_KEY)
 
@@ -246,7 +243,7 @@ class TestLocking:
     @pytest.mark.asyncio
     async def test_a_lost_lock_aborts_before_writes(self, runner):
         runner._tms.return_value.fetch_test_cases_by_project.return_value = [_listed("SMOKE-1")]
-        runner._db.client.scroll.return_value = _scroll_result([])
+        runner._db.scroll_points.return_value = _scroll_result([])
         runner._lock_store.is_holder.return_value = False
 
         with pytest.raises(PermissionError):

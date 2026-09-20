@@ -10,7 +10,7 @@ import httpx
 
 import config
 from common import utils
-from common.models import RagUpdateResult, SyncOutcome
+from common.models import RagUpdateResult, SyncOutcome, SyncStatus
 from common.services.sync_lock_store import SyncOutcomeStore, scope_key
 from common.services.vector_db_service import VectorDbService
 
@@ -21,24 +21,30 @@ async def report_terminal_outcome(
     sync_type: str, scope_id: str, result: RagUpdateResult | None = None, error: Exception | None = None
 ) -> None:
     """Persist and optionally callback terminal status without changing the sync outcome."""
-    # The runners report partial success as "completed-with-errors"; anything but a clean completion counts as such.
-    status = "failed" if error else "completed_with_errors" if result and result.status != "completed" else "completed"
+    if error:
+        status = SyncStatus.FAILED
+        message = str(error)
+    elif result:
+        status = result.status
+        message = f"Sync {result.status}."
+    else:
+        status = SyncStatus.COMPLETED
+        message = "Sync completed."
     outcome = SyncOutcome(
         sync_type=sync_type,
         scope=scope_key(sync_type, scope_id),
         status=status,
         processed_count=result.processed_count if result else 0,
-        message=str(error) if error else result.status if result else "Sync completed.",
+        message=message,
         updated_at=datetime.now(UTC).isoformat(),
     )
     service = VectorDbService(config.QdrantConfig.METADATA_COLLECTION_NAME)
     try:
-        try:
-            await SyncOutcomeStore(service).write(
-                outcome.scope, outcome.status, outcome.message, outcome.processed_count, outcome.sync_type
-            )
-        except Exception:
-            logger.exception("Unable to persist sync outcome.")
+        # SyncOutcomeStore.write handles its own storage failures, so a sync is never
+        # turned into a failure by its reporting; there is nothing left to catch here.
+        await SyncOutcomeStore(service).write(
+            outcome.scope, outcome.status, outcome.message, outcome.processed_count, outcome.sync_type
+        )
     finally:
         try:
             await service.close()

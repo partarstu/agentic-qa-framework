@@ -31,6 +31,8 @@ the review can say so.
 """
 
 import asyncio
+import base64
+from dataclasses import dataclass
 
 from pydantic_ai.messages import BinaryContent
 from qdrant_client import models
@@ -66,6 +68,7 @@ CONFLUENCE_SOURCE = "confluence"
 SHAREPOINT_SOURCE = "sharepoint"
 
 
+@dataclass(frozen=True, slots=True)
 class RetrievalScope:
     """Optional scope of a document retrieval.
 
@@ -73,27 +76,19 @@ class RetrievalScope:
     ignores the scope fields that belong to the other one.
     """
 
-    def __init__(
-        self,
-        space_key: str | None = None,
-        page_id: str | None = None,
-        document_name_pattern: str | None = None,
-        drive_id: str | None = None,
-        folder_path: str | None = None,
-    ):
-        self.space_key = space_key
-        self.page_id = page_id
-        self.document_name_pattern = document_name_pattern
-        self.drive_id = drive_id
-        self.folder_path = folder_path
+    space_key: str | None = None
+    page_id: str | None = None
+    document_name_pattern: str | None = None
+    drive_id: str | None = None
+    folder_path: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
 class RetrievalResult:
     """Merged pages of one retrieval plus the sources that failed at runtime."""
 
-    def __init__(self, pages: list["RetrievedPage"], unavailable_sources: list[str]):
-        self.pages = pages
-        self.unavailable_sources = unavailable_sources
+    pages: list["RetrievedPage"]
+    unavailable_sources: list[str]
 
 
 def _header(part: DocumentPagePart) -> str:
@@ -140,32 +135,19 @@ async def _matching_document_names(
     documents_db: VectorDbService, scope: RetrievalScope | None, source: str, pattern
 ) -> list[str]:
     """Distinct document names under one source's scope filters matching the pattern."""
-    names: list[str] = []
-    offset = None
-    while True:
-        points, next_offset = await documents_db.client.scroll(
-            collection_name=documents_db.collection_name,
-            scroll_filter=_scope_filter(scope, source),
-            limit=1000,
-            offset=offset,
-            with_payload=models.PayloadSelectorInclude(include=["document_name"]),
-            with_vectors=False,
-        )
-        names.extend(p.payload["document_name"] for p in points if p.payload and p.payload.get("document_name"))
-        if next_offset is None:
-            break
-        offset = next_offset
+    points = await documents_db.scroll_points(_scope_filter(scope, source), ["document_name"])
+    names = [p.payload["document_name"] for p in points if p.payload and p.payload.get("document_name")]
     matched = sorted({name for name in names if pattern.search(name)})
     logger.info("Document-name pattern matched %s of %s distinct %s name(s).", len(matched), len(names), source)
     return matched
 
 
+@dataclass(slots=True)
 class RetrievedPage:
     """One retrieved page: its best-ranked part plus the image fetched for it."""
 
-    def __init__(self, part: DocumentPagePart, image: bytes | None):
-        self.part = part
-        self.image = image
+    part: DocumentPagePart
+    image: bytes | None
 
 
 async def retrieve_documents(
@@ -207,7 +189,13 @@ async def retrieve_documents(
     failed = 0
     for source, result in zip(sources, results, strict=True):
         if isinstance(result, BaseException):
-            logger.exception("%s document retrieval failed; the source is unavailable for this review.", source)
+            # gather(return_exceptions=True) returns the exception instead of raising it, so
+            # there is no active exception for logger.exception to read a traceback from.
+            logger.error(
+                "%s document retrieval failed; the source is unavailable for this review.",
+                source,
+                exc_info=result,
+            )
             unavailable.append(source)
             failed += 1
         else:
@@ -217,10 +205,8 @@ async def retrieve_documents(
 
     interleaved = _interleave(merged_lists)
     pages = interleaved[:limit]
-    for page in pages:
-        page.image = await _fetch_page_image(
-            documents_db if page.part.source == CONFLUENCE_SOURCE else sharepoint_db, page.part
-        )
+    for source_db, source in ((documents_db, CONFLUENCE_SOURCE), (sharepoint_db, SHAREPOINT_SOURCE)):
+        await _attach_page_images(source_db, [page for page in pages if page.part.source == source])
     return RetrievalResult(pages, unavailable)
 
 
@@ -289,24 +275,27 @@ def _interleave(source_pages: list[list[RetrievedPage]]) -> list[RetrievedPage]:
     return merged
 
 
-async def _fetch_page_image(documents_db: VectorDbService | None, part: DocumentPagePart) -> bytes | None:
-    """Fetches the page image by the deterministic part-0 ID of an attachment page."""
-    if documents_db is None or part.content_kind != "attachment":
-        return None
-    part0 = part.model_copy(update={"part_index": 0})
-    try:
-        records = await documents_db.retrieve([part0.get_vector_id()])
-    except Exception:
-        logger.exception("Failed to fetch the page image of %s.", part.breadcrumb)
-        raise
-    if not records or not records[0].payload:
-        return None
-    image = records[0].payload.get("image")
-    if not image:
-        return None
-    import base64
+async def _attach_page_images(documents_db: VectorDbService | None, pages: list[RetrievedPage]) -> None:
+    """Fetches one source's page images in a single retrieve, by the part-0 IDs of its attachment pages.
 
-    return base64.b64decode(image)
+    A failure here leaves the images unset rather than propagating: the module's contract is
+    that a broken source never fails the whole review, and a page without its image falls back
+    to its text in :func:`assemble_retrieved_parts`.
+    """
+    attachment_pages = [page for page in pages if page.part.content_kind == "attachment"]
+    if documents_db is None or not attachment_pages:
+        return
+    image_ids = [page.part.model_copy(update={"part_index": 0}).get_vector_id() for page in attachment_pages]
+    try:
+        records = await documents_db.retrieve(image_ids)
+    except Exception:
+        logger.exception("Failed to fetch %s page image(s); the pages fall back to their text.", len(image_ids))
+        return
+    images = {str(record.id): (record.payload or {}).get("image") for record in records}
+    for page, image_id in zip(attachment_pages, image_ids, strict=True):
+        image = images.get(image_id)
+        if image:
+            page.image = base64.b64decode(image)
 
 
 def assemble_retrieved_parts(pages: list[RetrievedPage]) -> list[str | BinaryContent]:

@@ -41,36 +41,20 @@ def require_valid_issue_key(issue_key: str) -> None:
         )
 
 
-def _origin(url: str) -> tuple[str, str, int | None]:
-    """Scheme, host and port of a URL as the HTTP client parses them.
-
-    httpx lower-cases scheme and host and reports a scheme's default port as None, so
-    ``https://host`` and ``https://host:443`` share an origin.
-
-    Raises:
-        httpx.InvalidURL: When the client would refuse the URL (e.g. a control character).
-        UnicodeError: When the host is invalid IDNA/punycode or the URL holds a lone surrogate.
-    """
-    parsed = httpx.URL(url)
-    return parsed.scheme, parsed.host, parsed.port
-
-
 def _resolve_content_url(content: str) -> str | None:
     """Resolves an attachment's ``content`` field to the URL to download, or None when it is untrusted.
 
     Jira Cloud returns an absolute URL; a relative path (seen on Data Center setups) is
-    appended to the base URL. Either way the resulting URL is used only when its scheme,
-    host and port match the configured base URL, so the credentials never reach another
-    origin (a crafted relative path such as ``@other-host/...`` changes the host too).
-    The check parses URLs with httpx, the client that sends the request, so both agree.
+    appended to the base URL. Either way the resulting URL is used only when it shares the
+    configured base URL's origin, so the credentials never reach another origin (a crafted
+    relative path such as ``@other-host/...`` changes the host too).
     """
     try:
         url = content if httpx.URL(content).scheme else f"{config.JIRA_BASE_URL}{content}"
-        is_same_origin = _origin(url) == _origin(config.JIRA_BASE_URL)
     except (httpx.InvalidURL, UnicodeError):
         # URLs the client would refuse are untrusted as well.
         return None
-    return url if is_same_origin else None
+    return url if utils.is_same_origin(url, config.JIRA_BASE_URL) else None
 
 
 def _download(content_url: str) -> bytes:

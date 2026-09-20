@@ -59,7 +59,34 @@ def test_confluence_run_with_item_failures_exits_two(cli, monkeypatch) -> None:
     monkeypatch.setattr(sys, "argv", ["cli", "confluence", "--space-key", "DEV"])
     with patch("rag_sync.confluence_sync.ConfluenceRagSyncRunner") as runner_cls:
         runner_cls.return_value.sync_space = AsyncMock(
-            return_value=RagUpdateResult(status="completed-with-errors", processed_count=1)
+            return_value=RagUpdateResult(status="completed_with_errors", processed_count=1)
+        )
+
+        assert cli.main() == 2
+
+
+@pytest.mark.parametrize(
+    ("argv", "runner_path", "method"),
+    [
+        (["cli", "jira", "--project-key", "PROJ"], "rag_sync.jira_sync.JiraRagSyncRunner", "sync_project"),
+        (
+            ["cli", "test_cases", "--project-key", "PROJ"],
+            "rag_sync.test_case_sync.TestCaseRagSyncRunner",
+            "sync_project",
+        ),
+    ],
+    ids=["jira", "test_cases"],
+)
+def test_every_source_exits_two_on_a_non_clean_run(cli, monkeypatch, argv, runner_path, method) -> None:
+    """A job platform must see a non-clean sync whichever source produced it."""
+    from common.models import RagUpdateResult
+
+    monkeypatch.setattr(sys, "argv", argv)
+    with patch(runner_path) as runner_cls:
+        setattr(
+            runner_cls.return_value,
+            method,
+            AsyncMock(return_value=RagUpdateResult(status="completed_with_errors", processed_count=1)),
         )
 
         assert cli.main() == 2

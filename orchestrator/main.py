@@ -53,20 +53,25 @@ from common.models import (
     AgentExecutionError,
     AgentInfo,
     AgentRoutingDecision,
+    ConfluenceSyncRequest,
     FileArtifact,
     GeneratedTestCases,
     IncidentCreationInput,
     IncidentCreationResult,
+    JiraSyncRequest,
     JsonSerializableModel,
     ProjectExecutionRequest,
     RoutingOutcome,
     SelectedAgents,
+    SharePointSyncRequest,
     SyncOutcome,
+    SyncRequest,
     TestCase,
     TestCaseType,
     TestExecutionRequest,
     TestExecutionResult,
 )
+from common.services.sync_lock_store import SyncLockHeldError
 from common.services.test_management_system_client_provider import get_test_management_client
 from common.services.test_reporting_client_base_provider import get_test_reporting_client
 from common.services.vector_db_service import VectorDbService
@@ -101,7 +106,7 @@ from orchestrator.prompt import (
     ROUTING_INSTRUCTION,
     build_additional_fields_instruction,
 )
-from orchestrator.rag_sync_trigger import RagSyncTrigger, SyncTriggerError
+from orchestrator.rag_sync_trigger import RagSyncTrigger, SyncStartResult, SyncTriggerError
 from orchestrator.streaming_hub import _Subscriber, streaming_hub
 
 logger = utils.get_logger("orchestrator")
@@ -844,23 +849,6 @@ def _get_rag_sync_trigger() -> RagSyncTrigger:
     return _rag_sync_trigger
 
 
-class JiraSyncRequest(BaseModel):
-    project_key: str = Field(min_length=1, pattern=r"^[A-Z][A-Z0-9_]*$")
-
-
-class SharePointSyncRequest(BaseModel):
-    drive_id: str = Field(min_length=1, max_length=200)
-    folder_path: str | None = Field(default=None, max_length=500)
-    attachment_name_pattern: str | None = Field(default=None, max_length=200)
-
-
-class ConfluenceSyncRequest(BaseModel):
-    space_key: str = Field(min_length=1, pattern=r"^[~]?[A-Za-z0-9._~-]+$")
-    page_id: int | None = Field(default=None, gt=0)
-    attachment_name_pattern: str | None = Field(default=None, max_length=200)
-    skip_page_body: bool = False
-
-
 class ManualTestExecutionRequest(BaseModel):
     """Validated request for one explicitly selected unattended execution agent."""
 
@@ -870,7 +858,7 @@ class ManualTestExecutionRequest(BaseModel):
     project_key: str = Field(min_length=1, max_length=50, pattern=r"^[A-Z][A-Z0-9_]*$")
 
 
-async def _trigger_rag_sync(source: str, scope_id: str, runner_args: list[str]) -> Any:
+async def _trigger_rag_sync(source: str, scope_id: str, request: SyncRequest) -> SyncStartResult:
     """Acquires the scope lock (serialized) and starts the sync in the configured mode.
 
     The in-process mutex covers only the lock acquisition: the Qdrant lock record guards
@@ -881,23 +869,33 @@ async def _trigger_rag_sync(source: str, scope_id: str, runner_args: list[str]) 
     try:
         async with _rag_sync_lock:
             token = await trigger.acquire(source, scope_id)
-        return await trigger.start(source, scope_id, runner_args, token)
+        return await trigger.start(source, scope_id, request, token)
+    except SyncLockHeldError as e:
+        _record_error(str(e))
+        raise HTTPException(status_code=409, detail=str(e)) from e
     except SyncTriggerError as e:
         if e.start_confirmed:
             _record_error(str(e))
-            status_code = 409 if "already running" in str(e) else 503
-            raise HTTPException(status_code=status_code, detail=str(e))
+            raise HTTPException(status_code=503, detail=str(e)) from e
         # Unconfirmed start (timeout, dropped connection or server error): an execution
         # may exist. The lock is kept and the start allowance decides the takeover.
         _record_error(f"Unconfirmed RAG sync start for {source}:{scope_id}: {e}")
-        raise HTTPException(status_code=502, detail=f"{e} The start is unconfirmed; the lock expires automatically.")
+        raise HTTPException(
+            status_code=502, detail=f"{e} The start is unconfirmed; the lock expires automatically."
+        ) from e
 
 
-def _sync_response(result: Any) -> Any:
-    """202 + execution name in job mode; the runner's result in local mode."""
-    if result["status_code"] == 202:
-        return JSONResponse(status_code=202, content={"message": "RAG sync started.", "execution": result["execution"]})
-    return result["response"]
+def _sync_response(result: SyncStartResult) -> Any:
+    """202 + execution name in job mode; the runner's own status and result in local mode.
+
+    A local-mode rejection (401, 409, 422, ...) must reach the caller as that status, never
+    as a 200 carrying an error body.
+    """
+    if result.status_code == 202:
+        return JSONResponse(status_code=202, content={"message": "RAG sync started.", "execution": result.execution})
+    if result.status_code >= 400:
+        raise HTTPException(status_code=result.status_code, detail=result.response)
+    return JSONResponse(status_code=result.status_code, content=result.response)
 
 
 # noinspection PyUnusedLocal
@@ -905,7 +903,7 @@ def _sync_response(result: Any) -> Any:
 async def update_test_case_db(request: JiraSyncRequest, api_key: str = Depends(_validate_api_key)):
     """Triggers the test-case full resync for the given project (WS17)."""
     logger.info("Triggering test-case RAG sync for project %s", request.project_key)
-    result = await _trigger_rag_sync("test_cases", request.project_key, ["--project-key", request.project_key])
+    result = await _trigger_rag_sync("test_cases", request.project_key, request)
     return _sync_response(result)
 
 
@@ -914,7 +912,7 @@ async def update_test_case_db(request: JiraSyncRequest, api_key: str = Depends(_
 async def update_jira_db(request: JiraSyncRequest, api_key: str = Depends(_validate_api_key)):
     """Triggers the RAG Vector DB update for the given Jira project (WS8)."""
     logger.info("Triggering RAG sync for Jira project %s", request.project_key)
-    result = await _trigger_rag_sync("jira", request.project_key, ["--project-key", request.project_key])
+    result = await _trigger_rag_sync("jira", request.project_key, request)
     return _sync_response(result)
 
 
@@ -926,13 +924,8 @@ async def update_sharepoint_db(request: SharePointSyncRequest, api_key: str = De
         try:
             compile_name_pattern(request.attachment_name_pattern)
         except ValueError as e:
-            raise HTTPException(status_code=422, detail=str(e))
-    runner_args = ["--drive-id", request.drive_id]
-    if request.folder_path:
-        runner_args += ["--folder-path", request.folder_path]
-    if request.attachment_name_pattern:
-        runner_args += ["--attachment-name-pattern", request.attachment_name_pattern]
-    result = await _trigger_rag_sync("sharepoint", request.drive_id, runner_args)
+            raise HTTPException(status_code=422, detail=str(e)) from e
+    result = await _trigger_rag_sync("sharepoint", request.drive_id, request)
     return _sync_response(result)
 
 
@@ -943,15 +936,8 @@ async def update_confluence_db(request: ConfluenceSyncRequest, api_key: str = De
         try:
             compile_name_pattern(request.attachment_name_pattern)
         except ValueError as e:
-            raise HTTPException(status_code=422, detail=str(e))
-    runner_args = ["--space-key", request.space_key]
-    if request.page_id:
-        runner_args += ["--page-id", str(request.page_id)]
-    if request.attachment_name_pattern:
-        runner_args += ["--attachment-name-pattern", request.attachment_name_pattern]
-    if request.skip_page_body:
-        runner_args += ["--skip-page-body"]
-    result = await _trigger_rag_sync("confluence", request.space_key, runner_args)
+            raise HTTPException(status_code=422, detail=str(e)) from e
+    result = await _trigger_rag_sync("confluence", request.space_key, request)
     return _sync_response(result)
 
 
@@ -1870,7 +1856,9 @@ async def _send_task_to_agent_with_message(
     except Exception as e:
         host = _get_agent_host(await agent_registry.get_card(agent_id))
         logger.exception(
-            f"Error communicating with agent {agent_id} on host '{host}'.",
+            "Error communicating with agent %s on host '%s'.",
+            agent_id,
+            host,
             extra={"task_id": internal_task_id, "agent_id": agent_id},
         )
         with suppress(Exception):

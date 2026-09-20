@@ -21,11 +21,23 @@ class DashboardStateStore:
     """Batch dashboard writes so observability never adds task latency."""
 
     def __init__(self, service: VectorDbService | None = None, max_queue_size: int = 10_000) -> None:
-        self._service = service or VectorDbService(config.DashboardPersistenceConfig.COLLECTION_NAME)
+        self._injected_service = service
         self._queue: asyncio.Queue[tuple[str, dict]] = asyncio.Queue(maxsize=max_queue_size)
         self._writer: asyncio.Task[None] | None = None
         self._maintenance: asyncio.Task[None] | None = None
         self._rehydrated = False
+
+    @property
+    def _service(self) -> VectorDbService:
+        """The payload-only service, created on first use.
+
+        The module-level singleton is built at import time, so constructing the service in
+        ``__init__`` would open a Qdrant and an httpx client merely by importing this module,
+        before any entry point has run and whether or not persistence is enabled.
+        """
+        if self._injected_service is None:
+            self._injected_service = VectorDbService(config.DashboardPersistenceConfig.COLLECTION_NAME)
+        return self._injected_service
 
     async def start(self) -> None:
         """Start best-effort writer and maintenance tasks when persistence is enabled.
@@ -35,8 +47,8 @@ class DashboardStateStore:
         if not config.DashboardPersistenceConfig.ENABLED:
             return
         self._rehydrated = await self.rehydrate()
-        self._writer = asyncio.create_task(self._write_loop())
-        self._maintenance = asyncio.create_task(self._maintenance_loop())
+        self._writer = _start_background_task(self._write_loop(), "dashboard state writer")
+        self._maintenance = _start_background_task(self._maintenance_loop(), "dashboard state maintenance")
 
     def enqueue(self, kind: str, payload: dict) -> None:
         """Queue one state update, dropping the oldest entry under sustained overload."""
@@ -71,6 +83,8 @@ class DashboardStateStore:
         except Exception:
             logger.exception("Dashboard-state rehydration failed; the maintenance loop retries it.")
             return False
+        # Deferred: both modules enqueue into this store, so importing them at module level
+        # would be circular.
         from orchestrator.memory_log_handler import LogEntry, memory_log_handler
         from orchestrator.models import ErrorRecord, TaskRecord, TaskStatus, error_history, task_history
 
@@ -80,7 +94,9 @@ class DashboardStateStore:
         logs: list[LogEntry] = []
         for record in records:
             kind, payload = record.get("kind"), record.get("payload")
-            if kind not in cutoffs or not isinstance(payload, dict) or str(record.get("stored_at", "")) < cutoffs[kind]:
+            if kind not in cutoffs or not isinstance(payload, dict):
+                continue
+            if _is_expired(record.get("stored_at", ""), cutoffs[kind]):
                 continue
             try:
                 if kind == "task":
@@ -159,7 +175,7 @@ class DashboardStateStore:
                     models.Filter(
                         must=[
                             models.FieldCondition(key="kind", match=models.MatchValue(value=kind)),
-                            models.FieldCondition(key="stored_at", range=models.DatetimeRange(lt=cutoff)),
+                            models.FieldCondition(key="stored_at", range=models.DatetimeRange(lt=cutoff.isoformat())),
                         ]
                     )
                 )
@@ -174,19 +190,47 @@ class DashboardStateStore:
         await asyncio.gather(
             *(task for task in (self._writer, self._maintenance) if task is not None), return_exceptions=True
         )
-        await self._service.close()
+        if self._injected_service is not None:
+            await self._injected_service.close()
 
 
-def _retention_cutoffs() -> dict[str, str]:
+def _start_background_task(coroutine, name: str) -> asyncio.Task[None]:
+    """Runs a loop in the background, logging the failure that would otherwise end it silently."""
+
+    def report(task: asyncio.Task[None]) -> None:
+        if not task.cancelled() and task.exception() is not None:
+            logger.error(
+                "The %s loop stopped; persistence is off until the next restart.", name, exc_info=task.exception()
+            )
+
+    task = asyncio.create_task(coroutine)
+    task.add_done_callback(report)
+    return task
+
+
+def _retention_cutoffs() -> dict[str, datetime]:
     """The oldest ``stored_at`` still retained, per record kind."""
     now = datetime.now(UTC)
     log_days = config.DashboardPersistenceConfig.LOG_RETENTION_DAYS
     history_days = config.DashboardPersistenceConfig.HISTORY_RETENTION_DAYS
     return {
-        "log": (now - timedelta(days=log_days)).isoformat(),
-        "task": (now - timedelta(days=history_days)).isoformat(),
-        "error": (now - timedelta(days=history_days)).isoformat(),
+        "log": now - timedelta(days=log_days),
+        "task": now - timedelta(days=history_days),
+        "error": now - timedelta(days=history_days),
     }
+
+
+def _is_expired(stored_at: object, cutoff: datetime) -> bool:
+    """Whether a record's ``stored_at`` is older than its kind's cutoff.
+
+    Compared as datetimes: the stored values are a mix of naive (pre-WS23) and aware ISO
+    strings, so comparing the strings would drop a record whose only difference from the
+    cutoff is the missing offset suffix. An unreadable timestamp counts as expired.
+    """
+    try:
+        return _utc(str(stored_at)) < cutoff
+    except ValueError:
+        return True
 
 
 def _utc(value: str) -> datetime:

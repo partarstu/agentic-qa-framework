@@ -20,7 +20,7 @@ from tests.smoke.artifacts import (
     save_snapshot,
     story_context,
 )
-from tests.smoke.judge import JUDGE_SCORE_TOLERANCE, Comparison
+from tests.smoke.judge import Comparison, verdict_for_candidate
 
 
 def _snapshot(**overrides) -> RunSnapshot:
@@ -125,15 +125,52 @@ class TestRenderForJudge:
         assert story_context(_snapshot()) == "Reset password\n\nAs a user..."
 
 
-class TestJudgeComparison:
-    def test_a_better_candidate_does_not_regress(self):
-        assert not Comparison("test_case_generation", baseline_score=6.0, candidate_score=8.0, rationale="").regressed
+class TestVerdictForCandidate:
+    @pytest.mark.parametrize(
+        ("label", "slot", "expected"),
+        [
+            ("A>>B", "A", "much_better"),
+            ("A>>B", "B", "much_worse"),
+            ("A>B", "B", "worse"),
+            ("B>A", "B", "better"),
+            ("B>>A", "A", "much_worse"),
+            ("A=B", "A", "same"),
+            ("A=B", "B", "same"),
+        ],
+    )
+    def test_the_label_is_read_from_the_candidate_slot(self, label, slot, expected):
+        assert verdict_for_candidate(label, slot) == expected
 
-    def test_a_gap_within_the_tolerance_does_not_regress(self):
-        comparison = Comparison(
-            "test_case_generation", baseline_score=8.0, candidate_score=8.0 - JUDGE_SCORE_TOLERANCE, rationale=""
-        )
+
+def _comparison(forward: str, swapped: str) -> Comparison:
+    return Comparison("test_case_generation", forward, swapped, forward_rationale="", swapped_rationale="")
+
+
+class TestJudgeComparison:
+    @pytest.mark.parametrize("verdict", ["much_better", "better", "same"])
+    def test_a_candidate_not_judged_worse_does_not_regress(self, verdict):
+        comparison = _comparison(verdict, verdict)
+        assert comparison.outcome == verdict
         assert not comparison.regressed
 
-    def test_a_gap_beyond_the_tolerance_regresses(self):
-        assert Comparison("test_case_generation", baseline_score=8.0, candidate_score=5.0, rationale="").regressed
+    @pytest.mark.parametrize("verdict", ["worse", "much_worse"])
+    def test_a_candidate_judged_worse_in_both_orders_regresses(self, verdict):
+        comparison = _comparison(verdict, verdict)
+        assert comparison.outcome == verdict
+        assert comparison.regressed
+
+    def test_two_degrees_of_worse_combine_to_the_milder_and_regress(self):
+        comparison = _comparison("much_worse", "worse")
+        assert comparison.outcome == "worse"
+        assert comparison.regressed
+
+    def test_two_degrees_of_better_combine_to_the_milder(self):
+        assert _comparison("better", "much_better").outcome == "better"
+
+    @pytest.mark.parametrize(
+        ("forward", "swapped"), [("worse", "better"), ("much_worse", "same"), ("same", "much_better")]
+    )
+    def test_orders_that_disagree_are_inconsistent_and_do_not_regress(self, forward, swapped):
+        comparison = _comparison(forward, swapped)
+        assert comparison.outcome == "inconsistent"
+        assert not comparison.regressed

@@ -19,8 +19,8 @@ from qdrant_client import models
 
 import config
 from common import utils
-from common.models import ListedTestCase, RagUpdateResult
-from common.services.sync_lock_store import SyncLockStore, scope_key
+from common.models import ListedTestCase, RagUpdateResult, SyncStatus
+from common.services.sync_lock_store import SyncLockHeldError, SyncLockStore, scope_key
 from common.services.test_case_index import render_test_case
 from common.services.test_management_system_client_provider import get_test_management_client
 from common.services.vector_db_service import VectorDbService
@@ -58,7 +58,7 @@ class TestCaseRagSyncRunner:
 
         Raises:
             PermissionError: When the runner no longer holds the lock at a write point.
-            RuntimeError: When a tokenless runner cannot acquire the lock.
+            SyncLockHeldError: When a tokenless runner cannot acquire the lock.
         """
         scope = scope_key(TEST_CASES_SCOPE, project_key)
         if lock_token:
@@ -68,7 +68,7 @@ class TestCaseRagSyncRunner:
         else:
             state = await self._lock_store.acquire(scope)
             if not state.acquired:
-                raise RuntimeError(f"Another sync already holds the lock for {scope}.")
+                raise SyncLockHeldError(f"Another sync already holds the lock for {scope}.")
             lock_token = state.lock_info["holder_token"]
 
         try:
@@ -121,7 +121,7 @@ class TestCaseRagSyncRunner:
             logger.info("Deleted %s stale test case(s) for project %s.", len(stale_ids), project_key)
 
         logger.info("Test-case RAG sync for project %s completed; indexed %s.", project_key, len(rendered))
-        return RagUpdateResult(status="completed", processed_count=len(rendered))
+        return RagUpdateResult(status=SyncStatus.COMPLETED, processed_count=len(rendered))
 
     async def _verify_holder_or_abort(self, scope: str, lock_token: str) -> None:
         """Stops at once, without further writes, when the runner no longer holds the lock."""
@@ -130,31 +130,20 @@ class TestCaseRagSyncRunner:
 
     async def _scroll_stored(self, project_key: str) -> dict[str, dict]:
         """The stored (content hash, indexed_at) per point id, for one project, payload-only."""
-        stored: dict[str, dict] = {}
-        offset = None
         project_filter = models.Filter(
             must=[
                 models.FieldCondition(key="project_key", match=models.MatchValue(value=project_key)),
                 models.FieldCondition(key="source", match=models.MatchValue(value="test_case")),
             ]
         )
-        while True:
-            points, next_offset = await self._test_cases_db.client.scroll(
-                collection_name=self._test_cases_db.collection_name,
-                scroll_filter=project_filter,
-                limit=1000,
-                offset=offset,
-                with_payload=models.PayloadSelectorInclude(include=["content_hash", "indexed_at"]),
-                with_vectors=False,
-            )
-            for point in points:
-                stored[str(point.id)] = {
-                    "hash": (point.payload or {}).get("content_hash"),
-                    "indexed_at": (point.payload or {}).get("indexed_at"),
-                }
-            if next_offset is None:
-                return stored
-            offset = next_offset
+        points = await self._test_cases_db.scroll_points(project_filter, ["content_hash", "indexed_at"])
+        return {
+            str(point.id): {
+                "hash": (point.payload or {}).get("content_hash"),
+                "indexed_at": (point.payload or {}).get("indexed_at"),
+            }
+            for point in points
+        }
 
 
 def _eligible_for_indexing(listed: list[ListedTestCase]) -> list[ListedTestCase]:

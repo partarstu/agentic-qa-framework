@@ -135,21 +135,20 @@ class VectorDbService:
         # service (the dashboard constructs one per request) and stall it for as long as the
         # server is slow to answer. Schema mismatches surface through the WS19 validation.
         self.client = AsyncQdrantClient(
-            url=getattr(config.QdrantConfig, "URL", "http://localhost:6333"),
+            url=config.QdrantConfig.URL,
             port=None,
-            api_key=getattr(config.QdrantConfig, "API_KEY", None),
-            timeout=getattr(config.QdrantConfig, "TIMEOUT_SECONDS", 30),
+            api_key=config.QdrantConfig.API_KEY,
+            timeout=config.QdrantConfig.TIMEOUT_SECONDS,
             check_compatibility=False,
         )
-        self.embedding_service_url = getattr(config.QdrantConfig, "EMBEDDING_SERVICE_URL", None)
+        self.embedding_service_url = config.QdrantConfig.EMBEDDING_SERVICE_URL
         if not self.embedding_service_url:
             logger.warning("EMBEDDING_SERVICE_URL is not configured. Vector operations requiring embeddings will fail.")
-        timeout_seconds = getattr(config.QdrantConfig, "EMBEDDING_SERVICE_TIMEOUT_SECONDS", 120.0)
-        self._http_client = httpx.AsyncClient(timeout=httpx.Timeout(timeout_seconds))
-        self._embedding_max_retries = getattr(config.QdrantConfig, "EMBEDDING_SERVICE_MAX_RETRIES", 6)
-        self._embedding_retry_backoff_cap = getattr(
-            config.QdrantConfig, "EMBEDDING_SERVICE_RETRY_BACKOFF_CAP_SECONDS", 32.0
+        self._http_client = httpx.AsyncClient(
+            timeout=httpx.Timeout(config.QdrantConfig.EMBEDDING_SERVICE_TIMEOUT_SECONDS)
         )
+        self._embedding_max_retries = config.QdrantConfig.EMBEDDING_SERVICE_MAX_RETRIES
+        self._embedding_retry_backoff_cap = config.QdrantConfig.EMBEDDING_SERVICE_RETRY_BACKOFF_CAP_SECONDS
         # Collections whose writes must not go through the embedding service (locks, sync state,
         # fingerprints, model identity): records are stored without vectors. A shared instance
         # can be passed in so callers that also hold their own metadata service don't duplicate
@@ -159,7 +158,7 @@ class VectorDbService:
             if metadata_collection_name and metadata_collection_name != collection_name
             else None
         )
-        self._upsert_batch_size = int(getattr(config.QdrantConfig, "UPSERT_BATCH_SIZE", 64))
+        self._upsert_batch_size = config.QdrantConfig.UPSERT_BATCH_SIZE
         # One ensure per collection per service instance is enough: index creation is
         # idempotent, and re-listing collections on every upsert/query wastes a round trip.
         self._ensured = False
@@ -238,7 +237,9 @@ class VectorDbService:
             except Exception:
                 logger.exception("Error calling embedding service")
                 raise
-        return None
+        # Reachable when the retry budget is configured as 0: callers unpack the result,
+        # so failure is signalled by raising rather than by returning None.
+        raise RuntimeError(f"The embedding service was not called: {max_retries} retries are configured.")
 
     async def _get_embedding(self, text: str) -> list[float]:
         """Dense embedding of one text, for call sites that don't use the sparse vector yet."""
@@ -637,6 +638,38 @@ class VectorDbService:
             )
         except Exception:
             logger.exception("Error updating payload in Vector DB")
+            raise
+
+    async def scroll_points(
+        self, scroll_filter: models.Filter, payload_fields: list[str] | None = None
+    ) -> list[models.Record]:
+        """Scrolls every point matching a filter, page by page, with the selected payload fields.
+
+        The one scroll implementation for callers that need a payload-field subset, so the
+        pagination loop isn't re-implemented against the client on each of them.
+        """
+        try:
+            records: list[models.Record] = []
+            offset = None
+            selector = models.PayloadSelectorInclude(include=payload_fields) if payload_fields else True
+            while True:
+                points, next_offset = await _retry_qdrant(
+                    "scroll",
+                    lambda current_offset=offset: self.client.scroll(
+                        collection_name=self.collection_name,
+                        scroll_filter=scroll_filter,
+                        limit=1000,
+                        offset=current_offset,
+                        with_payload=selector,
+                        with_vectors=False,
+                    ),
+                )
+                records.extend(points)
+                if next_offset is None:
+                    return records
+                offset = next_offset
+        except Exception:
+            logger.exception("Error scrolling points in %s", self.collection_name)
             raise
 
     async def scroll_all_ids_by_project(self, project_key: str) -> list[int]:

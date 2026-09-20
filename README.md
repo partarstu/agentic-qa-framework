@@ -417,7 +417,7 @@ RAG_OFFICE_CONVERSION_CONCURRENCY=1 # Default: 1. Maximum concurrent LibreOffice
 RAG_OCR_TEXT_THRESHOLD_CHARACTERS=20 # Default: 20. Pages below this native-text length receive full-page OCR.
 
 # Embedding Service Configuration
-EMBEDDING_BACKENDS=text # Default: text. Comma-separated enabled backends ("text", "visual").
+EMBEDDING_BACKENDS=text # Default: text. Comma-separated enabled backends; "text" is the only one implemented.
 EMBEDDING_TEXT_MODEL=BAAI/bge-m3 # Default: BAAI/bge-m3. Multilingual model producing dense and learned-sparse output in one pass.
 EMBEDDING_MAX_BATCH_SIZE=32 # Default: 32. Maximum number of texts per embedding request.
 EMBEDDING_MAX_TEXT_LENGTH=50000 # Default: 50000. Maximum text length (characters) per input.
@@ -867,13 +867,17 @@ two levels:
   objective, labels and a review comment, bugs created, output lengths. Each is "higher is better", so a candidate below
   its baseline value means the run produced *less*.
 * **Judged quality** (`tests/smoke/judge.py`) - both runs' outputs for a dimension are handed to a judge model as
-  anonymous "Output A" and "Output B", scored 1-10 against the requirement they came from, and judged a second time with
-  the two swapped so the judge's position bias cancels out. A candidate scoring below its baseline means the run produced
-  something *worse*.
+  anonymous "Output A" and "Output B" and judged against the requirement they came from on a five-level scale -
+  `much_better`, `better`, `same`, `worse`, `much_worse`, read from the candidate's side - with a rationale that must
+  name the concrete content behind the label. The pair is judged a second time with the two swapped: a verdict only
+  counts when both orders agree on its direction (at the milder of the two magnitudes), and orders that disagree are
+  reported as `inconsistent` - judge noise, never a regression. A candidate judged `worse` or `much_worse` in both
+  orders means the run produced something *worse*.
 
-Both levels apply a tolerance (25% for a metric, one point for a judge score) because the artifacts come from a
-non-deterministic model; a regression beyond that fails the run. Every comparison writes a full report - per-metric
-deltas, per-dimension scores and the judge's rationale - to `logs/smoke_ab_report.md`.
+Metrics apply a 25% tolerance because the artifacts come from a non-deterministic model; the judge's tolerance is the
+agreement of both orders. A regression on either level fails the run. Every comparison writes a full report - per-metric
+deltas, per-dimension verdicts for each order and the judge's rationale behind them - to `logs/smoke_ab_report.md`; the
+`smoke` CI job uploads it as the `smoke-ab-report` artifact of the workflow run.
 
 Capture a baseline once per configuration you want to compare against, then compare later runs against it (both with the
 smoke stack up):

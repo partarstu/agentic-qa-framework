@@ -21,8 +21,8 @@ from qdrant_client import models
 
 import config
 from common import utils
-from common.models import JiraIssue, ProjectMetadata, RagUpdateResult
-from common.services.sync_lock_store import SyncLockStore, SyncStateStore, scope_key
+from common.models import JiraIssue, ProjectMetadata, RagUpdateResult, SyncStatus
+from common.services.sync_lock_store import SyncLockHeldError, SyncLockStore, SyncStateStore, scope_key
 from common.services.vector_db_service import VectorDbService
 
 logger = utils.get_logger("rag_sync")
@@ -81,7 +81,7 @@ class JiraRagSyncRunner:
 
         Raises:
             PermissionError: When the runner no longer holds the lock at a write point.
-            RuntimeError: When a tokenless runner cannot acquire the lock.
+            SyncLockHeldError: When a tokenless runner cannot acquire the lock.
         """
         scope = scope_key(JIRA_SCOPE, project_key)
         if lock_token:
@@ -91,7 +91,7 @@ class JiraRagSyncRunner:
         else:
             state = await self._lock_store.acquire(scope)
             if not state.acquired:
-                raise RuntimeError(f"Another sync already holds the lock for {scope}.")
+                raise SyncLockHeldError(f"Another sync already holds the lock for {scope}.")
             lock_token = state.lock_info["holder_token"]
 
         try:
@@ -134,7 +134,7 @@ class JiraRagSyncRunner:
         )
 
         logger.info("RAG sync for project %s completed; processed %s issue(s).", project_key, processed_count)
-        return RagUpdateResult(status="completed", processed_count=processed_count)
+        return RagUpdateResult(status=SyncStatus.COMPLETED, processed_count=processed_count)
 
     async def _verify_holder_or_abort(self, scope: str, lock_token: str) -> None:
         """Stops at once, without further writes, when the runner no longer holds the lock."""

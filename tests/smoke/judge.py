@@ -2,17 +2,20 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
-"""Blinded pairwise scoring of two smoke runs' outputs by an LLM judge.
+"""Blinded pairwise judging of two smoke runs' outputs by an LLM judge.
 
 The metrics in ``artifacts.py`` see how much a run produced; this sees how good it is. Both
 runs' outputs for a dimension are handed to a judge model as anonymous "Output A" and
-"Output B", scored against the requirement they were produced from, and the same pair is
-judged a second time with the two swapped - the judge's position bias would otherwise be
-charged to whichever run happens to come second.
+"Output B" and judged against the requirement they were produced from on a five-level verdict
+scale, with a rationale naming the concrete content behind the label. The same pair is judged
+a second time with the two swapped - the judge's position bias would otherwise be charged to
+whichever run happens to come second - and only a verdict both orders agree on counts; orders
+that disagree are judge noise, reported as such and never a regression.
 """
 
 import os
 from dataclasses import dataclass
+from typing import Literal
 
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent
@@ -28,15 +31,44 @@ JUDGE_MODEL_NAME = os.environ.get("SMOKE_JUDGE_MODEL", "google-gla:gemini-3.8-fl
 
 logger = utils.get_logger("smoke_judge")
 
-# How far below the baseline a candidate may score before it counts as a regression. The
-# judge re-scores identical inputs about a point apart, so a smaller gap says nothing.
-JUDGE_SCORE_TOLERANCE = 1.0
+# The label the judge picks for a blinded pair, on the five-level scale Arena-Hard uses.
+Label = Literal["A>>B", "A>B", "A=B", "B>A", "B>>A"]
+# The same label read from the candidate's side, once its slot is known.
+Verdict = Literal["much_better", "better", "same", "worse", "much_worse"]
+# What both orders say together: a verdict they agree on, or "inconsistent" when they do not.
+Outcome = Literal["much_better", "better", "same", "worse", "much_worse", "inconsistent"]
+
+_WORSE: frozenset[Verdict] = frozenset({"worse", "much_worse"})
+_BETTER: frozenset[Verdict] = frozenset({"much_better", "better"})
+# What each label means for the output in slot A; the output in slot B gets the mirror image.
+_FOR_SLOT_A: dict[Label, Verdict] = {
+    "A>>B": "much_better",
+    "A>B": "better",
+    "A=B": "same",
+    "B>A": "worse",
+    "B>>A": "much_worse",
+}
+_MIRROR: dict[Verdict, Verdict] = {
+    "much_better": "much_worse",
+    "better": "worse",
+    "same": "same",
+    "worse": "better",
+    "much_worse": "much_better",
+}
 
 JUDGE_INSTRUCTIONS = (
     "You are an impartial QA expert comparing the outputs of two systems that were given the same "
-    "requirement. Score each output from 1 (unusable) to 10 (excellent) against the stated criteria, "
-    "judging only its content: the outputs are anonymised, their order carries no meaning, and length "
-    "is worth nothing on its own. Justify both scores in two or three sentences."
+    "requirement. Judge only their content against the stated criteria: the outputs are anonymised, their "
+    "order carries no meaning, and length is worth nothing on its own. Write your rationale first, then "
+    "pick exactly one label:\n"
+    "  A>>B - A is clearly superior: B misses acceptance criteria, contains errors or is unfit for its purpose.\n"
+    "  A>B - A is somewhat better: B has minor gaps but is still fit for its purpose.\n"
+    "  A=B - equivalent: the differences are stylistic or trade off evenly.\n"
+    "  B>A - B is somewhat better: A has minor gaps but is still fit for its purpose.\n"
+    "  B>>A - B is clearly superior: A misses acceptance criteria, contains errors or is unfit for its purpose.\n"
+    "The rationale must ground the label in specific evidence: name the concrete findings, cases, steps or "
+    "details that one output has and the other lacks or gets wrong. Do not pick a label the rationale does "
+    "not support."
 )
 
 CRITERIA: dict[str, str] = {
@@ -62,37 +94,56 @@ CRITERIA: dict[str, str] = {
 }
 
 
-class _Verdict(BaseModel):
-    """The scores a judge returns for one blinded pair of outputs."""
+class _Judgement(BaseModel):
+    """What the judge returns for one blinded pair: the reasoning first, then the label it supports."""
 
-    score_a: int = Field(ge=1, le=10)
-    score_b: int = Field(ge=1, le=10)
-    rationale: str
+    rationale: str = Field(description="The specific differences in content that justify the label.")
+    label: Label
 
 
 @dataclass(slots=True)
 class Comparison:
-    """How the baseline and the candidate scored on one dimension."""
+    """How the candidate was judged against the baseline on one dimension, in both orders."""
 
     dimension: str
-    baseline_score: float
-    candidate_score: float
-    rationale: str
+    forward: Verdict
+    """The verdict with the candidate shown as Output B."""
+    swapped: Verdict
+    """The verdict with the candidate shown as Output A."""
+    forward_rationale: str
+    swapped_rationale: str
+
+    @property
+    def outcome(self) -> Outcome:
+        """The verdict both orders agree on, at the milder of their two magnitudes."""
+        if self.forward == self.swapped:
+            return self.forward
+        if self.forward in _WORSE and self.swapped in _WORSE:
+            return "worse"
+        if self.forward in _BETTER and self.swapped in _BETTER:
+            return "better"
+        return "inconsistent"
 
     @property
     def regressed(self) -> bool:
-        return self.baseline_score - self.candidate_score > JUDGE_SCORE_TOLERANCE
+        return self.outcome in _WORSE
 
     def __str__(self) -> str:
         return (
-            f"{self.dimension}: candidate {self.candidate_score:.1f} vs baseline {self.baseline_score:.1f} "
-            f"(tolerance {JUDGE_SCORE_TOLERANCE:.1f})"
+            f"{self.dimension}: {self.outcome} (candidate judged {self.forward} as Output B, "
+            f"{self.swapped} as Output A)"
         )
 
 
+def verdict_for_candidate(label: Label, candidate_slot: Literal["A", "B"]) -> Verdict:
+    """The judge's blinded label read from the candidate's side."""
+    for_slot_a = _FOR_SLOT_A[label]
+    return for_slot_a if candidate_slot == "A" else _MIRROR[for_slot_a]
+
+
 def compare(baseline: RunSnapshot, candidate: RunSnapshot) -> list[Comparison]:
-    """Score both runs on every dimension either of them produced something for."""
-    agent = Agent(build_model(JUDGE_MODEL_NAME), output_type=_Verdict, instructions=JUDGE_INSTRUCTIONS)
+    """Judge the candidate against the baseline on every dimension either of them produced something for."""
+    agent = Agent(build_model(JUDGE_MODEL_NAME), output_type=_Judgement, instructions=JUDGE_INSTRUCTIONS)
     requirement = story_context(baseline)
     comparisons: list[Comparison] = []
     for dimension in DIMENSIONS:
@@ -100,20 +151,21 @@ def compare(baseline: RunSnapshot, candidate: RunSnapshot) -> list[Comparison]:
         candidate_output = render_for_judge(dimension, candidate)
         if not baseline_output.strip() and not candidate_output.strip():
             continue
-        forward = _score(agent, dimension, requirement, baseline_output, candidate_output)
-        reverse = _score(agent, dimension, requirement, candidate_output, baseline_output)
+        forward = _judge(agent, dimension, requirement, baseline_output, candidate_output)
+        swapped = _judge(agent, dimension, requirement, candidate_output, baseline_output)
         comparisons.append(
             Comparison(
                 dimension=dimension,
-                baseline_score=(forward.score_a + reverse.score_b) / 2,
-                candidate_score=(forward.score_b + reverse.score_a) / 2,
-                rationale=f"{forward.rationale} || (swapped) {reverse.rationale}",
+                forward=verdict_for_candidate(forward.label, "B"),
+                swapped=verdict_for_candidate(swapped.label, "A"),
+                forward_rationale=forward.rationale,
+                swapped_rationale=swapped.rationale,
             )
         )
     return comparisons
 
 
-def _score(agent: Agent, dimension: str, requirement: str, output_a: str, output_b: str) -> _Verdict:
+def _judge(agent: Agent, dimension: str, requirement: str, output_a: str, output_b: str) -> _Judgement:
     prompt = (
         f"Requirement under test:\n{requirement}\n\n"
         f"Both outputs are {CRITERIA[dimension]}\n\n"
@@ -121,5 +173,10 @@ def _score(agent: Agent, dimension: str, requirement: str, output_a: str, output
         f"--- OUTPUT B ---\n{output_b or '(nothing was produced)'}"
     )
     result = agent.run_sync(prompt)
-    logger.info("Judge [%s]: %s", dimension, TokenUsage.from_run_usage(result.usage(), JUDGE_MODEL_NAME).summary_line())
+    logger.info(
+        "Judge [%s]: %s - %s",
+        dimension,
+        result.output.label,
+        TokenUsage.from_run_usage(result.usage(), JUDGE_MODEL_NAME).summary_line(),
+    )
     return result.output

@@ -26,8 +26,9 @@ from common import utils
 logger = utils.get_logger("sharepoint_client")
 
 GRAPH_SCOPE = "https://graph.microsoft.com/.default"
-# Retries for 429/5xx responses, honouring Retry-After.
+# Retries for 429/5xx responses, honouring Retry-After within the back-off cap.
 MAX_RETRIES = 5
+RETRY_BACKOFF_CAP_SECONDS = 32.0
 TIMEOUT_SECONDS = 30.0
 
 
@@ -93,8 +94,7 @@ class SharePointClient:
                     # enumeration strategy, it is not a retryable blip.
                     return response
                 if response.status_code in (429, 502, 503, 504) and attempt < MAX_RETRIES - 1:
-                    retry_after = response.headers.get("Retry-After")
-                    delay = float(retry_after) if retry_after else min(2**attempt, 32)
+                    delay = utils.retry_delay(response.headers.get("Retry-After"), attempt, RETRY_BACKOFF_CAP_SECONDS)
                     logger.warning(
                         "Graph %s %s returned %s; retrying in %.0fs.", method, url, response.status_code, delay
                     )
@@ -109,7 +109,16 @@ class SharePointClient:
 
         A ``delta_link`` of ``None`` starts a full enumeration from the drive root. A 410
         raises ``DeltaResyncRequired``.
+
+        The stored delta link comes back from response data and the request carries the
+        app-only bearer token, so a link outside the configured Graph origin is refused
+        rather than followed (credential-scope control); the caller restarts a full
+        enumeration, exactly as for an expired link.
         """
+        if delta_link and not utils.is_same_origin(delta_link, config.SharePointConfig.GRAPH_BASE_URL):
+            raise DeltaResyncRequired(
+                f"The stored delta link for drive {drive_id} does not target the configured Graph origin."
+            )
         url = delta_link or f"{config.SharePointConfig.GRAPH_BASE_URL}/drives/{drive_id}/root/delta"
         response = self._request_with_retry("GET", url)
         if response.status_code == 410:

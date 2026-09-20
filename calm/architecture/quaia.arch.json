@@ -908,6 +908,22 @@
               }
             }
           ]
+        },
+        "graph-credential-origin-scope": {
+          "description": "The Graph bearer token is sent only to URLs whose scheme, host and port match SHAREPOINT_GRAPH_BASE_URL; a stored delta link on another origin is refused and a full enumeration starts instead.",
+          "requirements": [
+            {
+              "requirement-url": "https://quaia.finos.calm/controls/credential-scope.requirement.json",
+              "config": {
+                "control-id": "quaia-graph-credential-origin-scope-rag-sync",
+                "name": "Graph Credential Origin Scope",
+                "description": "The delta enumeration sends the app-only Graph token only to the configured Graph origin, never to a delta link taken from response data that names another origin.",
+                "allowed-origin": "SHAREPOINT_GRAPH_BASE_URL",
+                "on-mismatch": "skip",
+                "enforced": true
+              }
+            }
+          ]
         }
       }
     },

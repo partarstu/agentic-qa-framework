@@ -203,6 +203,7 @@ steps:
             --min-instances=1 \
             --port=8080 \
             --env-vars-file=deploy/rendered/embedding-service.env.yaml \
+            --set-secrets="$$(cat deploy/rendered/embedding-service.secrets.txt)" \
             --update-labels=quaia_deploy_marker=$$MARKER \
             --startup-probe=httpGet.path=/ready \
             --concurrency=5
@@ -250,6 +251,7 @@ steps:
             --max-instances=1 \
             --port=8080 \
             --env-vars-file=deploy/rendered/prompt-guard-service.env.yaml \
+            --set-secrets="$$(cat deploy/rendered/prompt-guard-service.secrets.txt)" \
             --update-labels=quaia_deploy_marker=$$MARKER \
             --concurrency=5
         else

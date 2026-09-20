@@ -45,7 +45,7 @@ def callback_client():
     ("result", "error", "expected_status"),
     [
         (RagUpdateResult(status="completed", processed_count=3), None, "completed"),
-        (RagUpdateResult(status="completed-with-errors", processed_count=1), None, "completed_with_errors"),
+        (RagUpdateResult(status="completed_with_errors", processed_count=1), None, "completed_with_errors"),
         (None, RuntimeError("listing failed"), "failed"),
     ],
     ids=["clean", "partial", "failed"],
@@ -82,9 +82,19 @@ async def test_no_callback_is_sent_without_a_configured_url(outcome_store, callb
 
 
 @pytest.mark.asyncio
-async def test_reporting_failures_never_escape(outcome_store, callback_client):
-    outcome_store.write.side_effect = RuntimeError("qdrant down")
+async def test_reporting_failures_never_escape(callback_client):
+    """The real store swallows its own storage failures, so reporting cannot fail a sync."""
     callback_client.post.side_effect = RuntimeError("orchestrator down")
 
-    with patch("config.RagSyncConfig.CALLBACK_URL", "http://orchestrator/sync-outcome"):
+    with (
+        patch("rag_sync.outcome_reporting.VectorDbService") as service_class,
+        patch("config.RagSyncConfig.CALLBACK_URL", "http://orchestrator/sync-outcome"),
+    ):
+        service = service_class.return_value
+        service.close = AsyncMock()
+        service.get_payload_record = AsyncMock(side_effect=RuntimeError("qdrant down"))
+        service.upsert_payload_record = AsyncMock(side_effect=RuntimeError("qdrant down"))
+
         await report_terminal_outcome("jira", "PROJ", error=RuntimeError("sync failed"))
+
+    service.close.assert_awaited_once()

@@ -13,6 +13,7 @@ from contextvars import ContextVar
 from datetime import UTC, datetime
 from pathlib import Path
 
+import httpx
 from dateutil import parser
 from pydantic_ai import BinaryContent
 
@@ -40,6 +41,44 @@ def compile_name_pattern(pattern: str) -> re.Pattern:
         return re.compile(pattern, re.IGNORECASE)
     except re.error as e:
         raise ValueError(f"Invalid name pattern '{pattern}': {e}") from e
+
+
+def is_same_origin(url: str, base_url: str) -> bool:
+    """Whether ``url`` has the same scheme, host and port as ``base_url``.
+
+    The check parses both with httpx, the client that sends the request, so the two agree:
+    httpx lower-cases scheme and host and reports a scheme's default port as None, making
+    ``https://host`` and ``https://host:443`` one origin. A URL the client would refuse
+    (a control character, invalid IDNA, a lone surrogate) is never the same origin.
+
+    Every call site that attaches credentials to a URL taken from response data uses this,
+    so the configured service's credentials can't be sent to another origin.
+    """
+
+    def origin(value: str) -> tuple[str, str, int | None]:
+        # httpx decodes the host lazily, so the attribute access is part of the parse.
+        parsed = httpx.URL(value)
+        return parsed.scheme, parsed.host, parsed.port
+
+    try:
+        return origin(url) == origin(base_url)
+    except (httpx.InvalidURL, UnicodeError):
+        return False
+
+
+def retry_delay(retry_after: str | None, attempt: int, cap: float) -> float:
+    """Seconds to wait before the next attempt, honouring ``Retry-After`` within ``cap``.
+
+    ``Retry-After`` is legally delta-seconds *or* an HTTP-date (RFC 9110 § 10.2.3), and
+    comes from outside, so an unparsable value falls back to the exponential back-off and
+    the cap bounds the wait either way.
+    """
+    if retry_after:
+        try:
+            return min(float(retry_after), cap)
+        except ValueError:
+            pass
+    return min(2**attempt, cap)
 
 
 class StructuredLogFilter(logging.Filter):

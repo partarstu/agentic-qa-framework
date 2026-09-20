@@ -82,16 +82,13 @@ def _run_soffice(source: Path, output_directory: Path) -> Path:
             str(output_directory),
             str(source),
         ]
-        try:
-            result = subprocess.run(
-                command,
-                capture_output=True,
-                text=True,
-                timeout=config.DocumentRagConfig.OFFICE_CONVERSION_TIMEOUT_SECONDS,
-                check=False,
-            )
-        except subprocess.TimeoutExpired:
-            raise
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=config.DocumentRagConfig.OFFICE_CONVERSION_TIMEOUT_SECONDS,
+            check=False,
+        )
         if result.returncode != 0:
             raise OfficeConversionError(f"soffice exited with {result.returncode}: {result.stderr.strip()}")
 

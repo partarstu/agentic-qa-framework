@@ -391,8 +391,8 @@ class QdrantConfig:
 class EmbeddingServiceConfig:
     """Configuration of the embedding service's backends (WS6).
 
-    The text backend is always available; the visual backend is opt-in and fully
-    independent of the text path (it is implemented in a later phase).
+    ``text`` is the only backend implemented; ``EMBEDDING_BACKENDS`` and the backend
+    registry are the extension point for the ones that follow.
     """
 
     # Comma-separated enabled backends, e.g. "text" or "text,visual".
@@ -402,8 +402,6 @@ class EmbeddingServiceConfig:
     # One multilingual model producing dense and learned-sparse output in a single pass.
     TEXT_MODEL_NAME = os.environ.get("EMBEDDING_TEXT_MODEL", "BAAI/bge-m3")
     TEXT_MODEL_PATH = os.path.join(LOCAL_MODELS_PATH, "embedding_model")
-    VISUAL_MODEL_NAME = os.environ.get("EMBEDDING_VISUAL_MODEL")
-    VISUAL_MODEL_PATH = os.path.join(LOCAL_MODELS_PATH, "visual_model")
     # Input limits guarding against memory exhaustion.
     MAX_BATCH_SIZE = int(os.environ.get("EMBEDDING_MAX_BATCH_SIZE", "32"))
     MAX_TEXT_LENGTH = int(os.environ.get("EMBEDDING_MAX_TEXT_LENGTH", "50000"))
