@@ -46,10 +46,21 @@ SUPPORTED_MIME_TYPES: set[str] = config.SUPPORTED_ATTACHMENT_MIME_TYPES & PYDANT
 TEXT_EQUIVALENT_MIME_TYPES: dict[str, str] = {"application/json": "text/plain"}
 
 
+def resolve_media_type(media_type: str | None) -> str | None:
+    """Return the media type the attachment is handed to the model under.
+
+    Lets a caller apply :func:`is_supported_mime_type` to a listed media type before
+    downloading the content it belongs to.
+    """
+    if media_type is None:
+        return None
+    return TEXT_EQUIVALENT_MIME_TYPES.get(media_type, media_type)
+
+
 def as_text_equivalent(content: BinaryContent) -> BinaryContent:
     """Return the attachment under a text media type when its own one is only readable as text."""
-    text_media_type = TEXT_EQUIVALENT_MIME_TYPES.get(content.media_type)
-    if text_media_type is None:
+    text_media_type = resolve_media_type(content.media_type)
+    if text_media_type == content.media_type:
         return content
     return BinaryContent(data=content.data, media_type=text_media_type, identifier=content.identifier)
 

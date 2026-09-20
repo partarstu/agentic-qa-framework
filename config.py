@@ -106,6 +106,10 @@ AGENT_BASE_URL = os.environ.get("AGENT_BASE_URL", "http://localhost")
 MCP_SERVER_ATTACHMENTS_FOLDER_PATH = os.environ.get("MCP_SERVER_ATTACHMENTS_FOLDER_PATH", "/tmp")
 ATTACHMENTS_LOCAL_DESTINATION_FOLDER_PATH = os.environ.get("ATTACHMENTS_LOCAL_DESTINATION_FOLDER_PATH", "/tmp")
 JIRA_ATTACHMENT_SKIP_POSTFIX = os.environ.get("JIRA_ATTACHMENT_SKIP_POSTFIX", "_SKIP")
+# Checked against the listed attachment size before any download, and against the downloaded
+# content when Jira reports no size. The default matches the current Gemini API inline-data limit.
+JIRA_ATTACHMENT_MAX_BYTES = int(os.environ.get("JIRA_ATTACHMENT_MAX_BYTES", str(100 * 1024 * 1024)))
+JIRA_ATTACHMENT_DOWNLOAD_TIMEOUT_SECONDS = float(os.environ.get("JIRA_ATTACHMENT_DOWNLOAD_TIMEOUT_SECONDS", "60"))
 MCP_SERVER_TIMEOUT_SECONDS = int(os.environ.get("MCP_SERVER_TIMEOUT_SECONDS", "30"))
 MCP_SESSION_LIFECYCLE_TIMEOUT_SECONDS = int(os.environ.get("MCP_SESSION_LIFECYCLE_TIMEOUT_SECONDS", "30"))
 SUPPORTED_ATTACHMENT_MIME_TYPES: set[str] = {
@@ -209,7 +213,7 @@ PROMPT_GUARD_SERVICE_URL = os.environ.get("PROMPT_GUARD_SERVICE_URL")
 # Orchestrator
 class OrchestratorConfig:
     THINKING_LEVEL: ThinkingLevel = "low"
-    VERSION = os.environ.get("ORCHESTRATOR_VERSION", "1.1.1")
+    VERSION = os.environ.get("ORCHESTRATOR_VERSION", "2.0.0")
     # Label describing the environment the execution agents run their test cases against; reported
     # alongside every test execution result.
     TEST_ENVIRONMENT_LABEL = os.environ.get("TEST_ENVIRONMENT_LABEL", "Standard Test Environment")
@@ -273,7 +277,7 @@ class RequirementsReviewAgentConfig:
 # Test Case Classification Agent
 class TestCaseClassificationAgentConfig:
     THINKING_LEVEL: ThinkingLevel = "low"
-    VERSION = os.environ.get("TEST_CASE_CLASSIFICATION_AGENT_VERSION", "1.0.1")
+    VERSION = os.environ.get("TEST_CASE_CLASSIFICATION_AGENT_VERSION", "1.1.0")
     OWN_NAME = "Test Case Classification Agent"
     SKILL_ID = "test-case-classification"
     SKILL_NAME = "Test Case Classification"
@@ -289,7 +293,7 @@ class TestCaseClassificationAgentConfig:
 # Test Case Generation Agent
 class TestCaseGenerationAgentConfig:
     THINKING_LEVEL: ThinkingLevel = "low"
-    VERSION = os.environ.get("TEST_CASE_GENERATION_AGENT_VERSION", "1.0.1")
+    VERSION = os.environ.get("TEST_CASE_GENERATION_AGENT_VERSION", "1.1.0")
     OWN_NAME = "Test Case Generation Agent"
     SKILL_ID = "test-case-generation"
     SKILL_NAME = "Test Case Generation"
@@ -322,7 +326,7 @@ class TestCaseReviewAgentConfig:
 # Incident Creation Agent
 class IncidentCreationAgentConfig:
     THINKING_LEVEL: ThinkingLevel = "medium"
-    VERSION = os.environ.get("INCIDENT_CREATION_AGENT_VERSION", "1.0.1")
+    VERSION = os.environ.get("INCIDENT_CREATION_AGENT_VERSION", "1.1.0")
     OWN_NAME = "Incident Creation Agent"
     SKILL_ID = "incident-creation"
     SKILL_NAME = "Incident Creation"
@@ -476,7 +480,7 @@ class DocumentRagConfig:
     # Render resolution for PDF page rasterization.
     RENDER_DPI = int(os.environ.get("RAG_RENDER_DPI", "150"))
     # Maximum pixel dimension of a normalized page image (decompression-bomb guard).
-    MAX_IMAGE_PIXELS = int(os.environ.get("RAG_MAX_IMAGE_PIXELS", "4096"))
+    MAX_IMAGE_DIMENSION = int(os.environ.get("RAG_MAX_IMAGE_DIMENSION", "4096"))
     # Headless LibreOffice conversion of office formats to PDF. When disabled or the
     # binary is missing, formats that need conversion are skipped with a warning.
     OFFICE_CONVERSION_ENABLED = os.environ.get("RAG_OFFICE_CONVERSION_ENABLED", "true").lower() in ("true", "1", "t")

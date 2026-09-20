@@ -6,7 +6,7 @@
 
 import hmac
 import time
-from collections import defaultdict, deque
+from collections import OrderedDict, deque
 from datetime import UTC, datetime, timedelta
 
 import bcrypt
@@ -151,21 +151,24 @@ class LoginRateLimiter:
     """Bound login attempts per client in a bounded sliding time window."""
 
     def __init__(self, max_addresses: int = 10_000) -> None:
-        self._attempts: dict[str, deque[float]] = defaultdict(deque)
+        # Ordered by last activity, so the bound evicts the address idle the longest rather
+        # than whichever one happened to be seen first.
+        self._attempts: OrderedDict[str, deque[float]] = OrderedDict()
         self._max_addresses = max_addresses
 
     def check(self, client_ip: str, now: float | None = None) -> int | None:
         """Record an attempt and return retry seconds when the client is rate limited."""
         timestamp = time.monotonic() if now is None else now
         window = config.DashboardAuthConfig.LOGIN_RATE_LIMIT_WINDOW_SECONDS
-        attempts = self._attempts[client_ip]
+        attempts = self._attempts.setdefault(client_ip, deque())
+        self._attempts.move_to_end(client_ip)
         while attempts and attempts[0] <= timestamp - window:
             attempts.popleft()
         if len(attempts) >= config.DashboardAuthConfig.LOGIN_RATE_LIMIT_ATTEMPTS:
             return max(1, int(window - (timestamp - attempts[0])))
         attempts.append(timestamp)
-        if len(self._attempts) > self._max_addresses:
-            self._attempts.pop(next(iter(self._attempts)))
+        while len(self._attempts) > self._max_addresses:
+            self._attempts.popitem(last=False)
         return None
 
 

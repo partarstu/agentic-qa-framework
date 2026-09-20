@@ -77,12 +77,17 @@ class SharePointRagSyncRunner:
         scope = scope_key(SHAREPOINT_SCOPE, drive_id)
         try:
             async with self._lock_store.held_for_run(scope, lock_token) as token:
-                return await self._run_sync(drive_id, folder_path, file_name_pattern, scope, token)
+                client = SharePointClient()
+                try:
+                    return await self._run_sync(client, drive_id, folder_path, file_name_pattern, scope, token)
+                finally:
+                    client.close()
         finally:
             await self.close()
 
     async def _run_sync(
         self,
+        client: SharePointClient,
         drive_id: str,
         folder_path: str | None,
         file_name_pattern: str | None,
@@ -90,7 +95,6 @@ class SharePointRagSyncRunner:
         lock_token: str,
     ) -> RagUpdateResult:
         logger.info("Starting SharePoint sync for drive %s (folder: %s).", drive_id, folder_path or "root")
-        client = SharePointClient()
         stored = await self._fingerprints.load_scope(scope)
         state = await self._state_store.get_cursor(scope) or {}
         folders: dict[str, dict] = state.get("folders", {})

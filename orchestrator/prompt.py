@@ -21,9 +21,6 @@ class OrchestratorPrompt(PromptBase):
     def get_script_dir(self) -> Path:
         return PROMPTS_ROOT
 
-    def __init__(self, template_file_name: str):
-        super().__init__(template_file_name)
-
     def get_prompt(self) -> str:
         """Returns the formatted prompt as a string."""
         return self.template

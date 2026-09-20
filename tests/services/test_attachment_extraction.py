@@ -129,7 +129,7 @@ class TestAttachmentExtraction:
     def test_raster_image_is_resized_normalized_and_ocrd(self):
         with (
             patch("rag_sync.ocr.extract_text", return_value="German text: Größe"),
-            patch("config.DocumentRagConfig.MAX_IMAGE_PIXELS", 32),
+            patch("config.DocumentRagConfig.MAX_IMAGE_DIMENSION", 32),
         ):
             document = extract_attachment("diagram.jpg", _image_bytes((100, 50), "JPEG"))
 

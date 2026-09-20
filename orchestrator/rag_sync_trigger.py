@@ -53,6 +53,9 @@ class RagSyncTrigger:
             start_allowance_seconds=config.RagSyncConfig.START_ALLOWANCE_SECONDS,
         )
         self._outcomes = SyncOutcomeStore(metadata_db)
+        # One client per trigger, not per request: each one owns a gRPC channel and its threads.
+        self._jobs_client: Any | None = None
+        self._jobs_client_lock = asyncio.Lock()
 
     async def acquire(self, source: str, scope_id: str) -> str:
         """Verifies a sync mode is configured, acquires the scope lock and returns its holder token.
@@ -116,12 +119,9 @@ class RagSyncTrigger:
         """
         # Deferred: the Cloud Run Admin API client is only needed in job mode, and importing it
         # costs a noticeable share of the orchestrator's start-up.
-        import google.auth
         from google.cloud.run_v2 import RunJobRequest  # type: ignore[import-untyped]
-        from google.cloud.run_v2.services.jobs import JobsAsyncClient  # type: ignore[import-untyped]
 
-        credentials, _project = await asyncio.to_thread(google.auth.default)
-        jobs_client = JobsAsyncClient(credentials=credentials)
+        jobs_client = await self._get_jobs_client()
         run_job_request = RunJobRequest(
             name=config.RagSyncConfig.JOB_NAME,
             overrides={
@@ -136,6 +136,20 @@ class RagSyncTrigger:
         execution_name = operation.operation.name if operation else None
         logger.info("Started RAG sync job execution %s for scope %s.", execution_name, source)
         return SyncStartResult(status_code=202, execution=execution_name)
+
+    async def _get_jobs_client(self) -> Any:
+        """The Cloud Run Admin API client, built once and reused by every job start.
+
+        Building one per request would leak a gRPC channel and its threads on every trigger.
+        """
+        async with self._jobs_client_lock:
+            if self._jobs_client is None:
+                import google.auth
+                from google.cloud.run_v2.services.jobs import JobsAsyncClient  # type: ignore[import-untyped]
+
+                credentials, _project = await asyncio.to_thread(google.auth.default)
+                self._jobs_client = JobsAsyncClient(credentials=credentials)
+            return self._jobs_client
 
     async def _run_locally(self, source: str, scope_id: str, request: SyncRequest, token: str) -> SyncStartResult:
         """Forwards the request to the local sync service and awaits the result."""

@@ -426,6 +426,51 @@
       }
     },
     {
+      "unique-id": "rel-test-case-generation-atlassian-mcp",
+      "description": "Test Case Generation Agent reads the source Jira issue through the Atlassian MCP server.",
+      "protocol": "HTTPS",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "test-case-generation-agent"
+          },
+          "destination": {
+            "node": "atlassian-mcp-server"
+          }
+        }
+      }
+    },
+    {
+      "unique-id": "rel-test-case-review-atlassian-mcp",
+      "description": "Test Case Review Agent reads the source Jira issue through the Atlassian MCP server.",
+      "protocol": "HTTPS",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "test-case-review-agent"
+          },
+          "destination": {
+            "node": "atlassian-mcp-server"
+          }
+        }
+      }
+    },
+    {
+      "unique-id": "rel-incident-creation-atlassian-mcp",
+      "description": "Incident Creation Agent reads and writes Jira issues through the Atlassian MCP server.",
+      "protocol": "HTTPS",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "incident-creation-agent"
+          },
+          "destination": {
+            "node": "atlassian-mcp-server"
+          }
+        }
+      }
+    },
+    {
       "unique-id": "rel-atlassian-mcp-jira",
       "description": "The Atlassian MCP server communicates with the external Jira instance.",
       "protocol": "HTTPS",

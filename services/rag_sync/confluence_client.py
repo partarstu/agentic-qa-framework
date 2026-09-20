@@ -72,15 +72,18 @@ class ConfluenceClient:
     async def close(self) -> None:
         await self._client.aclose()
 
-    async def _get(self, path: str, params: dict | None = None) -> dict:
-        """GET with retries on 429/5xx, honouring Retry-After."""
+    async def _request_with_retry(self, url: str, description: str, params: dict | None = None) -> httpx.Response:
+        """GET with retries on 429/5xx, honouring Retry-After.
+
+        The one request path of this client: ``description`` names the call in the errors it raises.
+        """
         max_retries = config.DocumentRagConfig.CONFLUENCE_MAX_RETRIES
         for attempt in range(max_retries):
             try:
-                response = await self._client.get(path, params=params)
+                response = await self._client.get(url, params=params)
             except httpx.TimeoutException as e:
                 if attempt == max_retries - 1:
-                    raise ConfluenceApiError(f"Confluence request to {path} timed out: {e}") from e
+                    raise ConfluenceApiError(f"{description} timed out: {e}") from e
                 await asyncio.sleep(min(2**attempt, RETRY_BACKOFF_CAP_SECONDS))
                 continue
             if response.status_code in RETRYABLE_STATUS_CODES and attempt < max_retries - 1:
@@ -90,11 +93,16 @@ class ConfluenceClient:
                 continue
             if response.status_code >= 400:
                 raise ConfluenceApiError(
-                    f"Confluence request to {path} failed: {response.status_code} {response.text}",
+                    f"{description} failed: {response.status_code} {response.text}",
                     status_code=response.status_code,
                 )
-            return response.json()
-        raise ConfluenceApiError(f"Confluence request to {path} failed after {max_retries} attempts.")
+            return response
+        raise ConfluenceApiError(f"{description} failed after {max_retries} attempts.")
+
+    async def _get(self, path: str, params: dict | None = None) -> dict:
+        """The JSON body of one API call."""
+        response = await self._request_with_retry(path, f"Confluence request to {path}", params)
+        return response.json()
 
     async def _get_paginated(self, path: str, params: dict | None = None) -> list[dict]:
         """Collect every result page, following the cursor in ``_links.next``."""
@@ -155,24 +163,5 @@ class ConfluenceClient:
         prefix is only added when the link doesn't carry it.
         """
         prefixed = download_link if download_link.startswith("/wiki") else f"/wiki{download_link}"
-        download_url = f"{self._base_url}{prefixed}"
-        max_retries = config.DocumentRagConfig.CONFLUENCE_MAX_RETRIES
-        for attempt in range(max_retries):
-            try:
-                response = await self._client.get(download_url)
-            except httpx.TimeoutException as e:
-                if attempt == max_retries - 1:
-                    raise ConfluenceApiError(f"Attachment download timed out: {e}") from e
-                await asyncio.sleep(min(2**attempt, RETRY_BACKOFF_CAP_SECONDS))
-                continue
-            if response.status_code in RETRYABLE_STATUS_CODES and attempt < max_retries - 1:
-                await asyncio.sleep(
-                    utils.retry_delay(response.headers.get("Retry-After"), attempt, RETRY_BACKOFF_CAP_SECONDS)
-                )
-                continue
-            if response.status_code >= 400:
-                raise ConfluenceApiError(
-                    f"Attachment download failed: {response.status_code}", status_code=response.status_code
-                )
-            return response.content
-        raise ConfluenceApiError("Attachment download failed after retries.")
+        response = await self._request_with_retry(f"{self._base_url}{prefixed}", "Attachment download")
+        return response.content

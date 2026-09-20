@@ -5,7 +5,9 @@
 """Best-effort durable dashboard state backed by payload-only Qdrant records."""
 
 import asyncio
+from collections.abc import Coroutine
 from datetime import UTC, datetime, timedelta
+from typing import Any
 from uuid import uuid4
 
 from qdrant_client import models
@@ -195,7 +197,7 @@ class DashboardStateStore:
             await self._injected_service.close()
 
 
-def _start_background_task(coroutine, name: str) -> asyncio.Task[None]:
+def _start_background_task(coroutine: Coroutine[Any, Any, None], name: str) -> asyncio.Task[None]:
     """Runs a loop in the background, logging the failure that would otherwise end it silently."""
 
     def report(task: asyncio.Task[None]) -> None:

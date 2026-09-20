@@ -285,7 +285,7 @@ JIRA_URL=YOUR_JIRA_INSTANCE_URL # Required for Xray, the RAG sync runtime and th
                                  # MCP server (see "Jira MCP Server Setup" below), which has its own .env file.
 JIRA_USERNAME=YOUR_JIRA_USERNAME # Required alongside JIRA_URL. The email address associated with your Jira account.
 JIRA_API_TOKEN=YOUR_JIRA_API_TOKEN # Required alongside JIRA_URL. A Jira API token for authentication.
-ORCHESTRATOR_VERSION=1.1.1 # Default: 1.1.1. Version of the orchestrator, reported for traceability.
+ORCHESTRATOR_VERSION=2.0.0 # Default: 2.0.0. Version of the orchestrator, reported for traceability.
 TEST_ENVIRONMENT_LABEL=Standard Test Environment # Default: Standard Test Environment. Label describing the
                                  # environment tests are executed against. Reported on every test execution
                                  # result and emitted as an Allure tag.
@@ -346,10 +346,10 @@ EXTERNAL_PORT=8001 # Default: 8001. The externally accessible port for the agent
 # Version each agent reports in its A2A agent card (visible in the dashboard) and, for execution agents,
 # on every test execution result. Each agent reads its own variable.
 REQUIREMENTS_REVIEW_AGENT_VERSION=1.1.0 # Default: 1.1.0.
-TEST_CASE_CLASSIFICATION_AGENT_VERSION=1.0.1 # Default: 1.0.1.
-TEST_CASE_GENERATION_AGENT_VERSION=1.0.1 # Default: 1.0.1.
+TEST_CASE_CLASSIFICATION_AGENT_VERSION=1.1.0 # Default: 1.1.0.
+TEST_CASE_GENERATION_AGENT_VERSION=1.1.0 # Default: 1.1.0.
 TEST_CASE_REVIEW_AGENT_VERSION=1.1.1 # Default: 1.1.1.
-INCIDENT_CREATION_AGENT_VERSION=1.0.1 # Default: 1.0.1.
+INCIDENT_CREATION_AGENT_VERSION=1.1.0 # Default: 1.1.0.
 
 # Agent Discovery (for remote agents)
 REMOTE_EXECUTION_AGENT_HOSTS=http://localhost # Default: http://localhost. Comma-separated URLs of remote agent hosts.
@@ -363,6 +363,8 @@ ATTACHMENTS_LOCAL_DESTINATION_FOLDER_PATH=/tmp # Default: /tmp. Path where attac
 MCP_SERVER_ATTACHMENTS_FOLDER_PATH=/tmp # Default: /tmp. Path where MCP server stores attachments.
 JIRA_ATTACHMENT_SKIP_POSTFIX=_SKIP # Default: _SKIP. Attachments with filenames ending in this postfix (before the extension) 
                                    # will be excluded from agent analysis. Case-insensitive. Example: "mockup_SKIP.png" is skipped.
+JIRA_ATTACHMENT_MAX_BYTES=104857600 # Default: 104857600 (100 MiB). Attachments larger than this are skipped instead of being handed to the model.
+JIRA_ATTACHMENT_DOWNLOAD_TIMEOUT_SECONDS=60 # Default: 60. Timeout of one attachment download over the Jira REST API.
 
 # OpenTelemetry (for tracing and metrics)
 OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 # Default: http://localhost:4317. Endpoint for OpenTelemetry collector.
@@ -410,7 +412,7 @@ RAG_CHUNK_MAX_TOKENS=512 # Default: 512. Chunk token budget for page bodies, bre
 RAG_MAX_ATTACHMENT_BYTES=104857600 # Default: 100 MiB. Listed attachment size cap checked before download.
 RAG_MAX_PAGES_PER_DOCUMENT=200 # Default: 200. Maximum pages or image frames ingested; the true count is retained.
 RAG_RENDER_DPI=150 # Default: 150. PDF page rendering resolution.
-RAG_MAX_IMAGE_PIXELS=4096 # Default: 4096. Maximum width or height of a normalized page image.
+RAG_MAX_IMAGE_DIMENSION=4096 # Default: 4096. Maximum width or height of a normalized page image.
 RAG_OFFICE_CONVERSION_ENABLED=true # Default: true. Convert office formats to PDF with headless LibreOffice.
 RAG_OFFICE_CONVERSION_TIMEOUT_SECONDS=120 # Default: 120. Maximum duration of one LibreOffice conversion.
 RAG_OFFICE_CONVERSION_CONCURRENCY=1 # Default: 1. Maximum concurrent LibreOffice processes per sync runtime.
@@ -774,7 +776,7 @@ gcloud builds submit --config 'path/to/your/cloudbuild.yaml' --substitutions "`^
   lock. Defaults: `3600` / `3900` / `300`.
 * `_RAG_SYNC_MEMORY` / `_RAG_SYNC_CPU`: Memory and CPU of the sync job. Defaults: `4Gi` / `2`.
 * `_QDRANT_DOCUMENTS_COLLECTION_NAME`, `_RAG_OFFICE_CONVERSION_ENABLED`, `_RAG_MAX_ATTACHMENT_BYTES`,
-  `_RAG_MAX_PAGES_PER_DOCUMENT`, `_RAG_RENDER_DPI`, `_RAG_MAX_IMAGE_PIXELS`: The sync job's settings of the same names
+  `_RAG_MAX_PAGES_PER_DOCUMENT`, `_RAG_RENDER_DPI`, `_RAG_MAX_IMAGE_DIMENSION`: The sync job's settings of the same names
   (see *Environment Variables*); `_QDRANT_DOCUMENTS_COLLECTION_NAME` sets `QDRANT_CONFLUENCE_COLLECTION_NAME`.
 * `_ATLASSIAN_MCP_IMAGE_TAG` / `_QDRANT_IMAGE_TAG`: The image tags of the Atlassian MCP server and of Qdrant, which
   are also their redeploy versions. Defaults: `0.21.1` / `v1.16.3`.

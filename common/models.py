@@ -10,7 +10,7 @@ from enum import StrEnum
 from typing import Literal, Optional
 
 from a2a.types import Part
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from pydantic.json_schema import SkipJsonSchema
 
 
@@ -191,14 +191,30 @@ class JiraSyncRequest(SyncRequest):
         return ["--project-key", self.project_key]
 
 
-class SharePointSyncRequest(SyncRequest):
+class AttachmentFilteredSyncRequest(SyncRequest, ABC):
+    """A sync scope whose attachments can be narrowed by a name pattern."""
+
+    attachment_name_pattern: str | None = Field(default=None, max_length=200)
+
+    @field_validator("attachment_name_pattern")
+    @classmethod
+    def _reject_unusable_pattern(cls, pattern: str | None) -> str | None:
+        """Compile the pattern here, so every entry point rejects an unusable one as a bad request."""
+        if pattern:
+            # Deferred: common.utils imports this module, so importing it at module level would cycle.
+            from common.utils import compile_name_pattern
+
+            compile_name_pattern(pattern)
+        return pattern
+
+
+class SharePointSyncRequest(AttachmentFilteredSyncRequest):
     """Scope of a SharePoint sync: one drive, optionally one folder of it."""
 
     # Graph drive IDs are opaque but never carry path or query characters; constraining them keeps
     # a request from steering the app-only token at another Graph resource through the REST path.
     drive_id: str = Field(min_length=1, max_length=200, pattern=r"^[A-Za-z0-9!._-]+$")
     folder_path: str | None = Field(default=None, max_length=500)
-    attachment_name_pattern: str | None = Field(default=None, max_length=200)
 
     def to_cli_args(self) -> list[str]:
         args = ["--drive-id", self.drive_id]
@@ -209,12 +225,11 @@ class SharePointSyncRequest(SyncRequest):
         return args
 
 
-class ConfluenceSyncRequest(SyncRequest):
+class ConfluenceSyncRequest(AttachmentFilteredSyncRequest):
     """Scope of a Confluence sync: one space, optionally one page of it."""
 
     space_key: str = Field(min_length=1, pattern=r"^[~]?[A-Za-z0-9._~-]+$")
     page_id: int | None = Field(default=None, gt=0)
-    attachment_name_pattern: str | None = Field(default=None, max_length=200)
     skip_page_body: bool = False
 
     def to_cli_args(self) -> list[str]:

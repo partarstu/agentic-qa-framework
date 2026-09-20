@@ -17,6 +17,11 @@ import argparse
 import asyncio
 import os
 import sys
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    # Quoted at the use sites: the runtime import of "common" only works after the sys.path setup below.
+    from common.models import RagUpdateResult
 
 # Make the runtime importable when the runner is started directly. The image copies rag_sync/ next to
 # common/, while the repository nests it under services/, so both the package's parent directory
@@ -25,7 +30,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
-def _exit_code(result) -> int:
+def _exit_code(result: "RagUpdateResult") -> int:
     """The one exit-code mapping of a run's outcome, shared by every source.
 
     0 for a clean run, 2 for a run that finished with item failures, so a job platform
@@ -37,65 +42,59 @@ def _exit_code(result) -> int:
     return 0 if result.status == SyncStatus.COMPLETED else 2
 
 
-async def _run(args: argparse.Namespace) -> int:
-    from rag_sync.outcome_reporting import report_terminal_outcome
+# The argument naming each source's scope, which the outcome is reported under.
+_SCOPE_ARGUMENTS = {"confluence": "space_key", "sharepoint": "drive_id"}
 
-    if args.source == "jira":
-        from rag_sync.jira_sync import JiraRagSyncRunner
 
-        try:
-            result = await JiraRagSyncRunner().sync_project(args.project_key, lock_token=args.lock_token)
-        except Exception as exc:
-            await report_terminal_outcome("jira", args.project_key, error=exc)
-            raise
-        await report_terminal_outcome("jira", args.project_key, result=result)
-        print(f"Jira sync completed: {result.model_dump()}")
-        return _exit_code(result)
+def _scope_id(args: argparse.Namespace) -> str:
+    """The scope the run reports its outcome under, per source."""
+    return getattr(args, _SCOPE_ARGUMENTS.get(args.source, "project_key"))
 
-    if args.source == "sharepoint":
-        from rag_sync.sharepoint_sync import SharePointRagSyncRunner
 
-        try:
-            result = await SharePointRagSyncRunner().sync_drive(
+async def _start_run(args: argparse.Namespace) -> "RagUpdateResult":
+    """Runs the sync of the requested source; the runners are imported only when used."""
+    match args.source:
+        case "jira":
+            from rag_sync.jira_sync import JiraRagSyncRunner
+
+            return await JiraRagSyncRunner().sync_project(args.project_key, lock_token=args.lock_token)
+        case "test_cases":
+            from rag_sync.test_case_sync import TestCaseRagSyncRunner
+
+            return await TestCaseRagSyncRunner().sync_project(args.project_key, lock_token=args.lock_token)
+        case "sharepoint":
+            from rag_sync.sharepoint_sync import SharePointRagSyncRunner
+
+            return await SharePointRagSyncRunner().sync_drive(
                 drive_id=args.drive_id,
                 folder_path=args.folder_path,
                 file_name_pattern=args.attachment_name_pattern,
                 lock_token=args.lock_token,
             )
-        except Exception as exc:
-            await report_terminal_outcome("sharepoint", args.drive_id, error=exc)
-            raise
-        await report_terminal_outcome("sharepoint", args.drive_id, result=result)
-        print(f"SharePoint sync completed: {result.model_dump()}")
-        return _exit_code(result)
+        case _:
+            from rag_sync.confluence_sync import ConfluenceRagSyncRunner
 
-    if args.source == "test_cases":
-        from rag_sync.test_case_sync import TestCaseRagSyncRunner
+            return await ConfluenceRagSyncRunner().sync_space(
+                space_key=args.space_key,
+                page_id=args.page_id,
+                attachment_name_pattern=args.attachment_name_pattern,
+                skip_page_body=args.skip_page_body,
+                lock_token=args.lock_token,
+            )
 
-        try:
-            result = await TestCaseRagSyncRunner().sync_project(args.project_key, lock_token=args.lock_token)
-        except Exception as exc:
-            await report_terminal_outcome("test_cases", args.project_key, error=exc)
-            raise
-        await report_terminal_outcome("test_cases", args.project_key, result=result)
-        print(f"Test-case sync completed: {result.model_dump()}")
-        return _exit_code(result)
 
-    from rag_sync.confluence_sync import ConfluenceRagSyncRunner
+async def _run(args: argparse.Namespace) -> int:
+    """Runs one sync and reports its terminal outcome, whichever way it ended."""
+    from rag_sync.outcome_reporting import report_terminal_outcome
 
+    scope_id = _scope_id(args)
     try:
-        result = await ConfluenceRagSyncRunner().sync_space(
-            space_key=args.space_key,
-            page_id=args.page_id,
-            attachment_name_pattern=args.attachment_name_pattern,
-            skip_page_body=args.skip_page_body,
-            lock_token=args.lock_token,
-        )
+        result = await _start_run(args)
     except Exception as exc:
-        await report_terminal_outcome("confluence", args.space_key, error=exc)
+        await report_terminal_outcome(args.source, scope_id, error=exc)
         raise
-    await report_terminal_outcome("confluence", args.space_key, result=result)
-    print(f"Confluence sync completed: {result.model_dump()}")
+    await report_terminal_outcome(args.source, scope_id, result=result)
+    print(f"Sync of {args.source} scope {scope_id} completed: {result.model_dump()}")
     return _exit_code(result)
 
 

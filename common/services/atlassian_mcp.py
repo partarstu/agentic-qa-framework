@@ -158,10 +158,10 @@ class SelfHealingAtlassianToolset(WrapperToolset[AgentDepsT]):
             try:
                 with anyio.fail_after(timeout_seconds, shield=True):
                     await fresh.__aenter__()
-            except TimeoutError:
+            except TimeoutError as exc:
                 raise TimeoutError(
                     f"Atlassian MCP session set-up for {operation} did not complete within {timeout_seconds}s."
-                )
+                ) from exc
             return await run(fresh)
         finally:
             try:

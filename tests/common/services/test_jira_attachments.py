@@ -32,11 +32,16 @@ def test_build_jira_client_passes_basic_auth():
     mock_jira.assert_called_once_with(server="https://jira.example.com", basic_auth=("user", "token"))
 
 
-def _attachment(filename: str, mime_type: str, content: str = "/rest/api/2/attachment/content/1"):
+MAX_BYTES = 1024
+DOWNLOAD_TIMEOUT = 60.0
+
+
+def _attachment(filename: str, mime_type: str, content: str = "/rest/api/2/attachment/content/1", size: int = 10):
     attachment = MagicMock()
     attachment.filename = filename
     attachment.mimeType = mime_type
     attachment.content = content
+    attachment.size = size
     return attachment
 
 
@@ -46,13 +51,19 @@ def _issue_with(attachments) -> MagicMock:
     return issue
 
 
+def _configure(mock_config, base_url: str = "https://jira.example.com") -> None:
+    mock_config.JIRA_BASE_URL = base_url
+    mock_config.JIRA_USER = "user"
+    mock_config.JIRA_TOKEN = "token"
+    mock_config.JIRA_ATTACHMENT_MAX_BYTES = MAX_BYTES
+    mock_config.JIRA_ATTACHMENT_DOWNLOAD_TIMEOUT_SECONDS = DOWNLOAD_TIMEOUT
+
+
 @patch("common.services.jira_attachments.config")
 @patch("common.services.jira_attachments.httpx.get")
 @patch("common.services.jira_attachments.build_jira_client")
 def test_downloads_supported_attachments_as_text_equivalents(mock_client, mock_get, mock_config):
-    mock_config.JIRA_BASE_URL = "https://jira.example.com"
-    mock_config.JIRA_USER = "user"
-    mock_config.JIRA_TOKEN = "token"
+    _configure(mock_config)
     mock_client.return_value.issue.return_value = _issue_with([_attachment("data.json", "application/json")])
     mock_get.return_value.content = b'{"id": 1}'
     mock_get.return_value.raise_for_status = lambda: None
@@ -66,6 +77,7 @@ def test_downloads_supported_attachments_as_text_equivalents(mock_client, mock_g
         "https://jira.example.com/rest/api/2/attachment/content/1",
         auth=("user", "token"),
         follow_redirects=True,
+        timeout=DOWNLOAD_TIMEOUT,
     )
 
 
@@ -73,9 +85,7 @@ def test_downloads_supported_attachments_as_text_equivalents(mock_client, mock_g
 @patch("common.services.jira_attachments.httpx.get")
 @patch("common.services.jira_attachments.build_jira_client")
 def test_downloads_absolute_content_url_unchanged(mock_client, mock_get, mock_config):
-    mock_config.JIRA_BASE_URL = "https://jira.example.com"
-    mock_config.JIRA_USER = "user"
-    mock_config.JIRA_TOKEN = "token"
+    _configure(mock_config)
     absolute_url = "https://jira.example.com/rest/api/2/attachment/content/1"
     mock_client.return_value.issue.return_value = _issue_with(
         [_attachment("data.json", "application/json", content=absolute_url)]
@@ -85,7 +95,9 @@ def test_downloads_absolute_content_url_unchanged(mock_client, mock_get, mock_co
 
     download_issue_attachments("PROJ-1")
 
-    mock_get.assert_called_once_with(absolute_url, auth=("user", "token"), follow_redirects=True)
+    mock_get.assert_called_once_with(
+        absolute_url, auth=("user", "token"), follow_redirects=True, timeout=DOWNLOAD_TIMEOUT
+    )
 
 
 @pytest.mark.parametrize(
@@ -100,9 +112,7 @@ def test_downloads_absolute_content_url_unchanged(mock_client, mock_get, mock_co
 @patch("common.services.jira_attachments.httpx.get")
 @patch("common.services.jira_attachments.build_jira_client")
 def test_downloads_content_url_with_explicit_default_port(mock_client, mock_get, mock_config, base_url, content_url):
-    mock_config.JIRA_BASE_URL = base_url
-    mock_config.JIRA_USER = "user"
-    mock_config.JIRA_TOKEN = "token"
+    _configure(mock_config, base_url)
     mock_client.return_value.issue.return_value = _issue_with(
         [_attachment("data.json", "application/json", content=content_url)]
     )
@@ -112,7 +122,9 @@ def test_downloads_content_url_with_explicit_default_port(mock_client, mock_get,
     result = download_issue_attachments("PROJ-1")
 
     assert list(result) == ["data.json"]
-    mock_get.assert_called_once_with(content_url, auth=("user", "token"), follow_redirects=True)
+    mock_get.assert_called_once_with(
+        content_url, auth=("user", "token"), follow_redirects=True, timeout=DOWNLOAD_TIMEOUT
+    )
 
 
 @pytest.mark.parametrize(
@@ -157,9 +169,7 @@ def test_downloads_content_url_with_explicit_default_port(mock_client, mock_get,
 def test_skips_attachment_whose_content_url_is_on_another_origin(
     mock_client, mock_get, mock_config, mock_logger, content_url
 ):
-    mock_config.JIRA_BASE_URL = "https://jira.example.com"
-    mock_config.JIRA_USER = "user"
-    mock_config.JIRA_TOKEN = "token"
+    _configure(mock_config)
     mock_client.return_value.issue.return_value = _issue_with(
         [_attachment("data.json", "application/json", content=content_url)]
     )
@@ -176,18 +186,40 @@ def test_skips_attachment_whose_content_url_is_on_another_origin(
 @patch("common.services.jira_attachments.httpx.get")
 @patch("common.services.jira_attachments.build_jira_client")
 def test_skips_unsupported_and_postfixed_attachments(mock_client, mock_get, mock_config):
-    mock_config.JIRA_BASE_URL = "https://jira.example.com"
-    mock_config.JIRA_USER = "user"
-    mock_config.JIRA_TOKEN = "token"
+    _configure(mock_config)
     mock_client.return_value.issue.return_value = _issue_with(
         [_attachment("archive.zip", "application/zip"), _attachment("diagram_SKIP.png", "image/png")]
     )
-    mock_get.return_value.content = b"bytes"
+
+    assert download_issue_attachments("PROJ-1") == {}
+    # Both predicates read the listed metadata, so neither attachment is ever downloaded.
+    mock_get.assert_not_called()
+
+
+@patch("common.services.jira_attachments.config")
+@patch("common.services.jira_attachments.httpx.get")
+@patch("common.services.jira_attachments.build_jira_client")
+def test_skips_attachment_whose_listed_size_exceeds_the_limit(mock_client, mock_get, mock_config):
+    _configure(mock_config)
+    mock_client.return_value.issue.return_value = _issue_with(
+        [_attachment("huge.pdf", "application/pdf", size=MAX_BYTES + 1)]
+    )
+
+    assert download_issue_attachments("PROJ-1") == {}
+    mock_get.assert_not_called()
+
+
+@patch("common.services.jira_attachments.config")
+@patch("common.services.jira_attachments.httpx.get")
+@patch("common.services.jira_attachments.build_jira_client")
+def test_skips_attachment_whose_downloaded_content_exceeds_the_limit(mock_client, mock_get, mock_config):
+    """Jira may omit or under-report the size, so the downloaded content is checked too."""
+    _configure(mock_config)
+    mock_client.return_value.issue.return_value = _issue_with([_attachment("under-reported.pdf", "application/pdf")])
+    mock_get.return_value.content = b"x" * (MAX_BYTES + 1)
     mock_get.return_value.raise_for_status = lambda: None
 
     assert download_issue_attachments("PROJ-1") == {}
-    # The postfixed attachment is dropped before downloading; the unsupported one after it.
-    mock_get.assert_called_once()
 
 
 @patch("common.services.jira_attachments.httpx.get")

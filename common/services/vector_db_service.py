@@ -6,6 +6,7 @@ import asyncio
 import random
 import time
 import uuid
+from collections.abc import Awaitable, Callable
 
 import httpx
 from qdrant_client import AsyncQdrantClient, models
@@ -25,6 +26,8 @@ SPARSE_VECTOR_NAME = "sparse"
 # retrying; every other UnexpectedResponse, 4xx included, propagates untouched.
 _QDRANT_RETRYABLE_STATUSES = frozenset({502, 503, 504})
 _QDRANT_RETRY_ATTEMPTS = 3
+# Points fetched per scroll request; the loop follows the cursor to the last page.
+_SCROLL_PAGE_SIZE = 1000
 
 
 # Payload fields indexed per collection kind after creation; matching is by collection name from configuration.
@@ -59,7 +62,7 @@ _TEST_CASES_INDEXED_FIELDS = {
 }
 
 
-async def _retry_qdrant(operation: str, run):
+async def _retry_qdrant[T](operation: str, run: Callable[[], Awaitable[T]]) -> T:
     """Runs one asynchronous vector-database call with bounded retries.
 
     Only genuine transport failures (``ResponseHandlingException`` wraps connection errors
@@ -631,34 +634,42 @@ class VectorDbService:
             logger.exception("Error updating payload in Vector DB")
             raise
 
+    async def _scroll_all(
+        self,
+        operation: str,
+        scroll_filter: models.Filter,
+        with_payload: bool | models.PayloadSelector,
+    ) -> list[models.Record]:
+        """Every record matching a filter, following the scroll cursor to the last page.
+
+        The one scroll implementation: no caller re-implements the pagination loop against the client.
+        """
+        records: list[models.Record] = []
+        offset = None
+        while True:
+            points, next_offset = await _retry_qdrant(
+                operation,
+                lambda current_offset=offset: self.client.scroll(
+                    collection_name=self.collection_name,
+                    scroll_filter=scroll_filter,
+                    limit=_SCROLL_PAGE_SIZE,
+                    offset=current_offset,
+                    with_payload=with_payload,
+                    with_vectors=False,
+                ),
+            )
+            records.extend(points)
+            if next_offset is None:
+                return records
+            offset = next_offset
+
     async def scroll_points(
         self, scroll_filter: models.Filter, payload_fields: list[str] | None = None
     ) -> list[models.Record]:
-        """Scrolls every point matching a filter, page by page, with the selected payload fields.
-
-        The one scroll implementation for callers that need a payload-field subset, so the
-        pagination loop isn't re-implemented against the client on each of them.
-        """
+        """Scrolls every point matching a filter, page by page, with the selected payload fields."""
         try:
-            records: list[models.Record] = []
-            offset = None
             selector = models.PayloadSelectorInclude(include=payload_fields) if payload_fields else True
-            while True:
-                points, next_offset = await _retry_qdrant(
-                    "scroll",
-                    lambda current_offset=offset: self.client.scroll(
-                        collection_name=self.collection_name,
-                        scroll_filter=scroll_filter,
-                        limit=1000,
-                        offset=current_offset,
-                        with_payload=selector,
-                        with_vectors=False,
-                    ),
-                )
-                records.extend(points)
-                if next_offset is None:
-                    return records
-                offset = next_offset
+            return await self._scroll_all("scroll", scroll_filter, selector)
         except Exception:
             logger.exception("Error scrolling points in %s", self.collection_name)
             raise
@@ -668,28 +679,11 @@ class VectorDbService:
         try:
             if not await self._collection_exists():
                 return []
-            ids = []
-            offset = None
             project_filter = models.Filter(
                 must=[models.FieldCondition(key="project_key", match=models.MatchValue(value=project_key))]
             )
-            while True:
-                result, next_offset = await _retry_qdrant(
-                    f"project scroll in {self.collection_name}",
-                    lambda current_offset=offset: self.client.scroll(
-                        collection_name=self.collection_name,
-                        scroll_filter=project_filter,
-                        limit=1000,
-                        offset=current_offset,
-                        with_payload=False,
-                        with_vectors=False,
-                    ),
-                )
-                ids.extend(p.id for p in result)
-                if next_offset is None:
-                    break
-                offset = next_offset
-            return ids
+            records = await self._scroll_all(f"project scroll in {self.collection_name}", project_filter, False)
+            return [record.id for record in records]
         except Exception:
             logger.exception("Error scrolling Vector DB")
             raise
@@ -747,24 +741,8 @@ class VectorDbService:
             must = [
                 models.FieldCondition(key=key, match=models.MatchValue(value=value)) for key, value in filter_by.items()
             ]
-            records: list[dict] = []
-            offset = None
-            while True:
-                points, next_offset = await _retry_qdrant(
-                    f"record scroll in {self.collection_name}",
-                    lambda current_offset=offset: self.client.scroll(
-                        collection_name=self.collection_name,
-                        scroll_filter=models.Filter(must=must),
-                        limit=1000,
-                        offset=current_offset,
-                        with_payload=True,
-                        with_vectors=False,
-                    ),
-                )
-                records.extend(point.payload for point in points if point.payload)
-                if next_offset is None:
-                    return records
-                offset = next_offset
+            points = await self._scroll_all(f"record scroll in {self.collection_name}", models.Filter(must=must), True)
+            return [point.payload for point in points if point.payload]
         except Exception:
             logger.exception("Error scrolling records matching %s in %s", filter_by, self.collection_name)
             raise

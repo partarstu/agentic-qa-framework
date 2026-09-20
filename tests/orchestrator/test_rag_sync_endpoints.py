@@ -29,6 +29,11 @@ def client():
     orchestrator_app.dependency_overrides.pop(_validate_api_key, None)
 
 
+def _validation_messages(response) -> str:
+    """The messages of a FastAPI 422 body, joined so a test can assert one substring."""
+    return " ".join(error["msg"] for error in response.json()["detail"])
+
+
 @pytest.fixture
 def reset_trigger_singleton():
     yield
@@ -182,7 +187,7 @@ class TestUpdateConfluenceDb:
             "/update-confluence-db", json={"space_key": "DEV", "attachment_name_pattern": "([unclosed"}
         )
         assert response.status_code == 422
-        assert "Invalid name pattern" in response.json()["detail"]
+        assert "Invalid name pattern" in _validation_messages(response)
 
     def test_invalid_page_id_rejected(self, client):
         response = client.post("/update-confluence-db", json={"space_key": "DEV", "page_id": -5})
@@ -191,7 +196,7 @@ class TestUpdateConfluenceDb:
     def test_exponentially_backtracking_pattern_returns_422(self, client):
         response = client.post("/update-confluence-db", json={"space_key": "DEV", "attachment_name_pattern": "(a+)+b"})
         assert response.status_code == 422
-        assert "nested repetition" in response.json()["detail"]
+        assert "nested repetition" in _validation_messages(response)
 
     @pytest.mark.parametrize(
         "drive_id",

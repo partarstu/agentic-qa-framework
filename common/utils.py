@@ -130,6 +130,11 @@ class StructuredLogFilter(logging.Filter):
         return True
 
 
+# The attributes every LogRecord carries; anything else on a record was added by a call site.
+# Computed once: building a throwaway record per formatted line would cost far more than the lookup.
+_STANDARD_LOG_RECORD_FIELDS = frozenset(logging.makeLogRecord({}).__dict__)
+
+
 class StructuredJsonFormatter(logging.Formatter):
     """Render a log record as one UTC JSON object suitable for Cloud Logging."""
 
@@ -139,11 +144,10 @@ class StructuredJsonFormatter(logging.Formatter):
 
     def format(self, record: logging.LogRecord) -> str:
         message = record.getMessage()
-        standard = logging.makeLogRecord({}).__dict__
         custom = {
             key: value
             for key, value in record.__dict__.items()
-            if key not in standard and key not in self._CANONICAL_FIELDS
+            if key not in _STANDARD_LOG_RECORD_FIELDS and key not in self._CANONICAL_FIELDS
         }
         payload: dict[str, object] = {"custom": custom} if custom else {}
         payload.update(

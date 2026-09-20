@@ -67,6 +67,7 @@ from common.models import (
     SharePointSyncRequest,
     SyncOutcome,
     SyncRequest,
+    SyncStatus,
     TestCase,
     TestCaseType,
     TestExecutionRequest,
@@ -86,7 +87,6 @@ from common.streaming import (
     TaskDoneEvent,
 )
 from common.token_usage import TokenUsage
-from common.utils import compile_name_pattern
 from orchestrator.auth import LoginRequest, TokenResponse, auth_service, client_ip, dashboard_auth, login_rate_limiter
 from orchestrator.dashboard_service import dashboard_service
 from orchestrator.dashboard_state import dashboard_state_store
@@ -121,6 +121,12 @@ discovery_lock = asyncio.Lock()  # Serialises the startup, periodic and manual d
 agent_selection_lock = asyncio.Lock()  # Ensures atomic agent selection and reservation
 cancellation_queue = asyncio.Queue()
 _results_extractor_semaphore = asyncio.Semaphore(1)  # Serializes extractor calls to avoid rate limit errors
+
+# How loudly a reported sync outcome is logged; anything else is an ordinary INFO event.
+_SYNC_OUTCOME_LOG_LEVELS = {
+    SyncStatus.FAILED: logging.ERROR,
+    SyncStatus.COMPLETED_WITH_ERRORS: logging.WARNING,
+}
 
 # The agent a send-task call actually reserved. Routing may pick a different agent than the caller
 # proposed, and the execution result reports which agent ran the test, so the caller reads it back
@@ -294,13 +300,7 @@ async def get_rag_sync_status(_: str = Depends(dashboard_auth)):
 @orchestrator_app.post("/sync-outcome")
 async def receive_sync_outcome(outcome: SyncOutcome, api_key: str = Depends(_validate_api_key)):
     """Record a validated sync completion callback without changing job success semantics."""
-    level = (
-        logging.ERROR
-        if outcome.status == "failed"
-        else logging.WARNING
-        if outcome.status == "completed_with_errors"
-        else logging.INFO
-    )
+    level = _SYNC_OUTCOME_LOG_LEVELS.get(outcome.status, logging.INFO)
     logger.log(level, "Sync %s for %s: %s", outcome.status, outcome.scope, outcome.message)
     return {"accepted": True}
 
@@ -691,9 +691,9 @@ async def _run_agent_with_retry(agent_call, base_delay: float = config.RetryConf
                 raise
 
 
-async def _extract_with_retry(
-    output_type: type[JsonSerializableModel] | type[str], user_prompt: str, task_description: str
-) -> Any:
+async def _extract_with_retry[T: (JsonSerializableModel, str)](
+    output_type: type[T], user_prompt: str, task_description: str
+) -> T:
     """Extract structured information, retrying once with a differently shaped prompt.
 
     The model occasionally returns nothing for the plain prompt; restating the very same request as a
@@ -884,7 +884,7 @@ async def _trigger_rag_sync(source: str, scope_id: str, request: SyncRequest) ->
         ) from e
 
 
-def _sync_response(result: SyncStartResult) -> Any:
+def _sync_response(result: SyncStartResult) -> JSONResponse:
     """202 + execution name in job mode; the runner's own status and result in local mode.
 
     A local-mode rejection (401, 409, 422, ...) must reach the caller as that status, never
@@ -919,11 +919,6 @@ async def update_jira_db(request: JiraSyncRequest, api_key: str = Depends(_valid
 @orchestrator_app.post("/update-sharepoint-db")
 async def update_sharepoint_db(request: SharePointSyncRequest, api_key: str = Depends(_validate_api_key)):
     """Triggers the SharePoint documents sync for the given drive."""
-    if request.attachment_name_pattern:
-        try:
-            compile_name_pattern(request.attachment_name_pattern)
-        except ValueError as e:
-            raise HTTPException(status_code=422, detail=str(e)) from e
     result = await _trigger_rag_sync("sharepoint", request.drive_id, request)
     return _sync_response(result)
 
@@ -931,11 +926,6 @@ async def update_sharepoint_db(request: SharePointSyncRequest, api_key: str = De
 @orchestrator_app.post("/update-confluence-db")
 async def update_confluence_db(request: ConfluenceSyncRequest, api_key: str = Depends(_validate_api_key)):
     """Triggers the Confluence documents sync for the given scope (ingestion ships next)."""
-    if request.attachment_name_pattern:
-        try:
-            compile_name_pattern(request.attachment_name_pattern)
-        except ValueError as e:
-            raise HTTPException(status_code=422, detail=str(e)) from e
     result = await _trigger_rag_sync("confluence", request.space_key, request)
     return _sync_response(result)
 

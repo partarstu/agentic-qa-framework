@@ -33,7 +33,6 @@ from common.models import ConfluenceSyncRequest as SharedConfluenceSyncRequest
 from common.models import JiraSyncRequest as SharedJiraSyncRequest
 from common.models import SharePointSyncRequest as SharedSharePointSyncRequest
 from common.services.sync_lock_store import SyncLockHeldError
-from common.utils import compile_name_pattern
 
 logger = utils.get_logger("rag_sync_local_service")
 
@@ -53,20 +52,6 @@ def _require_service_auth(x_api_key: str | None = Header(default=None)) -> None:
         raise HTTPException(status_code=503, detail="INTERNAL_SERVICE_API_KEY is not configured.")
     if not x_api_key or not hmac.compare_digest(x_api_key, expected):
         raise HTTPException(status_code=401, detail="Unauthorized")
-
-
-def _validate_name_pattern(pattern: str | None) -> None:
-    """Rejects an unusable name pattern as a bad request, the way the orchestrator does.
-
-    Raises:
-        HTTPException: 422 when the pattern cannot be compiled.
-    """
-    if not pattern:
-        return
-    try:
-        compile_name_pattern(pattern)
-    except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e)) from e
 
 
 # The scopes are the orchestrator's validated ones (the constraints guarding JQL and the REST
@@ -129,7 +114,6 @@ async def sync_sharepoint(request: SharePointSyncRequest, _: None = Depends(_req
     from rag_sync.outcome_reporting import report_terminal_outcome
     from rag_sync.sharepoint_sync import SharePointRagSyncRunner
 
-    _validate_name_pattern(request.attachment_name_pattern)
     try:
         result = await SharePointRagSyncRunner().sync_drive(
             drive_id=request.drive_id,
@@ -153,7 +137,6 @@ async def sync_confluence(request: ConfluenceSyncRequest, _: None = Depends(_req
     from rag_sync.confluence_sync import ConfluenceRagSyncRunner
     from rag_sync.outcome_reporting import report_terminal_outcome
 
-    _validate_name_pattern(request.attachment_name_pattern)
     try:
         result = await ConfluenceRagSyncRunner().sync_space(
             space_key=request.space_key,

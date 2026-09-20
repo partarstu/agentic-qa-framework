@@ -5,7 +5,8 @@
 """Resolution of a configured model name into the model the agents talk to."""
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
+from types import ModuleType
 from urllib.parse import urlparse
 
 import google.auth
@@ -31,7 +32,7 @@ from pydantic_ai.providers.google import GoogleProvider
 from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.retries import AsyncTenacityTransport, RetryConfig, wait_retry_after
 from pydantic_ai.settings import ThinkingLevel
-from tenacity import retry_if_exception_type, stop_after_attempt, wait_exponential
+from tenacity import RetryCallState, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 import config
 from common import utils
@@ -159,7 +160,11 @@ def _build_google_model(model_name: str) -> GoogleModel:
     return GoogleModel(model_name.removeprefix(GOOGLE_PROVIDER_PREFIX), provider=GoogleProvider(client=client))
 
 
-def _retry_http_client(model_name: str, httpx_module=httpx, wrapped_transport=None):
+def _retry_http_client(
+    model_name: str,
+    httpx_module: ModuleType = httpx,
+    wrapped_transport: httpx.AsyncBaseTransport | httpx2.AsyncBaseTransport | None = None,
+) -> httpx.AsyncClient | httpx2.AsyncClient:
     """An HTTP client whose transport retries transport errors and 429/502/503/504.
 
     The attempt budget and back-off are the existing agent-run retry budget; ``Retry-After``
@@ -190,10 +195,10 @@ def _raise_if_retryable_status(response: httpx.Response) -> None:
         response.raise_for_status()
 
 
-def _log_retry_attempt(model_name: str):
+def _log_retry_attempt(model_name: str) -> Callable[[RetryCallState], None]:
     """The ``before_sleep`` hook logging one line per transport-level retry attempt."""
 
-    def log_attempt(retry_state) -> None:
+    def log_attempt(retry_state: RetryCallState) -> None:
         exception = retry_state.outcome.exception() if retry_state.outcome else None
         # The Anthropic client speaks httpx2, whose status error is a different class.
         if isinstance(exception, (httpx.HTTPStatusError, httpx2.HTTPStatusError)):

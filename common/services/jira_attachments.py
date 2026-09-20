@@ -14,12 +14,18 @@ import asyncio
 import re
 
 import httpx
+from jira.resources import Attachment
 from pydantic_ai.exceptions import ModelRetry
 from pydantic_ai.messages import BinaryContent
 
 import config
 from common import utils
-from common.attachment_handler import as_text_equivalent, is_supported_mime_type, should_skip_attachment
+from common.attachment_handler import (
+    as_text_equivalent,
+    is_supported_mime_type,
+    resolve_media_type,
+    should_skip_attachment,
+)
 from common.services.jira_client import build_jira_client
 
 logger = utils.get_logger("jira_attachments")
@@ -64,9 +70,26 @@ def _download(content_url: str) -> bytes:
         content_url,
         auth=(config.JIRA_USER, config.JIRA_TOKEN),
         follow_redirects=True,
+        timeout=config.JIRA_ATTACHMENT_DOWNLOAD_TIMEOUT_SECONDS,
     )
     response.raise_for_status()
     return response.content
+
+
+def _rejection_reason(attachment: Attachment) -> str | None:
+    """Why an attachment is not handed to the model, or None when it is.
+
+    Applied to the listed metadata, before the content is downloaded: an unsupported or
+    oversized attachment must not be pulled into memory only to be discarded.
+    """
+    if should_skip_attachment(attachment.filename):
+        return "it carries the skip postfix"
+    if not is_supported_mime_type(resolve_media_type(attachment.mimeType)):
+        return f"its MIME type is not supported: {attachment.mimeType}"
+    listed_size = int(getattr(attachment, "size", 0) or 0)
+    if listed_size > config.JIRA_ATTACHMENT_MAX_BYTES:
+        return f"it is {listed_size} bytes, exceeding the {config.JIRA_ATTACHMENT_MAX_BYTES}-byte limit"
+    return None
 
 
 def download_issue_attachments(issue_key: str) -> dict[str, BinaryContent]:
@@ -81,19 +104,27 @@ def download_issue_attachments(issue_key: str) -> dict[str, BinaryContent]:
     attachments: dict[str, BinaryContent] = {}
     for attachment in getattr(issue.fields, "attachment", None) or []:
         filename = attachment.filename
-        if should_skip_attachment(filename):
-            logger.info("Skipping attachment '%s' due to skip postfix.", filename)
+        rejection_reason = _rejection_reason(attachment)
+        if rejection_reason:
+            logger.info("Skipping attachment '%s' - %s.", filename, rejection_reason)
             continue
         content_url = _resolve_content_url(attachment.content)
         if content_url is None:
             logger.warning("Skipping attachment '%s' - its content URL is not on the configured Jira origin.", filename)
             continue
         content = _download(content_url)
-        binary = as_text_equivalent(BinaryContent(data=content, media_type=attachment.mimeType, identifier=filename))
-        if not is_supported_mime_type(binary.media_type):
-            logger.info("Skipping attachment '%s' - unsupported MIME type: %s", filename, attachment.mimeType)
+        if len(content) > config.JIRA_ATTACHMENT_MAX_BYTES:
+            # Reached when Jira omits or under-reports the size the pre-download check used.
+            logger.warning(
+                "Skipping attachment '%s' - it is %d bytes once downloaded, exceeding the %d-byte limit.",
+                filename,
+                len(content),
+                config.JIRA_ATTACHMENT_MAX_BYTES,
+            )
             continue
-        attachments[filename] = binary
+        attachments[filename] = as_text_equivalent(
+            BinaryContent(data=content, media_type=attachment.mimeType, identifier=filename)
+        )
     logger.info("Downloaded %d attachment(s) of %s over REST.", len(attachments), issue_key)
     return attachments
 

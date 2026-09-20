@@ -32,6 +32,7 @@ index and misses attachment uploads):
 import asyncio
 import base64
 import time
+from dataclasses import dataclass
 
 from qdrant_client import models
 
@@ -58,6 +59,24 @@ CONFLUENCE_SCOPE = "confluence"
 # Bounded concurrency for per-page attachment listings: enough to hide per-request
 # latency, small enough to stay polite to the Confluence API.
 ATTACHMENT_LISTING_CONCURRENCY = 4
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeListing:
+    """What one listing pass found: the items to sync, their parent pages and everything that exists."""
+
+    expected: dict[str, dict]
+    attachment_pages: dict[str, dict]
+    existing_item_keys: set[str]
+
+
+@dataclass(slots=True)
+class ItemCounts:
+    """Per-item outcome tally of one run."""
+
+    processed: int = 0
+    skipped: int = 0
+    failed: int = 0
 
 
 class ConfluenceRagSyncRunner:
@@ -117,8 +136,6 @@ class ConfluenceRagSyncRunner:
         run_started = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         client = ConfluenceClient()
         processed = 0
-        skipped = 0
-        failed = 0
         try:
             space_id = await client.get_space_id_by_key(space_key)
             listing_complete, pages = await self._list_pages(client, space_key, space_id, page_id)
@@ -140,67 +157,29 @@ class ConfluenceRagSyncRunner:
                     or (key.startswith("attachment:") and str(payload.get("page_id")) == page_id)
                 }
 
-            pattern = utils.compile_name_pattern(attachment_name_pattern) if attachment_name_pattern else None
-            page_by_id = {str(page["id"]): page for page in pages}
-            expected: dict[str, dict] = {f"page:{page['id']}": page for page in pages}
-            attachment_pages: dict[str, dict] = {}
-            existing_item_keys = set(expected)
-            for page_id_, attachments in page_attachments.items():
-                for attachment in attachments:
-                    item_key = f"attachment:{attachment['id']}"
-                    existing_item_keys.add(item_key)
-                    if pattern is None or pattern.search(attachment.get("title", "")):
-                        expected[item_key] = attachment
-                        attachment_pages[item_key] = page_by_id[page_id_]
-
-            removed_keys = self._removed_items(stored, expected, listing_complete, scope, existing_item_keys)
+            listing = self._classify_listing(pages, page_attachments, attachment_name_pattern)
+            removed_keys = self._removed_items(
+                stored, listing.expected, listing_complete, scope, listing.existing_item_keys
+            )
 
             await self._verify_holder_or_abort(scope, lock_token)
             for item_key, removed_payload in removed_keys.items():
                 await self._delete_item(scope, item_key, removed_payload, lock_token)
                 processed += 1
 
-            for item_key, item in expected.items():
-                is_attachment = item_key.startswith("attachment:")
-                try:
-                    await self._verify_holder_or_abort(scope, lock_token)
-                    if is_attachment:
-                        # Attachments are never skipped by the skip_page_body flag; the
-                        # name pattern already narrowed the expected set.
-                        if await self._sync_attachment(
-                            client,
-                            space_key,
-                            scope,
-                            item_key,
-                            item,
-                            attachment_pages[item_key],
-                            stored,
-                            lock_token,
-                        ):
-                            processed += 1
-                    elif not skip_page_body and await self._sync_page_body(
-                        client, space_key, scope, item_key, item, stored, lock_token
-                    ):
-                        processed += 1
-                except PermissionError:
-                    raise
-                except AttachmentSkippedError as skip:
-                    skipped += 1
-                    logger.warning("Skipping Confluence item %s in %s: %s", item_key, space_key, skip)
-                except Exception as e:
-                    failed += 1
-                    logger.exception("Failed to sync Confluence item %s in %s: %s", item_key, space_key, e)
+            counts = await self._process_items(client, space_key, scope, lock_token, listing, stored, skip_page_body)
+            processed += counts.processed
 
-            status = SyncStatus.COMPLETED_WITH_ERRORS if failed or not listing_complete else SyncStatus.COMPLETED
+            status = SyncStatus.COMPLETED_WITH_ERRORS if counts.failed or not listing_complete else SyncStatus.COMPLETED
             logger.info(
                 "Confluence sync of %s finished (%s): %s processed, %s skipped, %s failed.",
                 scope,
                 status,
                 processed,
-                skipped,
-                failed,
+                counts.skipped,
+                counts.failed,
             )
-            if failed == 0 and listing_complete:
+            if counts.failed == 0 and listing_complete:
                 # The cursor records the last successful run; Confluence doesn't use it
                 # for skipping (versions + hashes decide), but the operating model
                 # reports it and a reset forces a full re-ingest.
@@ -209,6 +188,73 @@ class ConfluenceRagSyncRunner:
             return RagUpdateResult(status=status, processed_count=processed)
         finally:
             await client.close()
+
+    @staticmethod
+    def _classify_listing(
+        pages: list[dict], page_attachments: dict[str, list[dict]], attachment_name_pattern: str | None
+    ) -> ScopeListing:
+        """Turns the raw listings into the items this run expects, keyed by item key.
+
+        The name pattern narrows what gets ingested, never what counts as existing: an
+        attachment the pattern hides is still present, so reconciliation leaves it alone.
+        """
+        pattern = utils.compile_name_pattern(attachment_name_pattern) if attachment_name_pattern else None
+        page_by_id = {str(page["id"]): page for page in pages}
+        expected: dict[str, dict] = {f"page:{page['id']}": page for page in pages}
+        attachment_pages: dict[str, dict] = {}
+        existing_item_keys = set(expected)
+        for page_id, attachments in page_attachments.items():
+            for attachment in attachments:
+                item_key = f"attachment:{attachment['id']}"
+                existing_item_keys.add(item_key)
+                if pattern is None or pattern.search(attachment.get("title", "")):
+                    expected[item_key] = attachment
+                    attachment_pages[item_key] = page_by_id[page_id]
+        return ScopeListing(expected=expected, attachment_pages=attachment_pages, existing_item_keys=existing_item_keys)
+
+    async def _process_items(
+        self,
+        client: ConfluenceClient,
+        space_key: str,
+        scope: str,
+        lock_token: str,
+        listing: ScopeListing,
+        stored: dict[str, dict],
+        skip_page_body: bool,
+    ) -> ItemCounts:
+        """Syncs every expected item, isolating each item's failure from the rest of the run."""
+        counts = ItemCounts()
+        for item_key, item in listing.expected.items():
+            try:
+                await self._verify_holder_or_abort(scope, lock_token)
+                if item_key.startswith("attachment:"):
+                    # Attachments are never skipped by the skip_page_body flag; the
+                    # name pattern already narrowed the expected set.
+                    changed = await self._sync_attachment(
+                        client,
+                        space_key,
+                        scope,
+                        item_key,
+                        item,
+                        listing.attachment_pages[item_key],
+                        stored,
+                        lock_token,
+                    )
+                else:
+                    changed = not skip_page_body and await self._sync_page_body(
+                        client, space_key, scope, item_key, item, stored, lock_token
+                    )
+                if changed:
+                    counts.processed += 1
+            except PermissionError:
+                raise
+            except AttachmentSkippedError as skip:
+                counts.skipped += 1
+                logger.warning("Skipping Confluence item %s in %s: %s", item_key, space_key, skip)
+            except Exception as e:
+                counts.failed += 1
+                logger.exception("Failed to sync Confluence item %s in %s: %s", item_key, space_key, e)
+        return counts
 
     async def _has_lost_its_points(self, space_key: str, stored: dict[str, dict]) -> bool:
         """Whether the space's fingerprints reference points that are no longer in the documents collection.

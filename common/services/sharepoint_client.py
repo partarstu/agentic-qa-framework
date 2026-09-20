@@ -55,6 +55,19 @@ class SharePointClient:
         self._client_secret = client_secret
         self._token: str | None = None
         self._token_expiry = 0.0
+        # One client for the whole enumeration: a client per request would pay a TCP and TLS
+        # handshake for every delta page and every downloaded file.
+        self._client = httpx.Client(timeout=TIMEOUT_SECONDS, follow_redirects=True)
+
+    def close(self) -> None:
+        """Close the Graph connection pool."""
+        self._client.close()
+
+    def __enter__(self) -> "SharePointClient":
+        return self
+
+    def __exit__(self, *exception_details: object) -> None:
+        self.close()
 
     def _access_token(self) -> str:
         """A cached app-only token, refreshed five minutes before it expires."""
@@ -86,22 +99,19 @@ class SharePointClient:
         Redirects are followed: a file download answers 302 with a pre-authenticated URL, and httpx drops
         the Authorization header when the redirect leaves the Graph origin.
         """
-        with httpx.Client(timeout=TIMEOUT_SECONDS, follow_redirects=True) as client:
-            for attempt in range(MAX_RETRIES):
-                response = client.request(method, url, headers=self._headers())
-                if response.status_code == 410:
-                    # The caller must distinguish this from other failures: it changes the
-                    # enumeration strategy, it is not a retryable blip.
-                    return response
-                if response.status_code in (429, 502, 503, 504) and attempt < MAX_RETRIES - 1:
-                    delay = utils.retry_delay(response.headers.get("Retry-After"), attempt, RETRY_BACKOFF_CAP_SECONDS)
-                    logger.warning(
-                        "Graph %s %s returned %s; retrying in %.0fs.", method, url, response.status_code, delay
-                    )
-                    time.sleep(delay)
-                    continue
-                response.raise_for_status()
+        for attempt in range(MAX_RETRIES):
+            response = self._client.request(method, url, headers=self._headers())
+            if response.status_code == 410:
+                # The caller must distinguish this from other failures: it changes the
+                # enumeration strategy, it is not a retryable blip.
                 return response
+            if response.status_code in (429, 502, 503, 504) and attempt < MAX_RETRIES - 1:
+                delay = utils.retry_delay(response.headers.get("Retry-After"), attempt, RETRY_BACKOFF_CAP_SECONDS)
+                logger.warning("Graph %s %s returned %s; retrying in %.0fs.", method, url, response.status_code, delay)
+                time.sleep(delay)
+                continue
+            response.raise_for_status()
+            return response
         raise RuntimeError(f"Graph {method} {url} failed after {MAX_RETRIES} attempts.")
 
     def enumerate_delta(self, drive_id: str, delta_link: str | None = None) -> dict:

@@ -180,9 +180,10 @@ def _render_page(page: Any) -> bytes | None:
 
     try:
         pixmap = page.get_pixmap(dpi=config.DocumentRagConfig.RENDER_DPI)
-        max_pixels = config.DocumentRagConfig.MAX_IMAGE_PIXELS
-        # Decompression-bomb guard on the raw raster, mirroring the decoder-side cap.
-        if pixmap.width * pixmap.height > max_pixels * max_pixels:
+        max_dimension = config.DocumentRagConfig.MAX_IMAGE_DIMENSION
+        # Decompression-bomb guard on the raw raster, mirroring the decoder-side cap: the
+        # largest raster the dimension cap allows is a square of it.
+        if pixmap.width * pixmap.height > max_dimension * max_dimension:
             logger.warning(
                 "Rendered page exceeds the pixel cap (%dx%d); the page stays text-only.",
                 pixmap.width,
@@ -217,7 +218,7 @@ def _image_to_png(image: Any) -> bytes:
     from PIL import ImageOps
 
     normalized = ImageOps.exif_transpose(image).convert("RGB")
-    max_dimension = config.DocumentRagConfig.MAX_IMAGE_PIXELS
+    max_dimension = config.DocumentRagConfig.MAX_IMAGE_DIMENSION
     if max(normalized.size) > max_dimension:
         normalized.thumbnail((max_dimension, max_dimension))
     buffer = io.BytesIO()
