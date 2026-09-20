@@ -2,11 +2,8 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
-"""
-Downloads the embedding model at image build time (WS6).
-
-Runtime model downloads are disabled by pointing the service at the local copy
-under local_models/.
+"""Downloads the embedding model at image build time, so the service can run against the local copy under local_models/
+instead of downloading at runtime.
 """
 
 import os

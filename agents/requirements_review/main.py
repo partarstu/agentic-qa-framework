@@ -17,19 +17,18 @@ from common.agent_base import AgentBase
 from common.custom_llm_wrapper import CustomLlmWrapper
 from common.models import AgentSkillDeclaration, RequirementsReviewFeedback
 from common.services.atlassian_mcp import build_atlassian_mcp_server_toolset
+from common.services.atlassian_tools import JIRA_ADD_COMMENT, JIRA_GET_ISSUE
 from common.services.document_retrieval import (
     RetrievalScope,
     assemble_retrieved_parts,
     retrieve_documents,
 )
-from common.services.jira_attachments import download_issue_attachments
+from common.services.jira_attachments import fetch_issue_attachments
 from common.services.vector_db_service import VectorDbService
 
 logger = utils.get_logger("reviewer_agent")
 
-# The Jira tools this agent actually uses (WS11 per-agent tool filtering): it reads the
-# issue through the MCP server and posts the review feedback as a comment.
-_JIRA_TOOL_ALLOWLIST = ("jira_get_issue", "jira_add_comment")
+_JIRA_TOOL_ALLOWLIST = (JIRA_GET_ISSUE, JIRA_ADD_COMMENT)
 
 _SCOPE_PARAM_LENGTH_CAP = 200
 
@@ -41,9 +40,9 @@ def _capped(value: str | None) -> str | None:
     return value[:_SCOPE_PARAM_LENGTH_CAP]
 
 
-def _get_issue_message_parts(issue_key: str, jira_issue_content: str) -> list[str | BinaryContent]:
+async def _get_issue_message_parts(issue_key: str, jira_issue_content: str) -> list[str | BinaryContent]:
     """The issue content followed by every supported attachment of the issue."""
-    attachments_content = download_issue_attachments(issue_key)
+    attachments_content = await fetch_issue_attachments(issue_key)
     user_message_parts: list[str | BinaryContent] = [f"Jira Issue content:\n```{jira_issue_content}```"]
     for filename, binary_content in attachments_content.items():
         user_message_parts.append(f"Attachment: {filename}")
@@ -54,7 +53,7 @@ def _get_issue_message_parts(issue_key: str, jira_issue_content: str) -> list[st
 
 class RequirementsReviewAgent(AgentBase):
     def __init__(self):
-        # Startup validation is per source (WS18): a source whose retrieval switch is on
+        # Startup validation is per source: a source whose retrieval switch is on
         # without a configured embedding service fails fast, naming that source.
         for source in ("Confluence", "SharePoint"):
             enabled = getattr(config.DocumentRagConfig, f"{source.upper()}_RETRIEVAL_ENABLED")
@@ -70,7 +69,7 @@ class RequirementsReviewAgent(AgentBase):
         self.documents_db = None
         self.sharepoint_db = None
         if self.confluence_retrieval_enabled:
-            # The metadata collection makes retrieval refuse to query vectors of a different model (WS6).
+            # The metadata collection makes retrieval refuse to query vectors of a different model.
             self.documents_db = VectorDbService(
                 config.DocumentRagConfig.DOCUMENTS_COLLECTION_NAME,
                 metadata_collection_name=config.QdrantConfig.METADATA_COLLECTION_NAME,
@@ -145,7 +144,7 @@ class RequirementsReviewAgent(AgentBase):
         Returns:
             Requirements review feedback with improvement suggestions.
         """
-        user_message_parts = _get_issue_message_parts(jira_issue_key, jira_issue_content)
+        user_message_parts = await _get_issue_message_parts(jira_issue_key, jira_issue_content)
         return await self._run_review(user_message_parts)
 
     async def _review_with_reference_documentation(
@@ -170,7 +169,9 @@ class RequirementsReviewAgent(AgentBase):
                 names, domain terms).
             space_key: Optional Confluence space key scope.
             page_id: Optional Confluence page ID scope.
-            document_name_pattern: Optional regex pattern on document names.
+            document_name_pattern: Optional regex pattern on document names, applied to every source.
+            drive_id: Optional SharePoint drive ID scope.
+            folder_path: Optional SharePoint folder path scope, relative to the drive root.
 
         Returns:
             Requirements review feedback with improvement suggestions.
@@ -182,7 +183,7 @@ class RequirementsReviewAgent(AgentBase):
                 "and domain terms from the issue and pass them as retrieval_query."
             )
 
-        user_message_parts = _get_issue_message_parts(jira_issue_key, jira_issue_content)
+        user_message_parts = await _get_issue_message_parts(jira_issue_key, jira_issue_content)
         scope = RetrievalScope(
             space_key=_capped(space_key),
             page_id=_capped(page_id),

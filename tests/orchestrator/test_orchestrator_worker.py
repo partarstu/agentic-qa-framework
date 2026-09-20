@@ -265,7 +265,7 @@ async def test_execute_test_group_spawns_one_worker_per_test_case(mock_registry)
 
 @pytest.mark.asyncio
 async def test_execute_test_group_reports_unexecuted_cases_when_every_worker_exits(mock_registry):
-    """WS15: once no worker is left, the group finishes and reports the queued cases as errors instead of hanging."""
+    """Once no worker is left, the group finishes and reports the queued cases as errors instead of hanging."""
     mock_registry.contains = AsyncMock(return_value=True)
 
     async def _exit_at_once(agent_id, queue, results, pool_agent_ids):
@@ -305,7 +305,7 @@ async def test_execute_single_test_keeps_the_status_of_an_http_exception(mock_re
         ),
         pytest.raises(HTTPException) as raised,
     ):
-        await _execute_single_test("agent-1", _test_case(), "manual", selected_agent_id="agent-1")
+        await _execute_single_test("agent-1", _test_case(), "manual", pin_to_agent=True)
 
     assert raised.value.status_code == 409
 
@@ -382,7 +382,7 @@ async def test_incident_fan_out_records_and_reraises_cancellation():
 
 
 class TestGenerateTestReport:
-    """WS15: the upload and the HTML report are independent, tolerated steps."""
+    """The upload and the HTML report are independent, tolerated steps."""
 
     @pytest.fixture
     def reporting_client(self):

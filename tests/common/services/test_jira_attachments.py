@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
-"""Unit tests for the REST attachment downloader and shared Jira client factory (WS5)."""
+"""Unit tests for the REST attachment downloader and shared Jira client factory."""
 
 from unittest.mock import MagicMock, patch
 

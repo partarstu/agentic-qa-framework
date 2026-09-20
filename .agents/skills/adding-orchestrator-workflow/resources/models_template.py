@@ -2,12 +2,7 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
-"""
-Request and result model templates for an orchestrator workflow.
-
-Paste into common/models.py, which already imports `Field` and defines `JsonSerializableModel` and `BaseAgentResult`.
-Replace <WorkflowName> and the fields.
-"""
+"""Request and result model templates for an orchestrator workflow, to paste into common/models.py, which already imports `Field` and defines `JsonSerializableModel` and `BaseAgentResult`."""
 
 
 class <WorkflowName>Request(JsonSerializableModel):

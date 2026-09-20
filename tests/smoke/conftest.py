@@ -8,7 +8,7 @@ The suite runs against the ``docker-compose.smoke.yml`` topology: a real
 orchestrator and the agents (driven by real Gemini), with the external
 boundaries (Jira MCP, Jira REST, Zephyr, Qdrant + embedding) replaced by
 recording mocks. The fixtures wait for all agents to register, then fire the
-four webhooks once, concurrently — the flows are mutually independent, so the
+webhooks once, concurrently — the flows are mutually independent, so the
 wall time is the longest flow instead of their sum. The test functions read the
 mocks' ``/__recorded`` endpoints and assert on what reached each boundary.
 
@@ -183,7 +183,7 @@ def _wait_for_agents_healthy(http_client: httpx.Client, auth_headers: dict[str, 
 
 @pytest.fixture(scope="session")
 def all_agents_ready(http_client: httpx.Client, auth_headers: dict[str, str]) -> None:
-    """Wait once until every agent the four flows need is registered and healthy."""
+    """Wait once until every agent the flows need is registered and healthy."""
     _wait_for_agents_healthy(http_client, auth_headers, EXPECTED_AGENT_NAMES | EXECUTION_FLOW_AGENT_NAMES)
 
 
@@ -192,7 +192,7 @@ def _post_webhook(path: str, headers: dict[str, str], payload: dict[str, str]) -
         return client.post(f"{ORCHESTRATOR_URL}{path}", headers=headers, json=payload)
 
 
-# The four flows are mutually independent: requirements review writes Jira comments;
+# The flows are mutually independent: requirements review writes Jira comments;
 # the test-case flow's cases end at "Review Complete" and never become executable;
 # /execute-tests selects only the seeded Approved + "automated" case; the RAG sync
 # involves no agent at all. So they can safely run concurrently.
@@ -209,7 +209,7 @@ _WEBHOOKS: dict[str, tuple[str, dict[str, str]]] = {
 
 @pytest.fixture(scope="session")
 def webhook_responses(all_agents_ready: None, webhook_headers: dict[str, str]) -> dict[str, httpx.Response]:
-    """Fire all four webhooks once, concurrently, and share the responses.
+    """Fire every webhook once, concurrently, and share the responses.
 
     Each webhook returns only after its whole flow completes, so posting them from
     a thread pool cuts the suite's wall time from the sum of the flows to the max.

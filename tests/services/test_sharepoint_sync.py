@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
-"""Unit tests for the SharePoint document-library ingestion (WS18).
+"""Unit tests for the SharePoint document-library ingestion.
 
 Every external boundary (Microsoft Graph, Qdrant) is mocked; the tests assert the delta
 paging, the 410 resync, folder-tree scoping, the cTag/eTag classification and the deletion
@@ -24,6 +24,7 @@ if str(SERVICES_DIR) not in sys.path:
 from rag_sync.sharepoint_sync import SharePointRagSyncRunner  # noqa: E402
 
 from common.services.sharepoint_client import DeltaResyncRequired  # noqa: E402
+from tests.conftest import with_real_lock_lifecycle  # noqa: E402
 
 DRIVE_ID = "drive-1"
 
@@ -84,6 +85,7 @@ def runner(graph):
     lock_store.mark_started = AsyncMock(return_value=True)
     lock_store.is_holder = AsyncMock(return_value=True)
     lock_store.release = AsyncMock(return_value=True)
+    with_real_lock_lifecycle(lock_store)
     state_store = MagicMock()
     state_store.get_cursor = AsyncMock(return_value=None)
     state_store.save_cursor = AsyncMock()

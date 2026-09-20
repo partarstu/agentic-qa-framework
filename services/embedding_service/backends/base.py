@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
-"""Embedding backends, one per model family (WS6).
+"""Embedding backends, one per model family.
 
 Each backend is imported and loaded lazily: importing this package (or the service
 module) must never import an ML library. The text backend is always available; the

@@ -61,7 +61,7 @@ class DefaultAgentExecutor(AgentExecutor):
         handler_token = set_current_log_handler(log_handler)
         meter = OperationMeter()
         meter_token = operation_meter.set(meter)
-        # Every log line of this run carries the agent's and the task's identity, without call-site changes (WS23).
+        # Every log line of this run carries the agent's and the task's identity, without call-site changes.
         log_context_token = utils.log_context.set({"agent_name": self._agent_name(), "task_id": task_id})
 
         logs_artifact_id = str(uuid4())  # stable id correlating every log chunk for this task

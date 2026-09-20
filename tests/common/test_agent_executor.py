@@ -251,7 +251,7 @@ async def test_contextvars_set_during_run_and_reset_after(mock_agent, mock_conte
 
 @pytest.mark.asyncio
 async def test_captured_log_lines_carry_the_agent_name_and_task_id(mock_agent, mock_context, mock_event_queue):
-    """WS23: the run's log lines are stamped with the agent's and the task's identity without call-site changes."""
+    """The run's log lines are stamped with the agent's and the task's identity without call-site changes."""
     mock_agent.agent_name = "Stamped Agent"
     executor = DefaultAgentExecutor(mock_agent)
     mock_context.message = MagicMock()

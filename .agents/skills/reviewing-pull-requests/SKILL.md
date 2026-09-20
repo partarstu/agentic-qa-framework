@@ -1,6 +1,6 @@
 ---
 name: reviewing-pull-requests
-description: Reviews a GitHub pull request of the QuAIA repository against AGENTS.md, PYTHON_GUIDELINES.md and the project review criteria, then posts the findings as a single GitHub review with inline comments once the user approves. Use when the user asks to review a PR, either by number or the PR of the current branch.
+description: Reviews a GitHub pull request of the QuAIA repository against AGENTS.md, PYTHON_GUIDELINES.md and the project review criteria, shows the numbered findings and posts only the ones the user names (`numbers`, `all` or `none`) as a single GitHub review with inline comments. Use when the user asks to review a PR, either by number or the PR of the current branch.
 ---
 
 # Reviewing Pull Requests
@@ -37,13 +37,11 @@ git fetch origin pull/<number>/head
 git show FETCH_HEAD:<path>
 ```
 
-Read the full new version of each changed file with `git show`, not only the diff hunks. Do not check out the PR
-branch: the working tree may hold uncommitted work.
+Read the full new version of each changed file with `git show`, not only the diff hunks. Do not check out the PR branch: the working tree may hold uncommitted work.
 
 ## 3. Analyse against the criteria
 
-Apply [resources/review_criteria.md](resources/review_criteria.md). For each finding record the file path, the line in
-the new version of the file, the severity, the problem and a suggested fix.
+Apply [resources/review_criteria.md](resources/review_criteria.md). For each finding record the file path, the line in the new version of the file, the severity, the problem and a suggested fix.
 
 - Inline comments are only possible on lines inside a diff hunk. Report issues in untouched code in the review body.
 - Confirm every finding against the code before keeping it; drop speculative ones.
@@ -51,12 +49,11 @@ the new version of the file, the severity, the problem and a suggested fix.
 
 ## 4. Present the findings and get approval
 
-Show the findings to the user grouped by severity, together with the proposed review body and event: `COMMENT` by
-default, `REQUEST_CHANGES` only if the user agrees. Posting notifies the PR author, so ask for approval and wait.
+Number the findings `1..n` and show them to the user grouped by severity, each with its number, location, problem and suggested fix. Nothing is posted at this point. Ask the user which findings to post: a list of numbers, `all` or `none`, and the review event, `COMMENT` by default or `REQUEST_CHANGES` if they say so. Posting notifies the PR author, so wait for that answer. `none` ends the skill without posting anything.
 
 ## 5. Post one review
 
-Write the review as JSON to a temporary file outside the repository:
+Only the findings the user named go into the review, as inline comments where their line is inside a diff hunk and in the review body otherwise; the counts in the body cover the posted findings only. Write the review as JSON to a temporary file outside the repository:
 
 ```json
 {
@@ -76,5 +73,4 @@ Post it in a single call, which sends one notification and avoids GitHub's secon
 gh api repos/<owner>/<repo>/pulls/<number>/reviews --method POST --input <path to review JSON>
 ```
 
-If GitHub rejects the review with `422` because a comment line is outside the diff, move that finding into the review
-body and post again. Finish by giving the user the PR URL and the finding counts.
+If GitHub rejects the review with `422` because a comment line is outside the diff, move that finding into the review body and post again. Finish by giving the user the PR URL and the finding counts.

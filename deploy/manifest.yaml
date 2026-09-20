@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
-# Deployment manifest (WS26): the source of truth for what every deployed workload is configured with.
+# Deployment manifest: the source of truth for what every deployed workload is configured with.
 # scripts/render_deployment_config.py resolves it per service and environment into an env-vars file, a
 # secret-name list and a redeploy marker; cloudbuild.yaml consumes those. Resource sizing, image tags,
 # request timeouts and container ports stay in cloudbuild.yaml.
@@ -85,6 +85,9 @@ services:
       QDRANT_URL: ""
       DASHBOARD_JWT_EXPIRE_HOURS: "24"
       DASHBOARD_PERSISTENCE_ENABLED: "false"
+      # Cloud Run terminates the connection, so the socket peer is its front end and every user
+      # would share one rate-limit bucket. The last X-Forwarded-For entry is the real client.
+      LOGIN_RATE_LIMIT_TRUSTED_PROXY_HOPS: "1"
       RAG_SYNC_JOB_NAME: "projects/{project}/locations/{region}/jobs/rag-sync-job"
       RAG_SYNC_JOB_REGION: "{region}"
       RAG_SYNC_JOB_TASK_TIMEOUT_SECONDS: "3600"
@@ -128,10 +131,10 @@ services:
       CONFLUENCE_API_TOKEN: CONFLUENCE_API_TOKEN
       QDRANT_API_KEY: QDRANT_API_KEY
       INTERNAL_SERVICE_API_KEY: INTERNAL_SERVICE_API_KEY
-      # The test-case sync (WS17) reads the test management system.
+      # The test-case sync reads the test management system.
       ZEPHYR_API_TOKEN: ZEPHYR_API_TOKEN
       ZEPHYR_BASE_URL: ZEPHYR_BASE_URL
-      # The SharePoint sync (WS18) authenticates app-only against Microsoft Graph.
+      # The SharePoint sync authenticates app-only against Microsoft Graph.
       SHAREPOINT_TENANT_ID: SHAREPOINT_TENANT_ID
       SHAREPOINT_CLIENT_ID: SHAREPOINT_CLIENT_ID
       SHAREPOINT_CLIENT_SECRET: SHAREPOINT_CLIENT_SECRET
@@ -204,7 +207,7 @@ services:
       GOOGLE_CLOUD_LOGGING_ENABLED: "true"
       AGENT_BASE_URL: ""
       EXTERNAL_PORT: "443"
-      # The duplicate check (WS17) indexes and searches the test-case collection.
+      # The duplicate check indexes and searches the test-case collection.
       EMBEDDING_SERVICE_URL: ""
       QDRANT_URL: ""
       PROMPT_GUARD_SERVICE_URL: ""

@@ -27,7 +27,6 @@ from common.agent_base import AgentBase
 from common.custom_llm_wrapper import CustomLlmWrapper
 from common.models import (
     AgentSkillDeclaration,
-    ListedTestCase,
     OverlappingTestCase,
     TestCase,
     TestCaseDuplicateCheck,
@@ -36,6 +35,7 @@ from common.models import (
     TestCaseReviewFeedbacks,
 )
 from common.services.atlassian_mcp import build_atlassian_mcp_server_toolset
+from common.services.atlassian_tools import JIRA_GET_ISSUE
 from common.services.test_case_index import IndexedTestCase, render_test_case
 from common.services.test_management_system_client_provider import get_test_management_client
 
@@ -44,10 +44,8 @@ if TYPE_CHECKING:
 
 logger = utils.get_logger("test_case_review_agent")
 
-# The Jira tools this agent actually uses (WS11 per-agent tool filtering): it reads the
-# issue; attachments arrive through the REST downloader and every write goes to the test
-# management system.
-_JIRA_TOOL_ALLOWLIST = ("jira_get_issue",)
+# Attachments arrive through the REST downloader and every write goes to the test management system.
+_JIRA_TOOL_ALLOWLIST = (JIRA_GET_ISSUE,)
 
 DUPLICATE_CHECK_HEADING = "Duplicate check"
 
@@ -153,14 +151,14 @@ class TestCaseReviewAgent(AgentBase):
             Test case review feedbacks with improvement suggestions and the duplicate check for each test case.
         """
 
-        from common.services.jira_attachments import download_issue_attachments
+        from common.services.jira_attachments import fetch_issue_attachments
 
         if not project_key.strip():
             raise ValueError("project_key must not be blank for the test case review.")
         checks = _current_duplicate_checks()
         records = await self._index_review_batch(project_key, test_cases)
 
-        attachments_content = download_issue_attachments(jira_issue_key)
+        attachments_content = await fetch_issue_attachments(jira_issue_key)
         attachment_parts: list[str | BinaryContent] = []
         for filename, binary_content in (attachments_content or {}).items():
             attachment_parts.append(f"Attachment: {filename}")
@@ -209,12 +207,7 @@ class TestCaseReviewAgent(AgentBase):
         keys = [test_case.key or "" for test_case in test_cases]
         if not all(keys):
             raise ValueError(f"Every test case under review needs a key for the duplicate check; got {keys}.")
-        # The review ends by setting this status; the next test-case sync records the actual one.
-        status = config.TestCaseReviewAgentConfig.REVIEW_COMPLETE_STATUS_NAME
-        records = [
-            render_test_case(project_key, ListedTestCase(test_case=test_case, status=status))
-            for test_case in test_cases
-        ]
+        records = [render_test_case(project_key, test_case) for test_case in test_cases]
         with _fail_loudly("indexing", project_key, keys):
             await self.vector_db_service.upsert_batch(records)
         logger.info("Indexed %d test case(s) under review for project %s.", len(records), project_key)

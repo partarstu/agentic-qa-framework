@@ -90,7 +90,7 @@ def test_serialize_content_with_binary_content(custom_llm):
 @pytest.mark.asyncio
 @patch("common.custom_llm_wrapper.PromptGuardFactory.get_prompt_guard")
 async def test_prompt_injection_screens_text_inside_mixed_text_and_binary_content(mock_get_prompt_guard, custom_llm):
-    """Retrieved documentation reaches the model as text parts mixed with page images (WS10)."""
+    """Retrieved documentation reaches the model as text parts mixed with page images."""
     from pydantic_ai.messages import BinaryContent
 
     mock_guard = MagicMock()
@@ -191,3 +191,23 @@ async def test_streaming_request_records_usage_after_the_stream_closes(mock_wrap
     assert entry.operation == "main"
     assert entry.uncached_input_tokens == 40
     assert entry.output_tokens == 8
+
+
+class TestOutputTokenCap:
+    """The configured output cap must reach every provider, not only the Claude settings builder."""
+
+    def test_cap_reaches_a_non_claude_model(self, mock_wrapped_model):
+        wrapper = CustomLlmWrapper(mock_wrapped_model, thinking_level="low", max_output_tokens=2048)
+
+        settings = wrapper._get_model_settings(None)
+
+        assert settings["max_tokens"] == 2048
+        assert settings["thinking"] == "low"
+
+    def test_no_cap_configured_leaves_max_tokens_unset(self, mock_wrapped_model):
+        with patch("common.custom_llm_wrapper.config.MAX_OUTPUT_TOKENS", None):
+            wrapper = CustomLlmWrapper(mock_wrapped_model)
+
+            settings = wrapper._get_model_settings(None)
+
+        assert "max_tokens" not in settings

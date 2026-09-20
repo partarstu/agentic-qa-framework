@@ -2,9 +2,7 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
-"""
-Dashboard service for aggregating orchestrator state for the Web UI.
-"""
+"""Dashboard service for aggregating orchestrator state for the Web UI."""
 
 import re
 from datetime import UTC, datetime

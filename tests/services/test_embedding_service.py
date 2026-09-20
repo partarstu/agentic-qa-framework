@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
-"""Unit tests for the embedding service's WS6 surface: backends, warm-up and endpoints.
+"""Unit tests for the embedding service's surface: backends, warm-up and endpoints.
 
 Every ML library and the FlagEmbedding model are mocked; the tests assert the endpoint
 contracts, the single-flight warm-up, disabled-backend errors, input limits and auth.
@@ -206,7 +206,7 @@ class TestWarmUp:
 
 class TestModuleImport:
     def test_importing_service_module_does_not_import_ml_libraries(self):
-        """The service module must stay importable without ML libraries (plan WS6)."""
+        """The service module must stay importable without ML libraries."""
         blocked = ["FlagEmbedding", "torch", "transformers", "sentence_transformers"]
         for module_name in blocked:
             sys.modules.pop(module_name, None)

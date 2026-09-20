@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
-"""Local sync service: the same two scopes over HTTP for development (WS8).
+"""Local sync service: the same two scopes over HTTP for development.
 
 Runs the sync inline and returns the result. It mutates the vector database, so it
 requires the internal-service API key like the other internal services.
@@ -55,6 +55,20 @@ def _require_service_auth(x_api_key: str | None = Header(default=None)) -> None:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 
+def _validate_name_pattern(pattern: str | None) -> None:
+    """Rejects an unusable name pattern as a bad request, the way the orchestrator does.
+
+    Raises:
+        HTTPException: 422 when the pattern cannot be compiled.
+    """
+    if not pattern:
+        return
+    try:
+        compile_name_pattern(pattern)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+
+
 # The scopes are the orchestrator's validated ones (the constraints guarding JQL and the REST
 # paths live there, once); this service only adds the holder token the orchestrator issues.
 class _LockedSyncRequest(BaseModel):
@@ -93,7 +107,7 @@ async def sync_jira(request: JiraSyncRequest, _: None = Depends(_require_service
 
 @app.post("/sync/test_cases")
 async def sync_test_cases(request: JiraSyncRequest, _: None = Depends(_require_service_auth)):
-    """Runs the test-case full resync inline and returns the result (WS17)."""
+    """Runs the test-case full resync inline and returns the result."""
     from rag_sync.outcome_reporting import report_terminal_outcome
     from rag_sync.test_case_sync import TestCaseRagSyncRunner
 
@@ -111,13 +125,12 @@ async def sync_test_cases(request: JiraSyncRequest, _: None = Depends(_require_s
 
 @app.post("/sync/sharepoint")
 async def sync_sharepoint(request: SharePointSyncRequest, _: None = Depends(_require_service_auth)):
-    """Runs the SharePoint sync inline and returns the result (WS18)."""
+    """Runs the SharePoint sync inline and returns the result."""
     from rag_sync.outcome_reporting import report_terminal_outcome
     from rag_sync.sharepoint_sync import SharePointRagSyncRunner
 
+    _validate_name_pattern(request.attachment_name_pattern)
     try:
-        if request.attachment_name_pattern:
-            compile_name_pattern(request.attachment_name_pattern)
         result = await SharePointRagSyncRunner().sync_drive(
             drive_id=request.drive_id,
             folder_path=request.folder_path,
@@ -140,9 +153,8 @@ async def sync_confluence(request: ConfluenceSyncRequest, _: None = Depends(_req
     from rag_sync.confluence_sync import ConfluenceRagSyncRunner
     from rag_sync.outcome_reporting import report_terminal_outcome
 
+    _validate_name_pattern(request.attachment_name_pattern)
     try:
-        if request.attachment_name_pattern:
-            compile_name_pattern(request.attachment_name_pattern)
         result = await ConfluenceRagSyncRunner().sync_space(
             space_key=request.space_key,
             page_id=str(request.page_id) if request.page_id else None,

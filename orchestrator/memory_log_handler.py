@@ -99,17 +99,7 @@ class MemoryLogHandler(logging.Handler):
         offset: int = 0,
         level: str | None = None,
     ) -> list[LogEntry]:
-        """
-        Get the most recent log entries.
-
-        Args:
-            limit: Maximum number of entries to return.
-            offset: Number of entries (from the newest) to skip.
-            level: Filter by log level (e.g., 'INFO', 'ERROR').
-
-        Returns:
-            List of LogEntry objects, newest first.
-        """
+        """Get the most recent log entries, newest first, optionally filtered by level."""
         with self._buffer_lock:
             logs = list(self._buffer)
 
@@ -140,12 +130,7 @@ class _NoiseFilter(logging.Filter):
 
 
 def setup_memory_logging() -> MemoryLogHandler:
-    """
-    Set up the memory log handler on the root logger to capture all application logs.
-
-    Returns:
-        The MemoryLogHandler instance.
-    """
+    """Set up the memory log handler on the root logger to capture all application logs."""
     handler = MemoryLogHandler()
     handler.setLevel(logging.DEBUG)
 

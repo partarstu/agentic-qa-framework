@@ -2,13 +2,12 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
-"""Confluence Cloud REST API v2 client for the document RAG sync (WS9).
+"""Confluence Cloud REST API v2 client for the document RAG sync.
 
 Uses basic auth (username + API token), cursor pagination and retries on 429/5xx
 responses honouring ``Retry-After``, with explicit timeouts. Only the calls the
 ingestion needs are implemented: resolving a space key, listing page metadata
-(without bodies), fetching one page's raw storage body and downloading attachments
-(WS9b).
+(without bodies), fetching one page's raw storage body and downloading attachments.
 
 Page IDs are strings in the v2 API (they are quoted in the schema), so they stay
 strings throughout the sync.
@@ -26,6 +25,19 @@ logger = utils.get_logger("confluence_client")
 RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 # Upper bound of any back-off wait, including one taken from a Retry-After header.
 RETRY_BACKOFF_CAP_SECONDS = 30.0
+
+
+def _next_cursor(body: dict) -> str | None:
+    """The cursor of the next result page, or ``None`` on the last one.
+
+    ``_links.next`` is a relative URL carrying the cursor as a query parameter
+    (``/wiki/api/v2/pages?cursor=...``), not the bare cursor, so passing it on as one would
+    make Confluence reject the next request or serve the first page again.
+    """
+    next_link = body.get("_links", {}).get("next")
+    if not next_link:
+        return None
+    return httpx.URL(next_link).params.get("cursor") or None
 
 
 class ConfluenceApiError(RuntimeError):
@@ -94,7 +106,7 @@ class ConfluenceClient:
                 request_params["cursor"] = cursor
             body = await self._get(path, request_params)
             results.extend(body.get("results", []))
-            cursor = body.get("_links", {}).get("next")
+            cursor = _next_cursor(body)
             if not cursor:
                 return results
 

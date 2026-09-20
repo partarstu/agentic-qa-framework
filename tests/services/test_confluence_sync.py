@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
-"""Unit tests for the WS9a Confluence ingestion: normalization, chunking, change
+"""Unit tests for the Confluence ingestion: normalization, chunking, change
 detection and the page-body reconciliation algorithm.
 
 Every external boundary (Confluence REST, Qdrant, the embedding service) is
@@ -28,6 +28,8 @@ from rag_sync.chunking import chunk_page_body  # noqa: E402
 from rag_sync.confluence_client import ConfluenceApiError, ConfluenceClient  # noqa: E402
 from rag_sync.normalization import normalize_page_body  # noqa: E402
 from rag_sync.sync_state import content_hash  # noqa: E402
+
+from tests.conftest import with_real_lock_lifecycle  # noqa: E402
 
 # --- Normalization (storage format -> markdown) -----------------------------------------
 
@@ -231,6 +233,39 @@ class TestConfluenceClient:
         finally:
             await client.close()
 
+    async def test_pagination_sends_the_cursor_taken_out_of_the_next_link(self, monkeypatch):
+        """``_links.next`` is a relative URL, so its ``cursor`` query parameter is what the next
+        request must carry - sending the whole link would make Confluence reject it or repeat page one."""
+        monkeypatch.setattr("config.CONFLUENCE_URL", "https://example.atlassian.net/")
+        monkeypatch.setattr("config.CONFLUENCE_USERNAME", "user")
+        monkeypatch.setattr("config.CONFLUENCE_API_TOKEN", "token")
+        sent_cursors = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            cursor = request.url.params.get("cursor")
+            sent_cursors.append(cursor)
+            if cursor is None:
+                return httpx.Response(
+                    200,
+                    json={
+                        "results": [{"id": "1"}],
+                        "_links": {"next": "/wiki/api/v2/spaces/9/pages?cursor=PAGE2&limit=50"},
+                    },
+                )
+            return httpx.Response(200, json={"results": [{"id": "2"}], "_links": {}})
+
+        client = ConfluenceClient()
+        client._client = httpx.AsyncClient(
+            base_url="https://example.atlassian.net/wiki/api/v2", transport=httpx.MockTransport(handler)
+        )
+        try:
+            pages = await client.list_pages_in_space("9")
+        finally:
+            await client.close()
+
+        assert [page["id"] for page in pages] == ["1", "2"]
+        assert sent_cursors == [None, "PAGE2"]
+
 
 # --- The runner's classification and write order ------------------------------------------
 
@@ -329,7 +364,7 @@ def runner():
         lock_store.is_holder = AsyncMock(return_value=True)
         lock_store.release = AsyncMock(return_value=True)
         lock_store.acquire = AsyncMock(return_value=MagicMock(acquired=True, lock_info={"holder_token": "test-token"}))
-        mock_lock_cls.return_value = lock_store
+        mock_lock_cls.return_value = with_real_lock_lifecycle(lock_store)
 
         state_store = MagicMock()
         state_store.save_cursor = AsyncMock()
@@ -666,7 +701,7 @@ class TestConfluenceSyncRunner:
 
     async def test_space_without_stored_points_resets_fingerprints_and_reingests_unchanged_page(self, runner):
         """The documents collection is shared: after another space's sync recreated it, this space's
-        fingerprints still exist but its points don't, so its unchanged page is re-ingested (WS7)."""
+        fingerprints still exist but its points don't, so its unchanged page is re-ingested."""
         runner_obj, documents_db, _, _, fingerprints = runner
         page = _page()
         stored_hash = content_hash("<p>Hello.</p>", "Home", "1")

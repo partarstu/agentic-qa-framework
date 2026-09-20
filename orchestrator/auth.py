@@ -2,9 +2,7 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
-"""
-Authentication utilities for the UI dashboard.
-"""
+"""Authentication utilities for the UI dashboard."""
 
 import hmac
 import time
@@ -75,9 +73,13 @@ class AuthService:
             logger.error("Dashboard authentication is not configured; rejecting login attempt.")
             return False
         username_ok = hmac.compare_digest(username, config.DashboardAuthConfig.USERNAME)
-        if len(password.encode("utf-8")) > 72:
-            return False
-        password_ok = bcrypt.checkpw(password.encode("utf-8"), config.DashboardAuthConfig.PASSWORD_HASH.encode("utf-8"))
+        encoded_password = password.encode("utf-8")
+        # bcrypt truncates at 72 bytes, so a longer password is rejected rather than silently
+        # shortened. It is still hashed, so the rejection costs the same time as a wrong password.
+        password_ok = (
+            bcrypt.checkpw(encoded_password[:72], config.DashboardAuthConfig.PASSWORD_HASH.encode("utf-8"))
+            and len(encoded_password) <= 72
+        )
         return username_ok and password_ok
 
     def create_token(self, username: str) -> TokenResponse:
@@ -99,12 +101,7 @@ class AuthService:
         )
 
     def verify_token(self, token: str) -> str | None:
-        """
-        Verify a JWT token and return the username if valid.
-
-        Returns:
-            The username if the token is valid, None otherwise.
-        """
+        """Verify a JWT token and return the username if valid."""
         # Fail closed: without a configured secret, no token can be trusted.
         if not config.DashboardAuthConfig.JWT_SECRET:
             logger.error("DASHBOARD_JWT_SECRET is not configured; rejecting token verification.")

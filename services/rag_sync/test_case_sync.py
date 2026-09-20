@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
-"""Full-resync synchronization of test cases into the RAG vector database (WS17).
+"""Full-resync synchronization of test cases into the RAG vector database.
 
 Unlike the Jira sync there is no cursor: the test-management systems offer no cheap
 "changed since" query, so every run lists the whole project, upserts new and changed test
@@ -20,7 +20,7 @@ from qdrant_client import models
 import config
 from common import utils
 from common.models import ListedTestCase, RagUpdateResult, SyncStatus
-from common.services.sync_lock_store import SyncLockHeldError, SyncLockStore, scope_key
+from common.services.sync_lock_store import SyncLockStore, scope_key
 from common.services.test_case_index import render_test_case
 from common.services.test_management_system_client_provider import get_test_management_client
 from common.services.vector_db_service import VectorDbService
@@ -61,22 +61,10 @@ class TestCaseRagSyncRunner:
             SyncLockHeldError: When a tokenless runner cannot acquire the lock.
         """
         scope = scope_key(TEST_CASES_SCOPE, project_key)
-        if lock_token:
-            if not await self._lock_store.mark_started(scope, lock_token):
-                logger.warning("Runner no longer holds the lock for %s; aborting without writes.", scope)
-                raise PermissionError(f"Lock for scope {scope} was taken over before the run started.")
-        else:
-            state = await self._lock_store.acquire(scope)
-            if not state.acquired:
-                raise SyncLockHeldError(f"Another sync already holds the lock for {scope}.")
-            lock_token = state.lock_info["holder_token"]
-
         try:
-            return await self._run_sync(project_key, scope, lock_token)
+            async with self._lock_store.held_for_run(scope, lock_token) as token:
+                return await self._run_sync(project_key, scope, token)
         finally:
-            released = await self._lock_store.release(scope, lock_token)
-            if not released:
-                logger.warning("Lock for %s was not released by this runner; it was taken over.", scope)
             await self.close()
 
     async def _run_sync(self, project_key: str, scope: str, lock_token: str) -> RagUpdateResult:
@@ -93,7 +81,7 @@ class TestCaseRagSyncRunner:
             len(eligible),
             config.QdrantConfig.TEST_CASE_INDEX_STATUSES or "all",
         )
-        rendered = [render_test_case(project_key, item) for item in eligible]
+        rendered = [render_test_case(project_key, item.test_case) for item in eligible]
 
         # Created before the first read: on the very first run the collection doesn't exist yet.
         await self._verify_holder_or_abort(scope, lock_token)

@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
-"""Unit tests for the test-case RAG sync runner (WS17): full resync, the status filter,
+"""Unit tests for the test-case RAG sync runner: full resync, the status filter,
 the indexed_at deletion guard and the fail-fast listing contract.
 
 Every external boundary (Qdrant, the test-management system) is mocked.
@@ -25,9 +25,9 @@ if str(SERVICES_DIR) not in sys.path:
 
 from rag_sync.test_case_sync import TestCaseRagSyncRunner, _eligible_for_indexing  # noqa: E402
 
-import config  # noqa: E402
 from common.models import ListedTestCase, TestCase, TestStep  # noqa: E402
 from common.services.sync_lock_store import LockState, scope_key  # noqa: E402
+from tests.conftest import with_real_lock_lifecycle  # noqa: E402
 
 PROJECT_KEY = "SMOKE"
 
@@ -47,7 +47,7 @@ def _listed(key: str, status: str = "Draft") -> ListedTestCase:
 
 
 def _point_id(key: str) -> str:
-    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"quaia:test-case:{config.TEST_MANAGEMENT_SYSTEM}:{key}"))
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"quaia:test-case:{key}"))
 
 
 @pytest.fixture
@@ -68,6 +68,7 @@ def runner():
         lock_store.mark_started = AsyncMock(return_value=True)
         lock_store.is_holder = AsyncMock(return_value=True)
         lock_store.release = AsyncMock(return_value=True)
+        with_real_lock_lifecycle(lock_store)
         with (
             patch("rag_sync.test_case_sync.VectorDbService", side_effect=[metadata_db, db]),
             patch("common.services.sync_lock_store.SyncLockStore", return_value=lock_store),
@@ -133,7 +134,7 @@ class TestFullResync:
         from common.services.test_case_index import render_test_case
 
         listed = [_listed("SMOKE-1")]
-        stored_record = render_test_case(PROJECT_KEY, listed[0])
+        stored_record = render_test_case(PROJECT_KEY, listed[0].test_case)
         runner._tms.return_value.fetch_test_cases_by_project.return_value = listed
         runner._db.scroll_points.return_value = _scroll_result(
             [(_point_id("SMOKE-1"), stored_record.content_hash, "2026-01-01T00:00:00+00:00")]

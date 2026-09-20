@@ -131,7 +131,7 @@ services:
       retries: 12
       start_period: 5s
 
-  # WS8/WS9: the local RAG sync service. The orchestrator's /update-jira-db and
+  # the local RAG sync service. The orchestrator's /update-jira-db and
   # /update-confluence-db forward to it (local mode); it runs the syncs inline
   # against the mocked Jira REST, Confluence REST and Qdrant.
   rag_sync_local:
@@ -149,13 +149,13 @@ services:
       CONFLUENCE_URL: "http://confluence_mock:8095"
       CONFLUENCE_USERNAME: "smoke"
       CONFLUENCE_API_TOKEN: "smoke-token"
-      # WS18: the SharePoint sync runs against the Microsoft Graph mock.
+      # the SharePoint sync runs against the Microsoft Graph mock.
       SHAREPOINT_TENANT_ID: "smoke-tenant"
       SHAREPOINT_CLIENT_ID: "smoke-client"
       SHAREPOINT_CLIENT_SECRET: "smoke-secret"
       SHAREPOINT_AUTHORITY_URL: "http://sharepoint_mock:8097"
       SHAREPOINT_GRAPH_BASE_URL: "http://sharepoint_mock:8097"
-      # WS17: the test-case sync lists the project's test cases from the test management system.
+      # the test-case sync lists the project's test cases from the test management system.
       TEST_MANAGEMENT_SYSTEM: "zephyr"
       ZEPHYR_BASE_URL: "http://zephyr_mock:8090"
       ZEPHYR_API_TOKEN: "smoke-token"
@@ -169,7 +169,7 @@ services:
       retries: 12
       start_period: 5s
 
-  # WS18: Microsoft Graph recording mock (Entra token endpoint included) for the
+  # Microsoft Graph recording mock (Entra token endpoint included) for the
   # SharePoint ingestion. Shares the mocks image jira_mcp_mock builds.
   sharepoint_mock:
     image: smoke-mocks:latest
@@ -191,10 +191,10 @@ services:
     environment:
       <<: *agent-env
       AGENT_BASE_URL: "http://requirements_review"
-      # WS3: proves prompt overrides reach the agent - the override file under
+      # proves prompt overrides reach the agent - the override file under
       # tests/smoke/overrides/ replaces the bundled main prompt template.
       PROMPT_OVERRIDES_DIR: "/prompt-overrides"
-      # WS10/WS18: retrieval enabled, Confluence-only - the review grounds itself in the
+      # retrieval enabled, Confluence-only - the review grounds itself in the
       # documents the concurrently running Confluence sync ingests into the mocked vector DB.
       CONFLUENCE_RETRIEVAL_ENABLED: "true"
       QDRANT_URL: "http://qdrant_mock:6333"
@@ -234,7 +234,7 @@ services:
     environment:
       <<: *agent-env
       AGENT_BASE_URL: "http://test_case_review"
-      # WS17: the review indexes its batch into the test-case collection and searches it for duplicates.
+      # the review indexes its batch into the test-case collection and searches it for duplicates.
       QDRANT_URL: "http://qdrant_mock:6333"
       EMBEDDING_SERVICE_URL: "http://qdrant_mock:6333"
     depends_on:
@@ -297,7 +297,7 @@ services:
       PROMPT_INJECTION_CHECK_ENABLED: "false"
       GOOGLE_API_KEY: "${GOOGLE_API_KEY}"
       MODEL_NAME: "google-gla:gemini-3.8-flash"
-      # WS4: proves the additional Jira custom fields instruction reaches the agents:
+      # proves the additional Jira custom fields instruction reaches the agents:
       # the Jira MCP mock records that jira_get_issue was asked for these field IDs.
       JIRA_ADDITIONAL_FIELD_IDS: "customfield_10101,customfield_10202"
       # The /execute-tests flow makes the orchestrator a test-management client.
@@ -308,11 +308,11 @@ services:
       JIRA_URL: "http://jira_rest_mock:8080"
       JIRA_USERNAME: "smoke"
       JIRA_API_TOKEN: "smoke-token"
-      # WS18: Confluence-only retrieval configuration for the review flow.
+      # Confluence-only retrieval configuration for the review flow.
       CONFLUENCE_RETRIEVAL_ENABLED: "true"
       QDRANT_URL: "http://qdrant_mock:6333"
       EMBEDDING_SERVICE_URL: "http://qdrant_mock:6333"
-      # WS8: local mode - the orchestrator forwards /update-jira-db to the local sync service.
+      # local mode - the orchestrator forwards /update-jira-db to the local sync service.
       RAG_SYNC_SERVICE_URL: "http://rag_sync_local:8085"
       INTERNAL_SERVICE_API_KEY: "smoke-internal-key"
     ports:

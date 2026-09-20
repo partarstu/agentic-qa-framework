@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
-"""Command-line runner: runs one sync for one scope to completion (WS8).
+"""Command-line runner: runs one sync for one scope to completion.
 
 The Cloud Run Job and local one-off runs use this entry point. The exit code reflects
 the outcome, so schedulers and job platforms see failures without parsing logs.

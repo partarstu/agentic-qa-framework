@@ -6,9 +6,9 @@
 
 Serves the endpoints ``ConfluenceClient`` exercises: the space lookup by key,
 the space page listing (cursor pagination), the single-page fetch with a storage
-body and the per-page attachment listing (WS9b). The space seeds one page with
-headings, paragraphs and a container macro; a small PDF and a PNG attachment ship
-with WS9b and are listed already so the ingestion flow sees the full shape.
+body and the per-page attachment listing. The space seeds one page with
+headings, paragraphs and a container macro; a small PDF and a PNG attachment are
+listed already so the ingestion flow sees the full shape.
 
 Everything recorded is exposed at ``GET /__recorded`` for the smoke assertions.
 """

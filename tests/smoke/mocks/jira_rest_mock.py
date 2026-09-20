@@ -7,7 +7,7 @@
 The ``jira`` Python client (``JIRA(server, basic_auth=...)``) probes ``myself`` and
 ``serverInfo`` on construction, then posts comments to
 ``/rest/api/2/issue/{key}/comment`` (``add_jira_comment``), runs JQL searches
-against ``/rest/api/2/search`` (the RAG sync) and, since WS5, serves the issue's
+against ``/rest/api/2/search`` (the RAG sync) and, since serves the issue's
 attachment metadata and content downloads for the agents' REST attachment
 downloader. Every recorded comment and download is exposed at ``GET /__recorded``
 for the smoke assertions.
@@ -39,7 +39,7 @@ _SEEDED_SEARCH_ISSUE = {
     },
 }
 
-# An issue in a status the former status allow-list excluded: the sync must still ingest it (WS18).
+# An issue in a status the former status allow-list excluded: the sync must still ingest it.
 _SEEDED_CLOSED_ISSUE = {
     "id": "10002",
     "key": "SMOKE-2",
@@ -55,7 +55,7 @@ _SEEDED_CLOSED_ISSUE = {
 
 # The seeded story's attachments, mirroring jira_mcp_mock's: a plain-text policy and a
 # JSON attachment (served under a text-equivalent media type by the downloader). The
-# ``content`` field is the ABSOLUTE URL Jira Cloud returns (WS5 downloader uses it as-is).
+# ``content`` field is the ABSOLUTE URL Jira Cloud returns (downloader uses it as-is).
 _ATTACHMENTS = [
     {
         "id": "10001",
@@ -99,7 +99,7 @@ async def server_info(request: Request) -> dict:
 
 @app.get("/rest/api/2/issue/{issue_key}")
 async def get_issue(issue_key: str, request: Request) -> dict:
-    """Serves the issue with its attachment metadata (the WS5 REST downloader's read)."""
+    """Serves the issue with its attachment metadata (the REST downloader's read)."""
     return {
         "id": "10001",
         "key": issue_key,

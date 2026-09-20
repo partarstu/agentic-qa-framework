@@ -2,12 +2,7 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
-"""
-Streaming hub for broadcasting SSE events to dashboard subscribers.
-
-Started and stopped via the FastAPI lifespan. Publish methods are called from
-the chunk-handling loop in _send_task_to_agent_with_message.
-"""
+"""Streaming hub broadcasting SSE events to dashboard subscribers, started and stopped by the FastAPI lifespan."""
 
 import asyncio
 import contextlib

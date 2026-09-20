@@ -1,67 +1,34 @@
-# Implementation Plan: <Feature>
+# Plan: <Feature or fix>
 
 ## Goal
 
-<One or two sentences. Note any deviation from the original request and why.>
+<One sentence.>
 
-## Assumptions and open questions
+## Open questions
 
-- <Assumption, or question the user must answer>
+- <Only questions the user must answer; omit the section if none.>
 
-## Current state and reuse
+## Architecture
 
-- `<module.function>`: <what it does today and what the change reuses>
-
-## Research
-
-| Source (official docs) | Finding | Applied to |
-|------------------------|---------|------------|
-| <URL>                  |         |            |
+<"No architecture change." or: the nodes, relationships and controls added, removed or renamed under `calm/`, one line each, followed by the line `CALM updated, validated and approved by the user on <date>`. Implementation does not start without that line (*Architecture first* in `AGENTS.md`).>
 
 ## Design
 
-<Components added or changed and how they interact. Optional Mermaid diagram.>
+- **Components**: <new or changed modules, one line each: responsibility and what it reuses>
+- **Decision**: <only for a significant choice: chosen option and why, in one line>
 
-### Alternatives considered
+## Workflows
 
-| Option | Pros | Cons |
-|--------|------|------|
-|        |      |      |
+**Logic flow:**
 
-**Recommendation:** <option and reason>
+1. <Entry point> → <component> → <component> → <result>
 
-### Architecture (CALM)
+**Data flow:** <only if relevant: what data is created, transformed, stored or returned, and where>
 
-<Nodes, relationships and controls added or changed under `calm/`, or "No topology change.">
+## Impact
 
-### Security
+<One line per affected area only: smoke suite, configuration, dependencies, security, and the version bump of every agent or orchestrator whose logic changes.>
 
-<Input validation, authentication, secrets, prompt-injection exposure.>
+## TODO
 
-### Dependencies and configuration
-
-<New packages with licence and `uv audit` result, new env vars and defaults, or "None.">
-
-## Changes
-
-| File | Change |
-|------|--------|
-|      |        |
-
-## Steps
-
-1. <Step> → verify: <command or check>
-2. <Step> → verify: <command or check>
-
-## Testing
-
-- **Unit:** <tests to add or update>
-- **Smoke:** <`tests/smoke/` change or baseline refresh, or "No end-to-end behaviour change.">
-
-## Definition of done
-
-- [ ] `uv run pytest` passes
-- [ ] `uv run ruff check .` passes
-- [ ] CALM validation passes (if `calm/` changed)
-- [ ] Smoke suite updated (if end-to-end behaviour changed)
-- [ ] README and affected skills updated
+- [ ] <Step> → verify: <check>

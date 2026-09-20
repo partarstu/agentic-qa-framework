@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
-"""SharePoint document-library ingestion into the documents collection (WS18).
+"""SharePoint document-library ingestion into the documents collection.
 
 Change detection is delta enumeration on the drive root. A drive-scoped run resumes from
 the stored delta link and saves the new one only on a clean run; a folder-scoped run
@@ -28,7 +28,7 @@ import config
 from common import utils
 from common.models import DocumentPagePart, RagUpdateResult, SyncStatus
 from common.services.sharepoint_client import DeltaResyncRequired, SharePointClient
-from common.services.sync_lock_store import SyncLockHeldError, SyncLockStore, SyncStateStore, scope_key
+from common.services.sync_lock_store import SyncLockStore, SyncStateStore, scope_key
 from common.services.vector_db_service import VectorDbService
 from rag_sync.attachment_extraction import (
     AttachmentSkippedError,
@@ -75,21 +75,10 @@ class SharePointRagSyncRunner:
     ) -> RagUpdateResult:
         """Synchronizes one drive — or one folder of it — into the SharePoint collection."""
         scope = scope_key(SHAREPOINT_SCOPE, drive_id)
-        if lock_token:
-            if not await self._lock_store.mark_started(scope, lock_token):
-                logger.warning("Runner no longer holds the lock for %s; aborting without writes.", scope)
-                raise PermissionError(f"Lock for scope {scope} was taken over before the run started.")
-        else:
-            state = await self._lock_store.acquire(scope)
-            if not state.acquired:
-                raise SyncLockHeldError(f"Another sync already holds the lock for {scope}.")
-            lock_token = state.lock_info["holder_token"]
         try:
-            return await self._run_sync(drive_id, folder_path, file_name_pattern, scope, lock_token)
+            async with self._lock_store.held_for_run(scope, lock_token) as token:
+                return await self._run_sync(drive_id, folder_path, file_name_pattern, scope, token)
         finally:
-            released = await self._lock_store.release(scope, lock_token)
-            if not released:
-                logger.warning("Lock for %s was not released by this runner; it was taken over.", scope)
             await self.close()
 
     async def _run_sync(
@@ -403,11 +392,7 @@ class SharePointRagSyncRunner:
     async def _update_payload_metadata(
         self, scope: str, item: dict, folders: dict[str, dict], stored_fingerprint: dict, lock_token: str
     ) -> dict:
-        """A rename/move or a folder rename: refresh the payload fields without re-embedding.
-
-        Returns:
-            The updated fingerprint.
-        """
+        """A rename/move or a folder rename: refresh the payload fields without re-embedding."""
         name = item.get("name", "")
         folder_path = self._folder_path(item, folders)
         await self._verify_holder_or_abort(scope, lock_token)

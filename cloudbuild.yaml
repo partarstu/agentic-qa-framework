@@ -8,7 +8,7 @@ steps:
   - name: 'gcr.io/cloud-builders/docker'
     args: [ 'build', '-t', 'agentic-qa-base:latest', '-f', 'Dockerfile.base', '.' ]
 
-  # Render every workload's configuration from deploy/manifest.yaml (WS26) into deploy/rendered/:
+  # Render every workload's configuration from deploy/manifest.yaml into deploy/rendered/:
   # an env-vars file, the --set-secrets value (secret names only; Cloud Run resolves the values
   # itself) and the redeploy marker. Substitutions reach the renderer as runtime overrides of
   # declared keys; an empty one keeps the manifest default.
@@ -126,7 +126,7 @@ steps:
         fi
 
   # Deploy atlassian-mcp-server to Cloud Run (conditional). The combined Jira + Confluence
-  # toolset: the Confluence part is enabled by its credentials (WS11).
+  # toolset: the Confluence part is enabled by its credentials.
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: 'bash'
     args:
@@ -294,7 +294,7 @@ steps:
           echo "Skipping qdrant-vector-db deployment (variable _DEPLOY_QDRANT and _DEPLOY_ALL_SERVICES are not true)"
         fi
 
-  # Deploy to Cloud Run orchestrator. The prompt-override directory (WS3) is mounted only
+  # Deploy to Cloud Run orchestrator. The prompt-override directory is mounted only
   # when the _PROMPT_OVERRIDES_DIR substitution is set (a Cloud Run volume mount from the
   # overrides bucket); the rendered env file then carries PROMPT_OVERRIDES_DIR.
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
@@ -330,7 +330,7 @@ steps:
           $$PROMPT_OVERRIDE_ARGS
 
   # Deploy the RAG sync job to Cloud Run and grant the orchestrator's runtime identity
-  # the least-privilege role to run it with overrides (WS8)
+  # the least-privilege role to run it with overrides
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: 'bash'
     args:

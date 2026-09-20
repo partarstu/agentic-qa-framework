@@ -77,12 +77,7 @@ class AgentBase(ABC):
         vector_db_collection_name: str | None = None,
         max_output_tokens: int | None = None,
     ):
-        """Initialise the agent and its underlying A2A server.
-
-        Note for prompt-template authors: the ``report_activity`` tool and a one-line
-        instruction snippet are appended to *instructions* automatically here.
-        Do **not** include them in your system-prompt template files.
-        """
+        """Initialise the agent and its underlying A2A server."""
         self.agent_name = agent_name
         self.base_url = base_url
         self.port = port
@@ -99,6 +94,7 @@ class AgentBase(ABC):
         # Factories rather than live connections: a fresh MCP session is built for each agent run.
         self.mcp_toolset_factories = list(mcp_toolset_factories)
         self._activity_queue: asyncio.Queue[str] = asyncio.Queue(maxsize=_ACTIVITY_QUEUE_MAXSIZE)
+        # The tool and its instruction are appended here, so a system-prompt template must not mention them.
         self.tools = [*tools, self.report_activity]
         self.instructions = (
             self.instructions
@@ -110,7 +106,7 @@ class AgentBase(ABC):
         self.vector_db_service = None
         if vector_db_collection_name:
             # The metadata collection makes the agent's reads/writes refuse to run against
-            # vectors produced by a different embedding model (WS6 model identity).
+            # vectors produced by a different embedding model (model identity).
             self.vector_db_service = VectorDbService(
                 vector_db_collection_name,
                 metadata_collection_name=config.QdrantConfig.METADATA_COLLECTION_NAME,
@@ -122,10 +118,8 @@ class AgentBase(ABC):
 
     @property
     def activity_queue(self) -> asyncio.Queue[str]:
-        """Queue of pending activity descriptions reported via report_activity.
-
-        Exposed so the executor can drain reported activities without reaching across
-        the privacy boundary into the internal queue.
+        """Queue of pending activity descriptions, exposed so the executor drains them without reaching into the
+        internal one.
         """
         return self._activity_queue
 
@@ -253,11 +247,7 @@ class AgentBase(ABC):
         logger.info(self.latest_token_usage.summary_line())
 
     def _log_llm_comments_if_result_incomplete(self, output: BaseModel | None | str) -> None:
-        """Logs LLM comments if the agent result appears empty or incomplete.
-
-        Args:
-            output: The output from the agent execution.
-        """
+        """Logs the LLM comments when the agent result appears empty or incomplete."""
         if output is None:
             logger.warning("Agent returned None result.")
             return
@@ -274,14 +264,7 @@ class AgentBase(ABC):
 
     @staticmethod
     def _check_if_result_incomplete(output: BaseModel) -> bool:
-        """Checks if the agent result appears to be empty or incomplete.
-
-        Args:
-            output: The output model from the agent execution.
-
-        Returns:
-            True if the result appears incomplete, False otherwise.
-        """
+        """Whether the agent result appears to be empty or incomplete."""
         if output is None:
             return True
 
@@ -320,11 +303,8 @@ class AgentBase(ABC):
         logger.info("Shutting down.")
 
     def _compose_card_description(self) -> str:
-        """Compose the agent card description from model, version and skill name.
-
-        Rendered by the dashboard tile as sanitized HTML clamped to two lines, so the
-        parts are separated with explicit line breaks.
-        """
+        """Compose the agent card description from model, version and skill name."""
+        # The dashboard tile renders it as sanitized HTML clamped to two lines, hence the explicit breaks.
         return f"Model: {self.model_name}<br>Version: {self.version}<br>Skill: {self.skill.name}"
 
     def _get_server(self) -> FastAPI:

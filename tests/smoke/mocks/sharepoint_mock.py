@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
-"""Stateful recording mock for the Microsoft Graph surface the SharePoint sync exercises (WS18).
+"""Stateful recording mock for the Microsoft Graph surface the SharePoint sync exercises.
 
 Serves the Entra token endpoint (client-credentials flow), the drive delta enumeration
 (root folder, one subfolder and one small PDF file, ending in a delta link) and the item

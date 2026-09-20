@@ -2,11 +2,8 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
-"""
-Core data models and state management for the Orchestrator.
-
-This module contains shared data structures used by both the main orchestrator
-logic and the dashboard service, avoiding circular imports.
+"""Core data models and state management shared by the orchestrator logic and the dashboard service, kept here to avoid
+circular imports.
 """
 
 import asyncio
@@ -331,11 +328,7 @@ class AgentRegistry:
             self._remove_locked(agent_id)
 
     async def remove_unless_busy(self, agent_id: str) -> bool:
-        """Remove an agent unless it is BUSY, checking the status under the same lock as the removal.
-
-        Returns:
-            Whether the agent was removed.
-        """
+        """Remove an agent unless it is BUSY, True when it was removed, with the check under the removal's lock."""
         async with self._lock:
             if agent_id not in self._cards or self._statuses.get(agent_id) == AgentStatus.BUSY:
                 return False

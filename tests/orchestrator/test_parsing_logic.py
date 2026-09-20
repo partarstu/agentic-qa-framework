@@ -813,6 +813,46 @@ async def test_execution_result_carries_agent_info():
 
 
 @pytest.mark.asyncio
+async def test_agent_info_names_the_agent_routing_actually_reserved():
+    """The worker proposes an agent, but routing may reserve another one - the result must name that one."""
+    from common.models import TestExecutionResult
+    from orchestrator.main import _execute_single_test, _reserved_agent_id
+
+    artifact = _create_text_artifact(["irrelevant - the extractor is stubbed"])
+    extracted = TestExecutionResult(
+        stepResults=[],
+        testCaseKey="TC-001",
+        testCaseName="Test Case",
+        testExecutionStatus="passed",
+        generalErrorMessage="",
+        start_timestamp="2025-01-01",
+        end_timestamp="2025-01-01",
+    )
+    cards = {"proposed-agent": agent_card(name="Proposed", version="1.0"), "routed-agent": agent_card(name="Routed")}
+
+    async def reserve_a_different_agent(*_args, **_kwargs):
+        _reserved_agent_id.set("routed-agent")
+        return MagicMock(artifacts=[artifact])
+
+    with (
+        patch("orchestrator.main._send_task_to_agent", side_effect=reserve_a_different_agent),
+        patch("orchestrator.main._get_artifacts_from_task", return_value=[artifact]),
+        patch("orchestrator.main.agent_registry") as mock_registry,
+        patch("orchestrator.main._get_results_extractor_agent") as mock_extractor,
+    ):
+        mock_registry.get_name = AsyncMock(return_value="Routed")
+        mock_registry.get_card = AsyncMock(side_effect=lambda agent_id: cards[agent_id])
+        mock_extractor_instance = AsyncMock()
+        mock_extractor_instance.run.return_value.output = extracted
+        mock_extractor.return_value = mock_extractor_instance
+
+        result = await _execute_single_test("proposed-agent", _executable_test_case(), "ui")
+
+    mock_registry.get_card.assert_awaited_with("routed-agent")
+    assert result.agent_info.agent_name == "Routed"
+
+
+@pytest.mark.asyncio
 async def test_failed_extraction_result_carries_agent_info():
     result = await _execute_single_test_with_extractor(ValueError("no structured output"))
 

@@ -314,7 +314,7 @@ def test_each_factory_call_builds_a_separate_session():
 
 @pytest.mark.asyncio
 async def test_allowed_tools_filters_tool_discovery():
-    """Each agent only ever sees the Atlassian tools it was built to use (WS11)."""
+    """Each agent only ever sees the Atlassian tools it was built to use."""
     advertised = {
         "jira_get_issue": MagicMock(),
         "jira_create_issue": MagicMock(),

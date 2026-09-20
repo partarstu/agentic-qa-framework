@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
-"""OpenTelemetry metrics for the per-operation token usage of agent tasks (WS13).
+"""OpenTelemetry metrics for the per-operation token usage of agent tasks.
 
 On task completion the executor records each operation's counters into the
 ``gen_ai.client.token.usage`` histogram (GenAI semantic conventions): one data point per

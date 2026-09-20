@@ -31,7 +31,7 @@ COVERAGE_REPORT = """<?xml version="1.0" ?>
 """
 SOURCE_PATH = "common/Calc.py"
 TEST_PATH = "tests/test_calc.py"
-TEMPLATE_PATH = ".agents/skills/creating-new-agent/resources/agent_template.py"
+TEMPLATE_PATH = ".agents/skills/adding-orchestrator-workflow/resources/endpoint_template.py"
 
 
 def _diff(*paths: str) -> str:

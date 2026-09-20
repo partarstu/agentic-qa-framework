@@ -16,14 +16,7 @@ def _get_prompts_root() -> Path:
 
 
 def _format_values_for_prompt(values_string: str) -> str:
-    """Formats a comma-separated 'value:description' string into prompt-friendly format.
-
-    Args:
-        values_string: Comma-separated string of "value:description" pairs.
-
-    Returns:
-        Formatted string like "`Value1` (description1), `Value2` (description2)".
-    """
+    """Formats a comma-separated 'value:description' string into prompt-friendly format."""
     pairs = values_string.split(",")
     formatted_pairs = []
     for pair in pairs:

@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
-"""Sync state for the Confluence document ingestion (WS9): fingerprints per item.
+"""Sync state for the Confluence document ingestion: fingerprints per item.
 
 One fingerprint per page body and per attachment holds the version number, the raw
 content hash, the ingestion-schema version and identity/metadata (space, page,
@@ -29,7 +29,7 @@ def content_hash(raw_content: str | bytes, *extra: str) -> str:
     """A stable hash of an item's raw content plus identity fields feeding it.
 
     The page title is hashed together with the raw body, because the title is part
-    of every chunk's breadcrumb (WS9 step 5).
+    of every chunk's heading breadcrumb.
     """
     if isinstance(raw_content, str):
         raw_content = raw_content.encode("utf-8")

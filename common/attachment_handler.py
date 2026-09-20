@@ -2,12 +2,8 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
-"""
-Utility module for handling Jira attachments for agent processing.
-
-Provides the predicates and helpers used when Jira attachments are downloaded over
-REST (WS5) and handed to the model as BinaryContent: which files to skip, which
-MIME types the models support, and media-type mapping for text-readable files.
+"""Predicates and helpers for the Jira attachments handed to a model as BinaryContent: which files to skip, which MIME
+types the models support, and the media-type mapping for text-readable files.
 """
 
 from pathlib import Path
@@ -59,40 +55,19 @@ def as_text_equivalent(content: BinaryContent) -> BinaryContent:
 
 
 def should_skip_attachment(filename: str, skip_postfix: str | None = None) -> bool:
-    """
-    Check if an attachment should be skipped based on its filename.
-
-    The check is case-insensitive for better user experience.
-
-    Args:
-        filename: The name of the attachment file.
-        skip_postfix: The postfix that indicates the file should be skipped.
-                     Defaults to config.JIRA_ATTACHMENT_SKIP_POSTFIX.
-
-    Returns:
-        True if the attachment should be skipped, False otherwise.
-    """
+    """Whether the attachment's file stem ends with the configured skip postfix, ignoring case."""
     if skip_postfix is None:
         skip_postfix = config.JIRA_ATTACHMENT_SKIP_POSTFIX
 
     if not skip_postfix:
         return False
 
-    # Get the file stem (name without extension)
     file_stem = Path(filename).stem
     return file_stem.lower().endswith(skip_postfix.lower())
 
 
 def is_supported_mime_type(mime_type: str | None) -> bool:
-    """
-    Check if a MIME type is supported by Pydantic AI for multimodal processing.
-
-    Args:
-        mime_type: The MIME type to check.
-
-    Returns:
-        True if the MIME type is supported, False otherwise.
-    """
+    """Whether pydantic-ai supports the MIME type for multimodal processing."""
     if not mime_type:
         return False
     return mime_type in SUPPORTED_MIME_TYPES

@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
-"""Scoped hybrid retrieval over the per-source document collections (WS10, WS18).
+"""Scoped hybrid retrieval over the per-source document collections.
 
 One retrieval turns a query text plus an optional scope (Confluence: space key, page ID;
 SharePoint: drive ID, folder path; shared: document-name pattern) into assembled,
@@ -62,8 +62,6 @@ _HIT_PAYLOAD_INCLUDE = [
     "part_index",
 ]
 
-_HEADER_TEXT_LENGTH_CAP = 200
-
 CONFLUENCE_SOURCE = "confluence"
 SHAREPOINT_SOURCE = "sharepoint"
 
@@ -92,11 +90,9 @@ class RetrievalResult:
 
 
 def _header(part: DocumentPagePart) -> str:
-    """The header text part: reconciliation chain, or breadcrumb and URL."""
-    if part.content_kind == "attachment":
-        return f"Reference documentation: {part.breadcrumb}"
+    """The header text part: the breadcrumb, plus the page URL where a page body has one."""
     header = f"Reference documentation: {part.breadcrumb}"
-    if part.page_url:
+    if part.content_kind != "attachment" and part.page_url:
         header = f"{header} ({part.page_url})"
     return header
 
@@ -288,14 +284,13 @@ async def _attach_page_images(documents_db: VectorDbService | None, pages: list[
     image_ids = [page.part.model_copy(update={"part_index": 0}).get_vector_id() for page in attachment_pages]
     try:
         records = await documents_db.retrieve(image_ids)
+        images = {str(record.id): (record.payload or {}).get("image") for record in records}
+        for page, image_id in zip(attachment_pages, image_ids, strict=True):
+            image = images.get(image_id)
+            if image:
+                page.image = base64.b64decode(image)
     except Exception:
         logger.exception("Failed to fetch %s page image(s); the pages fall back to their text.", len(image_ids))
-        return
-    images = {str(record.id): (record.payload or {}).get("image") for record in records}
-    for page, image_id in zip(attachment_pages, image_ids, strict=True):
-        image = images.get(image_id)
-        if image:
-            page.image = base64.b64decode(image)
 
 
 def assemble_retrieved_parts(pages: list[RetrievedPage]) -> list[str | BinaryContent]:

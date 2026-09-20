@@ -120,7 +120,7 @@ class TestRehydrate:
 
     @pytest.mark.asyncio
     async def test_a_naive_stored_at_at_the_retention_boundary_is_kept(self, fresh_state, monkeypatch):
-        """Pre-WS23 records carry naive timestamps, whose ISO string is a prefix of the aware cutoff's.
+        """Pre- records carry naive timestamps, whose ISO string is a prefix of the aware cutoff's.
 
         Compared as strings, the shorter one always sorts first, so a record exactly at the
         boundary — not older than it — was discarded as expired.

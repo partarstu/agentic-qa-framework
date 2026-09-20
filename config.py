@@ -69,7 +69,7 @@ XRAY_CLIENT_ID = os.environ.get("XRAY_CLIENT_ID")
 XRAY_CLIENT_SECRET = os.environ.get("XRAY_CLIENT_SECRET")
 XRAY_PRECONDITIONS_FIELD_ID = os.environ.get("XRAY_PRECONDITIONS_FIELD_ID", "Pre-conditions")
 
-# Confluence Cloud access for the RAG document sync (and, from WS11, the combined MCP server).
+# Confluence Cloud access for the RAG document sync and for the combined Atlassian MCP server.
 CONFLUENCE_URL = os.environ.get("CONFLUENCE_URL")
 CONFLUENCE_USERNAME = os.environ.get("CONFLUENCE_USERNAME")
 CONFLUENCE_API_TOKEN = os.environ.get("CONFLUENCE_API_TOKEN")
@@ -209,7 +209,7 @@ PROMPT_GUARD_SERVICE_URL = os.environ.get("PROMPT_GUARD_SERVICE_URL")
 # Orchestrator
 class OrchestratorConfig:
     THINKING_LEVEL: ThinkingLevel = "low"
-    VERSION = os.environ.get("ORCHESTRATOR_VERSION", "1.0")
+    VERSION = os.environ.get("ORCHESTRATOR_VERSION", "1.1.1")
     # Label describing the environment the execution agents run their test cases against; reported
     # alongside every test execution result.
     TEST_ENVIRONMENT_LABEL = os.environ.get("TEST_ENVIRONMENT_LABEL", "Standard Test Environment")
@@ -257,7 +257,7 @@ class DashboardPersistenceConfig:
 # Requirements Review Agent
 class RequirementsReviewAgentConfig:
     THINKING_LEVEL: ThinkingLevel = "medium"
-    VERSION = os.environ.get("REQUIREMENTS_REVIEW_AGENT_VERSION", "1.0")
+    VERSION = os.environ.get("REQUIREMENTS_REVIEW_AGENT_VERSION", "1.1.0")
     OWN_NAME = "Jira Requirements Reviewer"
     SKILL_ID = "jira-requirements-review"
     SKILL_NAME = "Jira Requirements Review"
@@ -273,7 +273,7 @@ class RequirementsReviewAgentConfig:
 # Test Case Classification Agent
 class TestCaseClassificationAgentConfig:
     THINKING_LEVEL: ThinkingLevel = "low"
-    VERSION = os.environ.get("TEST_CASE_CLASSIFICATION_AGENT_VERSION", "1.0")
+    VERSION = os.environ.get("TEST_CASE_CLASSIFICATION_AGENT_VERSION", "1.0.1")
     OWN_NAME = "Test Case Classification Agent"
     SKILL_ID = "test-case-classification"
     SKILL_NAME = "Test Case Classification"
@@ -289,7 +289,7 @@ class TestCaseClassificationAgentConfig:
 # Test Case Generation Agent
 class TestCaseGenerationAgentConfig:
     THINKING_LEVEL: ThinkingLevel = "low"
-    VERSION = os.environ.get("TEST_CASE_GENERATION_AGENT_VERSION", "1.0")
+    VERSION = os.environ.get("TEST_CASE_GENERATION_AGENT_VERSION", "1.0.1")
     OWN_NAME = "Test Case Generation Agent"
     SKILL_ID = "test-case-generation"
     SKILL_NAME = "Test Case Generation"
@@ -305,7 +305,7 @@ class TestCaseGenerationAgentConfig:
 # Test Case Review Agent
 class TestCaseReviewAgentConfig:
     THINKING_LEVEL: ThinkingLevel = "high"
-    VERSION = os.environ.get("TEST_CASE_REVIEW_AGENT_VERSION", "1.0")
+    VERSION = os.environ.get("TEST_CASE_REVIEW_AGENT_VERSION", "1.1.1")
     REVIEW_COMPLETE_STATUS_NAME = "Review Complete"
     OWN_NAME = "Test Case Review Agent"
     SKILL_ID = "test-case-review"
@@ -322,7 +322,7 @@ class TestCaseReviewAgentConfig:
 # Incident Creation Agent
 class IncidentCreationAgentConfig:
     THINKING_LEVEL: ThinkingLevel = "medium"
-    VERSION = os.environ.get("INCIDENT_CREATION_AGENT_VERSION", "1.0")
+    VERSION = os.environ.get("INCIDENT_CREATION_AGENT_VERSION", "1.0.1")
     OWN_NAME = "Incident Creation Agent"
     SKILL_ID = "incident-creation"
     SKILL_NAME = "Incident Creation"
@@ -360,7 +360,7 @@ class RetryConfig:
 
 class QdrantConfig:
     # QDRANT_URL is authoritative and includes the port (or relies on the scheme default);
-    # there is no separate port setting (WS7).
+    # there is no separate port setting.
     URL = os.environ.get("QDRANT_URL", "http://localhost:6333")
     API_KEY = os.environ.get("QDRANT_API_KEY")
     TIMEOUT_SECONDS = int(os.environ.get("QDRANT_TIMEOUT_SECONDS", "30"))
@@ -389,7 +389,7 @@ class QdrantConfig:
 
 
 class EmbeddingServiceConfig:
-    """Configuration of the embedding service's backends (WS6).
+    """Configuration of the embedding service's backends.
 
     ``text`` is the only backend implemented; ``EMBEDDING_BACKENDS`` and the backend
     registry are the extension point for the ones that follow.
@@ -408,7 +408,7 @@ class EmbeddingServiceConfig:
 
 
 class RagSyncConfig:
-    """RAG sync runtime, triggering, locks and cursors (WS8).
+    """RAG sync runtime, triggering, locks and cursors.
 
     Job mode is enabled by the Cloud Run job identity; local mode by the local sync
     service URL. When neither is configured the sync endpoints answer with an error
@@ -431,7 +431,7 @@ class RagSyncConfig:
 
 
 class SharePointConfig:
-    """Microsoft Graph app-only access for the SharePoint document-library ingestion (WS18).
+    """Microsoft Graph app-only access for the SharePoint document-library ingestion.
 
     The least-privilege setup grants the ``Sites.Selected`` application permission to the
     app for the specific sites; ``Files.Read.All`` is the tenant-wide fallback.
@@ -446,7 +446,7 @@ class SharePointConfig:
 
 
 class DocumentRagConfig:
-    """Confluence document ingestion and the documents collection (WS9).
+    """Confluence document ingestion and the documents collection.
 
     The chunk token budget uses a conservative character-based estimate (four
     characters per token), which stays safe while the budget is far below the
@@ -466,7 +466,7 @@ class DocumentRagConfig:
     CHUNK_MAX_TOKENS = int(os.environ.get("RAG_CHUNK_MAX_TOKENS", "512"))
     CHARACTERS_PER_TOKEN = 4
 
-    # --- Attachment ingestion (WS9b) ---
+    # --- Attachment ingestion ---
     # Checked against the listed size before any download. The default matches the
     # current Gemini API inline-data limit.
     MAX_ATTACHMENT_BYTES = int(os.environ.get("RAG_MAX_ATTACHMENT_BYTES", str(100 * 1024 * 1024)))

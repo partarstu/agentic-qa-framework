@@ -199,7 +199,6 @@ async def test_review_indexes_the_batch_under_review_before_reviewing(agent, dup
     records = agent.vector_db_service.upsert_batch.await_args.args[0]
     assert [record.test_case_key for record in records] == ["TC-1", "TC-2"]
     assert {record.project_key for record in records} == {PROJECT_KEY}
-    assert {record.status for record in records} == {"Review Complete"}
 
 
 async def test_review_rejects_a_test_case_without_a_key(agent, duplicate_checks, no_attachments):

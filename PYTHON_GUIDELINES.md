@@ -312,13 +312,14 @@ The project's test layout, fixtures and mocking pitfalls are in the `writing-uni
 
 ## 14. Docstrings and comments
 
-- Every public module, class, function and method has a PEP 257 docstring in triple double quotes, starting with a
-  one-line summary in the imperative mood that ends with a period.
-- Add Google-style `Args:`, `Returns:`, `Yields:` and `Raises:` sections when parameters, results or raised exceptions
-  are not obvious from the names and type hints. Do not repeat the types.
-- Comments explain *why* (a constraint, a workaround, a non-obvious decision), never *what* the code does, and are rare:
-  the code must explain itself.
+The rule is the *Comments and docstrings* section of `AGENTS.md`; this section only fixes its Python form.
+
+- A docstring follows PEP 257: triple double quotes and a one-line summary in the imperative mood that ends with a period. A function or method docstring is that one sentence; a class or module docstring is at most two sentences.
+- A module, class, function or method whose name and signature already say what it does gets no docstring.
+- Add Google-style `Args:`, `Returns:`, `Yields:` and `Raises:` sections only when a name and its type hint do not already say it, and always for the tools an LLM calls, because their docstring is the tool specification the model reads. Do not repeat the types.
+- A comment states a non-obvious *why* (a constraint, a workaround, a decision), never *what* the code does and never history (no plan, work-stream, ticket or "previously" references). Before writing one, make the code say it: a better name, a smaller function, an explicit type.
 - No commented-out code. A `TODO` names an issue or its reason.
+- Remove every comment or docstring that violates this rule from the code you touch.
 - Update docstrings and comments in the same change as the code they describe.
 
 ## 15. Dependencies and environment

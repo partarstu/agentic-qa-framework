@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
-"""Warm-up and backend registry for the embedding service (WS6).
+"""Warm-up and backend registry for the embedding service.
 
 On startup a background task loads every enabled backend. A single-flight guard makes
 requests that arrive during warm-up wait for the same load instead of starting a second

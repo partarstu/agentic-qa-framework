@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
-"""Unit tests for the document retrieval module (WS10, WS18 per-source retrieval)."""
+"""Unit tests for the document retrieval module (per-source retrieval)."""
 
 import base64
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -97,7 +97,7 @@ def sharepoint_db() -> MagicMock:
 
 @pytest.fixture
 def confluence_only(documents_db):
-    """Confluence retrieval on, SharePoint off: the pre-WS18 single-source setup."""
+    """Confluence retrieval on, SharePoint off: the pre- single-source setup."""
     with (
         patch.object(config_documentrag(), "CONFLUENCE_RETRIEVAL_ENABLED", True),
         patch.object(config_documentrag(), "SHAREPOINT_RETRIEVAL_ENABLED", False),

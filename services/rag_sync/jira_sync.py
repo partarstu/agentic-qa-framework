@@ -2,13 +2,9 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
-"""Programmatic synchronization of Jira issues into the RAG vector database (WS8).
-
-The algorithm is unchanged from the former in-orchestrator service, apart from the
-cursor fix: the saved cursor is the run's start time minus the overlap delay, taken
-BEFORE the run queries Jira, so issues updated during the run are fetched by the next
-run. The runner also verifies the scope lock before every write batch and before
-saving the cursor, and never saves the cursor when items failed.
+"""Programmatic synchronization of Jira issues into the RAG vector database. The saved cursor is the run's start time
+minus the overlap delay, taken before the run queries Jira, so issues updated during the run are fetched by the next
+one; the runner verifies the scope lock before every write and never saves the cursor when items failed.
 """
 
 import asyncio
@@ -22,7 +18,7 @@ from qdrant_client import models
 import config
 from common import utils
 from common.models import JiraIssue, ProjectMetadata, RagUpdateResult, SyncStatus
-from common.services.sync_lock_store import SyncLockHeldError, SyncLockStore, SyncStateStore, scope_key
+from common.services.sync_lock_store import SyncLockStore, SyncStateStore, scope_key
 from common.services.vector_db_service import VectorDbService
 
 logger = utils.get_logger("rag_sync")
@@ -48,7 +44,7 @@ class JiraRagSyncRunner:
 
     def __init__(self) -> None:
         # One shared metadata service: the issues db records/checks the model identity of
-        # its vectors through it (WS6), and the lock/state stores write to the same collection.
+        # its vectors through it, and the lock/state stores write to the same collection.
         self._metadata_db = VectorDbService(config.QdrantConfig.METADATA_COLLECTION_NAME)
         self._issues_db = VectorDbService(
             config.QdrantConfig.TICKETS_COLLECTION_NAME,
@@ -72,39 +68,21 @@ class JiraRagSyncRunner:
         local service) acquires the lock itself; an orchestrator-started runner
         receives the token and verifies it holds the lock before every write.
 
-        Args:
-            project_key: The Jira project key to synchronize.
-            lock_token: The holder token issued by the orchestrator, if any.
-
-        Returns:
-            A RagUpdateResult describing the outcome and the number of processed issues.
-
         Raises:
             PermissionError: When the runner no longer holds the lock at a write point.
             SyncLockHeldError: When a tokenless runner cannot acquire the lock.
         """
         scope = scope_key(JIRA_SCOPE, project_key)
-        if lock_token:
-            if not await self._lock_store.mark_started(scope, lock_token):
-                logger.warning("Runner no longer holds the lock for %s; aborting without writes.", scope)
-                raise PermissionError(f"Lock for scope {scope} was taken over before the run started.")
-        else:
-            state = await self._lock_store.acquire(scope)
-            if not state.acquired:
-                raise SyncLockHeldError(f"Another sync already holds the lock for {scope}.")
-            lock_token = state.lock_info["holder_token"]
-
         try:
-            return await self._run_sync(project_key, scope, lock_token)
+            async with self._lock_store.held_for_run(scope, lock_token) as token:
+                return await self._run_sync(project_key, scope, token)
         finally:
-            released = await self._lock_store.release(scope, lock_token)
-            if not released:
-                logger.warning("Lock for %s was not released by this runner; it was taken over.", scope)
             await self.close()
 
     async def _run_sync(self, project_key: str, scope: str, lock_token: str) -> RagUpdateResult:
         logger.info("Starting RAG sync for project %s.", project_key)
-        # The cursor is taken at run start, BEFORE querying Jira (the WS8 fix).
+        # The cursor is taken at run start, BEFORE querying Jira, so issues updated during the run
+        # are picked up by the next one.
         run_started_epoch = time.time()
         jira_client = await asyncio.to_thread(self._create_jira_client)
 
@@ -167,7 +145,7 @@ class JiraRagSyncRunner:
         """Forces a full re-ingest of a project that has no points in the issues collection.
 
         The collection is shared by all projects and recreated when its vector schema or embedding
-        model changes (WS7), so the decision is taken per project: a surviving cursor, or the legacy
+        model changes, so the decision is taken per project: a surviving cursor, or the legacy
         watermark it falls back to, would otherwise skip every issue not updated since the last run.
         """
         logger.info("No stored issues for %s; resetting its sync state for a full re-ingest.", scope)

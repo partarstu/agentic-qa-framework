@@ -31,16 +31,55 @@ def compile_name_pattern(pattern: str) -> re.Pattern:
     """Compile a user-supplied attachment/document name pattern.
 
     Patterns are case-insensitive and matched as an unanchored search, so a plain
-    pattern like ``report`` behaves like the old substring match. An invalid or
-    over-long pattern raises a clear error; patterns only ever run against short
-    name strings.
+    pattern like ``report`` behaves like the old substring match. An invalid, over-long
+    or exponentially backtracking pattern raises a clear error.
     """
     if len(pattern) > MAX_NAME_PATTERN_LENGTH:
         raise ValueError(f"Name pattern exceeds the {MAX_NAME_PATTERN_LENGTH}-character limit.")
+    if _has_nested_quantifier(pattern):
+        raise ValueError(
+            f"Name pattern '{pattern}' quantifies a group that already repeats (e.g. '(a+)+'), which can "
+            "take exponential time to match. Rewrite it without the nested repetition."
+        )
     try:
         return re.compile(pattern, re.IGNORECASE)
     except re.error as e:
         raise ValueError(f"Invalid name pattern '{pattern}': {e}") from e
+
+
+def _has_nested_quantifier(pattern: str) -> bool:
+    """Whether a repeated group of ``pattern`` itself repeats, as in ``(a+)+``.
+
+    That shape makes the backtracking engine explore exponentially many splits of the subject, so a
+    pattern carrying it can hang the process on a name of a few dozen characters. Escapes and
+    character classes are skipped, because a quantifier inside them is a literal.
+    """
+    repeats_in_group: list[bool] = []
+    index = 0
+    while index < len(pattern):
+        character = pattern[index]
+        if character == "\\":
+            index += 2
+            continue
+        if character == "[":
+            closing = pattern.find("]", index + 1)
+            if closing == -1:
+                return False
+            index = closing + 1
+            continue
+        if character == "(":
+            repeats_in_group.append(False)
+        elif character == ")" and repeats_in_group:
+            group_repeats = repeats_in_group.pop()
+            quantified = pattern[index + 1 : index + 2] in ("*", "+", "{")
+            if group_repeats and quantified:
+                return True
+            if repeats_in_group and (group_repeats or quantified):
+                repeats_in_group[-1] = True
+        elif character in ("*", "+") and repeats_in_group:
+            repeats_in_group[-1] = True
+        index += 1
+    return False
 
 
 def is_same_origin(url: str, base_url: str) -> bool:

@@ -252,7 +252,8 @@ async def test_execute_test_accepts_test_case_keys_of_both_systems_and_creates_n
     assert response.json()["testCaseKey"] == test_case_key
     assert response.json()["reporting_failures"] == []
     mock_client.return_value.fetch_test_case_by_key.assert_called_once_with(test_case_key)
-    assert mock_execute.await_args.kwargs["selected_agent_id"] == "agent-1"
+    assert mock_execute.await_args.args[0] == "agent-1"
+    assert mock_execute.await_args.kwargs["pin_to_agent"] is True
     mock_report.assert_awaited_once()
     mock_incident.assert_not_awaited()
 

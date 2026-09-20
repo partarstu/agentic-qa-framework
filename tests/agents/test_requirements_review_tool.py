@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
-"""Unit tests for the Requirements Review agent's reference documentation tool (WS10)."""
+"""Unit tests for the Requirements Review agent's reference documentation tool."""
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -64,7 +64,9 @@ def retrieval(retrieved_page):
 
     with ExitStack() as stack:
         patches = [
-            stack.enter_context(patch("agents.requirements_review.main.download_issue_attachments", return_value={})),
+            stack.enter_context(
+                patch("agents.requirements_review.main.fetch_issue_attachments", AsyncMock(return_value={}))
+            ),
             stack.enter_context(
                 patch(
                     "agents.requirements_review.main.retrieve_documents",

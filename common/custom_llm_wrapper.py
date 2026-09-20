@@ -57,7 +57,7 @@ class CustomLlmWrapper(WrapperModel):
         self.latest_instructions: str | None = None
         self.thinking_level = thinking_level
         self.max_output_tokens = max_output_tokens if max_output_tokens is not None else config.MAX_OUTPUT_TOKENS
-        # Name under which this model's calls are metered per operation (WS13): "main" for the
+        # Name under which this model's calls are metered per operation: "main" for the
         # agent created by AgentBase, the sub-agent's own name otherwise.
         self.operation_name = operation_name or "main"
 
@@ -102,13 +102,15 @@ class CustomLlmWrapper(WrapperModel):
             return provided_settings
         if is_claude_5(self.wrapped_model_name):
             return build_claude_5_settings(self.thinking_level, self.max_output_tokens, self.wrapped_model_name)
-        if self.thinking_level is None:
-            return ModelSettings(top_p=config.TOP_P, temperature=config.TEMPERATURE)
-        else:
-            return ModelSettings(top_p=config.TOP_P, temperature=config.TEMPERATURE, thinking=self.thinking_level)
+        settings = ModelSettings(top_p=config.TOP_P, temperature=config.TEMPERATURE)
+        if self.thinking_level is not None:
+            settings["thinking"] = self.thinking_level
+        if self.max_output_tokens is not None:
+            settings["max_tokens"] = self.max_output_tokens
+        return settings
 
     def _record_usage(self, response: ModelResponse) -> None:
-        """Add one completed LLM call's usage to the per-task operation meter (WS13).
+        """Add one completed LLM call's usage to the per-task operation meter.
 
         A model outside an agent task (e.g. the orchestrator's routing calls) has no meter and is
         not metered as an operation.

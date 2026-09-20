@@ -52,7 +52,7 @@ _executable_test_cases: dict[str, dict] = {
             }
         ],
     },
-    # Automated and ready, but without a recognized test-type label: /execute-tests must skip it (WS15).
+    # Automated and ready, but without a recognized test-type label: /execute-tests must skip it.
     _UNTYPED_TC_KEY: {
         "key": _UNTYPED_TC_KEY,
         "id": 1101,

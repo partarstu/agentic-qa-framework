@@ -8,9 +8,9 @@ Run algorithm (the fingerprints decide what gets skipped; the cursor is recorded
 but doesn't drive skipping, because CQL lastmodified depends on the lagging search
 index and misses attachment uploads):
 
-1. List metadata only: pages (id, title, parent, version, web link) and, with WS9b,
-   each page's attachments. The attachment name pattern and the skip-page-body
-   flag narrow the expected set.
+1. List metadata only: pages (id, title, parent, version, web link) and each page's
+   attachments. The attachment name pattern and the skip-page-body flag narrow the
+   expected set.
 2. Load the scope's stored fingerprints in one read.
 3. Classify each item: new, version-changed, unchanged, metadata-only-changed or
    removed. Removal is driven by non-existence in the listing and requires a
@@ -38,7 +38,7 @@ from qdrant_client import models
 import config
 from common import utils
 from common.models import DocumentPagePart, RagUpdateResult, SyncStatus
-from common.services.sync_lock_store import SyncLockHeldError, SyncLockStore, SyncStateStore, scope_key
+from common.services.sync_lock_store import SyncLockStore, SyncStateStore, scope_key
 from common.services.vector_db_service import VectorDbService
 from rag_sync.attachment_extraction import (
     AttachmentSkippedError,
@@ -65,7 +65,7 @@ class ConfluenceRagSyncRunner:
 
     def __init__(self) -> None:
         # One shared metadata service: the documents db records/checks the model identity
-        # of its vectors through it (WS6), and the lock/state/fingerprint stores write to
+        # of its vectors through it, and the lock/state/fingerprint stores write to
         # the same collection.
         self._metadata_db = VectorDbService(config.QdrantConfig.METADATA_COLLECTION_NAME)
         self._documents_db = VectorDbService(
@@ -94,37 +94,15 @@ class ConfluenceRagSyncRunner:
     ) -> RagUpdateResult:
         """Synchronizes a Confluence space (or one page of it) into the documents collection.
 
-        Args:
-            space_key: The Confluence space key (may start with '~' for personal spaces).
-            page_id: Restrict the sync to this page of the space.
-            attachment_name_pattern: Regex filtering attachment file names (WS9b).
-            skip_page_body: Ingest attachments only, skipping page bodies.
-            lock_token: The holder token issued by the orchestrator, if any.
-
-        Returns:
-            A RagUpdateResult describing the outcome and the number of processed items.
-
         Raises:
             PermissionError: When the runner no longer holds the lock at a write point.
             SyncLockHeldError: When a tokenless runner cannot acquire the lock.
         """
         scope = scope_key(CONFLUENCE_SCOPE, space_key)
-        if lock_token:
-            if not await self._lock_store.mark_started(scope, lock_token):
-                logger.warning("Runner no longer holds the lock for %s; aborting without writes.", scope)
-                raise PermissionError(f"Lock for scope {scope} was taken over before the run started.")
-        else:
-            state = await self._lock_store.acquire(scope)
-            if not state.acquired:
-                raise SyncLockHeldError(f"Another sync already holds the lock for {scope}.")
-            lock_token = state.lock_info["holder_token"]
-
         try:
-            return await self._run_sync(space_key, scope, lock_token, page_id, attachment_name_pattern, skip_page_body)
+            async with self._lock_store.held_for_run(scope, lock_token) as token:
+                return await self._run_sync(space_key, scope, token, page_id, attachment_name_pattern, skip_page_body)
         finally:
-            released = await self._lock_store.release(scope, lock_token)
-            if not released:
-                logger.warning("Lock for %s was not released by this runner; it was taken over.", scope)
             await self.close()
 
     async def _run_sync(
@@ -154,7 +132,7 @@ class ConfluenceRagSyncRunner:
             if page_id is not None:
                 # Page-scoped run: removal candidates are restricted to the scoped
                 # page's items (its body and its attachments); the rest of the space
-                # is never touched (WS9 reconciliation table).
+                # is never touched (reconciliation table).
                 stored = {
                     key: payload
                     for key, payload in stored.items()
@@ -236,7 +214,7 @@ class ConfluenceRagSyncRunner:
         """Whether the space's fingerprints reference points that are no longer in the documents collection.
 
         The collection is shared by all spaces and recreated when its vector schema or embedding model
-        changes (WS7), so the check is taken per space. Fingerprints without points (e.g. empty pages)
+        changes, so the check is taken per space. Fingerprints without points (e.g. empty pages)
         cannot tell, so they never trigger a reset.
         """
         if not any(fingerprint.get("point_ids") for fingerprint in stored.values()):

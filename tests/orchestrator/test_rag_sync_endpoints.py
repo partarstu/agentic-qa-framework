@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
-"""Unit tests for the WS8 RAG sync endpoints and trigger modes.
+"""Unit tests for the RAG sync endpoints and trigger modes.
 
 Every external boundary (Qdrant locks, the Cloud Run Admin API, the local sync service)
 is mocked. The lock state machine itself is covered in tests/services/test_rag_sync_runtime.py.
@@ -188,6 +188,27 @@ class TestUpdateConfluenceDb:
         response = client.post("/update-confluence-db", json={"space_key": "DEV", "page_id": -5})
         assert response.status_code == 422
 
+    def test_exponentially_backtracking_pattern_returns_422(self, client):
+        response = client.post("/update-confluence-db", json={"space_key": "DEV", "attachment_name_pattern": "(a+)+b"})
+        assert response.status_code == 422
+        assert "nested repetition" in response.json()["detail"]
+
+    @pytest.mark.parametrize(
+        "drive_id",
+        ["../sites/root/drive", "b!abc/items", "b!abc?select=id"],
+        ids=["traversal", "extra_path_segment", "query_string"],
+    )
+    def test_drive_id_carrying_path_or_query_characters_is_rejected(self, client, drive_id):
+        """drive_id is interpolated into the Graph REST path, so it may not carry path or query syntax."""
+        response = client.post("/update-sharepoint-db", json={"drive_id": drive_id})
+        assert response.status_code == 422
+
+
+async def _acquire_and_start(trigger_obj, source, scope_id, request):
+    """The sequence the endpoints run: acquire the scope lock, then start under its token."""
+    token = await trigger_obj.acquire(source, scope_id)
+    return await trigger_obj.start(source, scope_id, request, token)
+
 
 class TestTriggerModes:
     """The trigger's own mode selection, with the lock store mocked."""
@@ -229,12 +250,44 @@ class TestTriggerModes:
             client_cls.return_value.__aenter__ = AsyncMock(return_value=http)
             client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
 
-            result = await trigger_obj.trigger("jira", "PROJ", JiraSyncRequest(project_key="PROJ"))
+            result = await _acquire_and_start(trigger_obj, "jira", "PROJ", JiraSyncRequest(project_key="PROJ"))
 
         assert result.status_code == 200
         http.post.assert_awaited_once_with(
             "http://local-sync:8080/sync/jira", json={"project_key": "PROJ", "lock_token": "tok"}, headers={}
         )
+
+    @pytest.mark.parametrize(
+        ("status_code", "released"),
+        [(401, True), (422, True), (409, False)],
+        ids=["unauthorized_releases", "unprocessable_releases", "conflict_keeps_the_other_holders_lock"],
+    )
+    async def test_local_mode_rejection_frees_the_scope(self, trigger, monkeypatch, status_code, released):
+        """A runner that rejects the request started nothing, so the scope must not stay locked for the TTL."""
+        trigger_obj, lock_store = trigger
+        state = MagicMock()
+        state.acquired = True
+        state.lock_info = {"holder_token": "tok"}
+        lock_store.acquire.return_value = state
+        lock_store.read = AsyncMock(return_value={"holder_token": "tok"})
+        lock_store.release = AsyncMock(return_value=True)
+        monkeypatch.setattr(main.config.RagSyncConfig, "JOB_NAME", None)
+        monkeypatch.setattr(main.config.RagSyncConfig, "SERVICE_URL", "http://local-sync:8080")
+
+        response = MagicMock()
+        response.status_code = status_code
+        response.json.return_value = {"detail": "rejected"}
+
+        with patch("orchestrator.rag_sync_trigger.httpx.AsyncClient") as client_cls:
+            http = AsyncMock()
+            http.post = AsyncMock(return_value=response)
+            client_cls.return_value.__aenter__ = AsyncMock(return_value=http)
+            client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            result = await _acquire_and_start(trigger_obj, "jira", "PROJ", JiraSyncRequest(project_key="PROJ"))
+
+        assert result.status_code == status_code
+        assert lock_store.release.await_count == (1 if released else 0)
 
     async def test_neither_mode_configured_raises(self, trigger, monkeypatch):
         trigger_obj, _ = trigger
@@ -242,7 +295,7 @@ class TestTriggerModes:
         monkeypatch.setattr(main.config.RagSyncConfig, "SERVICE_URL", None)
 
         with pytest.raises(SyncTriggerError, match="No RAG sync runtime is configured"):
-            await trigger_obj.trigger("jira", "PROJ", JiraSyncRequest(project_key="PROJ"))
+            await _acquire_and_start(trigger_obj, "jira", "PROJ", JiraSyncRequest(project_key="PROJ"))
 
     async def test_live_lock_raises_with_lock_info(self, trigger):
         trigger_obj, lock_store = trigger
@@ -254,7 +307,7 @@ class TestTriggerModes:
         lock_store.acquire.return_value = state
 
         with pytest.raises(SyncLockHeldError, match="already running"):
-            await trigger_obj.trigger("jira", "PROJ", JiraSyncRequest(project_key="PROJ"))
+            await _acquire_and_start(trigger_obj, "jira", "PROJ", JiraSyncRequest(project_key="PROJ"))
         main.config.RagSyncConfig.JOB_NAME = None
 
     async def test_definite_job_failure_releases_the_lock(self, trigger):
@@ -277,7 +330,7 @@ class TestTriggerModes:
             ),
             pytest.raises(SyncTriggerError) as exc_info,
         ):
-            await trigger_obj.trigger("jira", "PROJ", JiraSyncRequest(project_key="PROJ"))
+            await _acquire_and_start(trigger_obj, "jira", "PROJ", JiraSyncRequest(project_key="PROJ"))
 
         assert exc_info.value.start_confirmed is True
         lock_store.read.assert_awaited_with("jira:PROJ")
@@ -300,7 +353,7 @@ class TestTriggerModes:
             ),
             pytest.raises(SyncTriggerError) as exc_info,
         ):
-            await trigger_obj.trigger("jira", "PROJ", JiraSyncRequest(project_key="PROJ"))
+            await _acquire_and_start(trigger_obj, "jira", "PROJ", JiraSyncRequest(project_key="PROJ"))
 
         assert exc_info.value.start_confirmed is False
         lock_store.release.assert_not_called()

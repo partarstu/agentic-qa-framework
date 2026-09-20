@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
-"""Microsoft Graph access for SharePoint document libraries (WS18).
+"""Microsoft Graph access for SharePoint document libraries.
 
 App-only tokens come from Entra's client-credentials grant, one form POST to the tenant's
 ``/oauth2/v2.0/token`` endpoint (the flow MSAL wraps; MSAL itself only accepts an HTTPS authority,

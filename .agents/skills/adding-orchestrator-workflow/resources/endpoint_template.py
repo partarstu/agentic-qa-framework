@@ -2,21 +2,13 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
-"""
-Workflow endpoint template.
-
-Paste into orchestrator/main.py, where every name used below is already defined or imported.
-Replace the <placeholders>. For a Jira webhook, take `request: Request` instead of a model and start the `try`
-block with `await _verify_jira_webhook_signature(request)`.
-"""
+"""Workflow endpoint template to paste into orchestrator/main.py, where every name used below is already defined; for a Jira webhook, take `request: Request` instead of a model and start the `try` block with `await _verify_jira_webhook_signature(request)`."""
 
 
 # noinspection PyUnusedLocal
 @orchestrator_app.post("/<endpoint-path>")
 async def <endpoint_function_name>(request: <RequestModel>, api_key: str = Depends(_validate_api_key)):
-    """
-    <What the workflow does and who triggers it>.
-    """
+    """<What the workflow does and who triggers it, in one sentence>."""
     try:
         logger.info("Received a request for <workflow description>: %s", request)
         task_description = f"<Description the orchestrator uses to select the agent>"

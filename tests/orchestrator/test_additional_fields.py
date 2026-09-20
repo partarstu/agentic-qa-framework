@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
-"""Unit tests for the additional Jira custom fields feature (WS4).
+"""Unit tests for the additional Jira custom fields feature.
 
 Tests cover:
 - _parse_additional_field_ids: parsing, trimming, blank/duplicate removal and format validation.

@@ -2,14 +2,12 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
-"""Orchestrator-side trigger for the RAG sync runtime (WS8).
+"""Orchestrator-side trigger for the RAG sync runtime, in job mode or local mode.
 
-The mode comes from configuration: job mode (a Cloud Run job is configured) starts a
-job execution through the Cloud Run Admin API with the orchestrator's runtime identity,
-passing the scope options and the lock token as per-execution container arguments
-(never secrets). Local mode (only the local sync service URL is configured) forwards
-the request and awaits the result. Neither configured: a clear error naming the
-missing configuration.
+The configuration picks the mode: job mode starts a Cloud Run job execution with the scope options and
+the lock token as per-execution arguments (never secrets, since execution arguments are visible in the
+execution metadata and the audit logs), local mode forwards the request to the sync service, and neither
+configured raises an error naming what is missing.
 """
 
 import asyncio
@@ -56,35 +54,8 @@ class RagSyncTrigger:
         )
         self._outcomes = SyncOutcomeStore(metadata_db)
 
-    async def trigger(self, source: str, scope_id: str, request: SyncRequest) -> SyncStartResult:
-        """Acquire the scope lock, then start the sync.
-
-        Args:
-            source: The sync source, ``jira``, ``test_cases``, ``sharepoint`` or ``confluence``.
-            scope_id: The project key, drive ID or space key identifying the scope.
-            request: The validated scope of the sync.
-
-        Returns:
-            The start result: 202 plus the execution name in job mode, the forwarded
-            response's status and parsed JSON in local mode.
-
-        Raises:
-            SyncLockHeldError: When the scope lock is already held.
-            SyncTriggerError: When no mode is configured or the start failed.
-                ``start_confirmed`` False means the failure kept the lock.
-        """
-        token = await self.acquire(source, scope_id)
-        await self._outcomes.write(scope_key(source, scope_id), "running", "Sync start requested.", sync_type=source)
-        return await self.start(source, scope_id, request, token)
-
     async def acquire(self, source: str, scope_id: str) -> str:
-        """Verifies a sync mode is configured and acquires the scope lock.
-
-        Splitting this from :meth:`start` lets the caller hold its in-process mutex
-        only around the lock acquisition, not around the (potentially long) start.
-
-        Returns:
-            The holder token of the acquired lock.
+        """Verifies a sync mode is configured, acquires the scope lock and returns its holder token.
 
         Raises:
             SyncLockHeldError: When the scope lock is already held.
@@ -115,10 +86,11 @@ class RagSyncTrigger:
                 execution may still exist, so the lock is kept for the start allowance.
         """
         scope = scope_key(source, scope_id)
+        await self._outcomes.write(scope, "running", "Sync start requested.", sync_type=source)
         try:
             if config.RagSyncConfig.JOB_NAME:
                 return await self._start_job(source, request, token)
-            return await self._run_locally(source, request, token)
+            return await self._run_locally(source, scope_id, request, token)
         except SyncTriggerError as exc:
             status = "failed" if exc.start_confirmed else "running"
             message = str(exc) if exc.start_confirmed else f"Sync start unconfirmed: {exc}"
@@ -150,7 +122,7 @@ class RagSyncTrigger:
 
         credentials, _project = await asyncio.to_thread(google.auth.default)
         jobs_client = JobsAsyncClient(credentials=credentials)
-        request = RunJobRequest(
+        run_job_request = RunJobRequest(
             name=config.RagSyncConfig.JOB_NAME,
             overrides={
                 "container_overrides": [
@@ -160,12 +132,12 @@ class RagSyncTrigger:
                 ]
             },
         )
-        operation = await jobs_client.run_job(request=request)
+        operation = await jobs_client.run_job(request=run_job_request)
         execution_name = operation.operation.name if operation else None
         logger.info("Started RAG sync job execution %s for scope %s.", execution_name, source)
         return SyncStartResult(status_code=202, execution=execution_name)
 
-    async def _run_locally(self, source: str, request: SyncRequest, token: str) -> SyncStartResult:
+    async def _run_locally(self, source: str, scope_id: str, request: SyncRequest, token: str) -> SyncStartResult:
         """Forwards the request to the local sync service and awaits the result."""
         # The lock is already held by this request, so the runner must continue under its token
         # instead of trying (and failing) to acquire the same lock again.
@@ -187,10 +159,22 @@ class RagSyncTrigger:
             # A proxy answering with HTML is still a definite answer from the local mode;
             # the caller must see its status, not an unconfirmed start.
             body = {"detail": response.text}
+        if response.status_code >= 400:
+            # The runner rejected the request and started nothing, so the scope must not stay
+            # locked for the whole TTL. A 409 is the runner reporting the lock it could not take,
+            # which belongs to somebody else and must survive.
+            if response.status_code != 409:
+                await self.release_on_definite_failure(source, scope_id)
+            await self._outcomes.write(
+                scope_key(source, scope_id),
+                "failed",
+                f"The local sync service rejected the request: {response.status_code}.",
+                sync_type=source,
+            )
         return SyncStartResult(status_code=response.status_code, response=body)
 
     async def release_on_definite_failure(self, source: str, scope_id: str) -> None:
-        """Releases the lock when the start definitely failed (the Admin API rejected it)."""
+        """Releases the lock when the start definitely failed and no runner exists."""
         scope = scope_key(source, scope_id)
         # Only the holder path releases; the orchestrator is the only writer of new locks,
         # and this lock belongs to this trigger request, so release by scope is safe here.

@@ -28,6 +28,10 @@
 
 - <Dependencies, configuration, CALM model, if any>
 
+### Versions
+
+- <agent or orchestrator: old → new (PATCH | MINOR | MAJOR, why)>, or: no agent or orchestrator logic changed
+
 ## Checks
 
 - [ ] Unit tests pass (`uv run pytest`)

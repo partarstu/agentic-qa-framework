@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
-"""Unit tests for WS9b attachment extraction, OCR, conversion, and limits."""
+"""Unit tests for attachment extraction, OCR, conversion, and limits."""
 
 import io
 import subprocess

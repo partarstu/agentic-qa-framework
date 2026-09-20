@@ -22,12 +22,6 @@ class OrchestratorPrompt(PromptBase):
         return PROMPTS_ROOT
 
     def __init__(self, template_file_name: str):
-        """
-        Initializes the OrchestratorPrompt instance.
-
-        Args:
-            template_file_name: The name of the prompt template file.
-        """
         super().__init__(template_file_name)
 
     def get_prompt(self) -> str:

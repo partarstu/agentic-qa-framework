@@ -3,7 +3,7 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
-# Redeploy gate (WS26). Prints "deploy" when the workload must be (re)deployed and "skip" when its
+# Redeploy gate. Prints "deploy" when the workload must be (re)deployed and "skip" when its
 # deployed marker label equals the rendered one; a workload that doesn't exist yet is always deployed.
 # Usage: redeploy_gate.sh <service|job> <name> <region> <marker>
 set -euo pipefail

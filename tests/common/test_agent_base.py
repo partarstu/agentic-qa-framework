@@ -307,12 +307,7 @@ async def test_agent_run_reaches_its_tools_with_their_arguments() -> None:
     tool_calls: list[tuple[str, str]] = []
 
     async def review_issue(jira_issue_key: str, jira_issue_content: str) -> str:
-        """Reviews the Jira issue with the given key.
-
-        Args:
-            jira_issue_key: The key of the Jira issue.
-            jira_issue_content: The content of the Jira issue.
-        """
+        """Reviews the Jira issue with the given key."""
         tool_calls.append((jira_issue_key, jira_issue_content))
         return "reviewed"
 

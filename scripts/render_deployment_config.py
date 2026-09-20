@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
-"""Render the declared deployment configuration of one workload for Google Cloud Run (WS26).
+"""Render the declared deployment configuration of one workload for Google Cloud Run.
 
 The precedence chain, later layers winning: shared defaults and the service's own env -> values
 derived from the deployment target's identity -> the environment's overrides -> runtime overrides
@@ -54,14 +54,6 @@ def render(
     environ: Mapping[str, str] | None = None,
 ) -> RenderedService:
     """Resolve one service's configuration for one environment.
-
-    Args:
-        manifest: The parsed deployment manifest.
-        service: The service name, as declared under ``services``.
-        environment: The environment name, as declared under ``environments``.
-        runtime: Runtime overrides by key (without the variable prefix).
-        version: Overrides the manifest's version of the service (e.g. a third-party image tag).
-        environ: Variables the target identity may reference as ``${NAME}``; defaults to the process environment.
 
     Raises:
         ValueError: For an unknown service or environment, an undeclared override key or secret name, a

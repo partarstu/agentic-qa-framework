@@ -24,13 +24,12 @@ from common.models import (
     JiraIssue,
 )
 from common.services.atlassian_mcp import build_atlassian_mcp_server_toolset
+from common.services.atlassian_tools import JIRA_CREATE_ISSUE, JIRA_GET_ISSUE, JIRA_UPDATE_ISSUE
 from common.services.test_management_system_client_provider import get_test_management_client
 
 logger = utils.get_logger("incident_creation_agent")
 
-# The Jira tools this agent actually uses (WS11 per-agent tool filtering): it reads the
-# linked issues, files the bug and links/updates it through the issue tools.
-_JIRA_TOOL_ALLOWLIST = ("jira_get_issue", "jira_create_issue", "jira_update_issue")
+_JIRA_TOOL_ALLOWLIST = (JIRA_GET_ISSUE, JIRA_CREATE_ISSUE, JIRA_UPDATE_ISSUE)
 
 # Qdrant RAG Config
 QDRANT_COLLECTION_NAME = getattr(config.QdrantConfig, "TICKETS_COLLECTION_NAME", "jira_issues")

@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
-"""Unit tests for the deployment configuration renderer (WS26)."""
+"""Unit tests for the deployment configuration renderer."""
 
 import re
 import shutil

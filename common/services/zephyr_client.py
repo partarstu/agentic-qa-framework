@@ -28,7 +28,7 @@ class ZephyrClient(TestManagementClientBase):
     """
 
     def fetch_test_cases_by_project(self, project_key: str) -> list[ListedTestCase]:
-        """List every test case of the project with its current status (WS17 full resync).
+        """List every test case of the project with its current status (full resync).
 
         A listed test case references its status by id only, so the names come from the status catalog.
         """
@@ -127,17 +127,7 @@ class ZephyrClient(TestManagementClientBase):
             logger.info(f"Successfully added review comment to test case {test_case_key}.")
 
     def create_test_cases(self, test_cases: list[TestCase], project_key: str, user_story_id: int) -> list[str]:
-        """
-        Creates test cases in Zephyr.
-
-        Args:
-            test_cases: A list of TestCase objects to create.
-            project_key: The project key for the test cases.
-            user_story_id: ID of the Jira user story
-
-        Returns:
-            A list of keys of the created test cases.
-        """
+        """Creates test cases in Zephyr."""
         created_test_case_keys = []
         with httpx.Client() as client:
             for test_case in test_cases:
@@ -198,13 +188,7 @@ class ZephyrClient(TestManagementClientBase):
         return created_test_case_keys
 
     def add_labels_to_test_case(self, test_case_key: str, labels: list[str]) -> None:
-        """
-        Adds labels to an existing test case.
-
-        Args:
-            test_case_key: The ID or key of the test case to update.
-            labels: A list of labels to add.
-        """
+        """Adds labels to an existing test case."""
         with httpx.Client() as client:
             logger.info(f"Adding labels {labels} to test case {test_case_key}")
             tc_url = self._get_test_case_url(test_case_key)
@@ -220,17 +204,7 @@ class ZephyrClient(TestManagementClientBase):
     def fetch_ready_for_execution_test_cases_by_labels(
         self, project_key: str, target_labels: list[str], max_results=100
     ) -> dict[str, list[TestCase]]:
-        """
-        Fetches test cases with status 'Approved' that have specific labels.
-
-        Args:
-            project_key: A Jira project key.
-            target_labels: A list of labels to search for.
-            max_results: Max amount of results to fetch in one round.
-
-        Returns:
-            A list of test case data dictionaries.
-        """
+        """Fetches test cases with status 'Approved' that have specific labels."""
         search_url = f"{self.base_url}/testcases"
         test_cases_by_label = defaultdict(list)
         logger.info(f"Fetching test cases with labels {target_labels} for project {project_key}")
@@ -268,21 +242,11 @@ class ZephyrClient(TestManagementClientBase):
             return dict(test_cases_by_label)
 
     def change_test_case_status(self, project_key: str, test_case_key: str, new_status_name: str) -> None:
-        """
-         Changes the status of a specific test case.
+        """Changes the status of a test case, resolving the target status name against the project's status catalog.
 
-         This method first fetches all available test case statuses for the given project,
-         finds the ID of the target status by its name, and then sends a request to update
-         the test case with the new status.
-
-        Args:
-             test_case_key: The key or ID of the test case to update.
-             project_key: The key of the project the test case belongs to.
-             new_status_name: The name of the desired new status (e.g., 'Approved').
-
-         Raises:
-             ValueError: If the specified status name cannot be found in the project.
-             httpx.HTTPStatusError: If any of the API requests fail.
+        Raises:
+            ValueError: If the specified status name cannot be found in the project.
+            httpx.HTTPStatusError: If any of the API requests fail.
         """
 
         logger.info(f"Attempting to change status for test case {test_case_key} to '{new_status_name}'")
@@ -328,15 +292,7 @@ class ZephyrClient(TestManagementClientBase):
         test_cycle_key: str,
         version_id: str | None = None,
     ) -> None:
-        """
-        Creates test executions in Zephyr based on the provided test execution results.
-
-        Args:
-            test_execution_results: A list of TestExecutionResult objects.
-            project_key: The project key for the test executions.
-            test_cycle_key: The test cycle key for the test execution.
-            version_id: Optional. The ID of the version to associate with the test execution.
-        """
+        """Creates test executions in Zephyr based on the provided test execution results."""
         with httpx.Client() as client:
             for result in test_execution_results:
                 logger.info(
@@ -435,12 +391,7 @@ class ZephyrClient(TestManagementClientBase):
         return step_data
 
     def create_test_plan(self, project_key: str, name: str, description: str | None = None) -> str:
-        """
-        Creates a new test cycle in Zephyr.
-
-        Returns:
-            The key of the created test cycle.
-        """
+        """Creates a new test cycle in Zephyr."""
         with httpx.Client() as client:
             logger.info(f"Creating test cycle: {name} for project {project_key}")
             payload = {"projectKey": project_key, "name": name, "statusName": "Not executed"}
@@ -512,15 +463,7 @@ class ZephyrClient(TestManagementClientBase):
             return self._parse_tc_json(client, None, test_case_data)
 
     def fetch_linked_issues(self, test_case_key: str) -> list[Any]:
-        """
-        Fetches Jira issues linked to a test case.
-
-        Args:
-            test_case_key: The key of the test case (e.g., 'SCRUM-T133').
-
-        Returns:
-            A list of dictionaries containing linked issue information.
-        """
+        """Fetches Jira issues linked to a test case."""
         linked_issues = []
         url = f"{self.base_url}/testcases/{test_case_key}/links"
         logger.info(f"Fetching linked issues for test case {test_case_key} from {url}")

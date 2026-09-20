@@ -57,7 +57,7 @@ QWEN_REASONING_EFFORT_MAP: dict[ThinkingLevel, ReasoningEffort] = {
 }
 THINKING_DISABLED_BODY = {"chat_template_kwargs": {"enable_thinking": False}}
 CLAUDE_5_PREFIXES = ("claude-opus-5", "claude-sonnet-5", "claude-fable-5", "claude-mythos-5")
-# Models whose API rejects explicitly disabled thinking (WS12): they run adaptive at effort low instead.
+# Models whose API rejects explicitly disabled thinking: they run adaptive at effort low instead.
 DISABLED_THINKING_UNSUPPORTED_PREFIXES = ("claude-fable-5", "claude-mythos-5")
 # HTTP statuses retried at the transport boundary (the model endpoints sit behind serverless front ends).
 RETRYABLE_STATUS_CODES = frozenset({429, 502, 503, 504})
@@ -108,7 +108,7 @@ def build_model(model_name: str | Model, thinking_level: ThinkingLevel | None = 
     """Return the model to wrap: the provider model built for a known provider, the input otherwise.
 
     Qwen is served by a self-hosted OpenAI-compatible endpoint; Claude and Gemini are built
-    explicitly so their HTTP clients carry the transport-level retry (WS12). Any other name stays
+    explicitly so their HTTP clients carry the transport-level retry. Any other name stays
     a plain string for pydantic-ai to infer the provider from.
     """
     if not isinstance(model_name, str):
@@ -160,7 +160,7 @@ def _build_google_model(model_name: str) -> GoogleModel:
 
 
 def _retry_http_client(model_name: str, httpx_module=httpx, wrapped_transport=None):
-    """An HTTP client whose transport retries transport errors and 429/502/503/504 (WS12).
+    """An HTTP client whose transport retries transport errors and 429/502/503/504.
 
     The attempt budget and back-off are the existing agent-run retry budget; ``Retry-After``
     headers take precedence over the exponential back-off, capped at its maximum. Each retry is

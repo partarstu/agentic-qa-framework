@@ -22,14 +22,13 @@ from common.models import (
     TestStepsSequenceList,
 )
 from common.services.atlassian_mcp import build_atlassian_mcp_server_toolset
+from common.services.atlassian_tools import JIRA_GET_ISSUE
 from common.services.test_management_system_client_provider import get_test_management_client
 
 logger = utils.get_logger("test_case_generation_agent")
 
-# The Jira tools this agent actually uses (WS11 per-agent tool filtering): it only reads
-# the issue; attachments arrive through the REST downloader and uploads go to the test
-# management system.
-_JIRA_TOOL_ALLOWLIST = ("jira_get_issue",)
+# Attachments arrive through the REST downloader and uploads go to the test management system.
+_JIRA_TOOL_ALLOWLIST = (JIRA_GET_ISSUE,)
 
 
 class TestCaseGenerationAgent(AgentBase):
@@ -110,9 +109,9 @@ class TestCaseGenerationAgent(AgentBase):
         Returns:
             Generated test cases.
         """
-        from common.services.jira_attachments import download_issue_attachments
+        from common.services.jira_attachments import fetch_issue_attachments
 
-        attachments_content = download_issue_attachments(jira_issue_key)
+        attachments_content = await fetch_issue_attachments(jira_issue_key)
         extracted_acceptance_criteria = await self.extract_acceptance_criteria(attachments_content, jira_issue_content)
         test_steps_sequences = await self.generate_test_steps(extracted_acceptance_criteria)
         generated_test_cases = await self.create_test_cases_from_steps(

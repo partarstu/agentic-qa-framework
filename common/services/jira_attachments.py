@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
-"""REST download of a Jira issue's attachments as model-ready binary content (WS5).
+"""REST download of a Jira issue's attachments as model-ready binary content.
 
 Replaces the previous MCP message-scanning path: agents download the attachments
 of the issue being processed directly over the Jira REST API and hand them to the
@@ -10,6 +10,7 @@ model as ``BinaryContent``, applying the same predicates as before (skip postfix
 supported MIME type, text-equivalent media types).
 """
 
+import asyncio
 import re
 
 import httpx
@@ -71,13 +72,6 @@ def _download(content_url: str) -> bytes:
 def download_issue_attachments(issue_key: str) -> dict[str, BinaryContent]:
     """Downloads the supported attachments of a Jira issue over the REST API.
 
-    Args:
-        issue_key: The key of the Jira issue (e.g. ``PROJ-123``). It comes from the model, so it is
-            validated before it reaches the Jira REST path.
-
-    Returns:
-        Dictionary mapping file name to BinaryContent for every supported attachment.
-
     Raises:
         ModelRetry: When the key does not have the Jira issue key format, so the model can correct it.
     """
@@ -102,3 +96,13 @@ def download_issue_attachments(issue_key: str) -> dict[str, BinaryContent]:
         attachments[filename] = binary
     logger.info("Downloaded %d attachment(s) of %s over REST.", len(attachments), issue_key)
     return attachments
+
+
+async def fetch_issue_attachments(issue_key: str) -> dict[str, BinaryContent]:
+    """Downloads the attachments in a worker thread, for the agents' async tools.
+
+    The Jira SDK and the content downloads are synchronous, so calling them on the event
+    loop would stall the agent's activity streaming and health endpoint for the whole
+    download.
+    """
+    return await asyncio.to_thread(download_issue_attachments, issue_key)

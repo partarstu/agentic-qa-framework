@@ -27,10 +27,9 @@ _QDRANT_RETRYABLE_STATUSES = frozenset({502, 503, 504})
 _QDRANT_RETRY_ATTEMPTS = 3
 
 
-# Payload fields indexed per collection kind after creation (WS7 plan table):
-# matching is by collection name from configuration.
+# Payload fields indexed per collection kind after creation; matching is by collection name from configuration.
 _DOCUMENTS_INDEXED_FIELDS = {
-    "source": models.PayloadSchemaType.KEYWORD,  # every document query pins the source discriminator (WS18)
+    "source": models.PayloadSchemaType.KEYWORD,  # every document query pins the source discriminator
     "space_key": models.PayloadSchemaType.KEYWORD,
     "page_id": models.PayloadSchemaType.KEYWORD,
     "attachment_id": models.PayloadSchemaType.KEYWORD,
@@ -57,12 +56,11 @@ _METADATA_INDEXED_FIELDS = {
 _TEST_CASES_INDEXED_FIELDS = {
     "project_key": models.PayloadSchemaType.KEYWORD,
     "test_case_key": models.PayloadSchemaType.KEYWORD,
-    "status": models.PayloadSchemaType.KEYWORD,
 }
 
 
 async def _retry_qdrant(operation: str, run):
-    """Runs one asynchronous vector-database call with bounded retries (WS19).
+    """Runs one asynchronous vector-database call with bounded retries.
 
     Only genuine transport failures (``ResponseHandlingException`` wraps connection errors
     and timeouts) and the gateway statuses 502/503/504 are retried, with exponential
@@ -133,7 +131,7 @@ class VectorDbService:
         # check_compatibility=False skips the client's construction-time server-version probe:
         # a blocking HTTP GET that would run on the event loop of whoever constructs the
         # service (the dashboard constructs one per request) and stall it for as long as the
-        # server is slow to answer. Schema mismatches surface through the WS19 validation.
+        # server is slow to answer. Schema mismatches surface through the validation.
         self.client = AsyncQdrantClient(
             url=config.QdrantConfig.URL,
             port=None,
@@ -162,7 +160,7 @@ class VectorDbService:
         # One ensure per collection per service instance is enough: index creation is
         # idempotent, and re-listing collections on every upsert/query wastes a round trip.
         self._ensured = False
-        # The existing collection's vector schema is validated once per instance, at first use (WS19).
+        # The existing collection's vector schema is validated once per instance, at first use.
         self._schema_validated = False
 
     async def close(self):
@@ -173,15 +171,11 @@ class VectorDbService:
             await self._metadata_db.close()
 
     async def _embed_texts(self, texts: list[str], query: bool = False):
-        """Embeds texts through the embedding service.
-
-        Uses the document-text endpoint (no query instruction) unless ``query`` is set.
-        Retries transient transport failures with backoff, honouring the configured caps.
+        """Embeds texts through the embedding service, using the query endpoint only when ``query`` is set.
 
         Returns:
-            A tuple (embeddings, model): embeddings is a list of
-            (dense vector, sparse indices, sparse values) tuples, one per input text;
-            model is the identity of the model that produced them.
+            A tuple (embeddings, model), where each embedding is a (dense vector, sparse indices,
+            sparse values) tuple.
         """
         if not self.embedding_service_url:
             raise ValueError("EMBEDDING_SERVICE_URL is not configured.")
@@ -330,7 +324,7 @@ class VectorDbService:
         self._schema_validated = True
 
     def _indexed_fields(self) -> dict[str, models.PayloadSchemaType]:
-        """The payload fields this collection should have indexes on (WS7), by collection name."""
+        """The payload fields this collection should have indexes on, by collection name."""
         if self.collection_name == config.QdrantConfig.TICKETS_COLLECTION_NAME:
             return _JIRA_INDEXED_FIELDS
         if self.collection_name == config.QdrantConfig.METADATA_COLLECTION_NAME:
@@ -387,22 +381,28 @@ class VectorDbService:
 
     async def _store_model_identity(self, collection_name: str, model: str) -> None:
         """Record which model produced a collection's vectors (part of the metadata collection)."""
-        await self.client.upsert(
-            collection_name=self.collection_name,
-            points=[
-                models.PointStruct(
-                    id=self._model_identity_id(collection_name),
-                    vector={},
-                    payload={"kind": "model-identity", "collection": collection_name, "model": model},
-                )
-            ],
+        await _retry_qdrant(
+            f"model-identity write for {collection_name}",
+            lambda: self.client.upsert(
+                collection_name=self.collection_name,
+                points=[
+                    models.PointStruct(
+                        id=self._model_identity_id(collection_name),
+                        vector={},
+                        payload={"kind": "model-identity", "collection": collection_name, "model": model},
+                    )
+                ],
+            ),
         )
 
     async def _get_model_identity(self, collection_name: str) -> str | None:
         """Read the recorded model for a collection, or None when it isn't recorded."""
-        points = await self.client.retrieve(
-            collection_name=self.collection_name,
-            ids=[self._model_identity_id(collection_name)],
+        points = await _retry_qdrant(
+            f"model-identity read for {collection_name}",
+            lambda: self.client.retrieve(
+                collection_name=self.collection_name,
+                ids=[self._model_identity_id(collection_name)],
+            ),
         )
         if points and points[0].payload:
             return points[0].payload.get("model")
@@ -423,18 +423,8 @@ class VectorDbService:
            covers the final limit.
         3. The similarity threshold applies to the dense prefetch only: fused RRF scores
            are rank-based, so the configured thresholds keep their meaning on the dense
-           branch (see the plan, WS7).
+           branch.
         4. Prefetches are fused with RRF.
-
-        Args:
-            query_text: The text to embed and search for.
-            limit: Maximum number of fused results.
-            score_threshold: Minimum similarity applied to the dense prefetch only.
-            query_filter: Optional payload filter applied to every prefetch.
-            with_payload: Payload selector; excludes heavy fields when needed.
-
-        Returns:
-            Fused scored points.
         """
         logger.info("Starting hybrid search in '%s' (limit %s)...", self.collection_name, limit)
         try:
@@ -488,18 +478,17 @@ class VectorDbService:
             embeddings, model = await self._embed_texts([text])
             await self._verify_model_identity(model)
             dense, sparse_indices, sparse_values = embeddings[0]
-            await self.client.upsert(
-                collection_name=self.collection_name,
-                points=[
-                    models.PointStruct(
-                        id=point_id,
-                        vector={
-                            DENSE_VECTOR_NAME: dense,
-                            SPARSE_VECTOR_NAME: models.SparseVector(indices=sparse_indices, values=sparse_values),
-                        },
-                        payload=payload,
-                    )
-                ],
+            point = models.PointStruct(
+                id=point_id,
+                vector={
+                    DENSE_VECTOR_NAME: dense,
+                    SPARSE_VECTOR_NAME: models.SparseVector(indices=sparse_indices, values=sparse_values),
+                },
+                payload=payload,
+            )
+            await _retry_qdrant(
+                f"upsert into {self.collection_name}",
+                lambda: self.client.upsert(collection_name=self.collection_name, points=[point]),
             )
             logger.info(f"Upserted document with ID {point_id} to collection {self.collection_name}")
         except Exception:
@@ -550,13 +539,6 @@ class VectorDbService:
     ) -> list[models.Record]:
         """Retrieve points by their IDs from the collection.
 
-        Args:
-            point_ids: List of point IDs to retrieve (64-bit unsigned integers or UUID strings).
-            with_payload: Payload selector, so heavy fields can be excluded from reads.
-
-        Returns:
-            List of Record objects containing point data.
-
         Raises:
             Exception: If retrieval from Vector DB fails.
         """
@@ -596,20 +578,26 @@ class VectorDbService:
         """Whether at least one point matches the filter; False when the collection doesn't exist."""
         if not await self._collection_exists():
             return False
-        points, _ = await self.client.scroll(
-            collection_name=self.collection_name,
-            scroll_filter=scope_filter,
-            limit=1,
-            with_payload=False,
-            with_vectors=False,
+        points, _ = await _retry_qdrant(
+            f"existence scroll in {self.collection_name}",
+            lambda: self.client.scroll(
+                collection_name=self.collection_name,
+                scroll_filter=scope_filter,
+                limit=1,
+                with_payload=False,
+                with_vectors=False,
+            ),
         )
         return bool(points)
 
     async def delete_by_filter(self, scope_filter: models.Filter):
         """Delete every point matching the filter (reconciliation of removed items)."""
         try:
-            await self.client.delete(
-                collection_name=self.collection_name, points_selector=models.FilterSelector(filter=scope_filter)
+            await _retry_qdrant(
+                f"filtered delete from {self.collection_name}",
+                lambda: self.client.delete(
+                    collection_name=self.collection_name, points_selector=models.FilterSelector(filter=scope_filter)
+                ),
             )
             logger.info("Deleted points matching filter from collection %s", self.collection_name)
         except Exception:
@@ -626,10 +614,13 @@ class VectorDbService:
                 if point_ids is not None
                 else models.FilterSelector(filter=scope_filter)
             )
-            await self.client.set_payload(
-                collection_name=self.collection_name,
-                payload=payload,
-                points=selector,
+            await _retry_qdrant(
+                f"payload update in {self.collection_name}",
+                lambda: self.client.set_payload(
+                    collection_name=self.collection_name,
+                    payload=payload,
+                    points=selector,
+                ),
             )
             logger.info(
                 "Updated payload on %s point(s) in %s",
@@ -673,14 +664,7 @@ class VectorDbService:
             raise
 
     async def scroll_all_ids_by_project(self, project_key: str) -> list[int]:
-        """Retrieves all stored point IDs for a given project key using Qdrant scroll pagination.
-
-        Args:
-            project_key: The project key to filter by.
-
-        Returns:
-            List of all numeric point IDs stored for the project.
-        """
+        """Retrieves all stored point IDs for a given project key using Qdrant scroll pagination."""
         try:
             if not await self._collection_exists():
                 return []
@@ -690,13 +674,16 @@ class VectorDbService:
                 must=[models.FieldCondition(key="project_key", match=models.MatchValue(value=project_key))]
             )
             while True:
-                result, next_offset = await self.client.scroll(
-                    collection_name=self.collection_name,
-                    scroll_filter=project_filter,
-                    limit=1000,
-                    offset=offset,
-                    with_payload=False,
-                    with_vectors=False,
+                result, next_offset = await _retry_qdrant(
+                    f"project scroll in {self.collection_name}",
+                    lambda current_offset=offset: self.client.scroll(
+                        collection_name=self.collection_name,
+                        scroll_filter=project_filter,
+                        limit=1000,
+                        offset=current_offset,
+                        with_payload=False,
+                        with_vectors=False,
+                    ),
                 )
                 ids.extend(p.id for p in result)
                 if next_offset is None:
@@ -708,16 +695,15 @@ class VectorDbService:
             raise
 
     async def upsert_payload_record(self, record_id: str, payload: dict) -> None:
-        """Store a metadata record by ID without vectors or embedding (locks, sync state).
-
-        Writing these records must never call the embedding service (WS7 plan), so the
-        point carries no vectors at all.
-        """
+        """Store a metadata record by ID without vectors, since these writes must never call the embedding service."""
         try:
             await self.ensure_payload_collection()
-            await self.client.upsert(
-                collection_name=self.collection_name,
-                points=[models.PointStruct(id=_record_uuid(record_id), vector={}, payload=payload)],
+            await _retry_qdrant(
+                f"record write of {record_id} in {self.collection_name}",
+                lambda: self.client.upsert(
+                    collection_name=self.collection_name,
+                    points=[models.PointStruct(id=_record_uuid(record_id), vector={}, payload=payload)],
+                ),
             )
         except Exception:
             logger.exception("Error storing record %s in %s", record_id, self.collection_name)
@@ -726,9 +712,12 @@ class VectorDbService:
     async def get_payload_record(self, record_id: str) -> dict | None:
         """Read one metadata record's payload, or None when it doesn't exist."""
         try:
-            points = await self.client.retrieve(
-                collection_name=self.collection_name,
-                ids=[_record_uuid(record_id)],
+            points = await _retry_qdrant(
+                f"record read of {record_id} in {self.collection_name}",
+                lambda: self.client.retrieve(
+                    collection_name=self.collection_name,
+                    ids=[_record_uuid(record_id)],
+                ),
             )
             if points and points[0].payload:
                 return points[0].payload
@@ -750,7 +739,7 @@ class VectorDbService:
     async def scroll_payload_records(self, filter_by: dict) -> list[dict]:
         """Scrolls every payload record whose fields match ``filter_by`` exactly.
 
-        Used by the sync state (WS9) to load one scope's fingerprints in one read.
+        Used by the sync state to load one scope's fingerprints in one read.
         Never calls the embedding service: metadata records carry no vectors.
         """
         try:
@@ -761,13 +750,16 @@ class VectorDbService:
             records: list[dict] = []
             offset = None
             while True:
-                points, next_offset = await self.client.scroll(
-                    collection_name=self.collection_name,
-                    scroll_filter=models.Filter(must=must),
-                    limit=1000,
-                    offset=offset,
-                    with_payload=True,
-                    with_vectors=False,
+                points, next_offset = await _retry_qdrant(
+                    f"record scroll in {self.collection_name}",
+                    lambda current_offset=offset: self.client.scroll(
+                        collection_name=self.collection_name,
+                        scroll_filter=models.Filter(must=must),
+                        limit=1000,
+                        offset=current_offset,
+                        with_payload=True,
+                        with_vectors=False,
+                    ),
                 )
                 records.extend(point.payload for point in points if point.payload)
                 if next_offset is None:
@@ -780,9 +772,12 @@ class VectorDbService:
     async def delete_payload_record(self, record_id: str) -> None:
         """Delete one metadata record by ID."""
         try:
-            await self.client.delete(
-                collection_name=self.collection_name,
-                points_selector=models.PointIdsList(points=[_record_uuid(record_id)]),
+            await _retry_qdrant(
+                f"record delete of {record_id} in {self.collection_name}",
+                lambda: self.client.delete(
+                    collection_name=self.collection_name,
+                    points_selector=models.PointIdsList(points=[_record_uuid(record_id)]),
+                ),
             )
         except Exception:
             logger.exception("Error deleting record %s from %s", record_id, self.collection_name)

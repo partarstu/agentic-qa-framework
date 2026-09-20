@@ -285,7 +285,7 @@ JIRA_URL=YOUR_JIRA_INSTANCE_URL # Required for Xray, the RAG sync runtime and th
                                  # MCP server (see "Jira MCP Server Setup" below), which has its own .env file.
 JIRA_USERNAME=YOUR_JIRA_USERNAME # Required alongside JIRA_URL. The email address associated with your Jira account.
 JIRA_API_TOKEN=YOUR_JIRA_API_TOKEN # Required alongside JIRA_URL. A Jira API token for authentication.
-ORCHESTRATOR_VERSION=1.0 # Default: 1.0. Version of the orchestrator, reported for traceability.
+ORCHESTRATOR_VERSION=1.1.1 # Default: 1.1.1. Version of the orchestrator, reported for traceability.
 TEST_ENVIRONMENT_LABEL=Standard Test Environment # Default: Standard Test Environment. Label describing the
                                  # environment tests are executed against. Reported on every test execution
                                  # result and emitted as an Allure tag.
@@ -312,7 +312,7 @@ TEST_CASE_DUPLICATE_MIN_SCORE=0.8 # Minimum dense similarity for test-case dupli
 TEST_CASE_DUPLICATE_MAX_CANDIDATES=5 # Maximum duplicate candidates judged per reviewed test case.
 LOGIN_RATE_LIMIT_ATTEMPTS=5 # Login attempts allowed per client IP per window.
 LOGIN_RATE_LIMIT_WINDOW_SECONDS=60 # Sliding-window length for the login rate limit.
-LOGIN_RATE_LIMIT_TRUSTED_PROXY_HOPS=0 # How many X-Forwarded-For entries from the right are trusted (0 = the socket peer).
+LOGIN_RATE_LIMIT_TRUSTED_PROXY_HOPS=0 # How many X-Forwarded-For entries from the right are trusted (0 = the socket peer). Set to 1 behind a reverse proxy or Cloud Run, otherwise every user shares one rate-limit bucket.
 SHAREPOINT_TENANT_ID= # Entra tenant ID for SharePoint app-only access (Sites.Selected permission recommended).
 SHAREPOINT_CLIENT_ID= # Entra app registration client ID.
 SHAREPOINT_CLIENT_SECRET= # Entra app registration client secret. Store in a secret manager, never in the repo.
@@ -345,11 +345,11 @@ PORT=8001 # Default: 8001. The internal port an agent listens on.
 EXTERNAL_PORT=8001 # Default: 8001. The externally accessible port for the agent.
 # Version each agent reports in its A2A agent card (visible in the dashboard) and, for execution agents,
 # on every test execution result. Each agent reads its own variable.
-REQUIREMENTS_REVIEW_AGENT_VERSION=1.0 # Default: 1.0.
-TEST_CASE_CLASSIFICATION_AGENT_VERSION=1.0 # Default: 1.0.
-TEST_CASE_GENERATION_AGENT_VERSION=1.0 # Default: 1.0.
-TEST_CASE_REVIEW_AGENT_VERSION=1.0 # Default: 1.0.
-INCIDENT_CREATION_AGENT_VERSION=1.0 # Default: 1.0.
+REQUIREMENTS_REVIEW_AGENT_VERSION=1.1.0 # Default: 1.1.0.
+TEST_CASE_CLASSIFICATION_AGENT_VERSION=1.0.1 # Default: 1.0.1.
+TEST_CASE_GENERATION_AGENT_VERSION=1.0.1 # Default: 1.0.1.
+TEST_CASE_REVIEW_AGENT_VERSION=1.1.1 # Default: 1.1.1.
+INCIDENT_CREATION_AGENT_VERSION=1.0.1 # Default: 1.0.1.
 
 # Agent Discovery (for remote agents)
 REMOTE_EXECUTION_AGENT_HOSTS=http://localhost # Default: http://localhost. Comma-separated URLs of remote agent hosts.
@@ -389,7 +389,7 @@ EMBEDDING_SERVICE_MAX_RETRIES=6 # Default: 6. Connect/timeout retry attempts (wi
 EMBEDDING_SERVICE_RETRY_BACKOFF_CAP_SECONDS=32.0 # Default: 32.0. Upper bound for the exponential backoff between embedding service retries.
 QDRANT_UPSERT_BATCH_SIZE=64 # Default: 64. Number of points per batched vector upsert.
 
-# RAG Sync Runtime (WS8)
+# RAG Sync Runtime
 RAG_SYNC_JOB_NAME= # Unset by default. Cloud Run job resource name (projects/<p>/locations/<r>/jobs/<job>); enables job mode.
 RAG_SYNC_JOB_REGION=us-central1 # Default: us-central1. Region of the sync job.
 RAG_SYNC_SERVICE_URL= # Unset by default. Local sync service URL (development only); enables local mode.
@@ -399,7 +399,7 @@ RAG_SYNC_START_ALLOWANCE_SECONDS=300 # Default: 300. How long an unconfirmed job
 # Every Jira status is ingested. Reset the Jira sync cursor once after upgrading from a status-filtered deployment.
                                  # statuses eligible to be synced into the RAG vector DB.
 
-# Confluence Document Ingestion (WS9)
+# Confluence Document Ingestion
 CONFLUENCE_URL= # Required for document RAG. Base URL of the Confluence Cloud site (e.g. https://<tenant>.atlassian.net).
 CONFLUENCE_USERNAME= # Required for document RAG. Confluence user for basic auth.
 CONFLUENCE_API_TOKEN= # Required for document RAG. Confluence API token for basic auth.
@@ -1313,8 +1313,9 @@ schedulers before upgrading:
     explicitly built provider models with transport-level retries; `GOOGLE_API_KEY`/`ANTHROPIC_API_KEY` are read
     from the environment. Claude deployments should set `MAX_OUTPUT_TOKENS` explicitly (unset means
     pydantic-ai's own 4096 default for Anthropic).
-15. **Test-case point ids are derived from the test management system and the test case key.** Run
-    `/update-test-case-db` once per project: the full resync writes the new points and deletes the old ones.
+15. **Test-case point ids are derived from the test case key alone, and the payload keeps only `source`,
+    `project_key`, `test_case_key`, `text`, `content_hash` and `indexed_at`.** Run `/update-test-case-db` once per
+    project: the full resync writes the new points and deletes the old ones.
 16. **The Test Case Review agent needs the vector database and the embedding service** (`QDRANT_URL`,
     `EMBEDDING_SERVICE_URL`, `INTERNAL_SERVICE_API_KEY`) for its duplicate check. Without them every review fails
     instead of reporting "no duplicates".

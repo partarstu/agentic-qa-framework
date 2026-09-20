@@ -13,6 +13,7 @@ import traceback
 from collections import defaultdict
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -120,6 +121,12 @@ discovery_lock = asyncio.Lock()  # Serialises the startup, periodic and manual d
 agent_selection_lock = asyncio.Lock()  # Ensures atomic agent selection and reservation
 cancellation_queue = asyncio.Queue()
 _results_extractor_semaphore = asyncio.Semaphore(1)  # Serializes extractor calls to avoid rate limit errors
+
+# The agent a send-task call actually reserved. Routing may pick a different agent than the caller
+# proposed, and the execution result reports which agent ran the test, so the caller reads it back
+# from here rather than from the id it passed in. Set inside the awaited call, so it reaches the
+# caller's context; a concurrent task runs in a context of its own and cannot overwrite it.
+_reserved_agent_id: ContextVar[str | None] = ContextVar("reserved_agent_id", default=None)
 
 # Stream token store: token string -> (username, expires_at). Keyed by opaque token.
 _stream_token_store: dict[str, tuple[str, datetime]] = {}
@@ -575,15 +582,7 @@ def _build_agent_auth_headers() -> dict[str, str]:
 
 
 async def _cancel_agent_task(agent_card: AgentCard, task_id: str) -> bool:
-    """Attempt to cancel a task on an agent using the A2A protocol.
-
-    Args:
-        agent_card: The agent's card containing connection info.
-        task_id: The ID of the task to cancel.
-
-    Returns:
-        True if cancellation was successful or acknowledged, False otherwise.
-    """
+    """Attempt to cancel a task on an agent using the A2A protocol."""
     httpx_client: httpx.AsyncClient | None = None
     try:
         httpx_client = httpx.AsyncClient(
@@ -831,7 +830,7 @@ async def trigger_test_case_generation_workflow(request: Request, api_key: str =
 
 
 # =============================================================================
-# RAG Sync Endpoints (WS8)
+# RAG Sync Endpoints
 # =============================================================================
 
 # Serializes lock acquisitions: valid because the orchestrator runs as a single
@@ -901,7 +900,7 @@ def _sync_response(result: SyncStartResult) -> Any:
 # noinspection PyUnusedLocal
 @orchestrator_app.post("/update-test-case-db")
 async def update_test_case_db(request: JiraSyncRequest, api_key: str = Depends(_validate_api_key)):
-    """Triggers the test-case full resync for the given project (WS17)."""
+    """Triggers the test-case full resync for the given project."""
     logger.info("Triggering test-case RAG sync for project %s", request.project_key)
     result = await _trigger_rag_sync("test_cases", request.project_key, request)
     return _sync_response(result)
@@ -910,7 +909,7 @@ async def update_test_case_db(request: JiraSyncRequest, api_key: str = Depends(_
 # noinspection PyUnusedLocal
 @orchestrator_app.post("/update-jira-db")
 async def update_jira_db(request: JiraSyncRequest, api_key: str = Depends(_validate_api_key)):
-    """Triggers the RAG Vector DB update for the given Jira project (WS8)."""
+    """Triggers the RAG Vector DB update for the given Jira project."""
     logger.info("Triggering RAG sync for Jira project %s", request.project_key)
     result = await _trigger_rag_sync("jira", request.project_key, request)
     return _sync_response(result)
@@ -919,7 +918,7 @@ async def update_jira_db(request: JiraSyncRequest, api_key: str = Depends(_valid
 # noinspection PyUnusedLocal
 @orchestrator_app.post("/update-sharepoint-db")
 async def update_sharepoint_db(request: SharePointSyncRequest, api_key: str = Depends(_validate_api_key)):
-    """Triggers the SharePoint documents sync for the given drive (WS18)."""
+    """Triggers the SharePoint documents sync for the given drive."""
     if request.attachment_name_pattern:
         try:
             compile_name_pattern(request.attachment_name_pattern)
@@ -993,7 +992,7 @@ async def execute_test(request: ManualTestExecutionRequest, api_key: str = Depen
     """Execute one test on the explicitly selected agent without incident creation."""
     test_management_client = get_test_management_client()
     test_case = await asyncio.to_thread(test_management_client.fetch_test_case_by_key, request.test_case_key)
-    result = await _execute_single_test(request.agent_id, test_case, "manual", selected_agent_id=request.agent_id)
+    result = await _execute_single_test(request.agent_id, test_case, "manual", pin_to_agent=True)
     if result is None:
         raise HTTPException(status_code=502, detail="Execution agent returned no result.")
     reporting_failures = await _generate_test_report([result], request.project_key, test_management_client)
@@ -1001,14 +1000,11 @@ async def execute_test(request: ManualTestExecutionRequest, api_key: str = Depen
 
 
 async def _generate_test_report(all_execution_results, project_key, test_management_client) -> list[str]:
-    """Uploads the results to the test management system and generates the HTML report (WS15).
+    """Uploads the results to the test management system and generates the HTML report.
 
     Both steps are independent: each failure is recorded as a dashboard error and tolerated, and a missing
     test plan skips the execution upload but not the report. The lock keeps concurrent runs from corrupting
     the report tool's fixed output directories.
-
-    Returns:
-        The messages of the steps that failed; empty when reporting succeeded.
     """
     failures: list[str] = []
 
@@ -1046,12 +1042,7 @@ async def _request_incident_creation_for_failed_tests(
     all_execution_results: list[TestExecutionResult],
     project_key: str,
 ) -> None:
-    """
-    Process all failed test execution results and create incidents for each.
-
-    Args:
-        all_execution_results: List of all test execution results to process.
-    """
+    """Process all failed test execution results and create incidents for each."""
     failed_results = [result for result in all_execution_results if result.testExecutionStatus in ["failed", "error"]]
 
     if not failed_results:
@@ -1105,8 +1096,8 @@ async def _request_all_test_cases_execution(grouped_test_cases):
 
 async def _group_test_cases_by_labels(automated_test_cases):
     grouped_test_cases = defaultdict(list)
+    labels = {test_type.label for test_type in TestCaseType}
     for tc in automated_test_cases:
-        labels = {test_type.label for test_type in TestCaseType}
         matching_labels = [label for label in tc.labels if label in labels]
         if not matching_labels:
             logger.warning("Skipping test case %s: no recognized test-type label.", tc.key)
@@ -1291,7 +1282,7 @@ async def _agent_worker(
 
 
 async def _execute_single_test(
-    agent_id: str, test_case: TestCase, test_type: str, selected_agent_id: str | None = None
+    agent_id: str, test_case: TestCase, test_type: str, pin_to_agent: bool = False
 ) -> TestExecutionResult | None:
     task_description = f"Execution of test case {test_case.key} (type: {test_type})"
     execution_request = TestExecutionRequest(test_case=test_case)
@@ -1299,12 +1290,9 @@ async def _execute_single_test(
     # Reported to the test management systems, which read every timestamp as UTC.
     start_timestamp = datetime.now(UTC)
     try:
-        if selected_agent_id is None:
-            completed_task = await _send_task_to_agent(execution_request.model_dump_json(), task_description)
-        else:
-            completed_task = await _send_task_to_agent(
-                execution_request.model_dump_json(), task_description, selected_agent_id
-            )
+        completed_task = await _send_task_to_agent(
+            execution_request.model_dump_json(), task_description, agent_id if pin_to_agent else None
+        )
         artifacts = _get_artifacts_from_task(completed_task, task_description)
     except HTTPException:
         # Its status (the manual reservation's 404/409/503, a timeout's 408) must reach the caller unchanged.
@@ -1314,8 +1302,10 @@ async def _execute_single_test(
     finally:
         end_timestamp = datetime.now(UTC)
 
-    agent_name = await agent_registry.get_name(agent_id)
-    agent_info = _build_agent_info(await agent_registry.get_card(agent_id), agent_name)
+    # Without pinning, routing chose the agent; the result must name the one that actually ran the test.
+    executing_agent_id = _reserved_agent_id.get() or agent_id
+    agent_name = await agent_registry.get_name(executing_agent_id)
+    agent_info = _build_agent_info(await agent_registry.get_card(executing_agent_id), agent_name)
     if not artifacts:
         _handle_exception(f"No test case execution results received from agent {agent_name}", 500)
     text_parts = _get_text_content_from_artifacts(artifacts, task_description)
@@ -1365,16 +1355,7 @@ Test case execution results:\n```{text_results}```
 async def _request_incident_creation(
     incident_input: IncidentCreationInput, artifacts: list[FileArtifact]
 ) -> IncidentCreationResult | None:
-    """Request incident creation with all artifacts sent as file parts.
-
-    Args:
-        incident_input: The incident creation input JSON.
-        artifacts: All file artifacts to send as file parts in the A2A message.
-
-    Returns:
-        IncidentCreationResult containing the created incident information,
-        or None if an AgentExecutionError occurred.
-    """
+    """Request incident creation with all artifacts sent as file parts."""
     task_description = f"Create incident report for test case {incident_input.test_case.key}"
 
     # Create message with JSON text part and ALL artifact file parts
@@ -1403,12 +1384,6 @@ async def _request_incident_creation(
 
 async def _request_test_cases_generation(user_story_id) -> GeneratedTestCases:
     """Request test case generation for a user story.
-
-    Args:
-        user_story_id: The Jira user story key to generate test cases for.
-
-    Returns:
-        GeneratedTestCases containing the generated test cases.
 
     Raises:
         HTTPException: If an AgentExecutionError is returned by the agent.
@@ -1452,14 +1427,6 @@ def _get_text_content_from_artifacts(
 ) -> list[str]:
     """Extract text content from artifacts.
 
-    Args:
-        artifacts: List of artifacts from the agent response.
-        task_description: Description of the task for error messages.
-        any_content_expected: If True, raises an exception when no text content is found.
-
-    Returns:
-        List of non-empty text strings extracted from artifacts.
-
     Raises:
         HTTPException: If any_content_expected is True and no text content is found.
     """
@@ -1479,14 +1446,6 @@ def _get_model_from_artifacts[T: JsonSerializableModel](
     artifacts: list[Artifact] | None, task_description: str, model_type: type[T]
 ) -> T | AgentExecutionError | None:
     """Extract text content from artifacts and parse it as a model.
-
-    Args:
-        artifacts: List of artifacts from the agent response.
-        task_description: Description of the task for error messages.
-        model_type: The expected model type to parse the content as.
-
-    Returns:
-        Either the parsed model of type T, or an AgentExecutionError if the agent returned an error.
 
     Raises:
         HTTPException: If no text content is found in artifacts or parsing fails.
@@ -1635,10 +1594,6 @@ async def _save_agent_logs_from_task(task: Task, internal_task_id: str) -> None:
     function replaces any streamed log buffer with the authoritative artifact-based
     log set. If the task crashes before the final artifact is emitted, the streamed
     buffer accumulated via append_log_batch is kept as a best-effort record.
-
-    Args:
-        task: The completed Task containing artifacts with potential logs.
-        internal_task_id: The internal task ID for tracking in task history.
     """
     try:
         file_artifacts = _get_file_contents_from_artifacts(task.artifacts)
@@ -1671,15 +1626,7 @@ async def _save_agent_usage_from_task(task: Task, internal_task_id: str) -> None
 async def _send_task_to_agent_with_message(
     message: Message, task_description: str, selected_agent_id: str | None = None
 ) -> Task | None:
-    """Send a custom message (with file parts) to an agent.
-
-    Args:
-        message: The A2A Message object to send (can contain text and file parts).
-        task_description: Description of the task for agent selection and logging.
-
-    Returns:
-        The completed Task, or None if the task failed to complete.
-    """
+    """Send a custom message (with file parts) to an agent."""
 
     internal_task_id = str(uuid4())
     agent_id = None
@@ -1701,6 +1648,9 @@ async def _send_task_to_agent_with_message(
                     raise HTTPException(status_code=503, detail="Execution agent is unavailable.")
                 await agent_registry.update_status(selected_agent_id, AgentStatus.BUSY)
                 agent_id = selected_agent_id
+        # The routing call picks the agent, which is not necessarily the one the caller had in
+        # mind, so the caller reads back who actually ran the task (see _reserved_agent_id).
+        _reserved_agent_id.set(agent_id)
         task_start_time = datetime.now(UTC)
         agent_name = await agent_registry.get_name(agent_id)
 
@@ -1876,15 +1826,7 @@ async def _send_task_to_agent_with_message(
 async def _send_task_to_agent(
     input_data: str, task_description: str, selected_agent_id: str | None = None
 ) -> Task | None:
-    """Send a text message to an agent.
-
-    Args:
-        input_data: The text content to send to the agent.
-        task_description: Description of the task for agent selection and logging.
-
-    Returns:
-        The completed Task, or None if the task failed to complete.
-    """
+    """Send a text message to an agent."""
     message = new_text_message(input_data, role=Role.ROLE_USER)
     return await _send_task_to_agent_with_message(message, task_description, selected_agent_id)
 
@@ -1893,13 +1835,6 @@ async def reserve_agent_waiting_if_needed(
     task_description: str, task_id: str | None = None
 ) -> tuple[str, AgentCard] | None:
     """Wait for an available agent and atomically reserve it.
-
-    Args:
-        task_description: Description of the task to be assigned.
-        task_id: Optional ID of the task for logging purposes.
-
-    Returns:
-        Tuple of (agent_id, agent_card) for the reserved agent.
 
     Raises:
         HTTPException: If no agents are registered, no suitable agent found,
@@ -1911,33 +1846,41 @@ async def reserve_agent_waiting_if_needed(
     max_wait_time = config.OrchestratorConfig.TASK_EXECUTION_TIMEOUT
     start_time = time.time()
     last_justification = "no routing decision was made"
+    decision: AgentRoutingDecision | None = None
+    routed_agents_info = ""
 
     while (time.time() - start_time) < max_wait_time:
-        # The routing model call runs OUTSIDE the lock: concurrent task routing must not
-        # serialize behind each other's model calls. Only the check-and-reserve step below
-        # is atomic under agent_selection_lock.
-        decision = await _route_task(task_description, task_id)
-        last_justification = decision.justification
+        # The rendered registry IS the routing model's input, so the decision is re-taken exactly
+        # when it changes (discovery registered an agent, one became free or broke) instead of once
+        # per poll - a wait of TASK_EXECUTION_TIMEOUT would otherwise cost one model call per tick.
+        agents_info = await _get_agents_info()
+        if decision is None or agents_info != routed_agents_info:
+            # The routing model call runs OUTSIDE the lock: concurrent task routing must not
+            # serialize behind each other's model calls. Only the check-and-reserve step below
+            # is atomic under agent_selection_lock.
+            decision = await _route_task(task_description, agents_info, task_id)
+            routed_agents_info = agents_info
+            last_justification = decision.justification
 
-        if decision.outcome == RoutingOutcome.NONE_SUITABLE:
-            # Fail fast: no registered agent can execute the task, so waiting is pointless.
-            _record_error(
-                f"No registered agent can execute task '{task_description}'. "
-                f"Routing justification: {decision.justification}",
-                task_id=task_id,
-            )
-            _handle_exception(
-                f"No registered agent can execute task '{task_description}'. "
-                f"Routing justification: {decision.justification}",
-                404,
-                task_id=task_id,
-            )
+            if decision.outcome == RoutingOutcome.NONE_SUITABLE:
+                # Fail fast: no registered agent can execute the task, so waiting is pointless.
+                _record_error(
+                    f"No registered agent can execute task '{task_description}'. "
+                    f"Routing justification: {decision.justification}",
+                    task_id=task_id,
+                )
+                _handle_exception(
+                    f"No registered agent can execute task '{task_description}'. "
+                    f"Routing justification: {decision.justification}",
+                    404,
+                    task_id=task_id,
+                )
 
         async with agent_selection_lock:
             available_agent_ids = await agent_registry.get_available_agents()
             agent_id = _selected_agent_if_available(decision, available_agent_ids, task_description, task_id)
             if agent_id:
-                # Double-check agent is still available (might have changed during _select_agent)
+                # Double-check agent is still available (might have changed since the routing call)
                 current_status = await agent_registry.get_status(agent_id)
                 if current_status == AgentStatus.AVAILABLE:
                     agent_card = await agent_registry.get_card(agent_id)
@@ -1998,13 +1941,7 @@ async def _get_jira_issue_key_from_request(request):
 
 
 def _record_error(message: str, task_id: str | None = None, agent_id: str | None = None) -> None:
-    """Log an error and record it in error_history without raising. Call from within an except block.
-
-    Args:
-        message: Error message.
-        task_id: Optional task ID related to the error.
-        agent_id: Optional agent ID related to the error.
-    """
+    """Log an error and record it in error_history without raising. Call from within an except block."""
     logger.exception(message)
     error_record = ErrorRecord(
         error_id=str(uuid4()),
@@ -2021,14 +1958,7 @@ def _record_error(message: str, task_id: str | None = None, agent_id: str | None
 def _handle_exception(
     message: str, status_code: int = 500, task_id: str | None = None, agent_id: str | None = None
 ) -> HTTPException:
-    """Record an error in the dashboard and raise an HTTPException.
-
-    Args:
-        message: Error message.
-        status_code: HTTP status code.
-        task_id: Optional task ID related to the error.
-        agent_id: Optional agent ID related to the error.
-    """
+    """Record an error in the dashboard and raise an HTTPException."""
     _record_error(message, task_id, agent_id)
     raise HTTPException(status_code=status_code, detail=message)
 
@@ -2070,7 +2000,7 @@ The list of all registered with you agents:
     valid_agent_ids = [agent_id for agent_id in selected_agent_ids if agent_id in available_agent_ids]
 
     if not valid_agent_ids or len(valid_agent_ids) < len(selected_agent_ids):
-        # WS1: the justification explains why the selection came up empty or partial.
+        # The justification explains why the selection came up empty or partial.
         logger.warning(
             "Routing decision for task '%s': selected %s of %s agent(s); justification: %s",
             task_description,
@@ -2102,43 +2032,22 @@ def _describe_agent_card(card: AgentCard) -> str:
     return ", ".join(parts)
 
 
-async def _get_agents_info(agent_ids: list[str] | None = None) -> str:
-    """Get information about the given agents, or every registered agent when none are given.
+async def _get_agents_info() -> str:
+    """Renders every registered agent with its identity, capabilities and current availability.
 
-    Every agent is listed with its identity, capabilities and current availability, so the
-    routing model can tell "busy" from "incapable" and can pick an available agent among
-    several equally capable ones.
-
-    Args:
-        agent_ids: Optional list of agent IDs to describe. Defaults to all registered agents.
-
-    Returns:
-        Formatted string with agent information for the discovery agent.
+    Busy agents are listed too, so the routing model can tell "busy" from "incapable" and can
+    pick an available agent among several equally capable ones.
     """
-    all_cards = await agent_registry.get_all_cards()
-    if agent_ids is None:
-        agent_ids = list(all_cards.keys())
     agents_info = ""
-    for agent_id in agent_ids:
-        card = all_cards.get(agent_id)
-        if card:
-            status = await agent_registry.get_status(agent_id)
-            availability = "available" if status == AgentStatus.AVAILABLE else f"not available ({status.value})"
-            agents_info += f"- ID: {agent_id}, {_describe_agent_card(card)}, Availability: {availability}\n"
+    for agent_id, card in (await agent_registry.get_all_cards()).items():
+        status = await agent_registry.get_status(agent_id)
+        availability = "available" if status == AgentStatus.AVAILABLE else f"not available ({status.value})"
+        agents_info += f"- ID: {agent_id}, {_describe_agent_card(card)}, Availability: {availability}\n"
     return agents_info
 
 
-async def _route_task(task_description: str, task_id: str | None = None) -> AgentRoutingDecision:
-    """Asks the routing model for one three-way decision over the full agent registry.
-
-    Args:
-        task_description: Description of the task to be assigned.
-        task_id: Optional ID of the task for logging purposes.
-
-    Returns:
-        The routing decision: outcome, selected agent ID (when applicable) and justification.
-    """
-    agents_info = await _get_agents_info()
+async def _route_task(task_description: str, agents_info: str, task_id: str | None = None) -> AgentRoutingDecision:
+    """Asks the routing model for one three-way decision over the rendered agent registry."""
     if not agents_info:
         return AgentRoutingDecision(
             outcome=RoutingOutcome.NONE_SUITABLE,
@@ -2168,27 +2077,6 @@ The list of all registered with you agents:
     return decision
 
 
-async def _select_agent(
-    task_description: str, available_agent_ids: list[str], task_id: str | None = None
-) -> str | None:
-    """Selects the best available agent to handle a given task.
-
-    The routing call sees all registered agents (so it can tell "busy" from "incapable"); this
-    helper keeps only a selected agent that is registered and currently AVAILABLE, which keeps
-    reservation atomic under agent_selection_lock.
-
-    Args:
-        task_description: Description of the task to be assigned.
-        available_agent_ids: List of agent IDs that are currently AVAILABLE.
-        task_id: Optional ID of the task for logging purposes.
-
-    Returns:
-        The ID of the selected agent, or None if no suitable available agent was selected.
-    """
-    decision = await _route_task(task_description, task_id)
-    return _selected_agent_if_available(decision, available_agent_ids, task_description, task_id)
-
-
 def _selected_agent_if_available(
     decision: AgentRoutingDecision,
     available_agent_ids: list[str],
@@ -2199,9 +2087,6 @@ def _selected_agent_if_available(
 
     An invalid or unavailable selected ID counts as an invalid routing result: it is logged with
     the justification and treated like the busy outcome.
-
-    Returns:
-        The selected agent ID when it is currently AVAILABLE, otherwise None.
     """
     if decision.outcome != RoutingOutcome.AGENT_SELECTED:
         return None
@@ -2281,7 +2166,7 @@ async def _discover_agents():
 
 
 async def _run_manual_discovery() -> dict[str, Any]:
-    """The manual discovery run (WS14): new-agent discovery plus a re-probe of every registered agent.
+    """The manual discovery run: new-agent discovery plus a re-probe of every registered agent.
 
     A reachable BROKEN agent becomes AVAILABLE again; an unreachable one is removed unless it is BUSY,
     so stale entries (e.g. a VM-hosted agent that moved to a new address) disappear. One failing probe
@@ -2296,16 +2181,22 @@ async def _run_manual_discovery() -> dict[str, Any]:
                 "removed": 0,
             }
         cards = await agent_registry.get_all_cards()
-        agent_ids = list(cards)
+        # A card without a usable interface can't be probed, so it counts as unreachable rather
+        # than failing the run on an index error.
+        probe_targets = {
+            agent_id: card.supported_interfaces[0].url if card.supported_interfaces else None
+            for agent_id, card in cards.items()
+        }
+        agent_ids = list(probe_targets)
         probes = await asyncio.gather(
-            *(_check_agent_reachability(cards[agent_id].supported_interfaces[0].url) for agent_id in agent_ids),
-            return_exceptions=True,
+            *(
+                _check_agent_reachability(url) if url else asyncio.sleep(0, result=False)
+                for url in probe_targets.values()
+            )
         )
         reachable = removed = 0
         for agent_id, probe in zip(agent_ids, probes, strict=True):
-            if isinstance(probe, BaseException):
-                logger.warning("Probing agent %s failed: %s", agent_id, probe)
-            if probe is True:
+            if probe:
                 reachable += 1
                 if await agent_registry.get_status(agent_id) == AgentStatus.BROKEN:
                     await agent_registry.update_status(agent_id, AgentStatus.AVAILABLE)
@@ -2321,11 +2212,7 @@ async def _run_manual_discovery() -> dict[str, Any]:
 
 
 async def _discover_new_agents() -> bool:
-    """Registers the new agents found on the configured candidates; the caller holds the discovery lock.
-
-    Returns:
-        False when discovery is not configured (or misconfigured), True otherwise.
-    """
+    """Registers the new agents found on the configured candidates, False when discovery is not configured."""
     agent_base_urls_str = config.OrchestratorConfig.REMOTE_EXECUTION_AGENT_HOSTS
     port_range_str = config.OrchestratorConfig.AGENT_DISCOVERY_PORTS
 

@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
-"""Every bundled prompt template loads and renders as Markdown (WS27)."""
+"""Every bundled prompt template loads and renders as Markdown."""
 
 import re
 

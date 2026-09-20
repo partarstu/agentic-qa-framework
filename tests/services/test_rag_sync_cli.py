@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
-"""Unit tests for starting the sync runtime's entry points from the repository (WS11 local development)."""
+"""Unit tests for starting the sync runtime's entry points from the repository (local development)."""
 
 import subprocess
 import sys

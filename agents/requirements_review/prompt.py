@@ -44,12 +44,6 @@ class RequirementsReviewSystemPrompt(PromptBase):
         return _get_prompts_root()
 
     def __init__(self, template_file_name: str = "main_prompt_template.md"):
-        """
-        Initializes the InstructionPrompt instance.
-
-        Args:
-            template_file_name: The name of the prompt template file.
-        """
         super().__init__(template_file_name)
 
     def get_prompt(self) -> str:
@@ -76,14 +70,6 @@ class RequirementsReviewWithAttachmentsPrompt(PromptBase):
         template_file_name: str = "review_with_attachments_prompt.md",
         grounding_instruction: str | None = None,
     ):
-        """
-        Initializes the review with attachments prompt.
-
-        Args:
-            template_file_name: The name of the prompt template file.
-            grounding_instruction: Optional grounding instruction appended when
-                document retrieval is enabled.
-        """
         super().__init__(template_file_name)
         self.grounding_instruction = grounding_instruction
 
@@ -99,7 +85,7 @@ class RequirementsReviewWithAttachmentsPrompt(PromptBase):
 
 class RequirementsReviewRetrievalInstruction(PromptBase):
     """
-    Retrieval instruction appended to the main prompt when document retrieval is enabled (WS10).
+    Retrieval instruction appended to the main prompt when document retrieval is enabled.
     """
 
     def get_script_dir(self) -> Path:

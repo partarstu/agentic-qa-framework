@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
-"""Heading-aware chunking of normalized page bodies (WS9).
+"""Heading-aware chunking of normalized page bodies.
 
 Splits along markdown headings while tracking the heading path. Each chunk carries
 its breadcrumb (``Page title > Section > Subsection``) as a prefix. A section with
@@ -38,15 +38,7 @@ class PageChunk:
 
 
 def chunk_page_body(markdown: str, page_title: str) -> list[PageChunk]:
-    """Splits a normalized page body into breadcrumb-prefixed chunks.
-
-    Args:
-        markdown: The normalized page body, starting with the page title as h1.
-        page_title: The page title, prepended to every breadcrumb.
-
-    Returns:
-        Chunks in document order; empty when the body has no text.
-    """
+    """Splits a normalized page body into breadcrumb-prefixed chunks."""
     budget = config.DocumentRagConfig.CHUNK_MAX_TOKENS * config.DocumentRagConfig.CHARACTERS_PER_TOKEN
     chunks: list[PageChunk] = []
     for breadcrumb, text in _split_sections(markdown):

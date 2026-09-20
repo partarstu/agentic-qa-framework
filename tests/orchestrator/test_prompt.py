@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
-"""Unit tests for the orchestrator's instruction templates (WS3)."""
+"""Unit tests for the orchestrator's instruction templates."""
 
 import pytest
 
@@ -27,7 +27,7 @@ def test_orchestrator_instruction_template_loads_from_its_bundled_file(
 
 
 def test_execution_agent_selection_prompt_states_the_run_is_unattended() -> None:
-    """WS15: the execution-agent selection must exclude agents that need a human during the run."""
+    """The execution-agent selection must exclude agents that need a human during the run."""
     instruction = orchestrator_prompt.MULTI_ROUTING_INSTRUCTION.lower()
 
     assert "fully automated, unattended ci/cd execution" in instruction

@@ -14,9 +14,7 @@ from common.services.test_management_system_client_provider import get_test_mana
 
 logger = utils.get_logger("test_case_classification_agent")
 
-# The classification agent works purely on the test cases handed to it and labels them
-# through the test management system, so it is filtered down to no Atlassian tools at
-# all (WS11 per-agent tool filtering).
+# The agent labels the test cases through the test management system, so it needs no Atlassian tool.
 _JIRA_TOOL_ALLOWLIST: tuple[str, ...] = ()
 
 

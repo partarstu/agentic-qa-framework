@@ -25,20 +25,13 @@ def _extract_placeholders(template: str) -> set[str]:
 
 
 class PromptBase(ABC):
-    """
-    Abstract base class for prompts.
-
-    Bundled templates live under the package returned by :meth:`get_script_dir`. When
-    ``PROMPT_OVERRIDES_DIR`` is set, a file at the same repository-relative path inside that
-    directory replaces the bundled one; overrides load once at process start (no hot reload).
+    """Abstract base class for prompts, whose bundled templates live under the package returned by
+    :meth:`get_script_dir`. When ``PROMPT_OVERRIDES_DIR`` is set, a file at the same repository-relative path inside
+    it replaces the bundled one, loaded once at process start.
     """
 
     def __init__(self, template_file_name: str):
-        """
-        Initializes the PromptBase instance.
-
-        Args:
-            template_file_name: The name of the prompt template file.
+        """Loads the template, preferring an override over the bundled file.
 
         Raises:
             FileNotFoundError: If neither a bundled template nor an override exists.
@@ -55,10 +48,7 @@ class PromptBase(ABC):
         self.template = self._load_template(bundled_path)
 
     def _resolve_override(self, bundled_path: Path) -> Path | None:
-        """Resolve the override path for one bundled template, with startup validation.
-
-        Returns:
-            The override path when an override exists, otherwise None.
+        """Resolve the override path for one bundled template, or None when no override exists.
 
         Raises:
             NotADirectoryError: If the override directory is set but missing or not a directory.
@@ -82,11 +72,7 @@ class PromptBase(ABC):
         return override_path
 
     def _load_template(self, bundled_path: Path) -> str:
-        """Loads the prompt template from the file, explicitly as UTF-8.
-
-        An override is validated against the bundled template's named placeholders so a
-        mismatch fails at startup instead of at the first task.
-        """
+        """Loads the prompt template as UTF-8, validating an override's placeholders against the bundled ones."""
         template = self.template_path.read_text(encoding="utf-8")
         if self.template_path != bundled_path and bundled_path.is_file():
             self._validate_override_placeholders(template, bundled_path.read_text(encoding="utf-8"))

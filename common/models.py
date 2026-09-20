@@ -43,11 +43,8 @@ class AgentRuntimeError(Exception):
 
 
 class BaseAgentResult(JsonSerializableModel):
-    """Base class for all agent result models.
-
-    This class provides a common `llm_comments` field for capturing debug information
-    from the LLM about any exceptional situations, missing tools, information gaps,
-    or other issues that may have prevented the agent from fully completing its task.
+    """Base class for all agent result models, carrying the `llm_comments` the model uses to report gaps, missing tools
+    or anything that stopped it from completing the task.
     """
 
     llm_comments: str | None = Field(
@@ -63,12 +60,7 @@ class VectorizableBaseModel(JsonSerializableModel, ABC):
 
     @abstractmethod
     def get_vector_id(self) -> int | str:
-        """Returns the unique ID for the vector database.
-
-        The ID must be either:
-        - A 64-bit unsigned integer
-        - A UUID string in standard format (e.g., '550e8400-e29b-41d4-a716-446655440000')
-        """
+        """Returns the point ID for the vector database: a 64-bit unsigned integer or a standard UUID string."""
         pass
 
     @abstractmethod
@@ -112,11 +104,8 @@ ContentKind = Literal["page_body", "attachment"]
 
 
 class SyncStatus(StrEnum):
-    """The one status vocabulary of a scoped sync, from the runner to the dashboard.
-
-    A ``StrEnum``, so it serialises and compares as the string that is already persisted
-    and rendered, while the members stop the producers and the consumers from spelling the
-    same status differently.
+    """The one status vocabulary of a scoped sync, from the runner to the dashboard. It is a ``StrEnum``, so it
+    serialises and compares as the string already persisted and rendered.
     """
 
     RUNNING = "running"
@@ -126,11 +115,9 @@ class SyncStatus(StrEnum):
 
 
 class DocumentPagePart(VectorizableBaseModel):
-    """One part of a Confluence document stored in the documents collection (WS9).
-
-    A page-body chunk is one part (``content_kind='page_body'``); an attachment
-    page is split into text parts sharing the page's reconciliation chain
-    (``content_kind='attachment'``), with the page image on part 0 only.
+    """One part of a Confluence document stored in the documents collection. A page-body chunk is one part; an
+    attachment page is split into text parts sharing the page's reconciliation chain, with the page image on part 0
+    only.
     """
 
     source: DocumentSource = Field(description="Source system of the document")
@@ -185,12 +172,9 @@ class RagUpdateResult(BaseAgentResult):
 
 
 class SyncRequest(BaseModel, ABC):
-    """One validated RAG sync request, shared by the orchestrator and the sync runtime.
-
-    The same object is the endpoint's request body, the source of the runner's command-line
-    arguments in job mode and the forwarded payload in local mode, so the three can never
-    disagree about a scope. Every field that reaches a query language (JQL) or a REST path
-    is constrained here, once.
+    """One validated RAG sync request, shared by the orchestrator and the sync runtime. The same object is the
+    endpoint's request body, the source of the runner's command-line arguments in job mode and the forwarded payload
+    in local mode, so every field reaching a query language or a REST path is constrained here once.
     """
 
     @abstractmethod
@@ -210,7 +194,9 @@ class JiraSyncRequest(SyncRequest):
 class SharePointSyncRequest(SyncRequest):
     """Scope of a SharePoint sync: one drive, optionally one folder of it."""
 
-    drive_id: str = Field(min_length=1, max_length=200)
+    # Graph drive IDs are opaque but never carry path or query characters; constraining them keeps
+    # a request from steering the app-only token at another Graph resource through the REST path.
+    drive_id: str = Field(min_length=1, max_length=200, pattern=r"^[A-Za-z0-9!._-]+$")
     folder_path: str | None = Field(default=None, max_length=500)
     attachment_name_pattern: str | None = Field(default=None, max_length=200)
 
@@ -354,7 +340,7 @@ class TestCaseReviewRequest(JsonSerializableModel):
 
 
 class OverlappingTestCase(JsonSerializableModel):
-    """An existing test case whose coverage overlaps the reviewed one (WS17)."""
+    """An existing test case whose coverage overlaps the reviewed one."""
 
     test_case_key: str = Field(description="The key of the candidate test case which overlaps in coverage")
     overlap_explanation: str = Field(description="What exactly both test cases cover in common")
@@ -469,10 +455,8 @@ class AggregatedTestResults(JsonSerializableModel):
 
 
 class AgentSkillDeclaration(JsonSerializableModel):
-    """Declared skill of a Python agent, published on its A2A card.
-
-    Every agent declares exactly one skill with a stable identity; AgentBase requires it and
-    never falls back to a generic one.
+    """Declared skill of a Python agent, published on its A2A card. Every agent declares exactly one skill with a stable
+    identity, which AgentBase requires and never replaces with a generic fallback.
     """
 
     id: str = Field(description="Stable, unique skill ID, e.g. 'jira-requirements-review'")

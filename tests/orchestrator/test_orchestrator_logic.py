@@ -32,7 +32,7 @@ from orchestrator.main import (
     _LogStreamState,
     _route_task,
     _run_manual_discovery,
-    _select_agent,
+    _selected_agent_if_available,
     agent_registry,
     cancellation_queue,
     discovery_agent,
@@ -148,8 +148,8 @@ async def test_route_task_agent_selected(clear_registry, mock_agent_card):
     with patch.object(discovery_agent, "run", new_callable=AsyncMock) as mock_run:
         mock_run.return_value = _routing_result(RoutingOutcome.AGENT_SELECTED, "test-id")
 
-        agent_id = await _select_agent("some task", ["test-id"])
-        assert agent_id == "test-id"
+        decision = await _route_task("some task", await _get_agents_info())
+        assert _selected_agent_if_available(decision, ["test-id"], "some task") == "test-id"
 
 
 @pytest.mark.asyncio
@@ -159,8 +159,8 @@ async def test_route_task_suitable_but_busy(clear_registry, mock_agent_card):
     with patch.object(discovery_agent, "run", new_callable=AsyncMock) as mock_run:
         mock_run.return_value = _routing_result(RoutingOutcome.SUITABLE_BUT_BUSY)
 
-        agent_id = await _select_agent("some task", [])
-        assert agent_id is None
+        decision = await _route_task("some task", await _get_agents_info())
+        assert _selected_agent_if_available(decision, [], "some task") is None
 
 
 @pytest.mark.asyncio
@@ -170,7 +170,7 @@ async def test_route_task_none_suitable(clear_registry, mock_agent_card):
     with patch.object(discovery_agent, "run", new_callable=AsyncMock) as mock_run:
         mock_run.return_value = _routing_result(RoutingOutcome.NONE_SUITABLE)
 
-        decision = await _route_task("some task")
+        decision = await _route_task("some task", await _get_agents_info())
         assert decision.outcome == RoutingOutcome.NONE_SUITABLE
         assert decision.selected_agent_id is None
 
@@ -179,25 +179,22 @@ async def test_route_task_none_suitable(clear_registry, mock_agent_card):
 async def test_route_task_no_agents_registered(clear_registry):
     # No routing model call happens when no agents are registered at all
     with patch.object(discovery_agent, "run", new_callable=AsyncMock) as mock_run:
-        decision = await _route_task("some task")
+        decision = await _route_task("some task", await _get_agents_info())
         assert decision.outcome == RoutingOutcome.NONE_SUITABLE
         mock_run.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_select_agent_none_found(clear_registry, mock_agent_card):
-    # A suitable agent exists but is busy: nothing is selected among the available agents
+async def test_selected_agent_is_dropped_when_it_is_not_available(clear_registry, mock_agent_card):
+    # The model named an agent that went BUSY between the routing call and the reservation
     await agent_registry.register("test-id", mock_agent_card)
+    decision = _routing_decision(RoutingOutcome.AGENT_SELECTED, "test-id")
 
-    with patch.object(discovery_agent, "run", new_callable=AsyncMock) as mock_run:
-        mock_run.return_value = _routing_result(RoutingOutcome.SUITABLE_BUT_BUSY)
-
-        agent_id = await _select_agent("some task", [])
-        assert agent_id is None
+    assert _selected_agent_if_available(decision, [], "some task") is None
 
 
 # =============================================================================
-# Agent reservation outcomes (WS1)
+# Agent reservation outcomes
 # =============================================================================
 
 
@@ -282,6 +279,60 @@ async def test_reserve_invalid_selected_id_is_treated_like_busy(
     assert exc_info.value.status_code == 503
     assert "A suitable agent exists but none of the suitable agents became available" in exc_info.value.detail
     assert "invalid or unavailable agent ID 'test-id'" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_reserve_routes_once_while_the_registry_is_unchanged(
+    clear_registry, mock_agent_card, mock_error_history, monkeypatch
+):
+    """Waiting for a busy agent must not cost one routing model call per poll."""
+    await agent_registry.register("test-id", mock_agent_card)
+    await agent_registry.update_status("test-id", AgentStatus.BUSY)
+    fake_time = MagicMock()
+    fake_time.time.side_effect = [0, 0, 0, 0, config.OrchestratorConfig.TASK_EXECUTION_TIMEOUT + 1]
+    monkeypatch.setattr("orchestrator.main.time", fake_time)
+    monkeypatch.setattr("orchestrator.main.asyncio.sleep", AsyncMock())
+
+    with (
+        patch(
+            "orchestrator.main._route_task",
+            new_callable=AsyncMock,
+            return_value=_routing_decision(RoutingOutcome.SUITABLE_BUT_BUSY),
+        ) as mock_route,
+        pytest.raises(HTTPException),
+    ):
+        await reserve_agent_waiting_if_needed("some task")
+
+    mock_route.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_reserve_routes_again_once_the_registry_changed(
+    clear_registry, mock_agent_card, mock_error_history, monkeypatch
+):
+    """A newly registered agent changes the routing input, so the decision is taken again."""
+    await agent_registry.register("busy-id", mock_agent_card)
+    await agent_registry.update_status("busy-id", AgentStatus.BUSY)
+    fake_time = MagicMock()
+    fake_time.time.side_effect = [0, 0, 0, config.OrchestratorConfig.TASK_EXECUTION_TIMEOUT + 1]
+    monkeypatch.setattr("orchestrator.main.time", fake_time)
+
+    async def register_another_agent(_seconds):
+        await agent_registry.register("new-id", mock_agent_card)
+
+    monkeypatch.setattr("orchestrator.main.asyncio.sleep", register_another_agent)
+
+    with (
+        patch(
+            "orchestrator.main._route_task",
+            new_callable=AsyncMock,
+            return_value=_routing_decision(RoutingOutcome.SUITABLE_BUT_BUSY),
+        ) as mock_route,
+        pytest.raises(HTTPException),
+    ):
+        await reserve_agent_waiting_if_needed("some task")
+
+    assert mock_route.await_count == 2
 
 
 @pytest.mark.asyncio
@@ -399,7 +450,7 @@ async def test_discover_agents_fetches_new(clear_registry, mock_agent_card):
 
 
 # =============================================================================
-# Registration and manual discovery (WS14)
+# Registration and manual discovery
 # =============================================================================
 
 
@@ -488,13 +539,12 @@ async def test_manual_discovery_revives_reachable_and_removes_unreachable_idle_a
 
 @pytest.mark.asyncio
 async def test_manual_discovery_tolerates_a_failing_probe(clear_registry):
+    """_check_agent_reachability answers False for an agent it cannot reach, whatever went wrong."""
     await agent_registry.register("healthy", _card_at("http://agent-host:8001"))
-    await agent_registry.register("crashing", _card_at("http://agent-host:8002"))
+    await agent_registry.register("unreachable", _card_at("http://agent-host:8002"))
 
     async def _probe(url):
-        if url.endswith(":8002"):
-            raise RuntimeError("probe crashed")
-        return True
+        return not url.endswith(":8002")
 
     with (
         patch("orchestrator.main._discover_new_agents", AsyncMock(return_value=True)),
@@ -504,6 +554,22 @@ async def test_manual_discovery_tolerates_a_failing_probe(clear_registry):
 
     assert (report["reachable"], report["removed"]) == (1, 1)
     assert await agent_registry.contains("healthy")
+
+
+@pytest.mark.asyncio
+async def test_manual_discovery_removes_an_agent_whose_card_has_no_interface(clear_registry, mock_agent_card):
+    """An unprobeable card counts as unreachable instead of failing the whole run."""
+    del mock_agent_card.supported_interfaces[:]
+    await agent_registry.register("interfaceless", mock_agent_card)
+
+    with (
+        patch("orchestrator.main._discover_new_agents", AsyncMock(return_value=True)),
+        patch("orchestrator.main._check_agent_reachability", AsyncMock(return_value=True)) as mock_probe,
+    ):
+        report = await _run_manual_discovery()
+
+    assert (report["reachable"], report["removed"]) == (0, 1)
+    mock_probe.assert_not_called()
 
 
 @pytest.mark.asyncio

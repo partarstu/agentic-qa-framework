@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
-"""Unit tests for the reporting-only terminal outcome of a RAG sync run (WS20)."""
+"""Unit tests for the reporting-only terminal outcome of a RAG sync run."""
 
 import sys
 from pathlib import Path

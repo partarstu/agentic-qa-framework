@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
-"""Unit tests for the WS8 sync runtime: lock state machine, sync state, trigger modes.
+"""Unit tests for the sync runtime: lock state machine, sync state, trigger modes.
 
 Every external boundary (Qdrant, Jira, the Cloud Run Admin API, the local sync service)
 is mocked; the tests assert the state machine transitions and the endpoint contracts.
@@ -24,6 +24,7 @@ if str(SERVICES_DIR) not in sys.path:
 import common.services.sync_lock_store as lock_store_module  # noqa: E402
 from common.services.sync_lock_store import LOCK_RECORD_KIND, SyncLockStore, SyncStateStore, scope_key  # noqa: E402
 from common.services.vector_db_service import VectorDbService  # noqa: E402
+from tests.conftest import with_real_lock_lifecycle  # noqa: E402
 
 
 @pytest.fixture
@@ -173,7 +174,7 @@ class TestSyncState:
 
 
 class TestJiraRunner:
-    """The Jira sync runner's lock and cursor behaviour (WS8)."""
+    """The Jira sync runner's lock and cursor behaviour."""
 
     @pytest.fixture
     def runner(self, metadata_db):
@@ -192,7 +193,7 @@ class TestJiraRunner:
             mock_vdb.side_effect = [issues_db, metadata_db]
 
             lock_store = MagicMock()
-            mock_lock_cls.return_value = lock_store
+            mock_lock_cls.return_value = with_real_lock_lifecycle(lock_store)
 
             state_store = MagicMock()
             metadata_db.close = AsyncMock()
@@ -249,7 +250,7 @@ class TestJiraRunner:
         issues_db.upsert_batch.assert_not_called()
 
     async def test_cursor_saved_as_run_start_minus_delay(self, runner):
-        """The WS8 fix: the saved cursor is the run's start time minus the overlap delay,
+        """The fix: the saved cursor is the run's start time minus the overlap delay,
         so an issue updated during the run is fetched by the next run."""
         runner_obj, _, lock_store, state_store = runner
         lock_store.mark_started = AsyncMock(return_value=True)
@@ -291,7 +292,7 @@ class TestJiraRunner:
 
     async def test_project_without_stored_issues_resets_cursor_and_legacy_watermark(self, runner, metadata_db):
         """The issues collection is shared: after another project's sync recreated it, this project's
-        cursor and legacy watermark must not survive and skip its unchanged issues (WS7 migration)."""
+        cursor and legacy watermark must not survive and skip its unchanged issues."""
         from common.models import ProjectMetadata
 
         runner_obj, issues_db, lock_store, state_store = runner

@@ -25,12 +25,6 @@ class TestCaseReviewSystemPrompt(PromptBase):
         return _get_prompts_root()
 
     def __init__(self, template_file_name: str = "main_prompt_template.md"):
-        """
-        Initializes the TestCaseReviewSystemPrompt instance.
-
-        Args:
-            template_file_name: The name of the prompt template file.
-        """
         super().__init__(template_file_name)
 
     def get_prompt(self) -> str:
@@ -48,12 +42,6 @@ class TestCaseReviewWithAttachmentsPrompt(PromptBase):
         return _get_prompts_root()
 
     def __init__(self, template_file_name: str = "review_with_attachments_prompt.md"):
-        """
-        Initializes the review with attachments prompt.
-
-        Args:
-            template_file_name: The name of the prompt template file.
-        """
         super().__init__(template_file_name)
 
     def get_prompt(self) -> str:
@@ -65,7 +53,7 @@ class TestCaseReviewWithAttachmentsPrompt(PromptBase):
 
 
 class TestCaseDuplicateJudgePrompt(PromptBase):
-    """Prompt for the sub-agent which judges the coverage overlap of duplicate candidates (WS17)."""
+    """Prompt for the sub-agent which judges the coverage overlap of duplicate candidates."""
 
     __test__ = False
 

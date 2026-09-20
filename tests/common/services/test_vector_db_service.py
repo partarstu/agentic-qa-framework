@@ -94,7 +94,7 @@ def test_init(mock_qdrant_client):
 
         from common.services.vector_db_service import AsyncQdrantClient
 
-        # port=None keeps the client from appending its own default port to QDRANT_URL (WS7);
+        # port=None keeps the client from appending its own default port to QDRANT_URL;
         # check_compatibility=False keeps its blocking server-version probe off the event loop.
         AsyncQdrantClient.assert_called_with(
             url="http://localhost", port=None, api_key="test_key", timeout=30.0, check_compatibility=False
@@ -102,7 +102,7 @@ def test_init(mock_qdrant_client):
 
 
 def test_the_sharepoint_collection_indexes_its_scope_fields(mock_qdrant_client):
-    """Every SharePoint query pins the source and may scope by drive and folder (WS18)."""
+    """Every SharePoint query pins the source and may scope by drive and folder."""
     import config
 
     service = VectorDbService(config.QdrantConfig.SHAREPOINT_COLLECTION_NAME)
@@ -160,7 +160,7 @@ async def test_ensure_collection_creates_named_dense_and_sparse_vectors(
 
 
 class TestSchemaValidation:
-    """WS19: an existing collection is checked against the active embedding mode once, at first use."""
+    """An existing collection is checked against the active embedding mode once, at first use."""
 
     async def test_an_existing_collection_matching_the_mode_passes(self, vector_db_service, mock_qdrant_client):
         _mock_collections_exist(mock_qdrant_client, "test_collection", exists=True)
@@ -506,7 +506,7 @@ async def test_retrieve_accepts_payload_selector(vector_db_service, mock_qdrant_
 
 
 class TestQdrantRetries:
-    """The WS19 retry helper: transport failures retry, gateway 5xx retry, 4xx untouched."""
+    """The retry helper: transport failures retry, gateway 5xx retry, 4xx untouched."""
 
     @pytest.mark.asyncio
     async def test_a_gateway_502_is_retried_and_then_succeeds(self, vector_db_service, monkeypatch):
@@ -580,7 +580,7 @@ class TestQdrantRetries:
 
 
 class TestEmbeddingStatusRetries:
-    """WS19: the embedding service retries 429/502/503/504 honouring Retry-After."""
+    """The embedding service retries 429/502/503/504 honouring Retry-After."""
 
     @pytest.mark.asyncio
     async def test_a_503_is_retried_and_then_succeeds(self, vector_db_service, monkeypatch):

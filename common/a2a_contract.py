@@ -2,12 +2,8 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
-"""
-Contract constants for A2A artifact names produced by this project's agents.
-
-External agents are not required to use these names; the orchestrator identifies
-their artifacts by MIME type (text/plain for logs) and TaskStatus.message for
-activity — both standard A2A mechanisms.
+"""Contract constants for the A2A artifact names this project's agents produce. External agents need not use them: the
+orchestrator identifies their artifacts by MIME type and TaskStatus.message, both standard A2A mechanisms.
 """
 
 

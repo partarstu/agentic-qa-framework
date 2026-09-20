@@ -46,3 +46,17 @@ import pytest  # noqa: E402
 
 # Add the project root to sys.path so that imports work correctly
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
+
+def with_real_lock_lifecycle(lock_store: MagicMock) -> MagicMock:
+    """Binds the real ``held_for_run`` to an otherwise mocked lock store.
+
+    The runners share that one lifecycle (verify-or-acquire, release on every exit), so a fully
+    mocked lock store would stop the sync tests from covering it at all.
+    """
+    from functools import partial
+
+    from common.services.sync_lock_store import SyncLockStore
+
+    lock_store.held_for_run = partial(SyncLockStore.held_for_run, lock_store)
+    return lock_store

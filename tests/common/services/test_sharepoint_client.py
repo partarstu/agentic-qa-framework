@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
-"""Unit tests for the Microsoft Graph client of the SharePoint ingestion (WS18)."""
+"""Unit tests for the Microsoft Graph client of the SharePoint ingestion."""
 
 from unittest.mock import patch
 

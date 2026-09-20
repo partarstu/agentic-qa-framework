@@ -25,7 +25,7 @@ class XrayClient(TestManagementClientBase):
     """
 
     def fetch_test_cases_by_project(self, project_key: str) -> list[ListedTestCase]:
-        """List every test case of the project with its current status (WS17 full resync).
+        """List every test case of the project with its current status (full resync).
 
         Xray offers no cheap "changed since" query, which is why the test-case sync is a full
         resync; the listing pages through one JQL query over the GraphQL API, 100 tests per page

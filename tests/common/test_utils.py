@@ -123,3 +123,31 @@ def test_render_log_text_renders_every_line_of_a_mixed_chunk():
     chunk = f"{_STRUCTURED_LINE}\nplain text line"
 
     assert utils.render_log_text(chunk) == "2026-05-04T10:33:56+00:00 - ui_agent - INFO - Step done\nplain text line"
+
+
+@pytest.mark.parametrize(
+    "pattern",
+    ["report", r"^spec.*\.pdf$", "(draft|final)", "a{2,4}b", "[*+]+", r"\(a+\)+"],
+)
+def test_compile_name_pattern_accepts_ordinary_patterns(pattern):
+    assert utils.compile_name_pattern(pattern).search is not None
+
+
+@pytest.mark.parametrize(
+    "pattern",
+    ["(a+)+", "(a+)+b", "((a*)*)", "(x(y+))+"],
+    ids=["plain", "with_suffix", "star_in_star", "quantifier_one_level_down"],
+)
+def test_compile_name_pattern_rejects_exponential_backtracking(pattern):
+    with pytest.raises(ValueError, match="nested repetition"):
+        utils.compile_name_pattern(pattern)
+
+
+def test_compile_name_pattern_rejects_an_over_long_pattern():
+    with pytest.raises(ValueError, match="character limit"):
+        utils.compile_name_pattern("a" * (utils.MAX_NAME_PATTERN_LENGTH + 1))
+
+
+def test_compile_name_pattern_rejects_an_uncompilable_pattern():
+    with pytest.raises(ValueError, match="Invalid name pattern"):
+        utils.compile_name_pattern("([unclosed")

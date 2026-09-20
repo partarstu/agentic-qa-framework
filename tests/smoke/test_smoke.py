@@ -10,32 +10,32 @@ boundary, read back from its ``/__recorded`` endpoint:
 
 * Requirements review   -> a non-empty comment reached Jira (REST or MCP) on the seeded story.
 * Requirements review   -> the agent first fetched the source story via the Jira MCP.
-* Requirements review   -> the story's attachment was downloaded over the Jira REST API (WS5),
+* Requirements review   -> the story's attachment was downloaded over the Jira REST API,
                            with the MCP download tool left unused.
 * Requirements review   -> the flow issued a documents-collection hybrid query with a focused
-                           (shorter than the issue) query text (WS10).
+                           (shorter than the issue) query text.
 * Requirements review   -> with JIRA_ADDITIONAL_FIELD_IDS configured, the agent requests those custom
                            field IDs (together with the standard content fields) when fetching the story.
 * Test-case generation  -> real test cases (name + steps) reached Zephyr.
 * Test-case generation  -> the created test cases were linked to the seeded story's numeric id.
 * Test-case classification -> labels reached Zephyr.
 * Requirements review   -> a Confluence-only configuration queries only the Confluence collection, with the
-                           source pinned (WS18); the agent's log lines carry its name and task id (WS23).
+                           source pinned; the agent's log lines carry its name and task id.
 * Test-case review      -> a non-empty "Review Comments" value reached Zephyr for every generated test case.
 * Test-case review      -> at least one test case reached the "Review Complete" status.
 * Test-case review      -> every review comment carries the duplicate-check section, after the batch was
-                           indexed and searched per test case within its project (WS17); the usage
-                           artifact carries per-operation counters (WS13).
+                           indexed and searched per test case within its project; the usage
+                           artifact carries per-operation counters.
 * Test execution        -> a failed automated test drove a real Bug issue into the seeded project.
 * Test execution        -> a failed execution for the seeded case was reported to Zephyr with UTC
                            execution dates, and the created bug was linked to that execution.
 * Test execution        -> the incident-creation flow consulted the vector DB for duplicates, filtered on the
-                           project (WS16).
+                           project.
 * Test execution        -> the typed ("api") test case reached the execution agent and the untyped one was
-                           skipped (WS15); /execute-test reported one result to Zephyr and created no bug.
-* RAG DB update         -> the sync pushed the seeded story into the vector DB, and a Closed issue too (WS18).
+                           skipped; /execute-test reported one result to Zephyr and created no bug.
+* RAG DB update         -> the sync pushed the seeded story into the vector DB, and a Closed issue too.
 * Dashboard             -> the login is rate limited (429), and the task history survives an orchestrator
-                           restart (WS22, WS24; the restart check runs last).
+                           restart (the restart check runs last).
 * Agent traceability    -> the version an agent is started with reaches the dashboard agents view,
                            the orchestrator's own version reaches the dashboard status view, and the
                            executing agent's name, version and environment reach the created bug.
@@ -180,7 +180,7 @@ def test_agents_requested_the_configured_additional_fields(
 def test_agent_downloaded_the_story_attachment_over_rest(
     requirements_review_response: httpx.Response, http_client: httpx.Client
 ) -> None:
-    """WS5: the attachment must be downloaded from the Jira REST API by the review flow,
+    """The attachment must be downloaded from the Jira REST API by the review flow,
     not handed through MCP tool-result messages."""
     data = wait_for_recorded(
         http_client,
@@ -192,7 +192,7 @@ def test_agent_downloaded_the_story_attachment_over_rest(
         f"The review flow never downloaded the story's attachment over REST. Downloaded: {downloaded}"
     )
     # The MCP download tool stays advertised by the mock, so the per-agent tool filtering
-    # (WS11) is what keeps the flow on the REST path.
+    # is what keeps the flow on the REST path.
     mcp = http_client.get(JIRA_MCP_RECORDED_URL).json()
     assert not mcp.get("download_attachments"), (
         f"The MCP download_attachments tool was still used: {mcp.get('download_attachments')}"
@@ -202,7 +202,7 @@ def test_agent_downloaded_the_story_attachment_over_rest(
 def test_review_flow_issued_a_documents_hybrid_query_with_a_focused_query_text(
     requirements_review_response: httpx.Response, http_client: httpx.Client
 ) -> None:
-    """WS10: with retrieval enabled, the review flow must run a hybrid (dense + sparse)
+    """With retrieval enabled, the review flow must run a hybrid (dense + sparse)
     query against the documents collection, embedding a focused query text that is
     shorter than the issue content itself."""
     data = wait_for_recorded(
@@ -230,7 +230,7 @@ def test_review_flow_issued_a_documents_hybrid_query_with_a_focused_query_text(
 def test_confluence_only_configuration_queries_exactly_one_document_collection(
     requirements_review_response: httpx.Response, http_client: httpx.Client
 ) -> None:
-    """WS18: with only Confluence retrieval enabled, every document query goes to the Confluence
+    """With only Confluence retrieval enabled, every document query goes to the Confluence
     collection with the pinned source discriminator, and the SharePoint collection is never queried."""
     data = wait_for_recorded(
         http_client,
@@ -256,7 +256,7 @@ def _completed_tasks_of(http_client: httpx.Client, auth_headers: dict[str, str],
 def test_agent_log_lines_carry_agent_name_and_task_id(
     requirements_review_response: httpx.Response, http_client: httpx.Client, auth_headers: dict[str, str]
 ) -> None:
-    """WS23: the agent stamps its own name and task id on every log line of a run, and the
+    """The agent stamps its own name and task id on every log line of a run, and the
     dashboard reads them from the structured records."""
     agent_name = config.RequirementsReviewAgentConfig.OWN_NAME
     tasks = _completed_tasks_of(http_client, auth_headers, agent_name)
@@ -277,7 +277,7 @@ def test_agent_log_lines_carry_agent_name_and_task_id(
 def test_usage_artifact_carries_per_operation_counters(
     test_case_flow_response: httpx.Response, http_client: httpx.Client, auth_headers: dict[str, str]
 ) -> None:
-    """WS13: the review task's usage artifact breaks the tokens down per operation (the main agent
+    """The review task's usage artifact breaks the tokens down per operation (the main agent
     and its review sub-agent) with the cached/uncached split, and its totals include every operation."""
     tasks = _completed_tasks_of(http_client, auth_headers, config.TestCaseReviewAgentConfig.OWN_NAME)
     assert tasks, "No completed test-case review task is listed on the dashboard."
@@ -384,7 +384,7 @@ def test_review_set_status_to_review_complete(
 def test_review_comment_carries_the_duplicate_check(
     test_case_flow_response: httpx.Response, http_client: httpx.Client
 ) -> None:
-    """WS17: every review comment written to Zephyr ends with the duplicate-check section
+    """Every review comment written to Zephyr ends with the duplicate-check section
     rendered in code, whatever the judge decided."""
     data = wait_for_recorded(
         http_client,
@@ -405,7 +405,7 @@ def test_review_comment_carries_the_duplicate_check(
 def test_review_indexed_its_batch_and_searched_the_project_for_duplicates(
     test_case_flow_response: httpx.Response, http_client: httpx.Client
 ) -> None:
-    """WS17: the review indexes the reviewed test cases and runs one project-scoped duplicate
+    """The review indexes the reviewed test cases and runs one project-scoped duplicate
     search per test case which excludes the test case itself."""
     zephyr = wait_for_recorded(http_client, ZEPHYR_RECORDED_URL, lambda d: bool(d.get("test_cases")))
     generated_keys = {tc["key"] for tc in zephyr.get("test_cases", [])}
@@ -491,7 +491,7 @@ def test_created_bug_carries_execution_traceability(
 
 def test_failed_execution_reported_to_zephyr(execute_tests_response: httpx.Response, http_client: httpx.Client) -> None:
     """The reporting half of /execute-tests: a failed execution of the seeded case must reach
-    Zephyr, inside a test cycle created for the seeded project, and no reporting step failed (WS15)."""
+    Zephyr, inside a test cycle created for the seeded project, and no reporting step failed."""
     assert execute_tests_response.json().get("reporting_failures") == [], execute_tests_response.json()
     data = wait_for_recorded(
         http_client,
@@ -561,7 +561,7 @@ def test_incident_creation_consulted_vector_db(
 def test_incident_duplicate_query_is_scoped_to_the_project(
     execute_tests_response: httpx.Response, http_client: httpx.Client
 ) -> None:
-    """WS16: the incident duplicate search filters on the project key it was given, on every branch."""
+    """The incident duplicate search filters on the project key it was given, on every branch."""
     data = wait_for_recorded(
         http_client,
         QDRANT_RECORDED_URL,
@@ -586,7 +586,7 @@ def _dashboard_tasks(http_client: httpx.Client, auth_headers: dict[str, str]) ->
 def test_typed_label_group_reached_the_execution_agent(
     execute_tests_response: httpx.Response, http_client: httpx.Client, auth_headers: dict[str, str]
 ) -> None:
-    """WS15: the test case carrying a recognized test-type label is dispatched to the execution
+    """The test case carrying a recognized test-type label is dispatched to the execution
     agent as a group of that type."""
     expected = f"Execution of test case {SEEDED_EXECUTABLE_TC_KEY} (type: {SEEDED_EXECUTABLE_TC_TYPE_LABEL})"
     dispatched = [t for t in _dashboard_tasks(http_client, auth_headers) if t.get("description") == expected]
@@ -597,7 +597,7 @@ def test_typed_label_group_reached_the_execution_agent(
 def test_untyped_test_case_is_skipped(
     execute_tests_response: httpx.Response, http_client: httpx.Client, auth_headers: dict[str, str]
 ) -> None:
-    """WS15: an automated test case without a recognized test-type label is skipped with a warning
+    """An automated test case without a recognized test-type label is skipped with a warning
     naming it, and never reaches an execution agent."""
     tasks = _dashboard_tasks(http_client, auth_headers)
     assert not [t for t in tasks if SEEDED_UNTYPED_TC_KEY in (t.get("description") or "")], tasks
@@ -615,7 +615,7 @@ def test_manual_execution_reaches_zephyr_without_creating_a_bug(
     auth_headers: dict[str, str],
     webhook_headers: dict[str, str],
 ) -> None:
-    """WS15: /execute-test runs one test case on the explicitly chosen agent, uploads its result to
+    """/execute-test runs one test case on the explicitly chosen agent, uploads its result to
     Zephyr and never requests incident creation."""
     agents = http_client.get(f"{ORCHESTRATOR_URL}/api/dashboard/agents", headers=auth_headers).json()
     agent_id = next(agent["id"] for agent in agents if agent.get("name") == EXECUTION_AGENT_NAME)
@@ -642,7 +642,7 @@ def test_manual_execution_reaches_zephyr_without_creating_a_bug(
     assert len(created_issues) == bugs_before, f"The manual run created an issue in Jira: {created_issues}"
 
 
-# --- RAG vector DB update flow (WS8: local mode via the sync service) ---------------------
+# --- RAG vector DB update flow (local mode via the sync service) -----------------------
 
 
 def test_update_jira_db_webhook_accepted(update_jira_db_response: httpx.Response) -> None:
@@ -688,7 +688,7 @@ def test_rag_sync_upserted_seeded_story_into_vector_db(
     assert TICKETS_COLLECTION_NAME in data.get("created_collections", []), (
         f"The tickets collection was never created. Recorded: {data}"
     )
-    # WS7: the collection is created with the hybrid schema and the story carries both named vectors.
+    # The collection is created with the hybrid schema and the story carries both named vectors.
     schema = data.get("collection_schemas", {}).get(TICKETS_COLLECTION_NAME, {})
     assert schema.get("vectors") == ["dense"] and schema.get("sparse_vectors") == ["sparse"], (
         f"The tickets collection lacks the named dense + sparse vector schema: {schema}"
@@ -701,7 +701,7 @@ def test_rag_sync_upserted_seeded_story_into_vector_db(
 def test_rag_sync_upserted_an_issue_in_a_previously_excluded_status(
     update_jira_db_response: httpx.Response, http_client: httpx.Client
 ) -> None:
-    """WS18: the Jira sync ingests every issue whatever its workflow status, e.g. a Closed bug."""
+    """The Jira sync ingests every issue whatever its workflow status, e.g. a Closed bug."""
     data = wait_for_recorded(
         http_client,
         QDRANT_RECORDED_URL,
@@ -720,7 +720,7 @@ def test_rag_sync_upserted_an_issue_in_a_previously_excluded_status(
     assert payloads[0].get("status") == "Closed", payloads[0]
 
 
-# --- Confluence documents ingestion (WS9: local mode via the sync service) ----------------
+# --- Confluence documents ingestion (local mode via the sync service) ------------------
 
 
 def test_update_confluence_db_webhook_accepted(update_confluence_db_response: httpx.Response) -> None:
@@ -963,7 +963,7 @@ def test_dashboard_reports_the_configured_agent_version(
 def test_manual_discovery_reports_reachable_and_removed_agents(
     all_agents_ready: None, http_client: httpx.Client, auth_headers: dict[str, str]
 ) -> None:
-    """WS14: the manual discovery run re-probes every registered agent and returns its summary; with
+    """The manual discovery run re-probes every registered agent and returns its summary; with
     every agent up, all of them are reachable and none is removed."""
     response = http_client.post(f"{ORCHESTRATOR_URL}/api/dashboard/discovery", headers=auth_headers)
     assert response.status_code == 200, f"Manual discovery failed: {response.status_code} {response.text}"
@@ -988,7 +988,7 @@ def test_dashboard_reports_the_configured_orchestrator_version(
 def test_login_is_rate_limited_after_the_configured_attempts(
     http_client: httpx.Client, auth_headers: dict[str, str]
 ) -> None:
-    """WS22: the login endpoint answers 429 with Retry-After once a client exceeds the configured
+    """The login endpoint answers 429 with Retry-After once a client exceeds the configured
     attempts in the window. Requests auth_headers first, so the session's own login is not blocked."""
     responses = [
         http_client.post(f"{ORCHESTRATOR_URL}/api/auth/login", json={"username": "smoke", "password": "wrong-password"})
@@ -1032,7 +1032,7 @@ def test_routing_justifications_appear_in_dashboard_logs(
     assert justified, f"The routing decision log entries carry no justification or agent name. Entries: {decisions[:5]}"
 
 
-# --- SharePoint documents ingestion (WS18: local mode via the sync service) --------------
+# --- SharePoint documents ingestion (local mode via the sync service) ----------------
 
 SHAREPOINT_COLLECTION_NAME = "sharepoint_documents"
 SHAREPOINT_DRIVE_ID = "drive-smoke"
@@ -1131,7 +1131,7 @@ def test_a_delta_link_on_another_origin_is_never_requested_with_the_graph_token(
     )
 
 
-# --- Test-case index sync (WS17: local mode via the sync service) ------------------------
+# --- Test-case index sync (local mode via the sync service) --------------------------
 
 
 def test_update_test_case_db_webhook_accepted(update_test_case_db_response: httpx.Response) -> None:
@@ -1190,7 +1190,7 @@ def test_concurrent_test_case_sync_yields_exactly_one_409(
     )
 
 
-# --- Durable dashboard state (WS24). Kept last: it restarts the orchestrator. -------------
+# --- Durable dashboard state. Kept last: it restarts the orchestrator. -------------
 
 ORCHESTRATOR_RESTART_TIMEOUT = 180.0
 

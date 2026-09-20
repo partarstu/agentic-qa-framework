@@ -132,7 +132,7 @@ async def create_collection(name: str, request: Request) -> dict:
 
 @app.get("/collections/{name}")
 async def get_collection(name: str) -> dict:
-    """Describe a collection with the vector configuration it was created with (WS19 schema validation)."""
+    """Describe a collection with the vector configuration it was created with (schema validation)."""
     if name not in _collections:
         raise HTTPException(status_code=404, detail=f"Collection `{name}` doesn't exist!")
     info = {

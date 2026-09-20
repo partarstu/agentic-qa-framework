@@ -8,9 +8,9 @@ Every agent run gets its own MCP session instead of sharing one process-wide con
 session that goes stale between requests cannot break the next one. Within a run, a recoverable
 transport failure is repaired by retrying the failed operation once on a fresh, isolated session
 owned by the retrying task: the shared session is left untouched, so a retry can never destroy
-(or fail to recreate) a session a concurrent tool call still owns (WS21).
+(or fail to recreate) a session a concurrent tool call still owns.
 
-Each agent passes the allowlist of tool names it actually uses (WS11): the combined server
+Each agent passes the allowlist of tool names it actually uses: the combined server
 advertises Jira and Confluence tools alike, but no agent receives Confluence (or Jira) tools it
 wasn't built for.
 """
@@ -100,7 +100,7 @@ class SelfHealingAtlassianToolset(WrapperToolset[AgentDepsT]):
     untouched. The retry owns a session of its own, so the session shared with concurrent tool
     calls is never torn down or re-entered in place. Set-up and tear-down of the isolated session
     run inside a bounded, cancellation-shielded scope: an interrupted set-up cannot hang, and a
-    slow tear-down is logged instead of masking the operation's result or error (WS21).
+    slow tear-down is logged instead of masking the operation's result or error.
 
     When ``allowed_tools`` is set, tool discovery is filtered down to that allowlist, so each
     agent only ever sees the tools it was built to use.
@@ -148,7 +148,7 @@ class SelfHealingAtlassianToolset(WrapperToolset[AgentDepsT]):
     async def _retry_on_isolated_session(
         self, operation: str, run: Callable[[MCPServerStreamableHTTP], Awaitable[Any]]
     ) -> Any:
-        """Retry ``run`` against a fresh session owned by this task (WS21)."""
+        """Retry ``run`` against a fresh session owned by this task."""
         # A cancelled task stops here instead of firing another request.
         await anyio.lowlevel.checkpoint()
         logger.warning("Atlassian MCP session broke while serving %s; retrying on a fresh session.", operation)
@@ -181,12 +181,7 @@ def build_atlassian_mcp_server() -> MCPServerStreamableHTTP:
 
 
 def build_atlassian_mcp_server_toolset(allowed_tools: Iterable[str] | None = None) -> AbstractToolset:
-    """Create a fresh, self-healing Atlassian MCP toolset for a single agent run.
-
-    Args:
-        allowed_tools: Optional tool names the agent may use; every other advertised
-            tool is filtered out of its tool discovery. None keeps every tool.
-    """
+    """Create a fresh, self-healing Atlassian MCP toolset for a single agent run."""
     return SelfHealingAtlassianToolset(
         build_atlassian_mcp_server(),
         allowed_tools=frozenset(allowed_tools) if allowed_tools is not None else None,

@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
-"""Normalization of Confluence storage-format page bodies into markdown (WS9).
+"""Normalization of Confluence storage-format page bodies into markdown.
 
 The storage format is deterministic, so one fetch serves both content hashing and
 normalization. Content-bearing structure is kept as markdown (headings, paragraphs,

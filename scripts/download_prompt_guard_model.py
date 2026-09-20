@@ -2,11 +2,8 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
-"""
-Script to download the prompt injection detection model.
-
-This script downloads the prompt injection detection model and saves it locally
-to avoid downloading it every time the service is initialized.
+"""Downloads the prompt injection detection model and saves it locally, so the service does not fetch it on every
+initialisation.
 """
 
 import os

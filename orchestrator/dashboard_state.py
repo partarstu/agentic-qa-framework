@@ -57,6 +57,9 @@ class DashboardStateStore:
         item = (kind, {**payload, "kind": kind, "stored_at": datetime.now(UTC).isoformat()})
         if self._queue.full():
             self._queue.get_nowait()
+            # The dropped record is never written, so its unfinished-task count has to be settled
+            # here; leaving it open would make the queue's own bookkeeping drift for good.
+            self._queue.task_done()
             logger.warning("Dashboard persistence queue full; dropped oldest record.")
         self._queue.put_nowait(item)
 
@@ -72,11 +75,7 @@ class DashboardStateStore:
 
     async def rehydrate(self) -> bool:
         """Restore the persisted state within the retention windows, merged chronologically with the state
-        this process already has. A task still RUNNING was interrupted by the restart: it is marked FAILED
-        and persisted, so the running count stays honest.
-
-        Returns:
-            False when the store could not be read; the maintenance loop then retries.
+        this process already has, True on success.
         """
         try:
             records = await self._service.scroll_payload_records({})
@@ -142,6 +141,8 @@ class DashboardStateStore:
             except (KeyError, TypeError, ValueError):
                 logger.warning("Ignoring a malformed persisted %s record.", kind)
 
+        # A task still RUNNING was interrupted by the restart, so it is marked FAILED and persisted and the
+        # running count stays honest.
         for task in tasks:
             if task.status == TaskStatus.RUNNING:
                 task.status = TaskStatus.FAILED
@@ -221,12 +222,10 @@ def _retention_cutoffs() -> dict[str, datetime]:
 
 
 def _is_expired(stored_at: object, cutoff: datetime) -> bool:
-    """Whether a record's ``stored_at`` is older than its kind's cutoff.
-
-    Compared as datetimes: the stored values are a mix of naive (pre-WS23) and aware ISO
-    strings, so comparing the strings would drop a record whose only difference from the
-    cutoff is the missing offset suffix. An unreadable timestamp counts as expired.
-    """
+    """Whether a record's ``stored_at`` is older than its kind's cutoff."""
+    # Compared as datetimes because the stored values mix naive and aware ISO strings: comparing the
+    # strings would drop a record whose only difference from the cutoff is the missing offset suffix.
+    # An unreadable timestamp counts as expired.
     try:
         return _utc(str(stored_at)) < cutoff
     except ValueError:
@@ -234,7 +233,7 @@ def _is_expired(stored_at: object, cutoff: datetime) -> bool:
 
 
 def _utc(value: str) -> datetime:
-    """A persisted timestamp as an aware UTC datetime; records written before WS23 carry naive ones."""
+    """A persisted timestamp as an aware UTC datetime, since older records carry naive ones."""
     parsed = datetime.fromisoformat(value)
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
 

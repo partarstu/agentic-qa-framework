@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
-"""Scope locks and sync state stored in the Qdrant metadata collection (WS8).
+"""Scope locks and sync state stored in the Qdrant metadata collection.
 
 One running sync per scope: ``jira:<project>`` or ``confluence:<space>``. There is no
 atomic conditional write in Qdrant; the store relies on the orchestrator running as a
@@ -12,6 +12,8 @@ TTL being longer than the job's task timeout.
 
 import secrets
 import time
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -118,6 +120,35 @@ class SyncLockStore:
         await self._metadata_db.delete_payload_record(_record_id(LOCK_RECORD_KIND, scope))
         return True
 
+    @asynccontextmanager
+    async def held_for_run(self, scope: str, lock_token: str | None) -> AsyncIterator[str]:
+        """Holds a scope lock for the duration of one sync run, releasing it on every exit path.
+
+        An orchestrator-started runner passes the token it was issued and confirms it still holds the
+        lock; a tokenless runner (a manual CLI run or a direct call to the local service) acquires it.
+
+        Yields:
+            The holder token the run must verify before each of its writes.
+
+        Raises:
+            PermissionError: When the passed token no longer holds the lock.
+            SyncLockHeldError: When a tokenless runner cannot acquire the lock.
+        """
+        if lock_token:
+            if not await self.mark_started(scope, lock_token):
+                logger.warning("Runner no longer holds the lock for %s; aborting without writes.", scope)
+                raise PermissionError(f"Lock for scope {scope} was taken over before the run started.")
+        else:
+            state = await self.acquire(scope)
+            if not state.acquired:
+                raise SyncLockHeldError(f"Another sync already holds the lock for {scope}.")
+            lock_token = state.lock_info["holder_token"]
+        try:
+            yield lock_token
+        finally:
+            if not await self.release(scope, lock_token):
+                logger.warning("Lock for %s was not released by this runner; it was taken over.", scope)
+
     async def read(self, scope: str) -> dict | None:
         """The scope's lock record, or None when no lock is stored.
 
@@ -131,7 +162,7 @@ class SyncStateStore:
 
     The cursor is written only when a run finishes without item failures. Jira uses it
     for incremental fetching; Confluence records it but decides skips on version
-    numbers and content hashes (WS9).
+    numbers and content hashes.
     """
 
     def __init__(self, metadata_db: VectorDbService):

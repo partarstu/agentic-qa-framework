@@ -27,16 +27,7 @@ class PromptGuard(ABC):
 
     @abstractmethod
     def is_injection(self, prompt: GuardPrompt, threshold: float) -> bool:
-        """
-        Checks if a prompt is a prompt injection attempt.
-
-        Args:
-            prompt: The prompt to check.
-            threshold: The minimum score for a prompt to be considered an injection.
-
-        Returns:
-            True if the prompt is a prompt injection attempt, False otherwise.
-        """
+        """Checks if a prompt is a prompt injection attempt."""
         pass
 
 
@@ -63,16 +54,7 @@ class ProtectAiPromptGuard(PromptGuard):
         pass
 
     def is_injection(self, prompt: GuardPrompt, threshold: float) -> bool:
-        """
-        Checks if a prompt is a prompt injection attempt by calling the remote service.
-
-        Args:
-            prompt: The prompt to check.
-            threshold: The minimum score for a prompt to be considered an injection.
-
-        Returns:
-            True if the prompt is a prompt injection attempt, False otherwise.
-        """
+        """Checks if a prompt is a prompt injection attempt by calling the remote service."""
         if not isinstance(prompt, GuardPrompt):
             raise TypeError(f"Prompt must be a GuardPrompt, got {type(prompt)}")
 
@@ -106,15 +88,7 @@ class PromptGuardFactory:
 
     @staticmethod
     def get_prompt_guard(provider_name: str) -> PromptGuard:
-        """
-        Creates a prompt guard instance based on the provider name.
-
-        Args:
-            provider_name: The name of the prompt guard provider.
-
-        Returns:
-            An instance of a prompt guard.
-        """
+        """Creates a prompt guard instance based on the provider name."""
         if provider_name == "protect_ai":
             return ProtectAiPromptGuard.get_instance()
         else:

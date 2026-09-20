@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
-"""Shared Jira REST client factory (WS5).
+"""Shared Jira REST client factory.
 
 Every component that talks to the Jira REST API validates the same settings and
 builds its client the same way; the factory keeps that in one place.
