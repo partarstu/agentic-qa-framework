@@ -185,17 +185,25 @@ class TestJudgeComparison:
         comparison = _comparison(verdict, verdict)
         assert comparison.outcome == verdict
         assert not comparison.regressed
+        assert not comparison.degraded
 
-    @pytest.mark.parametrize("verdict", ["worse", "much_worse"])
-    def test_a_candidate_judged_worse_in_both_orders_regresses(self, verdict):
-        comparison = _comparison(verdict, verdict)
-        assert comparison.outcome == verdict
+    def test_a_candidate_judged_much_worse_in_both_orders_regresses(self):
+        comparison = _comparison("much_worse", "much_worse")
+        assert comparison.outcome == "much_worse"
         assert comparison.regressed
+        assert not comparison.degraded
 
-    def test_two_degrees_of_worse_combine_to_the_milder_and_regress(self):
+    def test_a_candidate_judged_worse_in_both_orders_only_degrades(self):
+        comparison = _comparison("worse", "worse")
+        assert comparison.outcome == "worse"
+        assert comparison.degraded
+        assert not comparison.regressed
+
+    def test_two_degrees_of_worse_combine_to_the_milder_and_only_degrade(self):
         comparison = _comparison("much_worse", "worse")
         assert comparison.outcome == "worse"
-        assert comparison.regressed
+        assert comparison.degraded
+        assert not comparison.regressed
 
     def test_two_degrees_of_better_combine_to_the_milder(self):
         assert _comparison("better", "much_better").outcome == "better"
@@ -207,3 +215,4 @@ class TestJudgeComparison:
         comparison = _comparison(forward, swapped)
         assert comparison.outcome == "inconsistent"
         assert not comparison.regressed
+        assert not comparison.degraded

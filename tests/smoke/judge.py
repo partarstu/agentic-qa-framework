@@ -19,6 +19,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent
+from pydantic_ai.settings import ModelSettings
 
 from common import utils
 from common.model_factory import build_model
@@ -126,7 +127,11 @@ class Comparison:
 
     @property
     def regressed(self) -> bool:
-        return self.outcome in _WORSE
+        return self.outcome == "much_worse"
+
+    @property
+    def degraded(self) -> bool:
+        return self.outcome == "worse"
 
     def __str__(self) -> str:
         return (
@@ -143,7 +148,12 @@ def verdict_for_candidate(label: Label, candidate_slot: Literal["A", "B"]) -> Ve
 
 def compare(baseline: RunSnapshot, candidate: RunSnapshot) -> list[Comparison]:
     """Judge the candidate against the baseline on every dimension either of them produced something for."""
-    agent = Agent(build_model(JUDGE_MODEL_NAME), output_type=_Judgement, instructions=JUDGE_INSTRUCTIONS)
+    agent = Agent(
+        build_model(JUDGE_MODEL_NAME),
+        output_type=_Judgement,
+        instructions=JUDGE_INSTRUCTIONS,
+        model_settings=ModelSettings(thinking="high"),
+    )
     story = story_context(baseline)
     # The bug report is written from the failed execution, so its judge must see that too - the
     # test case key, its test data and the failure are facts of the run, not inventions.

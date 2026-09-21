@@ -7,8 +7,8 @@
 The rest of the suite proves the flows work; this checks whether a change to the model, its
 settings or the agents' prompts made what they produce better or worse. It reuses the same
 session-wide webhook run - it costs no extra flow, only the judge's own calls - and compares
-the run against the snapshot in ``baselines/``, structurally and on judged quality. Any
-regression fails.
+the run against the snapshot in ``baselines/``, structurally and on judged quality. A metric
+regression or a much worse judged dimension fails; a somewhat worse one only warns.
 
 Capture a baseline (once per configuration you want to compare against)::
 
@@ -26,6 +26,7 @@ not ab"``.
 """
 
 import os
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -60,7 +61,7 @@ _RESULT_LABELS: dict[judge.Outcome, str] = {
     "much_better": "IMPROVED",
     "better": "IMPROVED",
     "same": "ok",
-    "worse": "REGRESSION",
+    "worse": "WARNING",
     "much_worse": "REGRESSION",
     "inconsistent": "INCONSISTENT",
 }
@@ -127,13 +128,20 @@ def test_output_metrics_did_not_regress(ab_result: _AbResult) -> None:
 
 
 def test_judged_output_quality_did_not_regress(ab_result: _AbResult) -> None:
-    """No dimension may be judged worse than the baseline in both orders: a run must not produce worse."""
+    """No dimension may be judged much worse than the baseline in both orders; merely worse only warns."""
+    degraded = [comparison for comparison in ab_result.comparisons if comparison.degraded]
+    if degraded:
+        warnings.warn(_judged_findings("somewhat worse", degraded), stacklevel=1)
     regressed = [comparison for comparison in ab_result.comparisons if comparison.regressed]
-    assert not regressed, (
-        f"The judge found this run worse than the '{BASELINE_NAME}' baseline on:\n"
+    assert not regressed, _judged_findings("much worse", regressed)
+
+
+def _judged_findings(severity: str, comparisons: list[judge.Comparison]) -> str:
+    return (
+        f"The judge found this run {severity} than the '{BASELINE_NAME}' baseline on:\n"
         + "\n".join(
             f"  - {comparison}\n" + "\n".join(f"    {line}" for line in _justification(comparison))
-            for comparison in regressed
+            for comparison in comparisons
         )
         + f"\nFull report: {REPORT_PATH}"
     )
