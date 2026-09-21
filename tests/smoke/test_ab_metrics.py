@@ -10,8 +10,10 @@ with the ordinary test suite.
 
 import pytest
 
+from tests.smoke.ab_report import AbResult, render_html
 from tests.smoke.artifacts import (
     METRIC_TOLERANCE,
+    MetricRegression,
     RunSnapshot,
     _review_comments,
     compute_metrics,
@@ -216,3 +218,31 @@ class TestJudgeComparison:
         assert comparison.outcome == "inconsistent"
         assert not comparison.regressed
         assert not comparison.degraded
+
+
+def _ab_result(comparisons: list[Comparison], metric_regressions: list[MetricRegression] | None = None) -> AbResult:
+    metrics = {"test_case_generation": {"test_cases": 5.0}}
+    return AbResult(metrics, metrics, metric_regressions or [], comparisons)
+
+
+class TestHtmlReport:
+    def test_the_judge_rationale_is_escaped_and_keeps_its_bold_emphasis(self):
+        comparison = Comparison("test_case_generation", "same", "same", "**Coverage** <script>x</script>", "")
+        html = render_html("default", _snapshot(), _snapshot(), _ab_result([comparison]))
+        assert "<strong>Coverage</strong> &lt;script&gt;x&lt;/script&gt;" in html
+        assert "<script>" not in html
+
+    @pytest.mark.parametrize(
+        ("verdict", "metric_regressions", "status"),
+        [
+            ("same", [], "PASSED"),
+            ("worse", [], "PASSED WITH WARNINGS"),
+            ("much_worse", [], "FAILED"),
+            ("same", [MetricRegression("test_case_generation", "test_cases", 5.0, 1.0)], "FAILED"),
+        ],
+    )
+    def test_the_overall_status_follows_the_gate(self, verdict, metric_regressions, status):
+        html = render_html(
+            "default", _snapshot(), _snapshot(), _ab_result([_comparison(verdict, verdict)], metric_regressions)
+        )
+        assert f'big">{status}</span>' in html

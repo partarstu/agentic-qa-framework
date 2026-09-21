@@ -27,7 +27,6 @@ not ab"``.
 
 import os
 import warnings
-from dataclasses import dataclass
 from pathlib import Path
 
 import httpx
@@ -35,9 +34,9 @@ import pytest
 
 import config
 from tests.smoke import judge
+from tests.smoke.ab_report import AbResult, render_html
 from tests.smoke.artifacts import (
     METRIC_TOLERANCE,
-    MetricRegression,
     RunSnapshot,
     collect_snapshot,
     compute_metrics,
@@ -54,27 +53,8 @@ WRITE_BASELINE = os.environ.get("SMOKE_WRITE_BASELINE", "").lower() in ("true", 
 # What this run is called in the report. The default is the model docker-compose.smoke.yml configures
 # for the stack; name the run explicitly when the two differ.
 RUN_LABEL = os.environ.get("SMOKE_RUN_LABEL", "google-gla:gemini-3.8-flash")
-REPORT_PATH = Path(config.LOG_DIR) / "smoke_ab_report.md"
+REPORT_PATH = Path(config.LOG_DIR) / "smoke_ab_report.html"
 CAPTURE_HINT = f"SMOKE_WRITE_BASELINE=1 SMOKE_BASELINE_NAME={BASELINE_NAME} uv run pytest tests/smoke -m smoke"
-# How a dimension's judged outcome reads in the report.
-_RESULT_LABELS: dict[judge.Outcome, str] = {
-    "much_better": "IMPROVED",
-    "better": "IMPROVED",
-    "same": "ok",
-    "worse": "WARNING",
-    "much_worse": "REGRESSION",
-    "inconsistent": "INCONSISTENT",
-}
-
-
-@dataclass(slots=True)
-class _AbResult:
-    """The full comparison of the candidate run against the baseline."""
-
-    baseline_metrics: dict[str, dict[str, float]]
-    candidate_metrics: dict[str, dict[str, float]]
-    metric_regressions: list[MetricRegression]
-    comparisons: list[judge.Comparison]
 
 
 @pytest.fixture(scope="session")
@@ -93,11 +73,11 @@ def baseline_snapshot() -> RunSnapshot:
 
 
 @pytest.fixture(scope="session")
-def ab_result(baseline_snapshot: RunSnapshot, candidate_snapshot: RunSnapshot, judge_google_api_key: None) -> _AbResult:
+def ab_result(baseline_snapshot: RunSnapshot, candidate_snapshot: RunSnapshot, judge_google_api_key: None) -> AbResult:
     """Compare the run against the baseline once: the judging costs real model calls."""
     baseline_metrics = compute_metrics(baseline_snapshot)
     candidate_metrics = compute_metrics(candidate_snapshot)
-    result = _AbResult(
+    result = AbResult(
         baseline_metrics=baseline_metrics,
         candidate_metrics=candidate_metrics,
         metric_regressions=find_metric_regressions(baseline_metrics, candidate_metrics),
@@ -117,7 +97,7 @@ def test_baseline_snapshot_written(candidate_snapshot: RunSnapshot) -> None:
     save_snapshot(BASELINE_PATH, candidate_snapshot)
 
 
-def test_output_metrics_did_not_regress(ab_result: _AbResult) -> None:
+def test_output_metrics_did_not_regress(ab_result: AbResult) -> None:
     """No structural metric may fall below its baseline value: a run must not produce less."""
     assert not ab_result.metric_regressions, (
         f"This run produced less than the '{BASELINE_NAME}' baseline, beyond the "
@@ -127,7 +107,7 @@ def test_output_metrics_did_not_regress(ab_result: _AbResult) -> None:
     )
 
 
-def test_judged_output_quality_did_not_regress(ab_result: _AbResult) -> None:
+def test_judged_output_quality_did_not_regress(ab_result: AbResult) -> None:
     """No dimension may be judged much worse than the baseline in both orders; merely worse only warns."""
     degraded = [comparison for comparison in ab_result.comparisons if comparison.degraded]
     if degraded:
@@ -155,43 +135,7 @@ def _justification(comparison: judge.Comparison) -> list[str]:
     ]
 
 
-def _write_report(baseline: RunSnapshot, candidate: RunSnapshot, result: _AbResult) -> None:
+def _write_report(baseline: RunSnapshot, candidate: RunSnapshot, result: AbResult) -> None:
     """Write the whole comparison out, so a verdict can be read without re-running the suite."""
-    lines = [
-        "# Smoke A/B report",
-        "",
-        f"* Baseline: `{BASELINE_NAME}` - {baseline.label}, captured {baseline.captured_at}",
-        f"* Candidate: {candidate.label}, captured {candidate.captured_at}",
-        f"* Judge: {judge.JUDGE_MODEL_NAME}",
-        "",
-        "## Metrics",
-        "",
-        "| Dimension | Metric | Baseline | Candidate | Delta |",
-        "| --- | --- | --- | --- | --- |",
-    ]
-    for dimension, metrics in result.baseline_metrics.items():
-        for metric, baseline_value in metrics.items():
-            candidate_value = result.candidate_metrics[dimension][metric]
-            lines.append(
-                f"| {dimension} | {metric} | {baseline_value:.2f} | {candidate_value:.2f} "
-                f"| {candidate_value - baseline_value:+.2f} |"
-            )
-    lines += [
-        "",
-        "## Judged quality",
-        "",
-        "| Dimension | Candidate as Output B | Candidate as Output A | Outcome | Result |",
-        "| --- | --- | --- | --- | --- |",
-    ]
-    for comparison in result.comparisons:
-        lines.append(
-            f"| {comparison.dimension} | {comparison.forward} | {comparison.swapped} "
-            f"| {comparison.outcome} | {_RESULT_LABELS[comparison.outcome]} |"
-        )
-    lines.append("")
-    for comparison in result.comparisons:
-        lines += [f"### {comparison.dimension}", "", *(f"* {line}" for line in _justification(comparison)), ""]
-    if result.metric_regressions:
-        lines += ["## Metric regressions", ""] + [f"* {regression}" for regression in result.metric_regressions]
     REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    REPORT_PATH.write_text("\n".join(lines), encoding="utf-8")
+    REPORT_PATH.write_text(render_html(BASELINE_NAME, baseline, candidate, result), encoding="utf-8")

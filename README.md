@@ -872,7 +872,7 @@ two levels:
 
 Metrics apply a 25% tolerance because the artifacts come from a non-deterministic model; the judge's tolerance is the
 agreement of both orders. A regression on either level fails the run; a judged `worse` shows up in the pytest warnings summary and as `WARNING` in the report. Every comparison writes a full report - per-metric
-deltas, per-dimension verdicts for each order and the judge's rationale behind them - to `logs/smoke_ab_report.md`; the
+deltas, per-dimension verdicts for each order and the judge's rationale behind them - to `logs/smoke_ab_report.html`, a self-contained page to open in any browser; the
 `smoke` CI job uploads it as the `smoke-ab-report` artifact of the workflow run.
 
 Capture a baseline once per configuration you want to compare against, then compare later runs against it (both with the

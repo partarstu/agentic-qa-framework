@@ -212,7 +212,7 @@ jobs:
         if: always()
         with:
           name: smoke-ab-report
-          path: logs/smoke_ab_report.md
+          path: logs/smoke_ab_report.html
           retention-days: 30
 
       - name: Dump compose logs
