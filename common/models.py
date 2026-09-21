@@ -3,12 +3,15 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 
 import hashlib
+import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Literal, Optional
 
 from a2a.types import Part
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+from pydantic.json_schema import SkipJsonSchema
 
 
 @dataclass(slots=True)
@@ -40,11 +43,8 @@ class AgentRuntimeError(Exception):
 
 
 class BaseAgentResult(JsonSerializableModel):
-    """Base class for all agent result models.
-
-    This class provides a common `llm_comments` field for capturing debug information
-    from the LLM about any exceptional situations, missing tools, information gaps,
-    or other issues that may have prevented the agent from fully completing its task.
+    """Base class for all agent result models, carrying the `llm_comments` the model uses to report gaps, missing tools
+    or anything that stopped it from completing the task.
     """
 
     llm_comments: str | None = Field(
@@ -60,12 +60,7 @@ class VectorizableBaseModel(JsonSerializableModel, ABC):
 
     @abstractmethod
     def get_vector_id(self) -> int | str:
-        """Returns the unique ID for the vector database.
-
-        The ID must be either:
-        - A 64-bit unsigned integer
-        - A UUID string in standard format (e.g., '550e8400-e29b-41d4-a716-446655440000')
-        """
+        """Returns the point ID for the vector database: a 64-bit unsigned integer or a standard UUID string."""
         pass
 
     @abstractmethod
@@ -104,6 +99,60 @@ class JiraIssue(VectorizableBaseModel):
         return f"{self.summary}\n\n{self.description}"
 
 
+DocumentSource = Literal["confluence", "sharepoint"]
+ContentKind = Literal["page_body", "attachment"]
+
+
+class SyncStatus(StrEnum):
+    """The one status vocabulary of a scoped sync, from the runner to the dashboard. It is a ``StrEnum``, so it
+    serialises and compares as the string already persisted and rendered.
+    """
+
+    RUNNING = "running"
+    COMPLETED = "completed"
+    COMPLETED_WITH_ERRORS = "completed_with_errors"
+    FAILED = "failed"
+
+
+class DocumentPagePart(VectorizableBaseModel):
+    """One part of a Confluence document stored in the documents collection. A page-body chunk is one part; an
+    attachment page is split into text parts sharing the page's reconciliation chain, with the page image on part 0
+    only.
+    """
+
+    source: DocumentSource = Field(description="Source system of the document")
+    space_key: str = Field(default="", description="Key of the Confluence space")
+    page_id: str = Field(default="", description="ID of the Confluence page")
+    page_title: str = Field(default="", description="Title of the Confluence page")
+    drive_id: str | None = Field(default=None, description="ID of the SharePoint drive")
+    folder_path: str | None = Field(default=None, description="Folder path of the SharePoint file")
+    page_url: str | None = Field(default=None, description="Web UI link of the page")
+    attachment_id: str | None = Field(default=None, description="ID of the attachment, for attachment pages")
+    attachment_name: str | None = Field(default=None, description="File name of the attachment")
+    media_type: str | None = Field(default=None, description="Media type of the attachment")
+    content_kind: ContentKind = Field(description="'page_body' for page-body chunks, 'attachment' for attachment pages")
+    document_name: str = Field(
+        description="The name retrieval matches document-name patterns against: the attachment file "
+        "name for attachments, the page title for page-body chunks"
+    )
+    breadcrumb: str = Field(description="The breadcrumb or reconciliation chain prefix of the text")
+    text: str = Field(description="The embedded text: breadcrumb plus content")
+    page_number: int | None = Field(default=None, description="1-based page number within the attachment")
+    page_count: int | None = Field(default=None, description="True total page count of the attachment")
+    part_index: int = Field(description="0-based index of this part within its page or chunk sequence")
+    image: str | None = Field(default=None, description="Base64 PNG of the page image, stored on part 0 only")
+
+    def get_vector_id(self) -> str:
+        """Deterministic UUID derived from content identity: source, item, page and part index."""
+        item = self.attachment_id or self.page_id
+        scope = str(self.page_number) if self.attachment_id else "body"
+        identity = f"quaia:document:{self.source}:{item}:{scope}:{self.part_index}"
+        return str(uuid.uuid5(uuid.NAMESPACE_URL, identity))
+
+    def get_embedding_content(self) -> str:
+        return self.text
+
+
 class ProjectMetadata(VectorizableBaseModel):
     project_key: str = Field(description="Key of the project")
     last_update: str = Field(description="Last update timestamp")
@@ -118,8 +167,92 @@ class ProjectMetadata(VectorizableBaseModel):
 class RagUpdateResult(BaseAgentResult):
     """Result of RAG update operation."""
 
-    status: str = Field(description="Status of the RAG update operation")
+    status: SyncStatus = Field(description="Status of the RAG update operation")
     processed_count: int = Field(description="Number of items processed during the update")
+
+
+class SyncRequest(BaseModel, ABC):
+    """One validated RAG sync request, shared by the orchestrator and the sync runtime. The same object is the
+    endpoint's request body, the source of the runner's command-line arguments in job mode and the forwarded payload
+    in local mode, so every field reaching a query language or a REST path is constrained here once.
+    """
+
+    @abstractmethod
+    def to_cli_args(self) -> list[str]:
+        """The runner arguments AFTER the source, e.g. ``["--project-key", "PROJ"]``."""
+
+
+class JiraSyncRequest(SyncRequest):
+    """Scope of a Jira issue or test-case sync: one project."""
+
+    project_key: str = Field(min_length=1, pattern=r"^[A-Z][A-Z0-9_]*$")
+
+    def to_cli_args(self) -> list[str]:
+        return ["--project-key", self.project_key]
+
+
+class AttachmentFilteredSyncRequest(SyncRequest, ABC):
+    """A sync scope whose attachments can be narrowed by a name pattern."""
+
+    attachment_name_pattern: str | None = Field(default=None, max_length=200)
+
+    @field_validator("attachment_name_pattern")
+    @classmethod
+    def _reject_unusable_pattern(cls, pattern: str | None) -> str | None:
+        """Compile the pattern here, so every entry point rejects an unusable one as a bad request."""
+        if pattern:
+            # Deferred: common.utils imports this module, so importing it at module level would cycle.
+            from common.utils import compile_name_pattern
+
+            compile_name_pattern(pattern)
+        return pattern
+
+
+class SharePointSyncRequest(AttachmentFilteredSyncRequest):
+    """Scope of a SharePoint sync: one drive, optionally one folder of it."""
+
+    # Graph drive IDs are opaque but never carry path or query characters; constraining them keeps
+    # a request from steering the app-only token at another Graph resource through the REST path.
+    drive_id: str = Field(min_length=1, max_length=200, pattern=r"^[A-Za-z0-9!._-]+$")
+    folder_path: str | None = Field(default=None, max_length=500)
+
+    def to_cli_args(self) -> list[str]:
+        args = ["--drive-id", self.drive_id]
+        if self.folder_path:
+            args += ["--folder-path", self.folder_path]
+        if self.attachment_name_pattern:
+            args += ["--attachment-name-pattern", self.attachment_name_pattern]
+        return args
+
+
+class ConfluenceSyncRequest(AttachmentFilteredSyncRequest):
+    """Scope of a Confluence sync: one space, optionally one page of it."""
+
+    space_key: str = Field(min_length=1, pattern=r"^[~]?[A-Za-z0-9._~-]+$")
+    page_id: int | None = Field(default=None, gt=0)
+    skip_page_body: bool = False
+
+    def to_cli_args(self) -> list[str]:
+        args = ["--space-key", self.space_key]
+        if self.page_id:
+            args += ["--page-id", str(self.page_id)]
+        if self.attachment_name_pattern:
+            args += ["--attachment-name-pattern", self.attachment_name_pattern]
+        if self.skip_page_body:
+            args += ["--skip-page-body"]
+        return args
+
+
+class SyncOutcome(JsonSerializableModel):
+    """Durable, validated state of one scoped sync operation."""
+
+    sync_type: str = Field(min_length=1)
+    scope: str = Field(min_length=1)
+    status: SyncStatus
+    processed_count: int = Field(default=0, ge=0)
+    message: str = Field(default="", max_length=2000)
+    started_at: str | None = None
+    updated_at: str
 
 
 class RequirementsReviewFeedback(BaseAgentResult):
@@ -131,9 +264,9 @@ class RequirementsReviewFeedback(BaseAgentResult):
 class AcceptanceCriteriaItem(JsonSerializableModel):
     id: str = Field(description="The ID of the acceptance criterion (e.g., 'AC-1')")
     text: str = Field(description="The text of the acceptance criterion")
-    attachment_info: str = Field(
-        description="All information extracted from the attachments which might be relevant "
-        "to this acceptance criteria item"
+    additional_info: str = Field(
+        description="All information from the Jira issue content, beyond the criterion's own text, which is "
+        "relevant to this acceptance criteria item"
     )
 
 
@@ -177,6 +310,29 @@ class TestCase(JsonSerializableModel):
     )
 
 
+class ListedTestCase(JsonSerializableModel):
+    """A test case returned by a project-wide listing with its current status."""
+
+    test_case: TestCase
+    status: str
+
+
+class TestCaseType(StrEnum):
+    """Supported automated test-case types and their Jira labels."""
+
+    UI = "UI"
+    API = "API"
+    SECURITY = "SECURITY"
+    PERFORMANCE = "PERFORMANCE"
+    LOAD = "LOAD"
+    STRESS = "STRESS"
+
+    @property
+    def label(self) -> str:
+        """Return the Jira label used to route this test type."""
+        return self.value.lower()
+
+
 class GeneratedTestCases(BaseAgentResult):
     """Result of test case generation."""
 
@@ -186,7 +342,7 @@ class GeneratedTestCases(BaseAgentResult):
 class ClassifiedTestCase(JsonSerializableModel):
     issue_key: str = Field(description="The Jira issue key of the test case")
     name: str = Field(description="The name of the test case")
-    test_type: Literal["UI", "API", "Performance", "Load/Stress"]
+    test_type: TestCaseType
     automation_capability: Literal["automated", "semi-automated", "manual"]
     labels: list[str]
     tool_use_comment: str = Field(
@@ -198,12 +354,40 @@ class TestCaseReviewRequest(JsonSerializableModel):
     test_cases: list[TestCase]
 
 
-class TestCaseReviewFeedback(JsonSerializableModel):
+class OverlappingTestCase(JsonSerializableModel):
+    """An existing test case whose coverage overlaps the reviewed one."""
+
+    test_case_key: str = Field(description="The key of the candidate test case which overlaps in coverage")
+    overlap_explanation: str = Field(description="What exactly both test cases cover in common")
+
+
+class TestCaseDuplicateJudgement(BaseAgentResult):
+    """The duplicate judge's verdict over the duplicate candidates of one reviewed test case."""
+
+    __test__ = False
+    overlapping_test_cases: list[OverlappingTestCase] = Field(
+        description="Only the candidates which genuinely overlap in coverage with the reviewed test case; "
+        "empty when none of them does"
+    )
+
+
+class TestCaseDuplicateCheck(JsonSerializableModel):
+    """The outcome of the duplicate check of one reviewed test case; empty means no duplicates were found."""
+
+    __test__ = False
+    overlapping_test_cases: list[OverlappingTestCase] = Field(default_factory=list)
+
+
+class TestCaseReviewFeedback(BaseAgentResult):
+    __test__ = False
     test_case_id: str = Field(description="The ID or key of the test case which was reviewed")
     review_feedback: list[str] = Field(description="List of improvements suggested by the test case review")
+    # Filled in by code, never by a model, so it is hidden from the output schema the LLM sees.
+    duplicate_check: SkipJsonSchema[TestCaseDuplicateCheck | None] = None
 
 
 class TestCaseReviewFeedbacks(BaseAgentResult):
+    __test__ = False
     review_feedbacks: list[TestCaseReviewFeedback] = Field(description="A list of test case review feedbacks")
 
 
@@ -221,6 +405,14 @@ class TestStepResult(JsonSerializableModel):
     errorMessage: str = Field(description="Error message if the test step failed")
     executionStartTimestamp: str | None = Field(default=None, description="Timestamp when the step execution started")
     executionEndTimestamp: str | None = Field(default=None, description="Timestamp when the step execution ended")
+
+
+class AgentInfo(JsonSerializableModel):
+    """Traceability data about the agent that produced a test execution result."""
+
+    agent_name: str
+    agent_version: str
+    environment: str
 
 
 class TestExecutionResult(JsonSerializableModel):
@@ -248,6 +440,11 @@ class TestExecutionResult(JsonSerializableModel):
         default=None, description="Result of the incident creation process if the test failed"
     )
     test_case: Optional["TestCase"] = Field(default=None, description="The full test case object that was executed")
+    agent_info: AgentInfo | None = Field(
+        default=None,
+        description="Name and version of the agent which executed the test case and the environment it ran against. "
+        "Populated by the orchestrator, not expected from the execution agent.",
+    )
 
 
 class TestCaseKeys(JsonSerializableModel):
@@ -272,15 +469,51 @@ class AggregatedTestResults(JsonSerializableModel):
     results: list[TestExecutionResult]
 
 
-class SelectedAgent(JsonSerializableModel):
-    id: str = Field(description="ID of the agent that is most suitable for the task execution")
+class AgentSkillDeclaration(JsonSerializableModel):
+    """Declared skill of a Python agent, published on its A2A card. Every agent declares exactly one skill with a stable
+    identity, which AgentBase requires and never replaces with a generic fallback.
+    """
+
+    id: str = Field(description="Stable, unique skill ID, e.g. 'jira-requirements-review'")
+    name: str = Field(description="Human-readable skill name, e.g. 'Jira Requirements Review'")
+    description: str = Field(description="What the agent can do, used for routing decisions")
+    tags: list[str] = Field(default_factory=lambda: ["qa"], description="Skill tags")
+
+
+class RoutingOutcome(StrEnum):
+    """Outcome of one routing decision over the full agent registry."""
+
+    AGENT_SELECTED = "agent_selected"
+    SUITABLE_BUT_BUSY = "suitable_but_busy"
+    NONE_SUITABLE = "none_suitable"
+
+
+class AgentRoutingDecision(JsonSerializableModel):
+    """Result of one routing call that sees every registered agent, including availability.
+
+    The justification is mandatory for every outcome, so an unusable decision is never silent.
+    """
+
+    selected_agent_id: str | None = Field(
+        default=None,
+        description="ID of the single most suitable agent. Must be None unless the outcome is 'agent_selected'.",
+    )
+    outcome: RoutingOutcome = Field(description="One of the three routing outcomes")
+    justification: str = Field(
+        description="Elaborate justification of the decision. Must always be given, whatever the outcome."
+    )
 
 
 class SelectedAgents(JsonSerializableModel):
     ids: list[str] = Field(description="The IDs of all agents that are suitable for the task execution")
+    justification: str = Field(
+        default="",
+        description="Justification of the selection, to be given whenever the selected set is empty or partial",
+    )
 
 
 class IncidentCreationInput(JsonSerializableModel):
+    project_key: str = Field(min_length=1, description="Project key owning the incident")
     test_case: TestCase
     test_execution_result: str
     test_step_results: list["TestStepResult"] = Field(

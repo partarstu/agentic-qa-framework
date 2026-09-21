@@ -57,13 +57,8 @@ jobs:
           version: "0.11.21"
           enable-cache: true
 
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libmagic1
-
       - name: Install dependencies
-        run: uv sync --frozen --python ${{ matrix.python-version }}
+        run: uv sync --frozen --python ${{ matrix.python-version }} --extra rag-sync
 
       - name: Run tests with coverage
         run: |
@@ -207,7 +202,18 @@ jobs:
         run: docker compose -f docker-compose.smoke.yml up -d --build --wait
 
       - name: Run smoke tests
+        env:
+          # The A/B judge runs its model in the pytest process, not in a container.
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
         run: uv run pytest tests/smoke -m smoke -v
+
+      - name: Upload smoke A/B report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: smoke-ab-report
+          path: logs/smoke_ab_report.html
+          retention-days: 30
 
       - name: Dump compose logs
         if: always()

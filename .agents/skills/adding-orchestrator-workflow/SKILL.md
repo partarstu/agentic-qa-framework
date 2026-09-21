@@ -1,236 +1,103 @@
 ---
 name: adding-orchestrator-workflow
-description: Adds new workflow endpoints to the QuAIA orchestrator. Use when creating new FastAPI endpoints that coordinate agent tasks, handle webhooks, or expose new API functionality.
+description: Adds a workflow endpoint to the QuAIA orchestrator that receives a webhook or API call, delegates work to agents over A2A and returns the result, including the architecture-first CALM update, models, README docs, orchestrator version bump, unit tests and smoke-suite coverage. Use when creating or extending an orchestrator FastAPI endpoint or multi-agent flow.
 ---
 
-// turbo-all
+# Adding an Orchestrator Workflow
 
-# Adding a New Orchestrator Workflow
+Workflow endpoints live in `orchestrator/main.py`. All code follows `PYTHON_GUIDELINES.md` and the *Comments and docstrings* rule of `AGENTS.md`: an endpoint docstring is one sentence, and a comment states only a non-obvious why. Model new endpoints on the closest existing one:
 
-This skill provides a comprehensive guide for adding new workflow endpoints to the QuAIA™ orchestrator. Workflows are FastAPI endpoints that trigger and coordinate agent tasks.
+| Pattern                                         | Reference                                                                 |
+|-------------------------------------------------|---------------------------------------------------------------------------|
+| Jira webhook → one agent                        | `review_jira_requirements` (`/new-requirements-available`)                |
+| Sequential multi-agent flow                     | `trigger_test_case_generation_workflow` (`/story-ready-for-test-case-generation`) |
+| JSON request model, non-agent service           | `update_jira_db` (`/update-jira-db`), `update_confluence_db` (`/update-confluence-db`), `update_sharepoint_db` (`/update-sharepoint-db`), `update_test_case_db` (`/update-test-case-db`) |
+| Exclusive run and parallel fan-out to agents    | `execute_tests` (`/execute-tests`) with `_request_all_test_cases_execution` |
+| Explicitly chosen agent, no LLM routing         | `execute_test` (`/execute-test`), reserving the agent under the selection lock |
 
-## Overview
+Copy this checklist and track progress:
 
-The orchestrator (`orchestrator/main.py`) exposes HTTP endpoints that:
-1. Receive external requests (webhooks, API calls)
-2. Route tasks to appropriate agents
-3. Coordinate multi-agent workflows
-4. Handle results and trigger follow-up actions
-
-## ⚡ Auto-Run Policy
-
-This skill is designed to run with minimal interruption.
-
-- **Always set `SafeToAutoRun: true`** for all `run_command` calls.
-- **Exceptions:** Only set `SafeToAutoRun: false` if a step specifically instructs you to "Ask" the user, "Wait" for approval, or "Verify" a destructive action before proceeding.
-- **Restricted Symbols:** Never use the redirection operator (`>`) or `2>` in commands. Use alternatives (e.g., `Set-Content`, `Out-File`, or ignoring errors explicitly).
-
-## Workflow Architecture
-
-A typical orchestrator workflow:
-1. Receives a request (POST/GET endpoint)
-2. Extracts relevant data from the request
-3. Sends task(s) to agent(s) using `_send_task_to_agent()`
-4. Parses the agent response using helper functions
-5. Optionally triggers follow-up workflows
-6. Returns the result to the caller
-
-## Step-by-Step Instructions
-
-### Step 1: Define the Request Model (if needed)
-
-If your endpoint accepts structured input, create a request model in `common/models.py`:
-
-📄 **Template:** [resources/models_template.py](resources/models_template.py)
-
-### Step 2: Define the Response Model (if needed)
-
-If the workflow returns structured data beyond simple status messages, add a response model (also in the template above).
-
-### Step 3: Create the Endpoint Function
-
-Add your endpoint in `orchestrator/main.py`:
-
-📄 **Template:** [resources/endpoint_template.py](resources/endpoint_template.py)
-
-### Step 4: Helper Functions Reference
-
-The orchestrator provides these helper functions for working with agent tasks:
-
-#### Sending Tasks to Agents
-
-```python
-# Send a text task to an automatically selected agent
-completed_task = await _send_task_to_agent(
-    task_content: str,      # The payload/content for the agent
-    task_description: str   # Used to select the appropriate agent
-) -> Task
-
-# Send a message with file attachments
-completed_task = await _send_task_to_agent_with_message(
-    message: Message,       # A2A Message with text and file parts
-    task_description: str
-) -> Task
+```
+- [ ] 1. CALM model (architecture first)
+- [ ] 2. Request/result models
+- [ ] 3. Endpoint
+- [ ] 4. README documentation
+- [ ] 5. Orchestrator version
+- [ ] 6. Unit tests
+- [ ] 7. Smoke suite
 ```
 
-#### Parsing Agent Responses
+## 1. CALM model (architecture first)
 
-```python
-# Validate task completed successfully
-_validate_task_status(task: Task, task_description: str)
+Decide first whether the workflow alters the topology in `calm/architecture/quaia.arch.json`:
 
-# Extract artifacts from task (raises exception if none)
-artifacts = _get_artifacts_from_task(task: Task, task_description: str) -> list[Artifact]
+- A new call to a service or external system → a `connects` relationship (or an `interacts` edge for a new agent fan-out).
+- A new authentication or protection mechanism → a `controls` block on the node or relationship, asserted in `calm/patterns/quaia.pattern.json`.
 
-# Extract text content from artifacts
-text_parts = _get_text_content_from_artifacts(
-    artifacts: list[Artifact],
-    task_description: str,
-    any_content_expected: bool = True  # Set False if empty is OK
-) -> list[str]
-
-# Parse artifacts as a Pydantic model (also handles AgentExecutionError)
-result = _get_model_from_artifacts(
-    artifacts: list[Artifact],
-    task_description: str,
-    model_type: type[T]
-) -> T | AgentExecutionError | None
-
-# Extract file artifacts (screenshots, logs, etc.)
-files = _get_file_contents_from_artifacts(artifacts: list[Artifact]) -> list[FileWithBytes]
-```
-
-#### Error Handling
-
-```python
-# Raise HTTPException with consistent error handling and logging
-_handle_exception(error_message: str, status_code: int = 500)
-```
-
-### Step 5: Multi-Agent Workflows
-
-For workflows that involve multiple agents in sequence:
-
-📄 **Example:** [examples/multi_agent_workflow.py](examples/multi_agent_workflow.py)
-
-### Step 6: Parallel Agent Execution
-
-For workflows that can process items in parallel:
-
-📄 **Example:** [examples/parallel_execution.py](examples/parallel_execution.py)
-
-### Step 7: Using Execution Lock (Optional)
-
-For workflows that should not run concurrently (e.g., test execution):
-
-```python
-@orchestrator_app.post("/exclusive-workflow")
-async def exclusive_workflow(request: Request, api_key: str = Depends(_validate_api_key)):
-    """Workflow that requires exclusive access."""
-    
-    async with execution_lock:  # Only one instance runs at a time
-        # ... workflow logic ...
-        return {"message": "Exclusive workflow completed"}
-```
-
-### Step 8: Add Webhook URL Configuration (Optional)
-
-If the endpoint will be called via webhooks, add the URL to `config.py`:
-
-```python
-# Webhook URLs
-<WORKFLOW_NAME>_WEBHOOK_URL = f"{ORCHESTRATOR_URL}/<endpoint-path>"
-```
-
-### Step 9: Update README Documentation
-
-Add documentation for the new endpoint in `README.md` under "Invoking Orchestrator Workflows":
-
-```markdown
-### <Workflow Name>
-
-Description of what this workflow does.
-
-* **Endpoint:** `POST /<endpoint-path>`
-  
-  Example payload:
-  ```json
-  {
-      "field_name": "value"
-  }
-  ```
-  
-  Response:
-  ```json
-  {
-      "message": "Workflow completed successfully",
-      "result": { ... }
-  }
-  ```
-```
-
-### Step 10: Update the CALM Architecture Model (if the topology changes)
-
-The architecture is maintained as code with [FINOS CALM](https://calm.finos.org/) under `calm/`, and a **blocking** CI
-job validates it. Update the model in the same change whenever the workflow alters the architecture topology:
-
-- A new outbound call to a service or external system → add a `connects` relationship (or an `interacts` edge for a new
-  agent fan-out) in `calm/architecture/quaia.arch.json`.
-- A new authentication or protection mechanism on the endpoint → add a `controls` block on the relevant node/relationship,
-  and assert it in `calm/patterns/quaia.pattern.json`.
-
-Endpoints that only reuse existing agents and existing edges need no model change. When in doubt, validate from the
-`calm/` directory:
+Endpoints that reuse existing agents and edges need no change; say so explicitly. When the topology changes, *Architecture first* in `AGENTS.md` fixes the order and nothing below is written before it is done: update the model (and the pattern when the element is enforced), validate from `calm/`, render the documentation with `npx -y @finos/calm-cli@1.46.0 docify -a architecture/quaia.arch.json -o <directory outside the repository>` when the change is more than a single edge, show the user the result and get their explicit approval.
 
 ```bash
-npx -y @finos/calm-cli@1.46.0 validate -p patterns/quaia.pattern.json -a architecture/quaia.arch.json -u url-mapping.json --strict -f pretty
+npx -y "@finos/calm-cli@1.46.0" validate -p patterns/quaia.pattern.json -a architecture/quaia.arch.json -u url-mapping.json --strict -f pretty
 ```
 
-### Step 11: Create Unit Tests
+## 2. Request and result models
 
-Create test cases in `tests/orchestrator/test_endpoints.py` or a new file:
+Add them to `common/models.py` from [resources/models_template.py](resources/models_template.py). Jira webhook endpoints read the raw `Request` instead and need no request model.
 
-📄 **Example:** [examples/test_endpoint_example.py](examples/test_endpoint_example.py)
+## 3. Endpoint
 
-### Step 12: Extend the Hermetic Smoke Suite
+Start from [resources/endpoint_template.py](resources/endpoint_template.py). Rules:
 
-The smoke suite under `tests/smoke/` drives the whole system end-to-end through the orchestrator's public interface
-against the real agents in `docker-compose.smoke.yml`, and the `smoke` CI job runs it. A new workflow — or a change to
-what an existing workflow produces — is new end-to-end behaviour, so the smoke suite **must** be updated in the same
-change. It is not optional.
+- Every workflow endpoint takes `api_key: str = Depends(_validate_api_key)`.
+- Jira webhook endpoints call `await _verify_jira_webhook_signature(request)` first and read the issue key with `await _get_jira_issue_key_from_request(request)`.
+- Put `except HTTPException: raise` before `except Exception`. Otherwise the 4xx raised by `_handle_exception` becomes a 500 and the error is recorded twice.
+- Workflows that must not overlap run inside `async with execution_lock:`.
+- Fan out to agents concurrently as `PYTHON_GUIDELINES.md` § 9 describes.
+- If Jira calls the endpoint, add a `<NAME>_WEBHOOK_URL` constant next to the existing ones in `config.py`.
 
-* **New endpoint/flow** → add a smoke test in `tests/smoke/test_smoke.py` (plus any fixtures in
-  `tests/smoke/conftest.py` and recording mocks under `tests/smoke/mocks/` it needs) that posts to the endpoint and
-  asserts on what reached the mocked boundary, following the existing tests.
-* **Extended flow** → strengthen the existing smoke assertions to cover the new behaviour rather than leaving it
-  untested.
-* Run it with the stack up:
-  ```bash
-  docker build -t agentic-qa-base:latest -f Dockerfile.base .
-  GOOGLE_API_KEY=<your-key> docker compose -f docker-compose.smoke.yml up -d --build
-  uv run pytest tests/smoke -m smoke -v
-  docker compose -f docker-compose.smoke.yml down -v
-  ```
+Helpers available in `orchestrator/main.py`:
 
-## Complete Workflow Example
+| Helper                                                                        | Purpose                                                                                     |
+|-------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------|
+| `_send_task_to_agent(input_data, task_description) -> Task \| None`            | Selects an agent by `task_description` and sends a text task                                 |
+| `_send_task_to_agent_with_message(message, task_description) -> Task \| None`  | Same, with an A2A `Message` (e.g. file parts)                                                |
+| `_get_artifacts_from_task(task, task_description)`                            | Validates the task status and returns its artifacts; raises if there are none                |
+| `_validate_task_status(task, task_description)`                               | Status check only, when no artifacts are needed                                              |
+| `_get_text_content_from_artifacts(artifacts, task_description, any_content_expected=True)` | Text parts as `list[str]`                                                       |
+| `_get_model_from_artifacts(artifacts, task_description, model_type)`          | Parses exactly one text part into `model_type`, or returns `AgentExecutionError`             |
+| `_get_file_contents_from_artifacts(artifacts) -> list[FileArtifact]`           | Raw file parts, skipping the token-usage artifact                                            |
+| `_handle_exception(message, status_code=500, task_id=None, agent_id=None)`    | Records the error for the dashboard and raises `HTTPException`                               |
+| `_record_error(message, task_id=None, agent_id=None)`                         | Records the error without raising; call inside an `except` block                            |
 
-For a full example including models and endpoint:
+## 4. README documentation
 
-📄 **Example:** [examples/complete_workflow.py](examples/complete_workflow.py)
+Add a subsection under *Invoking Orchestrator Workflows* in `README.md`, in the same format as the existing ones: purpose, method and path, example payload, response.
 
-## Verification Checklist
+## 5. Orchestrator version
 
-After adding the workflow, verify:
+A new or changed workflow alters the orchestrator's logic, so bump the default of `ORCHESTRATOR_VERSION` in `config.py` (`OrchestratorConfig.VERSION`) and in the README *Environment Variables* block at the level *Versioning of agents and the orchestrator* in `AGENTS.md` prescribes: MINOR for a new endpoint or a backwards-compatible change of a flow, MAJOR for a changed request contract or endpoint, PATCH for a fix that keeps the contract.
 
-- [ ] Request model (if any) added to `common/models.py`
-- [ ] Response model (if any) added to `common/models.py`
-- [ ] Endpoint function follows the standard pattern
-- [ ] Proper error handling with `_handle_exception()`
-- [ ] API key validation via `Depends(_validate_api_key)`
-- [ ] Logging at key points (start, completion, errors)
-- [ ] Unit tests cover success and failure cases
-- [ ] Documentation updated in README.md
-- [ ] CALM model updated if the workflow added an integration edge or a security control (and validation passes)
-- [ ] Smoke suite extended: a `tests/smoke/` test drives the new/changed workflow end-to-end and asserts on what reaches the mocked boundary
-- [ ] Tests pass: `pytest tests/orchestrator/ -v`
-- [ ] Endpoint accessible: `curl -X POST http://localhost:8000/<endpoint-path> -d '...'`
+## 6. Unit tests
+
+Use the `writing-unit-tests` skill and model the tests on `tests/orchestrator/test_endpoints.py`. Cover success, an agent failure or `AgentExecutionError`, and invalid input.
+
+```bash
+uv run pytest tests/orchestrator -v
+```
+
+## 7. Smoke suite
+
+A new workflow, or a change to what an existing one produces, is end-to-end behaviour and must be covered in `tests/smoke/` in the same change:
+
+- **New endpoint** → a test in `tests/smoke/test_smoke.py` (fixtures in `tests/smoke/conftest.py`, recording mocks under `tests/smoke/mocks/`) that calls the endpoint and asserts on what reached the mocked boundary.
+- **Extended flow** → strengthen the existing assertions.
+- **Intentionally changed agent output** → refresh the A/B baseline (see *A/B comparison against a baseline* in `README.md`).
+
+The suite needs `GOOGLE_API_KEY` and makes billed LLM calls, so ask the user before running it:
+
+```bash
+docker build -t agentic-qa-base:latest -f Dockerfile.base .
+docker compose -f docker-compose.smoke.yml up -d --build --wait
+uv run pytest tests/smoke -m smoke -v
+docker compose -f docker-compose.smoke.yml down -v
+```

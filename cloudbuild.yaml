@@ -8,6 +8,50 @@ steps:
   - name: 'gcr.io/cloud-builders/docker'
     args: [ 'build', '-t', 'agentic-qa-base:latest', '-f', 'Dockerfile.base', '.' ]
 
+  # Render every workload's configuration from deploy/manifest.yaml into deploy/rendered/:
+  # an env-vars file, the --set-secrets value (secret names only; Cloud Run resolves the values
+  # itself) and the redeploy marker. Substitutions reach the renderer as runtime overrides of
+  # declared keys; an empty one keeps the manifest default.
+  - name: 'agentic-qa-base:latest'
+    entrypoint: 'bash'
+    env:
+      - 'PROJECT_ID=$PROJECT_ID'
+      - 'QUAIA_DEPLOY_OVERRIDE_TZ=$_TIMEZONE'
+      - 'QUAIA_DEPLOY_OVERRIDE_QDRANT_URL=$_QDRANT_URL'
+      - 'QUAIA_DEPLOY_OVERRIDE_EMBEDDING_SERVICE_URL=$_EMBEDDING_SERVICE_URL'
+      - 'QUAIA_DEPLOY_OVERRIDE_PROMPT_GUARD_SERVICE_URL=$_PROMPT_GUARD_SERVICE_URL'
+      - 'QUAIA_DEPLOY_OVERRIDE_PROMPT_OVERRIDES_DIR=$_PROMPT_OVERRIDES_DIR'
+      - 'QUAIA_DEPLOY_OVERRIDE_REMOTE_EXECUTION_AGENT_HOSTS=$_REMOTE_EXECUTION_AGENT_HOSTS'
+      - 'QUAIA_DEPLOY_OVERRIDE_EMBEDDING_BACKENDS=$_EMBEDDING_BACKENDS'
+      - 'QUAIA_DEPLOY_OVERRIDE_EMBEDDING_TEXT_MODEL=$_EMBEDDING_TEXT_MODEL'
+      - 'QUAIA_DEPLOY_OVERRIDE_RAG_SYNC_JOB_TASK_TIMEOUT_SECONDS=$_RAG_SYNC_TASK_TIMEOUT_SECONDS'
+      - 'QUAIA_DEPLOY_OVERRIDE_RAG_SYNC_LOCK_TTL_SECONDS=$_RAG_SYNC_LOCK_TTL_SECONDS'
+      - 'QUAIA_DEPLOY_OVERRIDE_RAG_SYNC_START_ALLOWANCE_SECONDS=$_RAG_SYNC_START_ALLOWANCE_SECONDS'
+      - 'QUAIA_DEPLOY_OVERRIDE_QDRANT_CONFLUENCE_COLLECTION_NAME=$_QDRANT_DOCUMENTS_COLLECTION_NAME'
+      - 'QUAIA_DEPLOY_OVERRIDE_RAG_OFFICE_CONVERSION_ENABLED=$_RAG_OFFICE_CONVERSION_ENABLED'
+      - 'QUAIA_DEPLOY_OVERRIDE_RAG_MAX_ATTACHMENT_BYTES=$_RAG_MAX_ATTACHMENT_BYTES'
+      - 'QUAIA_DEPLOY_OVERRIDE_RAG_MAX_PAGES_PER_DOCUMENT=$_RAG_MAX_PAGES_PER_DOCUMENT'
+      - 'QUAIA_DEPLOY_OVERRIDE_RAG_RENDER_DPI=$_RAG_RENDER_DPI'
+      - 'QUAIA_DEPLOY_OVERRIDE_RAG_MAX_IMAGE_DIMENSION=$_RAG_MAX_IMAGE_DIMENSION'
+      - 'QUAIA_DEPLOY_OVERRIDE_ATTACHMENTS_LOCAL_DESTINATION_FOLDER_PATH=$_LOCAL_ATTACHMENTS_MOUNT_PATH'
+      - 'QUAIA_DEPLOY_OVERRIDE_MCP_SERVER_ATTACHMENTS_FOLDER_PATH=$_JIRA_MCP_SERVER_ATTACHMENTS_MOUNT_PATH'
+    args:
+      - '-c'
+      - |
+        set -euo pipefail
+        render() { python scripts/render_deployment_config.py "$$1" production --output-dir deploy/rendered "$${@:2}"; }
+        render atlassian-mcp-server --version "$_ATLASSIAN_MCP_IMAGE_TAG"
+        render qdrant-vector-db --version "$_QDRANT_IMAGE_TAG"
+        for service in embedding-service prompt-guard-service orchestrator rag-sync-job; do
+          render "$$service"
+        done
+        # AGENT_BASE_URL differs per agent, so it is passed per rendering.
+        QUAIA_DEPLOY_OVERRIDE_AGENT_BASE_URL="$_REQUIREMENTS_REVIEW_AGENT_BASE_URL" render requirements-review-agent
+        QUAIA_DEPLOY_OVERRIDE_AGENT_BASE_URL="$_TEST_CASE_GENERATION_AGENT_BASE_URL" render test-case-generation-agent
+        QUAIA_DEPLOY_OVERRIDE_AGENT_BASE_URL="$_TEST_CASE_CLASSIFICATION_AGENT_BASE_URL" render test-case-classification-agent
+        QUAIA_DEPLOY_OVERRIDE_AGENT_BASE_URL="$_TEST_CASE_REVIEW_AGENT_BASE_URL" render test-case-review-agent
+        QUAIA_DEPLOY_OVERRIDE_AGENT_BASE_URL="$_INCIDENT_CREATION_AGENT_BASE_URL" render incident-creation-agent
+
   # Build the orchestrator image
   - name: 'gcr.io/cloud-builders/docker'
     args: [ 'build', '-t', 'gcr.io/$PROJECT_ID/orchestrator', '-f', 'orchestrator/Dockerfile', '.' ]
@@ -31,6 +75,10 @@ steps:
   # Build the incident-creation-agent image
   - name: 'gcr.io/cloud-builders/docker'
     args: [ 'build', '-t', 'gcr.io/$PROJECT_ID/incident-creation-agent', '-f', 'agents/incident_creation/Dockerfile', '.' ]
+
+  # Build the rag-sync-job image (runs the sync runtime as a Cloud Run Job)
+  - name: 'gcr.io/cloud-builders/docker'
+    args: [ 'build', '-t', 'gcr.io/$PROJECT_ID/rag-sync-job', '-f', 'services/rag_sync/Dockerfile', '.' ]
 
   # Push the orchestrator image to Container Registry
   - name: 'gcr.io/cloud-builders/docker'
@@ -56,32 +104,41 @@ steps:
   - name: 'gcr.io/cloud-builders/docker'
     args: [ 'push', 'gcr.io/$PROJECT_ID/incident-creation-agent' ]
 
-  # Pull, tag, and push jira-mcp-server image (conditional)
+  # Push the rag-sync-job image to Container Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args: [ 'push', 'gcr.io/$PROJECT_ID/rag-sync-job' ]
+
+  # Pull, tag, and push atlassian-mcp-server image (conditional)
   - name: 'gcr.io/cloud-builders/docker'
     entrypoint: 'bash'
     args:
       - '-c'
       - |
-        if [ "$_DEPLOY_ALL_SERVICES" = "true" ] || [ "$_DEPLOY_JIRA_MCP" = "true" ]; then
+        if [ "$_DEPLOY_ALL_SERVICES" = "true" ] || [ "$_DEPLOY_ATLASSIAN_MCP" = "true" ]; then
           echo "Pulling mcp-atlassian image from GitHub Container Registry..."
-          docker pull ghcr.io/sooperset/mcp-atlassian:0.21.1 && \
+          docker pull ghcr.io/sooperset/mcp-atlassian:$_ATLASSIAN_MCP_IMAGE_TAG && \
           echo "Tagging mcp-atlassian image for Google Container Registry..." && \
-          docker tag ghcr.io/sooperset/mcp-atlassian:0.21.1 gcr.io/$PROJECT_ID/mcp-atlassian:latest && \
+          docker tag ghcr.io/sooperset/mcp-atlassian:$_ATLASSIAN_MCP_IMAGE_TAG gcr.io/$PROJECT_ID/mcp-atlassian:latest && \
           echo "Pushing mcp-atlassian image to Container Registry..." && \
           docker push gcr.io/$PROJECT_ID/mcp-atlassian:latest
         else
-          echo "Skipping jira-mcp-server pull/tag/push (variable _DEPLOY_JIRA_MCP and _DEPLOY_ALL_SERVICES are not true)"
+          echo "Skipping atlassian-mcp-server pull/tag/push (variable _DEPLOY_ATLASSIAN_MCP and _DEPLOY_ALL_SERVICES are not true)"
         fi
 
-  # Deploy jira-mcp-server to Cloud Run (conditional)
+  # Deploy atlassian-mcp-server to Cloud Run (conditional). The combined Jira + Confluence
+  # toolset: the Confluence part is enabled by its credentials.
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: 'bash'
     args:
       - '-c'
       - |
-        if [ "$_DEPLOY_ALL_SERVICES" = "true" ] || [ "$_DEPLOY_JIRA_MCP" = "true" ]; then
-          echo "Deploying jira-mcp-server to Cloud Run..."
-          gcloud beta run deploy jira-mcp-server \
+        if [ "$_DEPLOY_ALL_SERVICES" = "true" ] || [ "$_DEPLOY_ATLASSIAN_MCP" = "true" ]; then
+          MARKER=$$(cat deploy/rendered/atlassian-mcp-server.marker)
+          if [ "$$(bash deploy/redeploy_gate.sh service atlassian-mcp-server us-central1 "$$MARKER")" = "skip" ]; then
+            exit 0
+          fi
+          echo "Deploying atlassian-mcp-server to Cloud Run..."
+          gcloud beta run deploy atlassian-mcp-server \
             --image=gcr.io/$PROJECT_ID/mcp-atlassian:latest \
             --network=agent-network \
             --subnet=agent-network \
@@ -92,15 +149,16 @@ steps:
             --allow-unauthenticated \
             --memory=1Gi \
             --max-instances=1 \
-            --set-secrets=JIRA_API_TOKEN=JIRA_API_TOKEN:latest,JIRA_USERNAME=JIRA_USERNAME:latest,JIRA_URL=JIRA_URL:latest \
-            --set-env-vars=TZ=$_TIMEZONE,MCP_LOGGING_STDOUT=true,DISABLE_JIRA_MARKUP_TRANSLATION=true \
+            --env-vars-file=deploy/rendered/atlassian-mcp-server.env.yaml \
+            --set-secrets="$$(cat deploy/rendered/atlassian-mcp-server.secrets.txt)" \
+            --update-labels=quaia_deploy_marker=$$MARKER \
             --port=9000 \
-            --args=--transport,sse,--port,9000,-v \
+            --args=--transport,streamable-http,--stateless,--port,9000,-v \
             --add-volume=type=cloud-storage,name=jira-volume,bucket=$_BUCKET_NAME,mount-options=only-dir=$_JIRA_ATTACHMENTS_FOLDER \
             --add-volume-mount=volume=jira-volume,mount-path=$_JIRA_MCP_SERVER_ATTACHMENTS_MOUNT_PATH \
             --concurrency=100
         else
-          echo "Skipping jira-mcp-server deploy (variable _DEPLOY_JIRA_MCP and _DEPLOY_ALL_SERVICES are not true)"
+          echo "Skipping atlassian-mcp-server deploy (variable _DEPLOY_ATLASSIAN_MCP and _DEPLOY_ALL_SERVICES are not true)"
         fi
 
   # Build and push embedding-service image (conditional)
@@ -111,7 +169,7 @@ steps:
       - |
         if [ "$_DEPLOY_ALL_SERVICES" = "true" ] || [ "$_DEPLOY_EMBEDDING_SERVICE" = "true" ]; then
           echo "Building embedding-service image..."
-          docker build -t gcr.io/$PROJECT_ID/embedding-service -f services/embedding_service/Dockerfile . && \
+          docker build --build-arg EMBEDDING_TEXT_MODEL=$_EMBEDDING_TEXT_MODEL -t gcr.io/$PROJECT_ID/embedding-service -f services/embedding_service/Dockerfile . && \
           echo "Pushing embedding-service image to Container Registry..." && \
           docker push gcr.io/$PROJECT_ID/embedding-service
         else
@@ -125,6 +183,10 @@ steps:
       - '-c'
       - |
         if [ "$_DEPLOY_ALL_SERVICES" = "true" ] || [ "$_DEPLOY_EMBEDDING_SERVICE" = "true" ]; then
+          MARKER=$$(cat deploy/rendered/embedding-service.marker)
+          if [ "$$(bash deploy/redeploy_gate.sh service embedding-service us-central1 "$$MARKER")" = "skip" ]; then
+            exit 0
+          fi
           echo "Deploying embedding-service to Cloud Run..."
           gcloud beta run deploy embedding-service \
             --image=gcr.io/$PROJECT_ID/embedding-service \
@@ -135,11 +197,15 @@ steps:
             --platform=managed \
             --region=us-central1 \
             --allow-unauthenticated \
-            --memory=8Gi \
+            --memory=$_EMBEDDING_MEMORY \
+            --cpu=$_EMBEDDING_CPU \
             --max-instances=1 \
             --min-instances=1 \
             --port=8080 \
-            --set-env-vars=TZ=$_TIMEZONE \
+            --env-vars-file=deploy/rendered/embedding-service.env.yaml \
+            --set-secrets="$$(cat deploy/rendered/embedding-service.secrets.txt)" \
+            --update-labels=quaia_deploy_marker=$$MARKER \
+            --startup-probe=httpGet.path=/ready \
             --concurrency=5
         else
           echo "Skipping embedding-service deploy (variable _DEPLOY_EMBEDDING_SERVICE and _DEPLOY_ALL_SERVICES are not true)"
@@ -167,6 +233,10 @@ steps:
       - '-c'
       - |
         if [ "$_DEPLOY_ALL_SERVICES" = "true" ] || [ "$_DEPLOY_PROMPT_GUARD" = "true" ]; then
+          MARKER=$$(cat deploy/rendered/prompt-guard-service.marker)
+          if [ "$$(bash deploy/redeploy_gate.sh service prompt-guard-service us-central1 "$$MARKER")" = "skip" ]; then
+            exit 0
+          fi
           echo "Deploying prompt-guard-service to Cloud Run..."
           gcloud beta run deploy prompt-guard-service \
             --image=gcr.io/$PROJECT_ID/prompt-guard-service \
@@ -180,7 +250,9 @@ steps:
             --memory=2Gi \
             --max-instances=1 \
             --port=8080 \
-            --set-env-vars=TZ=$_TIMEZONE \
+            --env-vars-file=deploy/rendered/prompt-guard-service.env.yaml \
+            --set-secrets="$$(cat deploy/rendered/prompt-guard-service.secrets.txt)" \
+            --update-labels=quaia_deploy_marker=$$MARKER \
             --concurrency=5
         else
           echo "Skipping prompt-guard-service deploy (variable _DEPLOY_PROMPT_GUARD and _DEPLOY_ALL_SERVICES are not true)"
@@ -194,9 +266,13 @@ steps:
       - '-c'
       - |
         if [ "$_DEPLOY_ALL_SERVICES" = "true" ] || [ "$_DEPLOY_QDRANT" = "true" ]; then
+          MARKER=$$(cat deploy/rendered/qdrant-vector-db.marker)
+          if [ "$$(bash deploy/redeploy_gate.sh service qdrant-vector-db us-central1 "$$MARKER")" = "skip" ]; then
+            exit 0
+          fi
           echo "Deploying qdrant-vector-db to Cloud Run..."
           gcloud beta run deploy qdrant-vector-db \
-            --image=qdrant/qdrant:v1.16.3 \
+            --image=qdrant/qdrant:$_QDRANT_IMAGE_TAG \
             --network=agent-network \
             --subnet=agent-network \
             --vpc-egress=private-ranges-only \
@@ -206,172 +282,264 @@ steps:
             --memory=2Gi \
             --cpu=1 \
             --max-instances=1 \
-            --min-instances=1 \            
+            --min-instances=1 \
             --port=6333 \
             --add-volume=type=cloud-storage,name=qdrant-storage,bucket=$_BUCKET_NAME,mount-options=only-dir=$_QDRANT_STORAGE_FOLDER \
             --add-volume-mount=volume=qdrant-storage,mount-path=/qdrant/storage \
-            --set-secrets=QDRANT__SERVICE__API_KEY=QDRANT_API_KEY:latest \
-            --set-env-vars=TZ=$_TIMEZONE \
+            --env-vars-file=deploy/rendered/qdrant-vector-db.env.yaml \
+            --set-secrets="$$(cat deploy/rendered/qdrant-vector-db.secrets.txt)" \
+            --update-labels=quaia_deploy_marker=$$MARKER \
             --concurrency=5
         else
           echo "Skipping qdrant-vector-db deployment (variable _DEPLOY_QDRANT and _DEPLOY_ALL_SERVICES are not true)"
         fi
 
-  # Deploy to Cloud Run orchestrator
+  # Deploy to Cloud Run orchestrator. The prompt-override directory is mounted only
+  # when the _PROMPT_OVERRIDES_DIR substitution is set (a Cloud Run volume mount from the
+  # overrides bucket); the rendered env file then carries PROMPT_OVERRIDES_DIR.
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
-    entrypoint: gcloud
+    entrypoint: 'bash'
     args:
-      - 'beta'
-      - 'run'
-      - 'deploy'
-      - 'orchestrator'
-      - '--image=gcr.io/$PROJECT_ID/orchestrator'
-      - '--platform=managed'
-      - '--network=agent-network'
-      - '--subnet=agent-network'
-      - '--vpc-egress=all-traffic'
-      - '--region=us-central1'
-      - '--allow-unauthenticated'
-      - '--memory=4Gi'
-      - '--max-instances=1'
-      - '--concurrency=5'
-      - '--set-env-vars=^;^REMOTE_EXECUTION_AGENT_HOSTS=$_REMOTE_EXECUTION_AGENT_HOSTS'
-      - '--set-env-vars=TZ=$_TIMEZONE,AGENT_DISCOVERY_PORTS=443-443,GOOGLE_CLOUD_LOGGING_ENABLED=true,QDRANT_URL=$_QDRANT_URL,QDRANT_PORT=443,EMBEDDING_SERVICE_URL=$_EMBEDDING_SERVICE_URL,ATTACHMENTS_LOCAL_DESTINATION_FOLDER_PATH=$_LOCAL_ATTACHMENTS_MOUNT_PATH,MCP_SERVER_ATTACHMENTS_FOLDER_PATH=$_JIRA_MCP_SERVER_ATTACHMENTS_MOUNT_PATH,DASHBOARD_JWT_EXPIRE_HOURS=24'
-      - '--set-secrets=GOOGLE_API_KEY=GOOGLE_API_KEY:latest,JIRA_API_TOKEN=JIRA_API_TOKEN:latest,JIRA_USERNAME=JIRA_USERNAME:latest,ZEPHYR_API_TOKEN=ZEPHYR_API_TOKEN:latest,JIRA_URL=JIRA_URL:latest,ZEPHYR_BASE_URL=ZEPHYR_BASE_URL:latest,ORCHESTRATOR_API_KEY=ORCHESTRATOR_API_KEY:latest,QDRANT_API_KEY=QDRANT_API_KEY:latest,DASHBOARD_USERNAME=DASHBOARD_USERNAME:latest,DASHBOARD_PASSWORD=DASHBOARD_PASSWORD:latest,DASHBOARD_JWT_SECRET=DASHBOARD_JWT_SECRET:latest,REMOTE_EXECUTION_AGENT_AUTH_TOKEN=AGENT_AUTH_TOKEN:latest'
-      - '--add-volume=type=cloud-storage,name=gcs-allure-reports,bucket=$_ALLURE_REPORTS_BUCKET'
-      - '--add-volume-mount=volume=gcs-allure-reports,mount-path=$_ALLURE_REPORTS_CONTAINER_PATH'
-      - '--add-volume=type=cloud-storage,name=jira-volume,bucket=$_BUCKET_NAME,mount-options=only-dir=$_JIRA_ATTACHMENTS_FOLDER'
-      - '--add-volume-mount=volume=jira-volume,mount-path=$_LOCAL_ATTACHMENTS_MOUNT_PATH'
-      - '--timeout=$_ORCHESTRATOR_REQUEST_TIMEOUT'
+      - '-c'
+      - |
+        MARKER=$$(cat deploy/rendered/orchestrator.marker)
+        if [ "$$(bash deploy/redeploy_gate.sh service orchestrator us-central1 "$$MARKER")" = "skip" ]; then
+          exit 0
+        fi
+        PROMPT_OVERRIDE_ARGS=""
+        if [ -n "$_PROMPT_OVERRIDES_DIR" ]; then
+          PROMPT_OVERRIDE_ARGS="--add-volume=type=cloud-storage,name=prompt-overrides,bucket=$_PROMPT_OVERRIDES_BUCKET,mount-options=only-dir=$_PROMPT_OVERRIDES_FOLDER --add-volume-mount=volume=prompt-overrides,mount-path=$_PROMPT_OVERRIDES_DIR"
+        fi
+        gcloud beta run deploy orchestrator \
+          --image=gcr.io/$PROJECT_ID/orchestrator \
+          --platform=managed \
+          --network=agent-network \
+          --subnet=agent-network \
+          --vpc-egress=all-traffic \
+          --region=us-central1 \
+          --allow-unauthenticated \
+          --memory=4Gi \
+          --max-instances=1 \
+          --concurrency=5 \
+          --env-vars-file=deploy/rendered/orchestrator.env.yaml \
+          --set-secrets="$$(cat deploy/rendered/orchestrator.secrets.txt)" \
+          --update-labels=quaia_deploy_marker=$$MARKER \
+          --add-volume=type=cloud-storage,name=gcs-allure-reports,bucket=$_ALLURE_REPORTS_BUCKET \
+          --add-volume-mount=volume=gcs-allure-reports,mount-path=$_ALLURE_REPORTS_CONTAINER_PATH \
+          --timeout=$_ORCHESTRATOR_REQUEST_TIMEOUT \
+          $$PROMPT_OVERRIDE_ARGS
+
+  # Deploy the RAG sync job to Cloud Run and grant the orchestrator's runtime identity
+  # the least-privilege role to run it with overrides
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        MARKER=$$(cat deploy/rendered/rag-sync-job.marker)
+        if [ "$$(bash deploy/redeploy_gate.sh job rag-sync-job us-central1 "$$MARKER")" = "deploy" ]; then
+          gcloud run jobs deploy rag-sync-job \
+            --image=gcr.io/$PROJECT_ID/rag-sync-job \
+            --region=us-central1 \
+            --network=agent-network \
+            --subnet=agent-network \
+            --vpc-egress=all-traffic \
+            --tasks=1 \
+            --max-retries=0 \
+            --task-timeout=$_RAG_SYNC_TASK_TIMEOUT_SECONDS \
+            --memory=$_RAG_SYNC_MEMORY \
+            --cpu=$_RAG_SYNC_CPU \
+            --env-vars-file=deploy/rendered/rag-sync-job.env.yaml \
+            --set-secrets="$$(cat deploy/rendered/rag-sync-job.secrets.txt)" \
+            --update-labels=quaia_deploy_marker=$$MARKER
+        fi
+        # The orchestrator runs as the default compute service account unless one was assigned.
+        ORCHESTRATOR_SA=$$(gcloud run services describe orchestrator --region=us-central1 --format='value(spec.template.spec.serviceAccountName)')
+        if [ -z "$$ORCHESTRATOR_SA" ]; then
+          ORCHESTRATOR_SA="$$(gcloud projects describe $PROJECT_ID --format='value(projectNumber)')-compute@developer.gserviceaccount.com"
+        fi
+        # Least privilege: run.jobs.runWithOverrides on this one job only.
+        gcloud run jobs add-iam-policy-binding rag-sync-job \
+          --region=us-central1 \
+          --member="serviceAccount:$$ORCHESTRATOR_SA" \
+          --role=roles/run.jobsExecutorWithOverrides
 
   # Deploy to Cloud Run requirements-review-agent
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
-    entrypoint: gcloud
+    entrypoint: 'bash'
     args:
-      - 'run'
-      - 'deploy'
-      - 'requirements-review-agent'
-      - '--image=gcr.io/$PROJECT_ID/requirements-review-agent'
-      - '--platform=managed'
-      - '--ingress=internal'
-      - '--network=agent-network'
-      - '--subnet=agent-network'
-      - '--vpc-egress=all-traffic'
-      - '--region=us-central1'
-      - '--allow-unauthenticated'
-      - '--memory=3Gi'
-      - '--max-instances=1'
-      - '--concurrency=2'
-      - '--set-secrets=GOOGLE_API_KEY=GOOGLE_API_KEY:latest,JIRA_API_TOKEN=JIRA_API_TOKEN:latest,JIRA_USERNAME=JIRA_USERNAME:latest,ZEPHYR_API_TOKEN=ZEPHYR_API_TOKEN:latest,JIRA_URL=JIRA_URL:latest,JIRA_MCP_SERVER_URL=JIRA_MCP_SERVER_URL:latest,ZEPHYR_BASE_URL=ZEPHYR_BASE_URL:latest'
-      - '--set-env-vars=TZ=$_TIMEZONE,GOOGLE_CLOUD_LOGGING_ENABLED=true,AGENT_BASE_URL=$_REQUIREMENTS_REVIEW_AGENT_BASE_URL,EXTERNAL_PORT=443,EMBEDDING_SERVICE_URL=$_EMBEDDING_SERVICE_URL,PROMPT_GUARD_SERVICE_URL=$_PROMPT_GUARD_SERVICE_URL,ATTACHMENTS_LOCAL_DESTINATION_FOLDER_PATH=$_LOCAL_ATTACHMENTS_MOUNT_PATH,MCP_SERVER_ATTACHMENTS_FOLDER_PATH=$_JIRA_MCP_SERVER_ATTACHMENTS_MOUNT_PATH'
-      - '--port=8001'
-      - '--add-volume=type=cloud-storage,name=jira-volume,bucket=$_BUCKET_NAME,mount-options=only-dir=$_JIRA_ATTACHMENTS_FOLDER'
-      - '--add-volume-mount=volume=jira-volume,mount-path=$_LOCAL_ATTACHMENTS_MOUNT_PATH'
+      - '-c'
+      - |
+        MARKER=$$(cat deploy/rendered/requirements-review-agent.marker)
+        if [ "$$(bash deploy/redeploy_gate.sh service requirements-review-agent us-central1 "$$MARKER")" = "skip" ]; then
+          exit 0
+        fi
+        PROMPT_OVERRIDE_ARGS=""
+        if [ -n "$_PROMPT_OVERRIDES_DIR" ]; then
+          PROMPT_OVERRIDE_ARGS="--add-volume=type=cloud-storage,name=prompt-overrides,bucket=$_PROMPT_OVERRIDES_BUCKET,mount-options=only-dir=$_PROMPT_OVERRIDES_FOLDER --add-volume-mount=volume=prompt-overrides,mount-path=$_PROMPT_OVERRIDES_DIR"
+        fi
+
+        gcloud run deploy requirements-review-agent \
+          --image=gcr.io/$PROJECT_ID/requirements-review-agent \
+          --platform=managed \
+          --ingress=internal \
+          --network=agent-network \
+          --subnet=agent-network \
+          --vpc-egress=all-traffic \
+          --region=us-central1 \
+          --allow-unauthenticated \
+          --memory=3Gi \
+          --max-instances=1 \
+          --concurrency=2 \
+          --env-vars-file=deploy/rendered/requirements-review-agent.env.yaml \
+          --set-secrets="$$(cat deploy/rendered/requirements-review-agent.secrets.txt)" \
+          --update-labels=quaia_deploy_marker=$$MARKER \
+          --port=8001 \
+          $$PROMPT_OVERRIDE_ARGS
 
   # Deploy to Cloud Run test-case-generation-agent
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
-    entrypoint: gcloud
+    entrypoint: 'bash'
     args:
-      - 'run'
-      - 'deploy'
-      - 'test-case-generation-agent'
-      - '--image=gcr.io/$PROJECT_ID/test-case-generation-agent'
-      - '--platform=managed'
-      - '--ingress=internal'
-      - '--network=agent-network'
-      - '--subnet=agent-network'
-      - '--vpc-egress=all-traffic'
-      - '--region=us-central1'
-      - '--allow-unauthenticated'
-      - '--memory=3Gi'
-      - '--max-instances=1'
-      - '--concurrency=2'
-      - '--set-secrets=GOOGLE_API_KEY=GOOGLE_API_KEY:latest,JIRA_API_TOKEN=JIRA_API_TOKEN:latest,JIRA_USERNAME=JIRA_USERNAME:latest,ZEPHYR_API_TOKEN=ZEPHYR_API_TOKEN:latest,JIRA_URL=JIRA_URL:latest,JIRA_MCP_SERVER_URL=JIRA_MCP_SERVER_URL:latest,ZEPHYR_BASE_URL=ZEPHYR_BASE_URL:latest'
-      - '--set-env-vars=TZ=$_TIMEZONE,GOOGLE_CLOUD_LOGGING_ENABLED=true,AGENT_BASE_URL=$_TEST_CASE_GENERATION_AGENT_BASE_URL,EXTERNAL_PORT=443,EMBEDDING_SERVICE_URL=$_EMBEDDING_SERVICE_URL,PROMPT_GUARD_SERVICE_URL=$_PROMPT_GUARD_SERVICE_URL,ATTACHMENTS_LOCAL_DESTINATION_FOLDER_PATH=$_LOCAL_ATTACHMENTS_MOUNT_PATH,MCP_SERVER_ATTACHMENTS_FOLDER_PATH=$_JIRA_MCP_SERVER_ATTACHMENTS_MOUNT_PATH'
-      - '--port=8001'
-      - '--add-volume=type=cloud-storage,name=jira-volume,bucket=$_BUCKET_NAME,mount-options=only-dir=$_JIRA_ATTACHMENTS_FOLDER'
-      - '--add-volume-mount=volume=jira-volume,mount-path=$_LOCAL_ATTACHMENTS_MOUNT_PATH'
+      - '-c'
+      - |
+        MARKER=$$(cat deploy/rendered/test-case-generation-agent.marker)
+        if [ "$$(bash deploy/redeploy_gate.sh service test-case-generation-agent us-central1 "$$MARKER")" = "skip" ]; then
+          exit 0
+        fi
+        PROMPT_OVERRIDE_ARGS=""
+        if [ -n "$_PROMPT_OVERRIDES_DIR" ]; then
+          PROMPT_OVERRIDE_ARGS="--add-volume=type=cloud-storage,name=prompt-overrides,bucket=$_PROMPT_OVERRIDES_BUCKET,mount-options=only-dir=$_PROMPT_OVERRIDES_FOLDER --add-volume-mount=volume=prompt-overrides,mount-path=$_PROMPT_OVERRIDES_DIR"
+        fi
+
+        gcloud run deploy test-case-generation-agent \
+          --image=gcr.io/$PROJECT_ID/test-case-generation-agent \
+          --platform=managed \
+          --ingress=internal \
+          --network=agent-network \
+          --subnet=agent-network \
+          --vpc-egress=all-traffic \
+          --region=us-central1 \
+          --allow-unauthenticated \
+          --memory=3Gi \
+          --max-instances=1 \
+          --concurrency=2 \
+          --env-vars-file=deploy/rendered/test-case-generation-agent.env.yaml \
+          --set-secrets="$$(cat deploy/rendered/test-case-generation-agent.secrets.txt)" \
+          --update-labels=quaia_deploy_marker=$$MARKER \
+          --port=8001 \
+          $$PROMPT_OVERRIDE_ARGS
 
   # Deploy to Cloud Run test-case-classification-agent
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
-    entrypoint: gcloud
+    entrypoint: 'bash'
     args:
-      - 'run'
-      - 'deploy'
-      - 'test-case-classification-agent'
-      - '--image=gcr.io/$PROJECT_ID/test-case-classification-agent'
-      - '--platform=managed'
-      - '--ingress=internal'
-      - '--network=agent-network'
-      - '--subnet=agent-network'
-      - '--vpc-egress=all-traffic'
-      - '--region=us-central1'
-      - '--allow-unauthenticated'
-      - '--memory=3Gi'
-      - '--max-instances=1'
-      - '--concurrency=2'
-      - '--set-secrets=GOOGLE_API_KEY=GOOGLE_API_KEY:latest,JIRA_API_TOKEN=JIRA_API_TOKEN:latest,JIRA_USERNAME=JIRA_USERNAME:latest,ZEPHYR_API_TOKEN=ZEPHYR_API_TOKEN:latest,JIRA_URL=JIRA_URL:latest,JIRA_MCP_SERVER_URL=JIRA_MCP_SERVER_URL:latest,ZEPHYR_BASE_URL=ZEPHYR_BASE_URL:latest'
-      - '--set-env-vars=TZ=$_TIMEZONE,GOOGLE_CLOUD_LOGGING_ENABLED=true,AGENT_BASE_URL=$_TEST_CASE_CLASSIFICATION_AGENT_BASE_URL,EXTERNAL_PORT=443,EMBEDDING_SERVICE_URL=$_EMBEDDING_SERVICE_URL,PROMPT_GUARD_SERVICE_URL=$_PROMPT_GUARD_SERVICE_URL,ATTACHMENTS_LOCAL_DESTINATION_FOLDER_PATH=$_LOCAL_ATTACHMENTS_MOUNT_PATH,MCP_SERVER_ATTACHMENTS_FOLDER_PATH=$_JIRA_MCP_SERVER_ATTACHMENTS_MOUNT_PATH'
-      - '--port=8001'
-      - '--add-volume=type=cloud-storage,name=jira-volume,bucket=$_BUCKET_NAME,mount-options=only-dir=$_JIRA_ATTACHMENTS_FOLDER'
-      - '--add-volume-mount=volume=jira-volume,mount-path=$_LOCAL_ATTACHMENTS_MOUNT_PATH'
+      - '-c'
+      - |
+        MARKER=$$(cat deploy/rendered/test-case-classification-agent.marker)
+        if [ "$$(bash deploy/redeploy_gate.sh service test-case-classification-agent us-central1 "$$MARKER")" = "skip" ]; then
+          exit 0
+        fi
+        PROMPT_OVERRIDE_ARGS=""
+        if [ -n "$_PROMPT_OVERRIDES_DIR" ]; then
+          PROMPT_OVERRIDE_ARGS="--add-volume=type=cloud-storage,name=prompt-overrides,bucket=$_PROMPT_OVERRIDES_BUCKET,mount-options=only-dir=$_PROMPT_OVERRIDES_FOLDER --add-volume-mount=volume=prompt-overrides,mount-path=$_PROMPT_OVERRIDES_DIR"
+        fi
+
+        gcloud run deploy test-case-classification-agent \
+          --image=gcr.io/$PROJECT_ID/test-case-classification-agent \
+          --platform=managed \
+          --ingress=internal \
+          --network=agent-network \
+          --subnet=agent-network \
+          --vpc-egress=all-traffic \
+          --region=us-central1 \
+          --allow-unauthenticated \
+          --memory=3Gi \
+          --max-instances=1 \
+          --concurrency=2 \
+          --env-vars-file=deploy/rendered/test-case-classification-agent.env.yaml \
+          --set-secrets="$$(cat deploy/rendered/test-case-classification-agent.secrets.txt)" \
+          --update-labels=quaia_deploy_marker=$$MARKER \
+          --port=8001 \
+          $$PROMPT_OVERRIDE_ARGS
 
   # Deploy to Cloud Run test-case-review-agent
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
-    entrypoint: gcloud
+    entrypoint: 'bash'
     args:
-      - 'run'
-      - 'deploy'
-      - 'test-case-review-agent'
-      - '--image=gcr.io/$PROJECT_ID/test-case-review-agent'
-      - '--platform=managed'
-      - '--ingress=internal'
-      - '--network=agent-network'
-      - '--subnet=agent-network'
-      - '--vpc-egress=all-traffic'
-      - '--region=us-central1'
-      - '--allow-unauthenticated'
-      - '--memory=3Gi'
-      - '--max-instances=1'
-      - '--concurrency=2'
-      - '--set-secrets=GOOGLE_API_KEY=GOOGLE_API_KEY:latest,JIRA_API_TOKEN=JIRA_API_TOKEN:latest,JIRA_USERNAME=JIRA_USERNAME:latest,ZEPHYR_API_TOKEN=ZEPHYR_API_TOKEN:latest,JIRA_URL=JIRA_URL:latest,JIRA_MCP_SERVER_URL=JIRA_MCP_SERVER_URL:latest,ZEPHYR_BASE_URL=ZEPHYR_BASE_URL:latest'
-      - '--set-env-vars=TZ=$_TIMEZONE,GOOGLE_CLOUD_LOGGING_ENABLED=true,AGENT_BASE_URL=$_TEST_CASE_REVIEW_AGENT_BASE_URL,EXTERNAL_PORT=443,EMBEDDING_SERVICE_URL=$_EMBEDDING_SERVICE_URL,PROMPT_GUARD_SERVICE_URL=$_PROMPT_GUARD_SERVICE_URL,ATTACHMENTS_LOCAL_DESTINATION_FOLDER_PATH=$_LOCAL_ATTACHMENTS_MOUNT_PATH,MCP_SERVER_ATTACHMENTS_FOLDER_PATH=$_JIRA_MCP_SERVER_ATTACHMENTS_MOUNT_PATH'
-      - '--port=8001'
-      - '--add-volume=type=cloud-storage,name=jira-volume,bucket=$_BUCKET_NAME,mount-options=only-dir=$_JIRA_ATTACHMENTS_FOLDER'
-      - '--add-volume-mount=volume=jira-volume,mount-path=$_LOCAL_ATTACHMENTS_MOUNT_PATH'
+      - '-c'
+      - |
+        MARKER=$$(cat deploy/rendered/test-case-review-agent.marker)
+        if [ "$$(bash deploy/redeploy_gate.sh service test-case-review-agent us-central1 "$$MARKER")" = "skip" ]; then
+          exit 0
+        fi
+        PROMPT_OVERRIDE_ARGS=""
+        if [ -n "$_PROMPT_OVERRIDES_DIR" ]; then
+          PROMPT_OVERRIDE_ARGS="--add-volume=type=cloud-storage,name=prompt-overrides,bucket=$_PROMPT_OVERRIDES_BUCKET,mount-options=only-dir=$_PROMPT_OVERRIDES_FOLDER --add-volume-mount=volume=prompt-overrides,mount-path=$_PROMPT_OVERRIDES_DIR"
+        fi
+
+        gcloud run deploy test-case-review-agent \
+          --image=gcr.io/$PROJECT_ID/test-case-review-agent \
+          --platform=managed \
+          --ingress=internal \
+          --network=agent-network \
+          --subnet=agent-network \
+          --vpc-egress=all-traffic \
+          --region=us-central1 \
+          --allow-unauthenticated \
+          --memory=3Gi \
+          --max-instances=1 \
+          --concurrency=2 \
+          --env-vars-file=deploy/rendered/test-case-review-agent.env.yaml \
+          --set-secrets="$$(cat deploy/rendered/test-case-review-agent.secrets.txt)" \
+          --update-labels=quaia_deploy_marker=$$MARKER \
+          --port=8001 \
+          $$PROMPT_OVERRIDE_ARGS
 
   # Deploy to Cloud Run incident-creation-agent
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
-    entrypoint: gcloud
+    entrypoint: 'bash'
     args:
-      - 'beta'
-      - 'run'
-      - 'deploy'
-      - 'incident-creation-agent'
-      - '--image=gcr.io/$PROJECT_ID/incident-creation-agent'
-      - '--platform=managed'
-      - '--ingress=internal'
-      - '--network=agent-network'
-      - '--subnet=agent-network'
-      - '--vpc-egress=all-traffic'
-      - '--region=us-central1'
-      - '--allow-unauthenticated'
-      - '--memory=3Gi'
-      - '--max-instances=1'
-      - '--concurrency=2'
-      - '--set-secrets=GOOGLE_API_KEY=GOOGLE_API_KEY:latest,JIRA_API_TOKEN=JIRA_API_TOKEN:latest,JIRA_USERNAME=JIRA_USERNAME:latest,ZEPHYR_API_TOKEN=ZEPHYR_API_TOKEN:latest,JIRA_URL=JIRA_URL:latest,JIRA_MCP_SERVER_URL=JIRA_MCP_SERVER_URL:latest,ZEPHYR_BASE_URL=ZEPHYR_BASE_URL:latest,QDRANT_API_KEY=QDRANT_API_KEY:latest'
-      - '--set-env-vars=TZ=$_TIMEZONE,GOOGLE_CLOUD_LOGGING_ENABLED=true,AGENT_BASE_URL=$_INCIDENT_CREATION_AGENT_BASE_URL,EXTERNAL_PORT=443,EMBEDDING_SERVICE_URL=$_EMBEDDING_SERVICE_URL,PROMPT_GUARD_SERVICE_URL=$_PROMPT_GUARD_SERVICE_URL,QDRANT_URL=$_QDRANT_URL,QDRANT_PORT=443,ATTACHMENTS_LOCAL_DESTINATION_FOLDER_PATH=$_LOCAL_ATTACHMENTS_MOUNT_PATH,MCP_SERVER_ATTACHMENTS_FOLDER_PATH=$_JIRA_MCP_SERVER_ATTACHMENTS_MOUNT_PATH'
-      - '--add-volume=type=cloud-storage,name=jira-volume,bucket=$_BUCKET_NAME,mount-options=only-dir=$_JIRA_ATTACHMENTS_FOLDER'
-      - '--add-volume-mount=volume=jira-volume,mount-path=$_LOCAL_ATTACHMENTS_MOUNT_PATH'
-      - '--port=8001'
+      - '-c'
+      - |
+        MARKER=$$(cat deploy/rendered/incident-creation-agent.marker)
+        if [ "$$(bash deploy/redeploy_gate.sh service incident-creation-agent us-central1 "$$MARKER")" = "skip" ]; then
+          exit 0
+        fi
+        PROMPT_OVERRIDE_ARGS=""
+        if [ -n "$_PROMPT_OVERRIDES_DIR" ]; then
+          PROMPT_OVERRIDE_ARGS="--add-volume=type=cloud-storage,name=prompt-overrides,bucket=$_PROMPT_OVERRIDES_BUCKET,mount-options=only-dir=$_PROMPT_OVERRIDES_FOLDER --add-volume-mount=volume=prompt-overrides,mount-path=$_PROMPT_OVERRIDES_DIR"
+        fi
+
+        gcloud beta run deploy incident-creation-agent \
+          --image=gcr.io/$PROJECT_ID/incident-creation-agent \
+          --platform=managed \
+          --ingress=internal \
+          --network=agent-network \
+          --subnet=agent-network \
+          --vpc-egress=all-traffic \
+          --region=us-central1 \
+          --allow-unauthenticated \
+          --memory=3Gi \
+          --max-instances=1 \
+          --concurrency=2 \
+          --env-vars-file=deploy/rendered/incident-creation-agent.env.yaml \
+          --set-secrets="$$(cat deploy/rendered/incident-creation-agent.secrets.txt)" \
+          --update-labels=quaia_deploy_marker=$$MARKER \
+          --add-volume=type=cloud-storage,name=jira-volume,bucket=$_BUCKET_NAME,mount-options=only-dir=$_JIRA_ATTACHMENTS_FOLDER \
+          --add-volume-mount=volume=jira-volume,mount-path=$_LOCAL_ATTACHMENTS_MOUNT_PATH \
+          --port=8001 \
+          $$PROMPT_OVERRIDE_ARGS
 
 substitutions:
   _TIMEZONE: 'Europe/Vienna'
   _DEPLOY_ALL_SERVICES: 'false'
-  _DEPLOY_JIRA_MCP: 'false'
+  _DEPLOY_ATLASSIAN_MCP: 'false'
   _DEPLOY_EMBEDDING_SERVICE: 'false'
   _DEPLOY_PROMPT_GUARD: 'false'
   _DEPLOY_QDRANT: 'false'
+  _ATLASSIAN_MCP_IMAGE_TAG: '0.21.1'
+  _QDRANT_IMAGE_TAG: 'v1.16.3'
   _JIRA_ATTACHMENTS_FOLDER: 'jira'
   _LOCAL_ATTACHMENTS_MOUNT_PATH: '/tmp'
   _JIRA_MCP_SERVER_ATTACHMENTS_MOUNT_PATH: '/tmp'
@@ -387,10 +555,29 @@ substitutions:
   _ORCHESTRATOR_REQUEST_TIMEOUT: '3500s'
   _EMBEDDING_SERVICE_URL: ''
   _PROMPT_GUARD_SERVICE_URL: ''
+  _EMBEDDING_MEMORY: '8Gi'
+  _EMBEDDING_CPU: '2'
+  _EMBEDDING_BACKENDS: 'text'
+  _EMBEDDING_TEXT_MODEL: 'BAAI/bge-m3'
   _QDRANT_URL: ''
+  _RAG_SYNC_TASK_TIMEOUT_SECONDS: '3600'
+  _RAG_SYNC_LOCK_TTL_SECONDS: '3900'
+  _RAG_SYNC_START_ALLOWANCE_SECONDS: '300'
+  _RAG_SYNC_MEMORY: '4Gi'
+  _RAG_SYNC_CPU: '2'
+  _QDRANT_DOCUMENTS_COLLECTION_NAME: 'confluence_documents'
+  _RAG_OFFICE_CONVERSION_ENABLED: 'true'
+  _RAG_MAX_ATTACHMENT_BYTES: '104857600'
+  _RAG_MAX_PAGES_PER_DOCUMENT: '200'
+  _RAG_RENDER_DPI: '150'
+  _RAG_MAX_IMAGE_DIMENSION: '4096'
   _QDRANT_STORAGE_FOLDER: 'qdrant'
+  _PROMPT_OVERRIDES_DIR: ''
+  _PROMPT_OVERRIDES_BUCKET: ''
+  _PROMPT_OVERRIDES_FOLDER: ''
 
 images:
+  - 'gcr.io/$PROJECT_ID/rag-sync-job'
   - 'gcr.io/$PROJECT_ID/requirements-review-agent'
   - 'gcr.io/$PROJECT_ID/test-case-generation-agent'
   - 'gcr.io/$PROJECT_ID/test-case-classification-agent'

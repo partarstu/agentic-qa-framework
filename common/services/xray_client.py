@@ -9,18 +9,74 @@ import httpx
 
 import config
 from common import utils
-from common.models import TestCase, TestExecutionResult, TestStep
+from common.models import ListedTestCase, TestCase, TestExecutionResult, TestStep
 from common.services.test_management_base import TestManagementClientBase
 
 logger = utils.get_logger(__name__)
 
 PRECONDITIONS_FIELD_ID = config.XRAY_PRECONDITIONS_FIELD_ID
+# The GraphQL API rejects a larger page size.
+XRAY_PAGE_LIMIT = 100
 
 
 class XrayClient(TestManagementClientBase):
     """
     A client for interacting with the Xray Cloud API.
     """
+
+    def fetch_test_cases_by_project(self, project_key: str) -> list[ListedTestCase]:
+        """List every test case of the project with its current status (full resync).
+
+        Xray offers no cheap "changed since" query, which is why the test-case sync is a full
+        resync; the listing pages through one JQL query over the GraphQL API, 100 tests per page
+        (the API's maximum ``limit``).
+        """
+        query = f"""
+        query getTests($jql: String!, $limit: Int!, $start: Int!) {{
+            getTests(jql: $jql, limit: $limit, start: $start) {{
+                total
+                results {{
+                    issueId
+                    steps {{
+                        id
+                        action
+                        data
+                        result
+                    }}
+                    jira(fields: ["summary", "labels", "parent", "status", "{PRECONDITIONS_FIELD_ID}"])
+                }}
+            }}
+        }}
+        """
+        results: list[dict] = []
+        while True:
+            variables = {"jql": f'project = "{project_key}"', "limit": XRAY_PAGE_LIMIT, "start": len(results)}
+            page = self._execute_graphql_query(query, variables).get("data", {}).get("getTests", {})
+            page_results = page.get("results", [])
+            results.extend(page_results)
+            if not page_results or len(results) >= page.get("total", 0):
+                break
+        listed: list[ListedTestCase] = []
+        for result in results:
+            jira_fields = result.get("jira", {})
+            summary = jira_fields.get("summary", "")
+            steps = [
+                TestStep(action=step["action"], expected_results=step["result"], test_data=[step["data"]])
+                for step in result.get("steps", [])
+            ]
+            test_case = TestCase(
+                key=result["issueId"],
+                name=summary,
+                summary=summary,
+                preconditions=jira_fields.get(PRECONDITIONS_FIELD_ID, ""),
+                steps=steps,
+                parent_issue_key=jira_fields.get("parent", {}).get("key"),
+                labels=jira_fields.get("labels", []),
+                comment="",
+            )
+            status = (jira_fields.get("status") or {}).get("name", "")
+            listed.append(ListedTestCase(test_case=test_case, status=status))
+        return listed
 
     def __init__(self):
         """

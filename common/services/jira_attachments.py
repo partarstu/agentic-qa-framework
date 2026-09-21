@@ -1,0 +1,139 @@
+# SPDX-FileCopyrightText: 2025-2026 Taras Paruta (partarstu@gmail.com)
+#
+# SPDX-License-Identifier: AGPL-3.0-only
+
+"""REST download of a Jira issue's attachments as model-ready binary content.
+
+Replaces the previous MCP message-scanning path: agents download the attachments
+of the issue being processed directly over the Jira REST API and hand them to the
+model as ``BinaryContent``, applying the same predicates as before (skip postfix,
+supported MIME type, text-equivalent media types).
+"""
+
+import asyncio
+import re
+
+import httpx
+from jira.resources import Attachment
+from pydantic_ai.exceptions import ModelRetry
+from pydantic_ai.messages import BinaryContent
+
+import config
+from common import utils
+from common.attachment_handler import (
+    as_text_equivalent,
+    is_supported_mime_type,
+    resolve_media_type,
+    should_skip_attachment,
+)
+from common.services.jira_client import build_jira_client
+
+logger = utils.get_logger("jira_attachments")
+
+# Jira issue keys are a project key, a hyphen and the issue number, e.g. PROJ-123.
+_ISSUE_KEY_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]*-\d+$")
+
+
+def require_valid_issue_key(issue_key: str) -> None:
+    """Rejects an issue key that the model made up or smuggled a path into.
+
+    Raises:
+        ModelRetry: When the key does not have the Jira issue key format. Raised as a retry, not
+            as a hard error, so the model can correct the key instead of failing the whole task.
+    """
+    if not _ISSUE_KEY_PATTERN.fullmatch(issue_key):
+        raise ModelRetry(
+            f"'{issue_key[:50]}' is not a Jira issue key. Pass the key of the issue you are working on, "
+            "in the format PROJ-123."
+        )
+
+
+def _resolve_content_url(content: str) -> str | None:
+    """Resolves an attachment's ``content`` field to the URL to download, or None when it is untrusted.
+
+    Jira Cloud returns an absolute URL; a relative path (seen on Data Center setups) is
+    appended to the base URL. Either way the resulting URL is used only when it shares the
+    configured base URL's origin, so the credentials never reach another origin (a crafted
+    relative path such as ``@other-host/...`` changes the host too).
+    """
+    try:
+        url = content if httpx.URL(content).scheme else f"{config.JIRA_BASE_URL}{content}"
+    except (httpx.InvalidURL, UnicodeError):
+        # URLs the client would refuse are untrusted as well.
+        return None
+    return url if utils.is_same_origin(url, config.JIRA_BASE_URL) else None
+
+
+def _download(content_url: str) -> bytes:
+    """Downloads one attachment's content with basic auth."""
+    response = httpx.get(
+        content_url,
+        auth=(config.JIRA_USER, config.JIRA_TOKEN),
+        follow_redirects=True,
+        timeout=config.JIRA_ATTACHMENT_DOWNLOAD_TIMEOUT_SECONDS,
+    )
+    response.raise_for_status()
+    return response.content
+
+
+def _rejection_reason(attachment: Attachment) -> str | None:
+    """Why an attachment is not handed to the model, or None when it is.
+
+    Applied to the listed metadata, before the content is downloaded: an unsupported or
+    oversized attachment must not be pulled into memory only to be discarded.
+    """
+    if should_skip_attachment(attachment.filename):
+        return "it carries the skip postfix"
+    if not is_supported_mime_type(resolve_media_type(attachment.mimeType)):
+        return f"its MIME type is not supported: {attachment.mimeType}"
+    listed_size = int(getattr(attachment, "size", 0) or 0)
+    if listed_size > config.JIRA_ATTACHMENT_MAX_BYTES:
+        return f"it is {listed_size} bytes, exceeding the {config.JIRA_ATTACHMENT_MAX_BYTES}-byte limit"
+    return None
+
+
+def download_issue_attachments(issue_key: str) -> dict[str, BinaryContent]:
+    """Downloads the supported attachments of a Jira issue over the REST API.
+
+    Raises:
+        ModelRetry: When the key does not have the Jira issue key format, so the model can correct it.
+    """
+    require_valid_issue_key(issue_key)
+    jira = build_jira_client()
+    issue = jira.issue(issue_key, fields="attachment")
+    attachments: dict[str, BinaryContent] = {}
+    for attachment in getattr(issue.fields, "attachment", None) or []:
+        filename = attachment.filename
+        rejection_reason = _rejection_reason(attachment)
+        if rejection_reason:
+            logger.info("Skipping attachment '%s' - %s.", filename, rejection_reason)
+            continue
+        content_url = _resolve_content_url(attachment.content)
+        if content_url is None:
+            logger.warning("Skipping attachment '%s' - its content URL is not on the configured Jira origin.", filename)
+            continue
+        content = _download(content_url)
+        if len(content) > config.JIRA_ATTACHMENT_MAX_BYTES:
+            # Reached when Jira omits or under-reports the size the pre-download check used.
+            logger.warning(
+                "Skipping attachment '%s' - it is %d bytes once downloaded, exceeding the %d-byte limit.",
+                filename,
+                len(content),
+                config.JIRA_ATTACHMENT_MAX_BYTES,
+            )
+            continue
+        attachments[filename] = as_text_equivalent(
+            BinaryContent(data=content, media_type=attachment.mimeType, identifier=filename)
+        )
+    logger.info("Downloaded %d attachment(s) of %s over REST.", len(attachments), issue_key)
+    return attachments
+
+
+async def fetch_issue_attachments(issue_key: str) -> dict[str, BinaryContent]:
+    """Downloads the attachments in a worker thread, for the agents' async tools.
+
+    The Jira SDK and the content downloads are synchronous, so calling them on the event
+    loop would stall the agent's activity streaming and health endpoint for the whole
+    download.
+    """
+    return await asyncio.to_thread(download_issue_attachments, issue_key)

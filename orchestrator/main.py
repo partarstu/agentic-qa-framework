@@ -13,9 +13,12 @@ import traceback
 from collections import defaultdict
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
+from urllib.parse import urlparse
 from uuid import uuid4
 
 import httpx
@@ -36,9 +39,10 @@ from a2a.types import (
     TaskState,
 )
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Security
+from fastapi.responses import JSONResponse
 from fastapi.security import APIKeyHeader
 from fastapi.staticfiles import StaticFiles
-from pydantic import ValidationError
+from pydantic import BaseModel, Field, ValidationError
 from pydantic_ai.exceptions import ModelHTTPError
 from sse_starlette.sse import EventSourceResponse, ServerSentEvent
 
@@ -48,21 +52,31 @@ from common.a2a_contract import ArtifactName
 from common.custom_llm_wrapper import CustomLlmWrapper
 from common.models import (
     AgentExecutionError,
+    AgentInfo,
+    AgentRoutingDecision,
+    ConfluenceSyncRequest,
     FileArtifact,
     GeneratedTestCases,
     IncidentCreationInput,
     IncidentCreationResult,
+    JiraSyncRequest,
     JsonSerializableModel,
     ProjectExecutionRequest,
-    SelectedAgent,
+    RoutingOutcome,
     SelectedAgents,
+    SharePointSyncRequest,
+    SyncOutcome,
+    SyncRequest,
+    SyncStatus,
     TestCase,
+    TestCaseType,
     TestExecutionRequest,
     TestExecutionResult,
 )
-from common.services.rag_sync_service import get_rag_sync_service
+from common.services.sync_lock_store import SyncLockHeldError
 from common.services.test_management_system_client_provider import get_test_management_client
 from common.services.test_reporting_client_base_provider import get_test_reporting_client
+from common.services.vector_db_service import VectorDbService
 from common.streaming import (
     AgentActivityEvent,
     AgentSnapshot,
@@ -73,8 +87,9 @@ from common.streaming import (
     TaskDoneEvent,
 )
 from common.token_usage import TokenUsage
-from orchestrator.auth import LoginRequest, TokenResponse, auth_service, dashboard_auth
+from orchestrator.auth import LoginRequest, TokenResponse, auth_service, client_ip, dashboard_auth, login_rate_limiter
 from orchestrator.dashboard_service import dashboard_service
+from orchestrator.dashboard_state import dashboard_state_store
 from orchestrator.memory_log_handler import setup_memory_logging
 from orchestrator.models import (
     AgentStatus,
@@ -86,6 +101,13 @@ from orchestrator.models import (
     error_history,
     task_history,
 )
+from orchestrator.prompt import (
+    MULTI_ROUTING_INSTRUCTION,
+    RESULTS_EXTRACTOR_INSTRUCTION,
+    ROUTING_INSTRUCTION,
+    build_additional_fields_instruction,
+)
+from orchestrator.rag_sync_trigger import RagSyncTrigger, SyncStartResult, SyncTriggerError
 from orchestrator.streaming_hub import _Subscriber, streaming_hub
 
 logger = utils.get_logger("orchestrator")
@@ -94,9 +116,23 @@ logger = utils.get_logger("orchestrator")
 setup_memory_logging()
 
 execution_lock = asyncio.Lock()
+report_lock = asyncio.Lock()
+discovery_lock = asyncio.Lock()  # Serialises the startup, periodic and manual discovery runs
 agent_selection_lock = asyncio.Lock()  # Ensures atomic agent selection and reservation
 cancellation_queue = asyncio.Queue()
 _results_extractor_semaphore = asyncio.Semaphore(1)  # Serializes extractor calls to avoid rate limit errors
+
+# How loudly a reported sync outcome is logged; anything else is an ordinary INFO event.
+_SYNC_OUTCOME_LOG_LEVELS = {
+    SyncStatus.FAILED: logging.ERROR,
+    SyncStatus.COMPLETED_WITH_ERRORS: logging.WARNING,
+}
+
+# The agent a send-task call actually reserved. Routing may pick a different agent than the caller
+# proposed, and the execution result reports which agent ran the test, so the caller reads it back
+# from here rather than from the id it passed in. Set inside the awaited call, so it reaches the
+# caller's context; a concurrent task runs in a context of its own and cannot overwrite it.
+_reserved_agent_id: ContextVar[str | None] = ContextVar("reserved_agent_id", default=None)
 
 # Stream token store: token string -> (username, expires_at). Keyed by opaque token.
 _stream_token_store: dict[str, tuple[str, datetime]] = {}
@@ -124,6 +160,8 @@ class EndpointFilter(logging.Filter):
 # noinspection PyUnusedLocal
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    auth_service.validate_configuration()
+    await dashboard_state_store.start()
     # Filter out dashboard polling logs from uvicorn access logger
     logging.getLogger("uvicorn.access").addFilter(EndpointFilter())
 
@@ -164,6 +202,7 @@ async def lifespan(app: FastAPI):
             logger.info("Cancellation retry task successfully cancelled.")
 
     await streaming_hub.shutdown()
+    await dashboard_state_store.close()
 
 
 def _validate_api_key(api_key: str = Security(api_key_header)):
@@ -185,11 +224,18 @@ orchestrator_app = FastAPI(lifespan=lifespan)
 
 
 @orchestrator_app.post("/api/auth/login", response_model=TokenResponse)
-async def login(request: LoginRequest):
+async def login(login_request: LoginRequest, http_request: Request):
     """Authenticate user and return a JWT token."""
-    if not auth_service.authenticate(request.username, request.password):
+    retry_after = login_rate_limiter.check(client_ip(http_request))
+    if retry_after is not None:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many login attempts. Please wait before trying again.",
+            headers={"Retry-After": str(retry_after)},
+        )
+    if not await asyncio.to_thread(auth_service.authenticate, login_request.username, login_request.password):
         raise HTTPException(status_code=401, detail="Invalid username or password")
-    return auth_service.create_token(request.username)
+    return auth_service.create_token(login_request.username)
 
 
 @orchestrator_app.post("/api/auth/logout")
@@ -245,6 +291,20 @@ async def get_recent_errors(limit: int = Query(default=20, le=50), _: str = Depe
     return await dashboard_service.get_recent_errors(limit=limit)
 
 
+@orchestrator_app.get("/api/dashboard/rag-sync-status")
+async def get_rag_sync_status(_: str = Depends(dashboard_auth)):
+    """Get durable RAG sync outcomes for the dashboard panel."""
+    return await dashboard_service.get_rag_sync_status()
+
+
+@orchestrator_app.post("/sync-outcome")
+async def receive_sync_outcome(outcome: SyncOutcome, api_key: str = Depends(_validate_api_key)):
+    """Record a validated sync completion callback without changing job success semantics."""
+    level = _SYNC_OUTCOME_LOG_LEVELS.get(outcome.status, logging.INFO)
+    logger.log(level, "Sync %s for %s: %s", outcome.status, outcome.scope, outcome.message)
+    return {"accepted": True}
+
+
 @orchestrator_app.get("/api/dashboard/logs")
 async def get_logs(
     limit: int = Query(default=100),
@@ -260,10 +320,9 @@ async def get_logs(
 
 @orchestrator_app.post("/api/dashboard/discovery")
 async def trigger_agent_discovery(_: str = Depends(dashboard_auth)):
-    """Manually trigger agent discovery."""
+    """Manually trigger agent discovery and report the reachable and removed agents."""
     try:
-        await _discover_agents()
-        return {"message": "Agent discovery triggered successfully"}
+        return await _run_manual_discovery()
     except HTTPException:
         raise
     except Exception as e:
@@ -479,6 +538,40 @@ async def _retry_cancellation_task():
             await asyncio.sleep(5)
 
 
+def _build_agent_info(card: AgentCard | None, agent_name: str) -> AgentInfo:
+    """Traceability data for a test execution result: which agent ran it, in which version and environment."""
+    return AgentInfo(
+        agent_name=card.name if card else agent_name,
+        agent_version=card.version if card else "unknown",
+        environment=config.OrchestratorConfig.TEST_ENVIRONMENT_LABEL,
+    )
+
+
+def _describe_execution_system(agent_info: AgentInfo) -> str:
+    """Fallback description of the system a test case was executed on."""
+    return f"Agent: {agent_info.agent_name} (version {agent_info.agent_version}), Environment: {agent_info.environment}"
+
+
+def _get_agent_host(card: AgentCard | None) -> str:
+    """Hostname of an agent's primary interface, so log lines name the machine the agent runs on."""
+    if not card or not card.supported_interfaces:
+        return "unknown"
+    return urlparse(card.supported_interfaces[0].url).hostname or "unknown"
+
+
+def _build_jira_issue_task_text(issue_key: str) -> str:
+    """Builds the task text for every task that hands a Jira issue to an agent.
+
+    When JIRA_ADDITIONAL_FIELD_IDS is configured, an instruction is appended that tells the agent to
+    fetch those custom fields together with the issue and to treat their values as issue content.
+    """
+    task_text = f"Jira user story with key {issue_key}"
+    additional_fields_instruction = build_additional_fields_instruction()
+    if additional_fields_instruction:
+        task_text = f"{task_text}\n\n{additional_fields_instruction}"
+    return task_text
+
+
 def _build_agent_auth_headers() -> dict[str, str]:
     """Build the Authorization header for calls to the execution agents' guarded main endpoint.
 
@@ -489,15 +582,7 @@ def _build_agent_auth_headers() -> dict[str, str]:
 
 
 async def _cancel_agent_task(agent_card: AgentCard, task_id: str) -> bool:
-    """Attempt to cancel a task on an agent using the A2A protocol.
-
-    Args:
-        agent_card: The agent's card containing connection info.
-        task_id: The ID of the task to cancel.
-
-    Returns:
-        True if cancellation was successful or acknowledged, False otherwise.
-    """
+    """Attempt to cancel a task on an agent using the A2A protocol."""
     httpx_client: httpx.AsyncClient | None = None
     try:
         httpx_client = httpx.AsyncClient(
@@ -534,15 +619,12 @@ async def _cancel_agent_task(agent_card: AgentCard, task_id: str) -> bool:
 # --- For selecting the single best for the task agent ---
 discovery_agent = CustomLlmWrapper.create_agent(
     model_name=config.OrchestratorConfig.MODEL_NAME,
-    output_type=SelectedAgent,
-    instructions="You are an intelligent orchestrator specialized on routing the target task to one of the agents "
-    "which are registered with you. Your task is to select one agent to handle the target "
-    "task based on the description of this task and the list of all available candidate agents "
-    " (this list has the info about the capabilities of each agent). If there is no agent that can "
-    "execute the target task, return an empty string.",
+    output_type=AgentRoutingDecision,
+    instructions=ROUTING_INSTRUCTION,
     name="Discovery Agent",
     retries=config.RetryConfig.MAX_RETRIES,
     thinking_level=config.OrchestratorConfig.THINKING_LEVEL,
+    max_output_tokens=config.OrchestratorConfig.MAX_OUTPUT_TOKENS,
     output_retries=config.RetryConfig.MAX_RETRIES,
 )
 
@@ -550,12 +632,11 @@ discovery_agent = CustomLlmWrapper.create_agent(
 multi_discovery_agent = CustomLlmWrapper.create_agent(
     model_name=config.OrchestratorConfig.MODEL_NAME,
     output_type=SelectedAgents,
-    instructions="You are an intelligent orchestrator specialized on routing tasks. Your task is to select all agents "
-    "that can handle the target task based on the task's description and a list of available agents. "
-    "If no agents can execute the task, return an empty list.",
+    instructions=MULTI_ROUTING_INSTRUCTION,
     name="Multi-Discovery Agent",
     retries=config.RetryConfig.MAX_RETRIES,
     thinking_level=config.OrchestratorConfig.THINKING_LEVEL,
+    max_output_tokens=config.OrchestratorConfig.MAX_OUTPUT_TOKENS,
     output_retries=config.RetryConfig.MAX_RETRIES,
 )
 
@@ -565,12 +646,10 @@ def _get_results_extractor_agent(output_type: type[JsonSerializableModel] | type
     return CustomLlmWrapper.create_agent(
         model_name=config.OrchestratorConfig.MODEL_NAME,
         output_type=output_type,
-        instructions="You are an intelligent agent specialized on extracting the structured information based on the input "
-        "provided to you. Your task is to analyze the provided to you input, identify the requested "
-        "information inside of this input and return it in a format which is requested by the user. If you've "
-        "identified no matching information inside of the provided to you input, return an empty result.",
+        instructions=RESULTS_EXTRACTOR_INSTRUCTION,
         name="Results Extractor Agent",
         thinking_level=config.OrchestratorConfig.THINKING_LEVEL,
+        max_output_tokens=config.OrchestratorConfig.MAX_OUTPUT_TOKENS,
         retries=config.RetryConfig.MAX_RETRIES,
         output_retries=config.RetryConfig.MAX_RETRIES,
     )
@@ -612,13 +691,43 @@ async def _run_agent_with_retry(agent_call, base_delay: float = config.RetryConf
                 raise
 
 
-async def _run_results_extractor_with_retry(user_prompt: str) -> TestExecutionResult | None:
-    """Runs the results extractor with retry on transient LLM provider errors."""
-    result = await _run_agent_with_retry(
-        lambda: _get_results_extractor_agent(TestExecutionResult).run(user_prompt),
-        base_delay=config.RetryConfig.LLM_RESULTS_EXTRACTOR_RETRY_BASE_DELAY_SECONDS,
-    )
-    return result.output
+async def _extract_with_retry[T: (JsonSerializableModel, str)](
+    output_type: type[T], user_prompt: str, task_description: str
+) -> T:
+    """Extract structured information, retrying once with a differently shaped prompt.
+
+    The model occasionally returns nothing for the plain prompt; restating the very same request as a
+    labelled JSON payload gives it a second chance before the extraction is declared failed.
+
+    Raises:
+        RuntimeError: If both attempts fail or yield an empty result.
+    """
+    attempt_prompts = [
+        user_prompt,
+        json.dumps({"task_description": task_description, "source_prompt": user_prompt}, indent=2),
+    ]
+    last_failure: str = ""
+    for attempt, prompt in enumerate(attempt_prompts, start=1):
+        try:
+            result = await _run_agent_with_retry(
+                lambda extraction_prompt=prompt: _get_results_extractor_agent(output_type).run(extraction_prompt),
+                base_delay=config.RetryConfig.LLM_RESULTS_EXTRACTOR_RETRY_BASE_DELAY_SECONDS,
+            )
+            output = result.output if result else None
+            if output is not None and output != "":
+                return output
+            last_failure = "the extractor returned an empty result"
+        except Exception as e:
+            last_failure = f"{type(e).__name__}: {e}"
+        logger.warning(
+            "Extraction attempt %s/%s of '%s' failed: %s", attempt, len(attempt_prompts), task_description, last_failure
+        )
+    raise RuntimeError(f"Extraction of '{task_description}' failed after {len(attempt_prompts)} attempts.")
+
+
+async def _run_results_extractor_with_retry(user_prompt: str) -> TestExecutionResult:
+    """Runs the test execution results extractor with retry on transient LLM provider errors."""
+    return await _extract_with_retry(TestExecutionResult, user_prompt, "test execution results extraction")
 
 
 async def periodic_agent_discovery():
@@ -679,7 +788,7 @@ async def review_jira_requirements(request: Request, api_key: str = Depends(_val
         logger.info("Received an event from Jira, requesting requirements review from an agent.")
         user_story_id = await _get_jira_issue_key_from_request(request)
         task_description = f"Review the Jira user story {user_story_id}"
-        completed_task = await _send_task_to_agent(f"Jira user story with key {user_story_id}", task_description)
+        completed_task = await _send_task_to_agent(_build_jira_issue_task_text(user_story_id), task_description)
         _validate_task_status(completed_task, f"Review of the user story {user_story_id}")
         logger.info("Received response from an agent, requirements review seems to be complete.")
         return {"message": f"Review of the requirements for Jira user story {user_story_id} completed."}
@@ -720,22 +829,105 @@ async def trigger_test_case_generation_workflow(request: Request, api_key: str =
         _handle_exception(f"Test case generation workflow failed: {e}")
 
 
-# noinspection PyUnusedLocal
-@orchestrator_app.post("/update-rag-db")
-async def update_rag_db(request: ProjectExecutionRequest, api_key: str = Depends(_validate_api_key)):
+# =============================================================================
+# RAG Sync Endpoints
+# =============================================================================
+
+# Serializes lock acquisitions: valid because the orchestrator runs as a single
+# instance (its agent registry is in-memory and it is deployed with max-instances=1).
+_rag_sync_lock = asyncio.Lock()
+_rag_sync_trigger: RagSyncTrigger | None = None
+
+
+def _get_rag_sync_trigger() -> RagSyncTrigger:
+    """Lazily-created singleton trigger (avoids import-time vector DB clients)."""
+    global _rag_sync_trigger
+    if _rag_sync_trigger is None:
+        metadata_db = VectorDbService(config.QdrantConfig.METADATA_COLLECTION_NAME)
+        _rag_sync_trigger = RagSyncTrigger(metadata_db)
+    return _rag_sync_trigger
+
+
+class ManualTestExecutionRequest(BaseModel):
+    """Validated request for one explicitly selected unattended execution agent."""
+
+    # Xray test cases are Jira issues (PROJ-42); Zephyr Scale keys carry a "T" (PROJ-T42).
+    test_case_key: str = Field(min_length=1, max_length=100, pattern=r"^[A-Z][A-Z0-9_]*-T?\d+$")
+    agent_id: str = Field(min_length=1, max_length=100)
+    project_key: str = Field(min_length=1, max_length=50, pattern=r"^[A-Z][A-Z0-9_]*$")
+
+
+async def _trigger_rag_sync(source: str, scope_id: str, request: SyncRequest) -> SyncStartResult:
+    """Acquires the scope lock (serialized) and starts the sync in the configured mode.
+
+    The in-process mutex covers only the lock acquisition: the Qdrant lock record guards
+    the scope for the rest of the run, so a long inline local-mode sync must not hold the
+    process-wide lock (which would block every other scope's acquisition).
     """
-    Triggers the RAG Vector DB update for the given project.
-    """
-    project_key = request.project_key
-    logger.info(f"Starting RAG update for project {project_key}")
+    trigger = _get_rag_sync_trigger()
     try:
-        result = await get_rag_sync_service().sync_project(project_key)
-        logger.info(f"RAG update completed: {result}")
-        return {"message": "RAG update completed.", "details": result.model_dump()}
-    except HTTPException:
-        raise
-    except Exception as e:
-        _handle_exception(f"RAG update failed: {e}")
+        async with _rag_sync_lock:
+            token = await trigger.acquire(source, scope_id)
+        return await trigger.start(source, scope_id, request, token)
+    except SyncLockHeldError as e:
+        _record_error(str(e))
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    except SyncTriggerError as e:
+        if e.start_confirmed:
+            _record_error(str(e))
+            raise HTTPException(status_code=503, detail=str(e)) from e
+        # Unconfirmed start (timeout, dropped connection or server error): an execution
+        # may exist. The lock is kept and the start allowance decides the takeover.
+        _record_error(f"Unconfirmed RAG sync start for {source}:{scope_id}: {e}")
+        raise HTTPException(
+            status_code=502, detail=f"{e} The start is unconfirmed; the lock expires automatically."
+        ) from e
+
+
+def _sync_response(result: SyncStartResult) -> JSONResponse:
+    """202 + execution name in job mode; the runner's own status and result in local mode.
+
+    A local-mode rejection (401, 409, 422, ...) must reach the caller as that status, never
+    as a 200 carrying an error body.
+    """
+    if result.status_code == 202:
+        return JSONResponse(status_code=202, content={"message": "RAG sync started.", "execution": result.execution})
+    if result.status_code >= 400:
+        raise HTTPException(status_code=result.status_code, detail=result.response)
+    return JSONResponse(status_code=result.status_code, content=result.response)
+
+
+# noinspection PyUnusedLocal
+@orchestrator_app.post("/update-test-case-db")
+async def update_test_case_db(request: JiraSyncRequest, api_key: str = Depends(_validate_api_key)):
+    """Triggers the test-case full resync for the given project."""
+    logger.info("Triggering test-case RAG sync for project %s", request.project_key)
+    result = await _trigger_rag_sync("test_cases", request.project_key, request)
+    return _sync_response(result)
+
+
+# noinspection PyUnusedLocal
+@orchestrator_app.post("/update-jira-db")
+async def update_jira_db(request: JiraSyncRequest, api_key: str = Depends(_validate_api_key)):
+    """Triggers the RAG Vector DB update for the given Jira project."""
+    logger.info("Triggering RAG sync for Jira project %s", request.project_key)
+    result = await _trigger_rag_sync("jira", request.project_key, request)
+    return _sync_response(result)
+
+
+# noinspection PyUnusedLocal
+@orchestrator_app.post("/update-sharepoint-db")
+async def update_sharepoint_db(request: SharePointSyncRequest, api_key: str = Depends(_validate_api_key)):
+    """Triggers the SharePoint documents sync for the given drive."""
+    result = await _trigger_rag_sync("sharepoint", request.drive_id, request)
+    return _sync_response(result)
+
+
+@orchestrator_app.post("/update-confluence-db")
+async def update_confluence_db(request: ConfluenceSyncRequest, api_key: str = Depends(_validate_api_key)):
+    """Triggers the Confluence documents sync for the given scope."""
+    result = await _trigger_rag_sync("confluence", request.space_key, request)
+    return _sync_response(result)
 
 
 # noinspection PyUnusedLocal
@@ -747,8 +939,10 @@ async def execute_tests(request: ProjectExecutionRequest, api_key: str = Depends
         test_management_client = get_test_management_client()
         automated_test_cases = []
         try:
-            automated_tests_dict = test_management_client.fetch_ready_for_execution_test_cases_by_labels(
-                project_key, [config.OrchestratorConfig.AUTOMATED_TC_LABEL]
+            automated_tests_dict = await asyncio.to_thread(
+                test_management_client.fetch_ready_for_execution_test_cases_by_labels,
+                project_key,
+                [config.OrchestratorConfig.AUTOMATED_TC_LABEL],
             )
             automated_test_cases = automated_tests_dict.get(config.OrchestratorConfig.AUTOMATED_TC_LABEL, [])
             if not automated_test_cases:
@@ -771,42 +965,74 @@ async def execute_tests(request: ProjectExecutionRequest, api_key: str = Depends
 
         # Request incident creation for all failed tests
         logger.info("Processing failed tests for incident creation.")
-        await _request_incident_creation_for_failed_tests(all_execution_results)
+        await _request_incident_creation_for_failed_tests(all_execution_results, project_key)
 
+        reporting_failures = []
         if all_execution_results:
             logger.info("Generating test execution report based on all execution results.")
-            try:
-                await _generate_test_report(all_execution_results, project_key, test_management_client)
-            except HTTPException:
-                raise
-            except Exception as e:
-                _handle_exception(f"Failed to generate test report: {e}")
+            reporting_failures = await _generate_test_report(all_execution_results, project_key, test_management_client)
         return {
-            "message": f"Test execution completed for project {project_key}. Ran {len(all_execution_results)} tests."
+            "message": f"Test execution completed for project {project_key}. Ran {len(all_execution_results)} tests.",
+            "reporting_failures": reporting_failures,
         }
 
 
-async def _generate_test_report(all_execution_results, project_key, test_management_client):
-    test_cycle_name = f"Automated Test Execution - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-    test_cycle_key = test_management_client.create_test_plan(project_key, test_cycle_name)
-    logger.info(f"Uploading {len(all_execution_results)} test execution result(s) to test management system.")
-    test_management_client.create_test_execution(all_execution_results, project_key, test_cycle_key)
-    logger.info("Test execution results upload to test management system completed.")
-    reporting_client = get_test_reporting_client(str(Path(__file__).resolve().parent.parent.resolve()))
-    logger.info("Generating HTML test report.")
-    reporting_client.generate_report(all_execution_results)
-    logger.info("HTML test report generation completed.")
+@orchestrator_app.post("/execute-test")
+async def execute_test(request: ManualTestExecutionRequest, api_key: str = Depends(_validate_api_key)):
+    """Execute one test on the explicitly selected agent without incident creation."""
+    test_management_client = get_test_management_client()
+    test_case = await asyncio.to_thread(test_management_client.fetch_test_case_by_key, request.test_case_key)
+    result = await _execute_single_test(request.agent_id, test_case, "manual", pin_to_agent=True)
+    if result is None:
+        raise HTTPException(status_code=502, detail="Execution agent returned no result.")
+    reporting_failures = await _generate_test_report([result], request.project_key, test_management_client)
+    return {**result.model_dump(), "reporting_failures": reporting_failures}
+
+
+async def _generate_test_report(all_execution_results, project_key, test_management_client) -> list[str]:
+    """Uploads the results to the test management system and generates the HTML report.
+
+    Both steps are independent: each failure is recorded as a dashboard error and tolerated, and a missing
+    test plan skips the execution upload but not the report. The lock keeps concurrent runs from corrupting
+    the report tool's fixed output directories.
+    """
+    failures: list[str] = []
+
+    def record_failure(message: str) -> None:
+        _record_error(message)
+        failures.append(message)
+
+    async with report_lock:
+        try:
+            test_cycle_name = f"Automated Test Execution - {datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')}"
+            test_cycle_key = await asyncio.to_thread(
+                test_management_client.create_test_plan, project_key, test_cycle_name
+            )
+            if test_cycle_key:
+                logger.info(
+                    "Uploading %s test execution result(s) to test management system.", len(all_execution_results)
+                )
+                await asyncio.to_thread(
+                    test_management_client.create_test_execution, all_execution_results, project_key, test_cycle_key
+                )
+            else:
+                record_failure("No test plan was created; the upload of the test execution results was skipped.")
+        except Exception as e:
+            record_failure(f"Uploading the test execution results to the test management system failed: {e}")
+        try:
+            reporting_client = get_test_reporting_client(str(Path(__file__).resolve().parent.parent.resolve()))
+            await asyncio.to_thread(reporting_client.generate_report, all_execution_results)
+            logger.info("HTML test report generation completed.")
+        except Exception as e:
+            record_failure(f"Generating the HTML test report failed: {e}")
+    return failures
 
 
 async def _request_incident_creation_for_failed_tests(
     all_execution_results: list[TestExecutionResult],
+    project_key: str,
 ) -> None:
-    """
-    Process all failed test execution results and create incidents for each.
-
-    Args:
-        all_execution_results: List of all test execution results to process.
-    """
+    """Process all failed test execution results and create incidents for each."""
     failed_results = [result for result in all_execution_results if result.testExecutionStatus in ["failed", "error"]]
 
     if not failed_results:
@@ -820,6 +1046,7 @@ async def _request_incident_creation_for_failed_tests(
         logger.info(f"Test case {result.testCaseKey} failed. Initiating incident creation.")
         try:
             incident_input = IncidentCreationInput(
+                project_key=project_key,
                 test_case=result.test_case,
                 test_execution_result=str(result.generalErrorMessage),
                 test_step_results=result.stepResults,
@@ -833,6 +1060,9 @@ async def _request_incident_creation_for_failed_tests(
                 f"Incident creation completed for test case {result.testCaseKey}. "
                 f"Incident key: {incident_result.incident_key if incident_result else 'N/A'}"
             )
+        except asyncio.CancelledError:
+            _record_error(f"Incident creation for test case {result.testCaseKey} was cancelled.")
+            raise
         except Exception:
             _record_error(f"Failed to create incident for test case {result.testCaseKey}.")
 
@@ -856,10 +1086,13 @@ async def _request_all_test_cases_execution(grouped_test_cases):
 
 async def _group_test_cases_by_labels(automated_test_cases):
     grouped_test_cases = defaultdict(list)
+    labels = {test_type.label for test_type in TestCaseType}
     for tc in automated_test_cases:
-        for label in tc.labels:
-            if label != config.OrchestratorConfig.AUTOMATED_TC_LABEL:
-                grouped_test_cases[label].append(tc)
+        matching_labels = [label for label in tc.labels if label in labels]
+        if not matching_labels:
+            logger.warning("Skipping test case %s: no recognized test-type label.", tc.key)
+        for label in matching_labels:
+            grouped_test_cases[label].append(tc)
     return grouped_test_cases
 
 
@@ -876,7 +1109,8 @@ async def _select_execution_agents_for_each_test_label(labels: list[str]) -> dic
             logger.error(f"Failed to select agents for label '{label}': {result}")
             label_agent_mapping[label] = []
         elif result:
-            logger.info(f"Selected agent(s) {result} for label '{label}'.")
+            hosts = [_get_agent_host(await agent_registry.get_card(agent_id)) for agent_id in result]
+            logger.info("Selected agent(s) %s on host(s) %s for label '%s'.", result, hosts, label)
             label_agent_mapping[label] = result
         else:
             logger.warning(f"No suitable agents found for label '{label}'.")
@@ -909,20 +1143,51 @@ async def _execute_test_group(
 
     results: list[TestExecutionResult] = []
     workers = []
-    for agent_id in valid_agent_ids:
+    # One worker can only ever process one test case at a time, so agents beyond the number of test
+    # cases get no worker - but they stay in the pool, as failover targets for a worker whose agent
+    # breaks.
+    for agent_id in valid_agent_ids[: len(test_cases)]:
         workers.append(asyncio.create_task(_agent_worker(agent_id, queue, results, valid_agent_ids)))
 
-    # Wait for all items in the queue to be processed
-    await queue.join()
+    # The group is done when the queue is drained or when every worker has exited (e.g. its agent broke),
+    # whichever comes first: waiting on the queue alone would hang forever once no worker is left.
+    queue_drained = asyncio.create_task(queue.join())
+    workers_exited = asyncio.gather(*workers)
+    try:
+        await asyncio.wait({queue_drained, workers_exited}, return_when=asyncio.FIRST_COMPLETED)
+    except asyncio.CancelledError:
+        for worker in workers:
+            worker.cancel()
+        raise
+    finally:
+        queue_drained.cancel()
 
-    # Signal all workers to stop
+    # Signal the remaining workers to stop and wait for them to finish gracefully
     for _ in workers:
         queue.put_nowait(None)
+    await workers_exited
 
-    # Wait for workers to finish gracefully
-    await asyncio.gather(*workers)
-
+    while not queue.empty():
+        item = queue.get_nowait()
+        if item is not None:
+            results.append(_unexecuted_test_result(item[0]))
     return results
+
+
+def _unexecuted_test_result(test_case: TestCase) -> TestExecutionResult:
+    """The result of a test case left in the queue after every execution agent of its group has gone."""
+    logger.error("Test case %s was not executed: no execution agent remained available.", test_case.key)
+    now = datetime.now(UTC).isoformat()
+    return TestExecutionResult(
+        stepResults=[],
+        testCaseKey=test_case.key,
+        testCaseName=test_case.name,
+        testExecutionStatus="error",
+        generalErrorMessage="Not executed: no execution agent remained available to run this test case.",
+        start_timestamp=now,
+        end_timestamp=now,
+        test_case=test_case,
+    )
 
 
 async def _agent_worker(
@@ -951,11 +1216,14 @@ async def _agent_worker(
                 if result:
                     results.append(result)
             except Exception as e:
-                logger.exception(f"Error in worker for agent {agent_id}.")
-                # Mark agent as BROKEN - task execution failed
-                await agent_registry.update_status(agent_id, AgentStatus.BROKEN, BrokenReason.TASK_STUCK)
-                # Hand the agent to the recovery task (matches the other BROKEN sites).
-                await cancellation_queue.put((agent_id, time.time()))
+                agent_card = await agent_registry.get_card(agent_id)
+                logger.exception("Error in worker for agent %s on host '%s'.", agent_id, _get_agent_host(agent_card))
+                # The send-task path may already have marked the agent BROKEN together with the id of the
+                # task it got stuck on; re-marking it here would destroy that tracked id.
+                if await agent_registry.get_status(agent_id) != AgentStatus.BROKEN:
+                    await agent_registry.update_status(agent_id, AgentStatus.BROKEN, BrokenReason.TASK_STUCK)
+                    # Hand the agent to the recovery task (matches the other BROKEN sites).
+                    await cancellation_queue.put((agent_id, time.time()))
 
                 # Check if any other agents in the pool are still alive (not BROKEN)
                 any_agents_alive = False
@@ -967,7 +1235,8 @@ async def _agent_worker(
                             break
 
                 if any_agents_alive:
-                    # Retry logic: Put back in queue
+                    # The agent is already queued for recovery, which frees it from the task it is
+                    # stuck on; the test case goes back into the queue without waiting for that.
                     logger.info(f"Agent {agent_id} broken, but other agents available. Re-queueing task.")
                     queue.put_nowait((test_case, test_type))
                 else:
@@ -976,16 +1245,18 @@ async def _agent_worker(
                         f"All agents for this group are broken. Returning failed result for test case {test_case.key}."
                     )
                     agent_name = await agent_registry.get_name(agent_id)
+                    agent_info = _build_agent_info(agent_card, agent_name)
                     failed_result = TestExecutionResult(
                         stepResults=[],
                         testCaseKey=test_case.key,
                         testCaseName=test_case.name,
                         testExecutionStatus="error",
                         generalErrorMessage=f"All agents failed. Last error from {agent_name}: {e}",
-                        start_timestamp=datetime.now().isoformat(),
-                        end_timestamp=datetime.now().isoformat(),
-                        system_description=f"Agent: {agent_name} (Failed - No Retry Available)",
+                        start_timestamp=datetime.now(UTC).isoformat(),
+                        end_timestamp=datetime.now(UTC).isoformat(),
+                        system_description=(f"{_describe_execution_system(agent_info)} (Failed - No Retry Available)"),
                         test_case=test_case,
+                        agent_info=agent_info,
                     )
                     results.append(failed_result)
 
@@ -993,25 +1264,38 @@ async def _agent_worker(
                 break  # Exit worker as agent is broken
             queue.task_done()
     except asyncio.CancelledError:
-        logger.info(f"Agent worker for {agent_id} cancelled.")
+        _record_error(f"Agent worker for {agent_id} was cancelled.", agent_id=agent_id)
+        raise
     except Exception as e:
-        _record_error(f"Unexpected error in agent worker {agent_id}: {e}")
+        host = _get_agent_host(await agent_registry.get_card(agent_id))
+        _record_error(f"Unexpected error in agent worker {agent_id} on host '{host}': {e}")
 
 
-async def _execute_single_test(agent_id: str, test_case: TestCase, test_type: str) -> TestExecutionResult | None:
+async def _execute_single_test(
+    agent_id: str, test_case: TestCase, test_type: str, pin_to_agent: bool = False
+) -> TestExecutionResult | None:
     task_description = f"Execution of test case {test_case.key} (type: {test_type})"
     execution_request = TestExecutionRequest(test_case=test_case)
     artifacts = []
-    start_timestamp = datetime.now()
+    # Reported to the test management systems, which read every timestamp as UTC.
+    start_timestamp = datetime.now(UTC)
     try:
-        completed_task = await _send_task_to_agent(execution_request.model_dump_json(), task_description)
+        completed_task = await _send_task_to_agent(
+            execution_request.model_dump_json(), task_description, agent_id if pin_to_agent else None
+        )
         artifacts = _get_artifacts_from_task(completed_task, task_description)
+    except HTTPException:
+        # Its status (the manual reservation's 404/409/503, a timeout's 408) must reach the caller unchanged.
+        raise
     except Exception as e:
         _handle_exception(f"Failed to execute test case {test_case.key}. Error: {e}", 500)
     finally:
-        end_timestamp = datetime.now()
+        end_timestamp = datetime.now(UTC)
 
-    agent_name = await agent_registry.get_name(agent_id)
+    # Without pinning, routing chose the agent; the result must name the one that actually ran the test.
+    executing_agent_id = _reserved_agent_id.get() or agent_id
+    agent_name = await agent_registry.get_name(executing_agent_id)
+    agent_info = _build_agent_info(await agent_registry.get_card(executing_agent_id), agent_name)
     if not artifacts:
         _handle_exception(f"No test case execution results received from agent {agent_name}", 500)
     text_parts = _get_text_content_from_artifacts(artifacts, task_description)
@@ -1034,8 +1318,9 @@ Test case execution results:\n```{text_results}```
             generalErrorMessage=f"Failed to extract test results: {e}",
             start_timestamp=start_timestamp.isoformat(),
             end_timestamp=end_timestamp.isoformat(),
-            system_description=f"Agent: {agent_name}, Environment: Standard Test Environment",
+            system_description=_describe_execution_system(agent_info),
             test_case=test_case,
+            agent_info=agent_info,
         )
 
     test_execution_result.testCaseKey = test_case.key
@@ -1048,9 +1333,10 @@ Test case execution results:\n```{text_results}```
     test_execution_result.artifacts = file_artifacts
 
     if not test_execution_result.system_description:
-        test_execution_result.system_description = f"Agent: {agent_name}, Environment: Standard Test Environment"
+        test_execution_result.system_description = _describe_execution_system(agent_info)
 
     test_execution_result.test_case = test_case
+    test_execution_result.agent_info = agent_info
 
     logger.info(f"Executed test case {test_case.key}. Status: {test_execution_result.testExecutionStatus}")
     return test_execution_result
@@ -1059,16 +1345,7 @@ Test case execution results:\n```{text_results}```
 async def _request_incident_creation(
     incident_input: IncidentCreationInput, artifacts: list[FileArtifact]
 ) -> IncidentCreationResult | None:
-    """Request incident creation with all artifacts sent as file parts.
-
-    Args:
-        incident_input: The incident creation input JSON.
-        artifacts: All file artifacts to send as file parts in the A2A message.
-
-    Returns:
-        IncidentCreationResult containing the created incident information,
-        or None if an AgentExecutionError occurred.
-    """
+    """Request incident creation with all artifacts sent as file parts."""
     task_description = f"Create incident report for test case {incident_input.test_case.key}"
 
     # Create message with JSON text part and ALL artifact file parts
@@ -1098,17 +1375,11 @@ async def _request_incident_creation(
 async def _request_test_cases_generation(user_story_id) -> GeneratedTestCases:
     """Request test case generation for a user story.
 
-    Args:
-        user_story_id: The Jira user story key to generate test cases for.
-
-    Returns:
-        GeneratedTestCases containing the generated test cases.
-
     Raises:
         HTTPException: If an AgentExecutionError is returned by the agent.
     """
     task_description = f"Generate test cases for Jira user story {user_story_id}"
-    completed_task = await _send_task_to_agent(f"Jira user story with key {user_story_id}", task_description)
+    completed_task = await _send_task_to_agent(_build_jira_issue_task_text(user_story_id), task_description)
     task_description = f"Generation of test cases for the user story {user_story_id}"
     received_artifacts = _get_artifacts_from_task(completed_task, task_description)
     result = _get_model_from_artifacts(received_artifacts, task_description, GeneratedTestCases)
@@ -1136,46 +1407,15 @@ async def _request_test_cases_classification(test_cases: list[TestCase], user_st
 async def _request_test_cases_review(test_cases: list[TestCase], user_story_id: str) -> list[Artifact]:
     task_description = f"Review test cases for Jira user story {user_story_id}"
     completed_task = await _send_task_to_agent(
-        f"Test cases:\n{test_cases}\nUser Story ID: {user_story_id}", task_description
+        f"Test cases:\n{test_cases}\n{_build_jira_issue_task_text(user_story_id)}", task_description
     )
     return _get_artifacts_from_task(completed_task, "Review of test cases")
-
-
-async def _extract_generated_test_case_issue_keys_from_agent_response(
-    results: list[Artifact], task_description: str
-) -> list[str]:
-    text_parts = _get_text_content_from_artifacts(results, task_description)
-    if len(text_parts) != 1:
-        _handle_exception(
-            f"Expected exactly one text artifact from test case generation, but received {len(text_parts)}."
-        )
-    test_case_generation_results = text_parts[0]
-    user_prompt = f"""
-Your input:\n"{test_case_generation_results}".
-
-The information inside the input you need to find: the Jira issue key of each test case.
-
-Result format: a list of all found test case issue keys as a lift of strings.
-"""
-    result = await _get_results_extractor_agent(str).run(user_prompt)
-    _log_orchestrator_usage(result)
-    issue_keys: list[str] = result.output or []
-    logger.info(f"Extracted issue keys of {len(issue_keys)} test cases from test case generation agent's response.")
-    return result.output or None
 
 
 def _get_text_content_from_artifacts(
     artifacts: list[Artifact] | None, task_description: str, any_content_expected: bool = True
 ) -> list[str]:
     """Extract text content from artifacts.
-
-    Args:
-        artifacts: List of artifacts from the agent response.
-        task_description: Description of the task for error messages.
-        any_content_expected: If True, raises an exception when no text content is found.
-
-    Returns:
-        List of non-empty text strings extracted from artifacts.
 
     Raises:
         HTTPException: If any_content_expected is True and no text content is found.
@@ -1196,14 +1436,6 @@ def _get_model_from_artifacts[T: JsonSerializableModel](
     artifacts: list[Artifact] | None, task_description: str, model_type: type[T]
 ) -> T | AgentExecutionError | None:
     """Extract text content from artifacts and parse it as a model.
-
-    Args:
-        artifacts: List of artifacts from the agent response.
-        task_description: Description of the task for error messages.
-        model_type: The expected model type to parse the content as.
-
-    Returns:
-        Either the parsed model of type T, or an AgentExecutionError if the agent returned an error.
 
     Raises:
         HTTPException: If no text content is found in artifacts or parsing fails.
@@ -1260,7 +1492,7 @@ async def _finalize_task(
     Agent-registry updates (update_status, set_current_task) are the caller's
     responsibility and follow this call.
     """
-    await task_history.update(internal_task_id, final_status, datetime.now(), error_msg)
+    await task_history.update(internal_task_id, final_status, datetime.now(UTC), error_msg)
     await task_history.clear_current_activity(internal_task_id)
     event = TaskDoneEvent(
         task_id=internal_task_id,
@@ -1283,13 +1515,13 @@ class _LogStreamState:
 def _build_logs_artifact(log_lines: list[str]) -> Artifact:
     """Collapse streamed log lines into ONE text/plain file part.
 
-    The filename contains "logs" and ends ".txt" so utils.get_execution_logs_from_artifacts
+    The filename contains "logs" and ends ".md" so utils.get_execution_logs_from_artifacts
     matches it and incident creation receives a single consolidated log file.
     """
     data = "\n".join(log_lines).encode("utf-8")
     return Artifact(
         name=ArtifactName.LOGS,
-        parts=[Part(raw=data, media_type="text/plain", filename="execution_logs.txt")],
+        parts=[Part(raw=data, media_type="text/plain", filename="execution_logs.md")],
     )
 
 
@@ -1352,10 +1584,6 @@ async def _save_agent_logs_from_task(task: Task, internal_task_id: str) -> None:
     function replaces any streamed log buffer with the authoritative artifact-based
     log set. If the task crashes before the final artifact is emitted, the streamed
     buffer accumulated via append_log_batch is kept as a best-effort record.
-
-    Args:
-        task: The completed Task containing artifacts with potential logs.
-        internal_task_id: The internal task ID for tracking in task history.
     """
     try:
         file_artifacts = _get_file_contents_from_artifacts(task.artifacts)
@@ -1385,24 +1613,35 @@ async def _save_agent_usage_from_task(task: Task, internal_task_id: str) -> None
         logger.warning(f"Failed to extract token usage for task {internal_task_id}: {e}")
 
 
-async def _send_task_to_agent_with_message(message: Message, task_description: str) -> Task | None:
-    """Send a custom message (with file parts) to an agent.
-
-    Args:
-        message: The A2A Message object to send (can contain text and file parts).
-        task_description: Description of the task for agent selection and logging.
-
-    Returns:
-        The completed Task, or None if the task failed to complete.
-    """
+async def _send_task_to_agent_with_message(
+    message: Message, task_description: str, selected_agent_id: str | None = None
+) -> Task | None:
+    """Send a custom message (with file parts) to an agent."""
 
     internal_task_id = str(uuid4())
     agent_id = None
+    last_task_id = None
     httpx_client: httpx.AsyncClient | None = None
     try:
         # Wait for an agent and reserve it atomically
-        agent_id, agent_card = await reserve_agent_waiting_if_needed(task_description, internal_task_id)
-        task_start_time = datetime.now()
+        if selected_agent_id is None:
+            agent_id, agent_card = await reserve_agent_waiting_if_needed(task_description, internal_task_id)
+        else:
+            async with agent_selection_lock:
+                agent_card = await agent_registry.get_card(selected_agent_id)
+                if agent_card is None:
+                    raise HTTPException(status_code=404, detail="Execution agent was not found.")
+                status = await agent_registry.get_status(selected_agent_id)
+                if status == AgentStatus.BUSY:
+                    raise HTTPException(status_code=409, detail="Execution agent is busy.")
+                if status == AgentStatus.BROKEN:
+                    raise HTTPException(status_code=503, detail="Execution agent is unavailable.")
+                await agent_registry.update_status(selected_agent_id, AgentStatus.BUSY)
+                agent_id = selected_agent_id
+        # The routing call picks the agent, which is not necessarily the one the caller had in
+        # mind, so the caller reads back who actually ran the task (see _reserved_agent_id).
+        _reserved_agent_id.set(agent_id)
+        task_start_time = datetime.now(UTC)
         agent_name = await agent_registry.get_name(agent_id)
 
         # Record task start in history
@@ -1426,7 +1665,6 @@ async def _send_task_to_agent_with_message(message: Message, task_description: s
         )
         response_iterator = a2a_client.send_message(SendMessageRequest(message=message))
         start_time = time.time()
-        last_task_id = None
         last_status = None
         collected_artifacts: list[Artifact] = []
         log_state = _LogStreamState()
@@ -1464,20 +1702,16 @@ async def _send_task_to_agent_with_message(message: Message, task_description: s
                     agent_id,
                 )
             except TimeoutError:
-                logger.error(
-                    f"Task '{task_description}' timed out while waiting for completion.",
-                    extra={"task_id": internal_task_id, "agent_id": agent_id},
+                timeout_message = (
+                    f"Task '{task_description}' timed out while waiting for completion on agent host "
+                    f"'{_get_agent_host(agent_card)}'."
                 )
+                logger.error(timeout_message, extra={"task_id": internal_task_id, "agent_id": agent_id})
                 await _finalize_task(internal_task_id, agent_id, TaskStatus.FAILED, "Task timed out")
                 await agent_registry.update_status(agent_id, AgentStatus.BROKEN, BrokenReason.TASK_STUCK, last_task_id)
                 await agent_registry.set_current_task(agent_id, None)
                 await cancellation_queue.put((agent_id, time.time()))
-                _handle_exception(
-                    f"Task '{task_description}' timed out while waiting for completion.",
-                    408,
-                    internal_task_id,
-                    agent_id,
-                )
+                _handle_exception(timeout_message, 408, internal_task_id, agent_id)
 
             if chunk.HasField("status_update"):
                 status_event = chunk.status_update
@@ -1537,16 +1771,35 @@ async def _send_task_to_agent_with_message(message: Message, task_description: s
         await agent_registry.set_current_task(agent_id, None)
         await cancellation_queue.put((agent_id, time.time()))
         _handle_exception(
-            f"Task for {task_description} wasn't complete within timeout.", 408, internal_task_id, agent_id
+            f"Task for {task_description} wasn't complete within timeout on agent host "
+            f"'{_get_agent_host(agent_card)}'.",
+            408,
+            internal_task_id,
+            agent_id,
         )
         return None
 
+    except asyncio.CancelledError:
+        # CancelledError is no Exception: without this branch a cancelled task would leave its agent BUSY forever.
+        if agent_id is not None:
+            _record_error(f"Task '{task_description}' was cancelled.", internal_task_id, agent_id)
+            with suppress(Exception):
+                await _finalize_task(internal_task_id, agent_id, TaskStatus.CANCELLED, "Task was cancelled")
+            # The remote task may still be running: the recovery worker cancels it and frees the agent.
+            await agent_registry.update_status(agent_id, AgentStatus.BROKEN, BrokenReason.TASK_STUCK, last_task_id)
+            await agent_registry.set_current_task(agent_id, None)
+            await cancellation_queue.put((agent_id, time.time()))
+        raise
     except HTTPException:
         # HTTPException is raised by _handle_exception, agent status already handled above
         raise
     except Exception as e:
+        host = _get_agent_host(await agent_registry.get_card(agent_id))
         logger.exception(
-            f"Error communicating with agent {agent_id}.", extra={"task_id": internal_task_id, "agent_id": agent_id}
+            "Error communicating with agent %s on host '%s'.",
+            agent_id,
+            host,
+            extra={"task_id": internal_task_id, "agent_id": agent_id},
         )
         with suppress(Exception):
             await _finalize_task(internal_task_id, agent_id, TaskStatus.FAILED, str(e))
@@ -1560,31 +1813,18 @@ async def _send_task_to_agent_with_message(message: Message, task_description: s
             await httpx_client.aclose()
 
 
-async def _send_task_to_agent(input_data: str, task_description: str) -> Task | None:
-    """Send a text message to an agent.
-
-    Args:
-        input_data: The text content to send to the agent.
-        task_description: Description of the task for agent selection and logging.
-
-    Returns:
-        The completed Task, or None if the task failed to complete.
-    """
+async def _send_task_to_agent(
+    input_data: str, task_description: str, selected_agent_id: str | None = None
+) -> Task | None:
+    """Send a text message to an agent."""
     message = new_text_message(input_data, role=Role.ROLE_USER)
-    return await _send_task_to_agent_with_message(message, task_description)
+    return await _send_task_to_agent_with_message(message, task_description, selected_agent_id)
 
 
 async def reserve_agent_waiting_if_needed(
     task_description: str, task_id: str | None = None
 ) -> tuple[str, AgentCard] | None:
     """Wait for an available agent and atomically reserve it.
-
-    Args:
-        task_description: Description of the task to be assigned.
-        task_id: Optional ID of the task for logging purposes.
-
-    Returns:
-        Tuple of (agent_id, agent_card) for the reserved agent.
 
     Raises:
         HTTPException: If no agents are registered, no suitable agent found,
@@ -1595,37 +1835,70 @@ async def reserve_agent_waiting_if_needed(
 
     max_wait_time = config.OrchestratorConfig.TASK_EXECUTION_TIMEOUT
     start_time = time.time()
+    last_justification = "no routing decision was made"
+    decision: AgentRoutingDecision | None = None
+    routed_agents_info = ""
 
     while (time.time() - start_time) < max_wait_time:
-        # Try to atomically select and reserve an agent
+        # The rendered registry IS the routing model's input, so the decision is re-taken exactly
+        # when it changes (discovery registered an agent, one became free or broke) instead of once
+        # per poll - a wait of TASK_EXECUTION_TIMEOUT would otherwise cost one model call per tick.
+        agents_info = await _get_agents_info()
+        if decision is None or agents_info != routed_agents_info:
+            # The routing model call runs OUTSIDE the lock: concurrent task routing must not
+            # serialize behind each other's model calls. Only the check-and-reserve step below
+            # is atomic under agent_selection_lock.
+            decision = await _route_task(task_description, agents_info, task_id)
+            routed_agents_info = agents_info
+            last_justification = decision.justification
+
+            if decision.outcome == RoutingOutcome.NONE_SUITABLE:
+                # Fail fast: no registered agent can execute the task, so waiting is pointless.
+                _record_error(
+                    f"No registered agent can execute task '{task_description}'. "
+                    f"Routing justification: {decision.justification}",
+                    task_id=task_id,
+                )
+                _handle_exception(
+                    f"No registered agent can execute task '{task_description}'. "
+                    f"Routing justification: {decision.justification}",
+                    404,
+                    task_id=task_id,
+                )
+
         async with agent_selection_lock:
             available_agent_ids = await agent_registry.get_available_agents()
-            if available_agent_ids:
-                agent_id = await _select_agent(task_description, available_agent_ids, task_id)
-                if agent_id:
-                    # Double-check agent is still available (might have changed during _select_agent)
-                    current_status = await agent_registry.get_status(agent_id)
-                    if current_status == AgentStatus.AVAILABLE:
-                        agent_card = await agent_registry.get_card(agent_id)
-                        if agent_card:
-                            # Atomically mark as BUSY before releasing the lock
-                            await agent_registry.update_status(agent_id, AgentStatus.BUSY)
-                            agent_name = await agent_registry.get_name(agent_id)
-                            logger.info(
-                                f"Reserved agent '{agent_name}' (ID: {agent_id}) for task '{task_description}'",
-                                extra={"task_id": task_id, "agent_id": agent_id},
-                            )
-                            return agent_id, agent_card
-                # If _select_agent returned None, it means no suitable agent is currently
-                # available. Continue waiting - the suitable agent might become available later.
+            agent_id = _selected_agent_if_available(decision, available_agent_ids, task_description, task_id)
+            if agent_id:
+                # Double-check agent is still available (might have changed since the routing call)
+                current_status = await agent_registry.get_status(agent_id)
+                if current_status == AgentStatus.AVAILABLE:
+                    agent_card = await agent_registry.get_card(agent_id)
+                    if agent_card:
+                        # Atomically mark as BUSY before releasing the lock
+                        await agent_registry.update_status(agent_id, AgentStatus.BUSY)
+                        agent_name = await agent_registry.get_name(agent_id)
+                        logger.info(
+                            "Reserved agent '%s' (ID: %s) on host '%s' for task '%s'",
+                            agent_name,
+                            agent_id,
+                            _get_agent_host(agent_card),
+                            task_description,
+                            extra={"task_id": task_id, "agent_id": agent_id},
+                        )
+                        return agent_id, agent_card
+        # Anything else counts as "a suitable agent exists but none is available right now":
+        # an invalid or unavailable selection is treated like busy, so the wait-and-retry loop
+        # continues - the suitable agent might become available later.
 
-        # No agent was reserved - wait 1s and retry (outside the lock)
+        # No agent was reserved - wait and retry
         await asyncio.sleep(10)
 
-    # Timeout reached
+    # Timeout reached: a suitable agent existed but stayed busy the whole time.
     _handle_exception(
         f"Timeout waiting for an available agent to handle task '{task_description}'. "
-        f"All agents have been busy for {max_wait_time} seconds.",
+        f"A suitable agent exists but none of the suitable agents became available within "
+        f"{max_wait_time} seconds. Last routing justification: {last_justification}",
         503,
         task_id=task_id,
     )
@@ -1658,17 +1931,11 @@ async def _get_jira_issue_key_from_request(request):
 
 
 def _record_error(message: str, task_id: str | None = None, agent_id: str | None = None) -> None:
-    """Log an error and record it in error_history without raising. Call from within an except block.
-
-    Args:
-        message: Error message.
-        task_id: Optional task ID related to the error.
-        agent_id: Optional agent ID related to the error.
-    """
+    """Log an error and record it in error_history without raising. Call from within an except block."""
     logger.exception(message)
     error_record = ErrorRecord(
         error_id=str(uuid4()),
-        timestamp=datetime.now(),
+        timestamp=datetime.now(UTC),
         message=message,
         task_id=task_id,
         agent_id=agent_id,
@@ -1681,14 +1948,7 @@ def _record_error(message: str, task_id: str | None = None, agent_id: str | None
 def _handle_exception(
     message: str, status_code: int = 500, task_id: str | None = None, agent_id: str | None = None
 ) -> HTTPException:
-    """Record an error in the dashboard and raise an HTTPException.
-
-    Args:
-        message: Error message.
-        status_code: HTTP status code.
-        task_id: Optional task ID related to the error.
-        agent_id: Optional agent ID related to the error.
-    """
+    """Record an error in the dashboard and raise an HTTPException."""
     _record_error(message, task_id, agent_id)
     raise HTTPException(status_code=status_code, detail=message)
 
@@ -1711,23 +1971,33 @@ def _get_time_left_for_task_completion_waiting(start_time):
 async def _select_all_suitable_agent_ids(task_description: str) -> list[str]:
     """Selects all suitable agents from the registry for a given task.
 
-    Only considers agents that are currently AVAILABLE for new tasks.
+    The routing model sees the full registry (including busy agents, so it can tell "busy" from
+    "incapable"), but only agents that are currently AVAILABLE are returned.
     """
-    available_agent_ids = await agent_registry.get_available_agents()
-    agents_info = await _get_agents_info(available_agent_ids)
+    agents_info = await _get_agents_info()
+    if not agents_info:
+        return []
+
     user_prompt = f"""
 Target task description: "{task_description}".
 
-The list of all registered with you agents:\n{agents_info}
+The list of all registered with you agents:
+{agents_info}
 """
-
     result = await _run_agent_with_retry(lambda: multi_discovery_agent.run(user_prompt))
     selected_agent_ids = result.output.ids or []
-    valid_agent_ids = []
-    for agent_id in selected_agent_ids:
-        # Verify agent exists AND is in our available agents list
-        if await agent_registry.contains(agent_id) and agent_id in available_agent_ids:
-            valid_agent_ids.append(agent_id)
+    available_agent_ids = await agent_registry.get_available_agents()
+    valid_agent_ids = [agent_id for agent_id in selected_agent_ids if agent_id in available_agent_ids]
+
+    if not valid_agent_ids or len(valid_agent_ids) < len(selected_agent_ids):
+        # The justification explains why the selection came up empty or partial.
+        logger.warning(
+            "Routing decision for task '%s': selected %s of %s agent(s); justification: %s",
+            task_description,
+            len(valid_agent_ids),
+            len(selected_agent_ids),
+            result.output.justification,
+        )
 
     for agent_id in valid_agent_ids:
         agent_name = await agent_registry.get_name(agent_id)
@@ -1735,66 +2005,101 @@ The list of all registered with you agents:\n{agents_info}
     return valid_agent_ids
 
 
-async def _get_agents_info(available_agent_ids: list[str]) -> str:
-    """Get information about agents that are AVAILABLE for new tasks.
+def _describe_agent_card(card: AgentCard) -> str:
+    """Human-readable capability description of one agent card.
 
-    Args:
-        available_agent_ids: List of agent IDs that are currently AVAILABLE.
+    External execution agents may publish generic or incomplete cards, so every field is
+    optional: whatever exists is included and nothing ever fails.
+    """
+    parts = [f"Name: {card.name}", f"Description: {card.description or 'none'}"]
+    if card.skills:
+        skill_descriptions = "; ".join(
+            f"{skill.name or 'unnamed skill'}: {skill.description or 'no description'}" for skill in card.skills
+        )
+        parts.append(f"Skills: {skill_descriptions}")
+    else:
+        parts.append("Skills: none declared")
+    return ", ".join(parts)
 
-    Returns:
-        Formatted string with agent information for the discovery agent.
+
+async def _get_agents_info() -> str:
+    """Renders every registered agent with its identity, capabilities and current availability.
+
+    Busy agents are listed too, so the routing model can tell "busy" from "incapable" and can
+    pick an available agent among several equally capable ones.
     """
     agents_info = ""
-    all_cards = await agent_registry.get_all_cards()
-    for agent_id in available_agent_ids:
-        card = all_cards.get(agent_id)
-        if card:
-            agents_info += (
-                f"- Name: {card.name}, ID: {agent_id}, Skills: "
-                f"{'; '.join(skill.description for skill in card.skills)}\n"
-            )
+    for agent_id, card in (await agent_registry.get_all_cards()).items():
+        status = await agent_registry.get_status(agent_id)
+        availability = "available" if status == AgentStatus.AVAILABLE else f"not available ({status.value})"
+        agents_info += f"- ID: {agent_id}, {_describe_agent_card(card)}, Availability: {availability}\n"
     return agents_info
 
 
-async def _select_agent(
-    task_description: str, available_agent_ids: list[str], task_id: str | None = None
-) -> str | None:
-    """Selects the best agent from the available agents to handle a given task.
-
-    Args:
-        task_description: Description of the task to be assigned.
-        available_agent_ids: List of agent IDs that are currently AVAILABLE.
-        task_id: Optional ID of the task for logging purposes.
-
-    Returns:
-        The ID of the selected agent, or None if no suitable agent found.
-    """
-    agents_info = await _get_agents_info(available_agent_ids)
+async def _route_task(task_description: str, agents_info: str, task_id: str | None = None) -> AgentRoutingDecision:
+    """Asks the routing model for one three-way decision over the rendered agent registry."""
     if not agents_info:
-        return None
+        return AgentRoutingDecision(
+            outcome=RoutingOutcome.NONE_SUITABLE,
+            justification="No agents are registered with the orchestrator.",
+        )
 
     user_prompt = f"""
 Target task description: "{task_description}".
 
-The list of all registered with you agents:\n{agents_info}
+The list of all registered with you agents:
+{agents_info}
 """
     result = await _run_agent_with_retry(lambda: discovery_agent.run(user_prompt))
-    selected_agent_id = result.output.id or None
-    # Verify the selected agent is in our available list
-    if selected_agent_id and selected_agent_id in available_agent_ids:
-        logger.info(
-            f"Selected agent ID: {selected_agent_id} for task: '{task_description}'", extra={"task_id": task_id}
-        )
-        return selected_agent_id
-    elif selected_agent_id:
-        logger.info(
-            f"Model returned invalid agent ID: {selected_agent_id} for task: '{task_description}'",
+    decision = result.output
+    selected_agent_name = (
+        await agent_registry.get_name(decision.selected_agent_id) if decision.selected_agent_id else "Unknown"
+    )
+    logger.info(
+        "Routing decision for task '%s': outcome=%s, selected_agent_name=%s, selected_agent_id=%s, justification: %s",
+        task_description,
+        decision.outcome.value,
+        selected_agent_name,
+        decision.selected_agent_id,
+        decision.justification,
+        extra={"task_id": task_id},
+    )
+    return decision
+
+
+def _selected_agent_if_available(
+    decision: AgentRoutingDecision,
+    available_agent_ids: list[str],
+    task_description: str,
+    task_id: str | None = None,
+) -> str | None:
+    """Validate one routing decision against the currently available agents.
+
+    An invalid or unavailable selected ID counts as an invalid routing result: it is logged with
+    the justification and treated like the busy outcome.
+    """
+    if decision.outcome != RoutingOutcome.AGENT_SELECTED:
+        return None
+    selected_agent_id = decision.selected_agent_id
+    if not selected_agent_id:
+        logger.warning(
+            "Routing returned outcome '%s' without an agent ID for task '%s': %s",
+            RoutingOutcome.AGENT_SELECTED.value,
+            task_description,
+            decision.justification,
             extra={"task_id": task_id},
         )
         return None
-    else:
-        logger.info(f"Model identified no suitable agent for the task '{task_description}'")
+    if selected_agent_id not in available_agent_ids:
+        logger.warning(
+            "Routing selected invalid or unavailable agent ID '%s' for task '%s': %s",
+            selected_agent_id,
+            task_description,
+            decision.justification,
+            extra={"task_id": task_id},
+        )
         return None
+    return selected_agent_id
 
 
 async def _fetch_agent_card(agent_base_url: str) -> AgentCard | None:
@@ -1832,27 +2137,72 @@ async def _process_url_discovery(url: str):
     health-check loop's responsibility, so known URLs are skipped here."""
     if await agent_registry.get_agent_id_by_url(url):
         return
-
     agent_card = await _fetch_agent_card(url)
     if not agent_card:
         return
 
-    card_url = agent_card.supported_interfaces[0].url
-    existing_agent_id = await agent_registry.get_agent_id_by_url(card_url)
-    if existing_agent_id:
-        logger.debug(f"Agent with URL {card_url} is already registered with ID {existing_agent_id}.")
-        return
-
-    new_agent_id = str(uuid4())
-    await agent_registry.register(new_agent_id, agent_card)
-    logger.info(f"Discovered and registered agent with URL: {card_url}")
+    advertised_url = agent_card.supported_interfaces[0].url
+    if advertised_url != url:
+        agent_card.supported_interfaces[0].url = url
+        logger.info("Rewrote advertised agent URL %s to reached URL %s.", advertised_url, url)
+    agent_id = await agent_registry.register_or_refresh(url, agent_card)
+    logger.info("Discovered and registered agent %s with URL: %s", agent_id, url)
 
 
 async def _discover_agents():
+    """Registers the new agents found on the configured host/port candidates (startup and periodic runs)."""
+    async with discovery_lock:
+        await _discover_new_agents()
+
+
+async def _run_manual_discovery() -> dict[str, Any]:
+    """The manual discovery run: new-agent discovery plus a re-probe of every registered agent.
+
+    A reachable BROKEN agent becomes AVAILABLE again; an unreachable one is removed unless it is BUSY,
+    so stale entries (e.g. a VM-hosted agent that moved to a new address) disappear. One failing probe
+    never fails the run.
     """
-    Discovers remote agents by scanning a port range on each of the configured base URLs.
-    Checks reachability of existing agents and discovers new ones.
-    """
+    async with discovery_lock:
+        if not await _discover_new_agents():
+            return {
+                "message": "Agent discovery is not configured: set REMOTE_EXECUTION_AGENT_HOSTS and "
+                "AGENT_DISCOVERY_PORTS.",
+                "reachable": 0,
+                "removed": 0,
+            }
+        cards = await agent_registry.get_all_cards()
+        # A card without a usable interface can't be probed, so it counts as unreachable rather
+        # than failing the run on an index error.
+        probe_targets = {
+            agent_id: card.supported_interfaces[0].url if card.supported_interfaces else None
+            for agent_id, card in cards.items()
+        }
+        agent_ids = list(probe_targets)
+        probes = await asyncio.gather(
+            *(
+                _check_agent_reachability(url) if url else asyncio.sleep(0, result=False)
+                for url in probe_targets.values()
+            )
+        )
+        reachable = removed = 0
+        for agent_id, probe in zip(agent_ids, probes, strict=True):
+            if probe:
+                reachable += 1
+                if await agent_registry.get_status(agent_id) == AgentStatus.BROKEN:
+                    await agent_registry.update_status(agent_id, AgentStatus.AVAILABLE)
+                    logger.info("Agent %s is reachable again; marked AVAILABLE.", agent_id)
+            elif await agent_registry.remove_unless_busy(agent_id):
+                removed += 1
+                logger.info("Removed unreachable agent %s.", agent_id)
+        return {
+            "message": f"{reachable} agents reachable, {removed} unreachable agents removed",
+            "reachable": reachable,
+            "removed": removed,
+        }
+
+
+async def _discover_new_agents() -> bool:
+    """Registers the new agents found on the configured candidates, False when discovery is not configured."""
     agent_base_urls_str = config.OrchestratorConfig.REMOTE_EXECUTION_AGENT_HOSTS
     port_range_str = config.OrchestratorConfig.AGENT_DISCOVERY_PORTS
 
@@ -1861,7 +2211,7 @@ async def _discover_agents():
             "Agent discovery configuration is incomplete. "
             "Please set both REMOTE_EXECUTION_AGENT_HOSTS and AGENT_DISCOVERY_PORTS."
         )
-        return
+        return False
 
     base_urls = [url.strip() for url in agent_base_urls_str.split(",")]
 
@@ -1872,7 +2222,7 @@ async def _discover_agents():
             f"Invalid port range format for AGENT_DISCOVERY_PORTS: '{port_range_str}'. "
             f"Expected format is 'start-end', e.g., '8001-8010'."
         )
-        return
+        return False
 
     remote_agent_urls = []
     for base_url in base_urls:
@@ -1881,10 +2231,11 @@ async def _discover_agents():
 
     if not remote_agent_urls:
         logger.warning("No agent URLs were generated for discovery.")
-        return
+        return False
 
     tasks = [_process_url_discovery(url) for url in set(remote_agent_urls)]
     await asyncio.gather(*tasks)
+    return True
 
 
 # =============================================================================

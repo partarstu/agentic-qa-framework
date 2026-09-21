@@ -9,6 +9,7 @@ Tests cover:
 - _get_model_from_artifacts: Parses artifacts into specific models or AgentExecutionError.
 """
 
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -19,11 +20,14 @@ from common.models import (
     GeneratedTestCases,
     IncidentCreationResult,
     JsonSerializableModel,
+    TestCase,
 )
 from orchestrator.main import (
+    _extract_with_retry,
     _get_model_from_artifacts,
     _get_text_content_from_artifacts,
 )
+from tests.orchestrator.conftest import agent_card
 
 # =============================================================================
 # Helper Functions and Fixtures
@@ -36,7 +40,7 @@ def _create_text_artifact(texts: list[str]) -> Artifact:
     return Artifact(name="test-artifact", parts=parts)
 
 
-def _create_file_artifact(filename: str = "test.txt") -> Artifact:
+def _create_file_artifact(filename: str = "test.md") -> Artifact:
     """Helper to create an artifact with a file part."""
     return Artifact(
         name="file-artifact",
@@ -44,7 +48,7 @@ def _create_file_artifact(filename: str = "test.txt") -> Artifact:
     )
 
 
-def _create_mixed_artifact(text: str, filename: str = "test.txt") -> Artifact:
+def _create_mixed_artifact(text: str, filename: str = "test.md") -> Artifact:
     """Helper to create an artifact with both text and file parts."""
     return Artifact(
         name="mixed-artifact",
@@ -432,6 +436,7 @@ class TestRequestIncidentCreationErrorHandling:
             test_step_results=[],
             system_description="Test system",
             issue_priority_field_id="priority_field_id",
+            project_key="SMOKE",
         )
 
         # Create artifact with AgentExecutionError
@@ -475,6 +480,7 @@ class TestRequestIncidentCreationErrorHandling:
             test_step_results=[],
             system_description="Test system",
             issue_priority_field_id="priority_field_id",
+            project_key="SMOKE",
         )
 
         # Create artifact with successful result
@@ -605,6 +611,7 @@ class TestExecuteSingleTestMultipleTextParts:
             mock_send.return_value = mock_task
             mock_get_artifacts.return_value = [multi_part_artifact]
             mock_registry.get_name = AsyncMock(return_value="Test Agent")
+            mock_registry.get_card = AsyncMock(return_value=agent_card(name="Test Agent", version="2.5"))
 
             # Mock the results extractor to return a proper TestExecutionResult
             from common.models import TestExecutionResult
@@ -665,6 +672,7 @@ class TestExecuteSingleTestMultipleTextParts:
             mock_send.return_value = mock_task
             mock_get_artifacts.return_value = [single_part_artifact]
             mock_registry.get_name = AsyncMock(return_value="Test Agent")
+            mock_registry.get_card = AsyncMock(return_value=agent_card(name="Test Agent", version="2.5"))
 
             from common.models import TestExecutionResult
 
@@ -687,3 +695,179 @@ class TestExecuteSingleTestMultipleTextParts:
 
             assert result is not None
             assert result.testExecutionStatus == "failed"
+
+
+# =============================================================================
+# _extract_with_retry
+# =============================================================================
+
+
+def _extractor_returning(*outputs):
+    """Build a _get_results_extractor_agent stub whose run() yields the given outputs (or raises them)."""
+    extractor = MagicMock()
+    extractor.run = AsyncMock(side_effect=[o if isinstance(o, Exception) else MagicMock(output=o) for o in outputs])
+    return MagicMock(return_value=extractor), extractor
+
+
+@pytest.mark.asyncio
+async def test_extract_with_retry_succeeds_on_first_attempt():
+    agent_factory, extractor = _extractor_returning("PROJ-1")
+
+    with patch("orchestrator.main._get_results_extractor_agent", agent_factory):
+        result = await _extract_with_retry(str, "plain prompt", "issue key extraction")
+
+    assert result == "PROJ-1"
+    assert extractor.run.await_count == 1
+    assert extractor.run.await_args.args[0] == "plain prompt"
+
+
+@pytest.mark.asyncio
+async def test_extract_with_retry_falls_back_to_json_shaped_prompt():
+    agent_factory, extractor = _extractor_returning("", "PROJ-1")
+
+    with patch("orchestrator.main._get_results_extractor_agent", agent_factory):
+        result = await _extract_with_retry(str, "plain prompt", "issue key extraction")
+
+    assert result == "PROJ-1"
+    assert extractor.run.await_count == 2
+    second_prompt = json.loads(extractor.run.await_args_list[1].args[0])
+    assert second_prompt == {"task_description": "issue key extraction", "source_prompt": "plain prompt"}
+
+
+@pytest.mark.asyncio
+async def test_extract_with_retry_reports_the_task_when_both_attempts_fail():
+    agent_factory, extractor = _extractor_returning(ValueError("boom"), None)
+
+    with (
+        patch("orchestrator.main._get_results_extractor_agent", agent_factory),
+        pytest.raises(RuntimeError, match="issue key extraction"),
+    ):
+        await _extract_with_retry(str, "plain prompt", "issue key extraction")
+
+    assert extractor.run.await_count == 2
+
+
+# =============================================================================
+# Agent info on execution results
+# =============================================================================
+
+
+def _executable_test_case() -> TestCase:
+    return TestCase(
+        key="TC-001",
+        name="Test Case",
+        summary="Sum",
+        steps=[],
+        labels=[],
+        comment="",
+        preconditions="",
+        parent_issue_key="STORY-1",
+    )
+
+
+async def _execute_single_test_with_extractor(extractor_output):
+    """Drive _execute_single_test with a stubbed agent + extractor, returning its result."""
+    artifact = _create_text_artifact(["irrelevant - the extractor is stubbed"])
+
+    with (
+        patch("orchestrator.main._send_task_to_agent", new_callable=AsyncMock) as mock_send,
+        patch("orchestrator.main._get_artifacts_from_task", return_value=[artifact]),
+        patch("orchestrator.main.agent_registry") as mock_registry,
+        patch("orchestrator.main._get_results_extractor_agent") as mock_extractor,
+        patch("orchestrator.main.config.OrchestratorConfig.TEST_ENVIRONMENT_LABEL", "Staging"),
+    ):
+        mock_send.return_value = MagicMock(artifacts=[artifact])
+        mock_registry.get_name = AsyncMock(return_value="Test Agent")
+        mock_registry.get_card = AsyncMock(return_value=agent_card(name="Test Agent", version="2.5"))
+        mock_extractor_instance = AsyncMock()
+        if isinstance(extractor_output, Exception):
+            mock_extractor_instance.run.side_effect = extractor_output
+        else:
+            mock_extractor_instance.run.return_value.output = extractor_output
+        mock_extractor.return_value = mock_extractor_instance
+
+        from orchestrator.main import _execute_single_test
+
+        return await _execute_single_test("agent-1", _executable_test_case(), "ui")
+
+
+@pytest.mark.asyncio
+async def test_execution_result_carries_agent_info():
+    from common.models import TestExecutionResult
+
+    extracted = TestExecutionResult(
+        stepResults=[],
+        testCaseKey="TC-001",
+        testCaseName="Test Case",
+        testExecutionStatus="passed",
+        generalErrorMessage="",
+        start_timestamp="2025-01-01",
+        end_timestamp="2025-01-01",
+    )
+
+    result = await _execute_single_test_with_extractor(extracted)
+
+    assert result.agent_info.agent_name == "Test Agent"
+    assert result.agent_info.agent_version == "2.5"
+    assert result.agent_info.environment == "Staging"
+
+
+@pytest.mark.asyncio
+async def test_agent_info_names_the_agent_routing_actually_reserved():
+    """The worker proposes an agent, but routing may reserve another one - the result must name that one."""
+    from common.models import TestExecutionResult
+    from orchestrator.main import _execute_single_test, _reserved_agent_id
+
+    artifact = _create_text_artifact(["irrelevant - the extractor is stubbed"])
+    extracted = TestExecutionResult(
+        stepResults=[],
+        testCaseKey="TC-001",
+        testCaseName="Test Case",
+        testExecutionStatus="passed",
+        generalErrorMessage="",
+        start_timestamp="2025-01-01",
+        end_timestamp="2025-01-01",
+    )
+    cards = {"proposed-agent": agent_card(name="Proposed", version="1.0"), "routed-agent": agent_card(name="Routed")}
+
+    async def reserve_a_different_agent(*_args, **_kwargs):
+        _reserved_agent_id.set("routed-agent")
+        return MagicMock(artifacts=[artifact])
+
+    with (
+        patch("orchestrator.main._send_task_to_agent", side_effect=reserve_a_different_agent),
+        patch("orchestrator.main._get_artifacts_from_task", return_value=[artifact]),
+        patch("orchestrator.main.agent_registry") as mock_registry,
+        patch("orchestrator.main._get_results_extractor_agent") as mock_extractor,
+    ):
+        mock_registry.get_name = AsyncMock(return_value="Routed")
+        mock_registry.get_card = AsyncMock(side_effect=lambda agent_id: cards[agent_id])
+        mock_extractor_instance = AsyncMock()
+        mock_extractor_instance.run.return_value.output = extracted
+        mock_extractor.return_value = mock_extractor_instance
+
+        result = await _execute_single_test("proposed-agent", _executable_test_case(), "ui")
+
+    mock_registry.get_card.assert_awaited_with("routed-agent")
+    assert result.agent_info.agent_name == "Routed"
+
+
+@pytest.mark.asyncio
+async def test_failed_extraction_result_carries_agent_info():
+    result = await _execute_single_test_with_extractor(ValueError("no structured output"))
+
+    assert result.testExecutionStatus == "error"
+    assert result.agent_info.agent_version == "2.5"
+    assert "version 2.5" in result.system_description
+    assert "Staging" in result.system_description
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_timestamps_are_utc():
+    """An offset-less timestamp is read as UTC downstream, so the orchestrator must emit UTC itself."""
+    from datetime import datetime, timedelta
+
+    result = await _execute_single_test_with_extractor(ValueError("no structured output"))
+
+    for timestamp in (result.start_timestamp, result.end_timestamp):
+        assert datetime.fromisoformat(timestamp).utcoffset() == timedelta(0)

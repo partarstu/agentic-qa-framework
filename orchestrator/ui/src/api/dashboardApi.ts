@@ -3,7 +3,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import { apiClient } from './client';
-import type { DashboardSummary, AgentInfo, TaskInfo, ErrorInfo, LogEntry } from '../types/dashboard';
+import type { DashboardSummary, AgentInfo, TaskInfo, ErrorInfo, LogEntry, RagSyncOutcome } from '../types/dashboard';
+
+// Above the orchestrator's agent discovery timeout (AGENT_DISCOVERY_TIMEOUT_SECONDS, 120 s).
+const DISCOVERY_TIMEOUT_MS = 130_000;
 
 /**
  * Dashboard API client for fetching orchestrator state.
@@ -55,11 +58,19 @@ export const dashboardApi = {
     return response.data;
   },
 
+  async getRagSyncStatus(): Promise<RagSyncOutcome[]> {
+    const response = await apiClient.get<RagSyncOutcome[]>('/rag-sync-status');
+    return response.data;
+  },
+
   /**
-   * Manually trigger agent discovery.
+   * Manually trigger agent discovery and return the server's summary of the run.
+   * Probing every candidate takes far longer than the default request timeout.
    */
   async triggerDiscovery(): Promise<{ message: string }> {
-    const response = await apiClient.post<{ message: string }>('/discovery');
+    const response = await apiClient.post<{ message: string }>('/discovery', undefined, {
+      timeout: DISCOVERY_TIMEOUT_MS,
+    });
     return response.data;
   },
 };

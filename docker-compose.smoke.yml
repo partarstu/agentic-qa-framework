@@ -22,7 +22,7 @@
 x-agent-env: &agent-env
   PORT: "8001"
   EXTERNAL_PORT: "8001"
-  JIRA_MCP_SERVER_URL: "http://jira_mcp_mock:9000/sse"
+  ATLASSIAN_MCP_SERVER_URL: "http://jira_mcp_mock:9000/mcp"
   JIRA_URL: "http://jira_rest_mock:8080"
   JIRA_USERNAME: "smoke"
   JIRA_API_TOKEN: "smoke-token"
@@ -31,6 +31,7 @@ x-agent-env: &agent-env
   TEST_MANAGEMENT_SYSTEM: "zephyr"
   PROMPT_INJECTION_CHECK_ENABLED: "false"
   GOOGLE_API_KEY: "${GOOGLE_API_KEY}"
+  MODEL_NAME: "google-gla:gemini-3.8-flash"
 
 # Agents serve their A2A card as soon as they are ready to take tasks.
 x-agent-healthcheck: &agent-healthcheck
@@ -44,6 +45,18 @@ x-mock-dependencies: &mock-dependencies
   jira_mcp_mock:
     condition: service_healthy
   jira_rest_mock:
+    condition: service_healthy
+  zephyr_mock:
+    condition: service_healthy
+
+x-sync-dependencies: &sync-dependencies
+  jira_rest_mock:
+    condition: service_healthy
+  qdrant_mock:
+    condition: service_healthy
+  confluence_mock:
+    condition: service_healthy
+  sharepoint_mock:
     condition: service_healthy
   zephyr_mock:
     condition: service_healthy
@@ -92,6 +105,19 @@ services:
       retries: 12
       start_period: 5s
 
+  confluence_mock:
+    image: smoke-mocks:latest
+    pull_policy: never
+    command: ["uvicorn", "mocks.confluence_mock:app", "--host", "0.0.0.0", "--port", "8095"]
+    ports:
+      - "8095:8095"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8095/__recorded')"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+
   qdrant_mock:
     image: smoke-mocks:latest
     pull_policy: never
@@ -105,6 +131,59 @@ services:
       retries: 12
       start_period: 5s
 
+  # the local RAG sync service. The orchestrator's /update-jira-db and
+  # /update-confluence-db forward to it (local mode); it runs the syncs inline
+  # against the mocked Jira REST, Confluence REST and Qdrant.
+  rag_sync_local:
+    build:
+      context: .
+      dockerfile: services/rag_sync/Dockerfile
+    entrypoint: ["python", "-m", "rag_sync.local_service"]
+    command: ["--port", "8085"]
+    environment:
+      TZ: "Europe/Vienna"
+      INTERNAL_SERVICE_API_KEY: "smoke-internal-key"
+      JIRA_URL: "http://jira_rest_mock:8080"
+      JIRA_USERNAME: "smoke"
+      JIRA_API_TOKEN: "smoke-token"
+      CONFLUENCE_URL: "http://confluence_mock:8095"
+      CONFLUENCE_USERNAME: "smoke"
+      CONFLUENCE_API_TOKEN: "smoke-token"
+      # the SharePoint sync runs against the Microsoft Graph mock.
+      SHAREPOINT_TENANT_ID: "smoke-tenant"
+      SHAREPOINT_CLIENT_ID: "smoke-client"
+      SHAREPOINT_CLIENT_SECRET: "smoke-secret"
+      SHAREPOINT_AUTHORITY_URL: "http://sharepoint_mock:8097"
+      SHAREPOINT_GRAPH_BASE_URL: "http://sharepoint_mock:8097"
+      # the test-case sync lists the project's test cases from the test management system.
+      TEST_MANAGEMENT_SYSTEM: "zephyr"
+      ZEPHYR_BASE_URL: "http://zephyr_mock:8090"
+      ZEPHYR_API_TOKEN: "smoke-token"
+      QDRANT_URL: "http://qdrant_mock:6333"
+      EMBEDDING_SERVICE_URL: "http://qdrant_mock:6333"
+    depends_on: *sync-dependencies
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8085/health')"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+
+  # Microsoft Graph recording mock (Entra token endpoint included) for the
+  # SharePoint ingestion. Shares the mocks image jira_mcp_mock builds.
+  sharepoint_mock:
+    image: smoke-mocks:latest
+    pull_policy: never
+    command: ["uvicorn", "mocks.sharepoint_mock:app", "--host", "0.0.0.0", "--port", "8097"]
+    ports:
+      - "8097:8097"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8097/__recorded')"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+
   requirements_review:
     build:
       context: .
@@ -112,7 +191,20 @@ services:
     environment:
       <<: *agent-env
       AGENT_BASE_URL: "http://requirements_review"
-    depends_on: *mock-dependencies
+      # proves prompt overrides reach the agent - the override file under
+      # tests/smoke/overrides/ replaces the bundled main prompt template.
+      PROMPT_OVERRIDES_DIR: "/prompt-overrides"
+      # retrieval enabled, Confluence-only - the review grounds itself in the
+      # documents the concurrently running Confluence sync ingests into the mocked vector DB.
+      CONFLUENCE_RETRIEVAL_ENABLED: "true"
+      QDRANT_URL: "http://qdrant_mock:6333"
+      EMBEDDING_SERVICE_URL: "http://qdrant_mock:6333"
+    volumes:
+      - ./tests/smoke/overrides:/prompt-overrides:ro
+    depends_on:
+      <<: *mock-dependencies
+      qdrant_mock:
+        condition: service_healthy
     healthcheck: *agent-healthcheck
 
   test_case_generation:
@@ -142,7 +234,13 @@ services:
     environment:
       <<: *agent-env
       AGENT_BASE_URL: "http://test_case_review"
-    depends_on: *mock-dependencies
+      # the review indexes its batch into the test-case collection and searches it for duplicates.
+      QDRANT_URL: "http://qdrant_mock:6333"
+      EMBEDDING_SERVICE_URL: "http://qdrant_mock:6333"
+    depends_on:
+      <<: *mock-dependencies
+      qdrant_mock:
+        condition: service_healthy
     healthcheck: *agent-healthcheck
 
   incident_creation:
@@ -152,8 +250,7 @@ services:
     environment:
       <<: *agent-env
       AGENT_BASE_URL: "http://incident_creation"
-      QDRANT_URL: "http://qdrant_mock"
-      QDRANT_PORT: "6333"
+      QDRANT_URL: "http://qdrant_mock:6333"
       # The duplicate search embeds its query once the tickets collection exists
       # (the concurrently running RAG sync creates it).
       EMBEDDING_SERVICE_URL: "http://qdrant_mock:6333"
@@ -172,6 +269,8 @@ services:
     environment:
       <<: *agent-env
       AGENT_BASE_URL: "http://execution_agent"
+      # An explicit, non-default version so the smoke suite can assert it is reported end to end.
+      EXECUTION_AGENT_VERSION: "9.9-smoke"
     depends_on: *mock-dependencies
     healthcheck: *agent-healthcheck
 
@@ -181,30 +280,46 @@ services:
       dockerfile: orchestrator/Dockerfile
     command: ["gunicorn", "-w", "1", "-k", "uvicorn.workers.UvicornWorker", "--bind", "0.0.0.0:8000", "orchestrator.main:orchestrator_app"]
     environment:
+      DASHBOARD_PERSISTENCE_ENABLED: "true"
+      QDRANT_DASHBOARD_COLLECTION_NAME: "dashboard_state"
       ORCHESTRATOR_HOST: "0.0.0.0"
       ORCHESTRATOR_PORT: "8000"
+      # Explicit, non-default values so the smoke suite can assert both reach their consumers:
+      # the version through the dashboard, the environment label through the created incident.
+      ORCHESTRATOR_VERSION: "8.8-smoke"
+      TEST_ENVIRONMENT_LABEL: "Smoke Test Environment"
       REMOTE_EXECUTION_AGENT_HOSTS: "http://requirements_review,http://test_case_generation,http://test_case_classification,http://test_case_review,http://incident_creation,http://execution_agent"
       AGENT_DISCOVERY_PORTS: "8001-8001"
       ORCHESTRATOR_API_KEY: "smoke-api-key"
       DASHBOARD_USERNAME: "smoke"
-      DASHBOARD_PASSWORD: "smoke-pass"
+      DASHBOARD_PASSWORD_HASH: "$$2b$$12$$OZG8i8zm/ulUkJ7mqIBqwekJNMXG5Ia.6rOTr0Oqb/1tPFZs1IWNW"
       DASHBOARD_JWT_SECRET: "smoke-jwt-secret"
       PROMPT_INJECTION_CHECK_ENABLED: "false"
       GOOGLE_API_KEY: "${GOOGLE_API_KEY}"
+      MODEL_NAME: "google-gla:gemini-3.8-flash"
+      # proves the additional Jira custom fields instruction reaches the agents:
+      # the Jira MCP mock records that jira_get_issue was asked for these field IDs.
+      JIRA_ADDITIONAL_FIELD_IDS: "customfield_10101,customfield_10202"
       # The /execute-tests flow makes the orchestrator a test-management client.
       TEST_MANAGEMENT_SYSTEM: "zephyr"
       ZEPHYR_BASE_URL: "http://zephyr_mock:8090"
       ZEPHYR_API_TOKEN: "smoke-token"
-      # The /update-rag-db flow makes the orchestrator a Jira REST and vector DB client.
+      # The /update-jira-db flow makes the local sync service a Jira REST and vector DB client.
       JIRA_URL: "http://jira_rest_mock:8080"
       JIRA_USERNAME: "smoke"
       JIRA_API_TOKEN: "smoke-token"
-      QDRANT_URL: "http://qdrant_mock"
-      QDRANT_PORT: "6333"
+      # Confluence-only retrieval configuration for the review flow.
+      CONFLUENCE_RETRIEVAL_ENABLED: "true"
+      QDRANT_URL: "http://qdrant_mock:6333"
       EMBEDDING_SERVICE_URL: "http://qdrant_mock:6333"
+      # local mode - the orchestrator forwards /update-jira-db to the local sync service.
+      RAG_SYNC_SERVICE_URL: "http://rag_sync_local:8085"
+      INTERNAL_SERVICE_API_KEY: "smoke-internal-key"
     ports:
       - "8000:8000"
     depends_on:
+      rag_sync_local:
+        condition: service_healthy
       zephyr_mock:
         condition: service_healthy
       qdrant_mock:

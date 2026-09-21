@@ -23,15 +23,30 @@
           ]
         },
         "dashboard-jwt": {
-          "description": "Monitoring dashboard endpoints require a signed JWT; tokens are rejected when the signing secret is unset.",
+          "description": "Monitoring dashboard endpoints require a signed JWT; login verifies the submitted password against the bcrypt hash DASHBOARD_PASSWORD_HASH on a worker thread (never plaintext) and is rate limited per client IP.",
           "requirements": [
             {
               "requirement-url": "https://quaia.finos.calm/controls/authentication.requirement.json",
               "config": {
                 "control-id": "quaia-dashboard-jwt",
                 "name": "Dashboard JWT",
-                "description": "Dashboard API access requires a valid JWT signed with DASHBOARD_JWT_SECRET.",
+                "description": "Dashboard API access requires a valid JWT signed with DASHBOARD_JWT_SECRET; the login verifies credentials against DASHBOARD_PASSWORD_HASH with bcrypt.",
                 "auth-method": "jwt",
+                "enforced": true
+              }
+            }
+          ]
+        },
+        "login-rate-limit": {
+          "description": "The login endpoint allows 5 attempts per minute per client IP, tracked in an in-process sliding window; exceeding it returns HTTP 429 with Retry-After.",
+          "requirements": [
+            {
+              "requirement-url": "https://quaia.finos.calm/controls/rate-limiting.requirement.json",
+              "config": {
+                "control-id": "quaia-login-rate-limit",
+                "name": "Login Rate Limit",
+                "description": "Login attempts per client IP are bounded to 5 per minute (application layer; a second layer is the platform load balancer's job).",
+                "rate-limit": "5/minute per client IP",
                 "enforced": true
               }
             }
@@ -212,10 +227,10 @@
       "description": "Stores embeddings for semantic search and duplicate detection."
     },
     {
-      "unique-id": "jira-mcp-server",
+      "unique-id": "atlassian-mcp-server",
       "node-type": "service",
-      "name": "Jira MCP Server",
-      "description": "Model Context Protocol server bridging agents and Jira."
+      "name": "Atlassian MCP Server",
+      "description": "Model Context Protocol server bridging agents and Atlassian (Jira and Confluence)."
     },
     {
       "unique-id": "cloud-run",
@@ -239,13 +254,48 @@
       "unique-id": "llm-provider",
       "node-type": "system",
       "name": "LLM Provider",
-      "description": "External large-language-model provider (Google Gemini) used by the orchestrator and agents."
+      "description": "External LLM provider(s): Google Gemini by default, with Anthropic Claude 5 family and self-hosted Qwen as configured model options. Provider HTTP clients carry transport-level retries, per-operation token metering feeds the dashboard, and max output tokens / thinking effort are resolved per provider."
     },
     {
       "unique-id": "execution-agents",
       "node-type": "system",
       "name": "Test Execution Agents",
       "description": "External UI and API test execution agents that run test cases and expose an A2A endpoint guarded by a shared bearer token."
+    },
+    {
+      "unique-id": "rag-sync-job",
+      "node-type": "service",
+      "name": "RAG Sync Job",
+      "description": "Synchronizes Jira issues (and later Confluence pages) into the Qdrant vector DB. Runs as a Cloud Run Job triggered by the orchestrator, or as a local sync service in development.",
+      "controls": {
+        "vector-db-api-key": {
+          "description": "Calls to Qdrant carry the shared QDRANT_API_KEY when one is configured.",
+          "requirements": [
+            {
+              "requirement-url": "https://quaia.finos.calm/controls/authentication.requirement.json",
+              "config": {
+                "control-id": "quaia-qdrant-api-key",
+                "name": "Qdrant API Key",
+                "description": "Every client into the vector database authenticates with the shared QDRANT_API_KEY when one is configured.",
+                "auth-method": "api-key",
+                "enforced": false
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "confluence",
+      "node-type": "system",
+      "name": "Confluence",
+      "description": "Atlassian Confluence Cloud, source of the documents ingested into the RAG vector DB."
+    },
+    {
+      "unique-id": "sharepoint",
+      "node-type": "system",
+      "name": "Microsoft SharePoint",
+      "description": "Microsoft SharePoint document libraries (drive items), source of the documents ingested into the RAG vector DB."
     }
   ],
   "relationships": [
@@ -268,12 +318,16 @@
     },
     {
       "unique-id": "rel-orchestrator-routes-execution-tasks",
-      "description": "Orchestrator routes test-execution tasks to the external UI/API execution agents over the A2A protocol.",
+      "description": "Orchestrator routes test-execution tasks to the external UI/API execution agents over the A2A protocol: batch execution groups from /execute-tests and single manually selected executions from /execute-test.",
       "protocol": "HTTPS",
       "relationship-type": {
         "connects": {
-          "source": { "node": "orchestrator" },
-          "destination": { "node": "execution-agents" }
+          "source": {
+            "node": "orchestrator"
+          },
+          "destination": {
+            "node": "execution-agents"
+          }
         }
       },
       "controls": {
@@ -300,8 +354,12 @@
       "protocol": "HTTPS",
       "relationship-type": {
         "connects": {
-          "source": { "node": "jira" },
-          "destination": { "node": "orchestrator" }
+          "source": {
+            "node": "jira"
+          },
+          "destination": {
+            "node": "orchestrator"
+          }
         }
       },
       "controls": {
@@ -328,8 +386,12 @@
       "protocol": "HTTPS",
       "relationship-type": {
         "connects": {
-          "source": { "node": "orchestrator" },
-          "destination": { "node": "llm-provider" }
+          "source": {
+            "node": "orchestrator"
+          },
+          "destination": {
+            "node": "llm-provider"
+          }
         }
       }
     },
@@ -339,30 +401,102 @@
       "protocol": "HTTPS",
       "relationship-type": {
         "connects": {
-          "source": { "node": "orchestrator" },
-          "destination": { "node": "zephyr" }
+          "source": {
+            "node": "orchestrator"
+          },
+          "destination": {
+            "node": "zephyr"
+          }
         }
       }
     },
     {
-      "unique-id": "rel-requirements-review-jira-mcp",
-      "description": "Requirements Review Agent reads Jira data through the Jira MCP server.",
+      "unique-id": "rel-requirements-review-atlassian-mcp",
+      "description": "Requirements Review Agent reads Jira data through the Atlassian MCP server.",
       "protocol": "HTTPS",
       "relationship-type": {
         "connects": {
-          "source": { "node": "requirements-review-agent" },
-          "destination": { "node": "jira-mcp-server" }
+          "source": {
+            "node": "requirements-review-agent"
+          },
+          "destination": {
+            "node": "atlassian-mcp-server"
+          }
         }
       }
     },
     {
-      "unique-id": "rel-jira-mcp-jira",
-      "description": "Jira MCP server communicates with the external Jira instance.",
+      "unique-id": "rel-test-case-generation-atlassian-mcp",
+      "description": "Test Case Generation Agent reads the source Jira issue through the Atlassian MCP server.",
       "protocol": "HTTPS",
       "relationship-type": {
         "connects": {
-          "source": { "node": "jira-mcp-server" },
-          "destination": { "node": "jira" }
+          "source": {
+            "node": "test-case-generation-agent"
+          },
+          "destination": {
+            "node": "atlassian-mcp-server"
+          }
+        }
+      }
+    },
+    {
+      "unique-id": "rel-test-case-review-atlassian-mcp",
+      "description": "Test Case Review Agent reads the source Jira issue through the Atlassian MCP server.",
+      "protocol": "HTTPS",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "test-case-review-agent"
+          },
+          "destination": {
+            "node": "atlassian-mcp-server"
+          }
+        }
+      }
+    },
+    {
+      "unique-id": "rel-incident-creation-atlassian-mcp",
+      "description": "Incident Creation Agent reads and writes Jira issues through the Atlassian MCP server.",
+      "protocol": "HTTPS",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "incident-creation-agent"
+          },
+          "destination": {
+            "node": "atlassian-mcp-server"
+          }
+        }
+      }
+    },
+    {
+      "unique-id": "rel-atlassian-mcp-jira",
+      "description": "The Atlassian MCP server communicates with the external Jira instance.",
+      "protocol": "HTTPS",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "atlassian-mcp-server"
+          },
+          "destination": {
+            "node": "jira"
+          }
+        }
+      }
+    },
+    {
+      "unique-id": "rel-atlassian-mcp-confluence",
+      "description": "The Atlassian MCP server reads Confluence content over the Confluence REST API.",
+      "protocol": "HTTPS",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "atlassian-mcp-server"
+          },
+          "destination": {
+            "node": "confluence"
+          }
         }
       }
     },
@@ -372,19 +506,44 @@
       "protocol": "HTTPS",
       "relationship-type": {
         "connects": {
-          "source": { "node": "incident-creation-agent" },
-          "destination": { "node": "embedding-service" }
+          "source": {
+            "node": "incident-creation-agent"
+          },
+          "destination": {
+            "node": "embedding-service"
+          }
         }
       }
     },
     {
-      "unique-id": "rel-orchestrator-embedding",
-      "description": "Orchestrator requests embeddings from the embedding service while syncing Jira issues into the RAG store.",
+      "unique-id": "rel-requirements-review-embedding",
+      "description": "Requirements Review Agent requests embeddings of the focused retrieval query from the embedding service.",
       "protocol": "HTTPS",
+      "controls": {
+        "internal-service-api-key": {
+          "description": "Calls to the embedding service carry the shared internal X-API-Key.",
+          "requirements": [
+            {
+              "requirement-url": "https://quaia.finos.calm/controls/authentication.requirement.json",
+              "config": {
+                "control-id": "quaia-internal-api-key-embedding",
+                "name": "Internal Service API Key",
+                "description": "Calls to the embedding service carry the shared X-API-Key (INTERNAL_SERVICE_API_KEY).",
+                "auth-method": "api-key",
+                "enforced": false
+              }
+            }
+          ]
+        }
+      },
       "relationship-type": {
         "connects": {
-          "source": { "node": "orchestrator" },
-          "destination": { "node": "embedding-service" }
+          "source": {
+            "node": "requirements-review-agent"
+          },
+          "destination": {
+            "node": "embedding-service"
+          }
         }
       }
     },
@@ -392,32 +551,209 @@
       "unique-id": "rel-incident-agent-qdrant",
       "description": "Incident Creation Agent queries Qdrant for duplicate detection.",
       "protocol": "HTTPS",
+      "controls": {
+        "vector-db-api-key": {
+          "description": "Calls to Qdrant carry the shared QDRANT_API_KEY when one is configured.",
+          "requirements": [
+            {
+              "requirement-url": "https://quaia.finos.calm/controls/authentication.requirement.json",
+              "config": {
+                "control-id": "quaia-qdrant-api-key",
+                "name": "Qdrant API Key",
+                "description": "Every client into the vector database authenticates with the shared QDRANT_API_KEY when one is configured.",
+                "auth-method": "api-key",
+                "enforced": false
+              }
+            }
+          ]
+        }
+      },
       "relationship-type": {
         "connects": {
-          "source": { "node": "incident-creation-agent" },
-          "destination": { "node": "qdrant" }
+          "source": {
+            "node": "incident-creation-agent"
+          },
+          "destination": {
+            "node": "qdrant"
+          }
         }
       }
     },
     {
       "unique-id": "rel-orchestrator-qdrant",
-      "description": "Orchestrator writes Jira issue embeddings to Qdrant during the RAG sync.",
+      "description": "Orchestrator acquires per-scope sync locks, reads/writes sync state, and optionally persists dashboard task, error and accepted-log history as payload-only Qdrant records (issue embedding writes moved to the RAG sync job).",
       "protocol": "HTTPS",
+      "controls": {
+        "vector-db-api-key": {
+          "description": "Calls to Qdrant carry the shared QDRANT_API_KEY when one is configured.",
+          "requirements": [
+            {
+              "requirement-url": "https://quaia.finos.calm/controls/authentication.requirement.json",
+              "config": {
+                "control-id": "quaia-qdrant-api-key",
+                "name": "Qdrant API Key",
+                "description": "Every client into the vector database authenticates with the shared QDRANT_API_KEY when one is configured.",
+                "auth-method": "api-key",
+                "enforced": false
+              }
+            }
+          ]
+        }
+      },
       "relationship-type": {
         "connects": {
-          "source": { "node": "orchestrator" },
-          "destination": { "node": "qdrant" }
+          "source": {
+            "node": "orchestrator"
+          },
+          "destination": {
+            "node": "qdrant"
+          }
+        }
+      }
+    },
+    {
+      "unique-id": "rel-requirements-review-qdrant",
+      "description": "Requirements Review Agent runs hybrid retrieval over the per-source document collections (Confluence and SharePoint) in Qdrant to ground the review in reference documentation.",
+      "protocol": "HTTPS",
+      "controls": {
+        "vector-db-api-key": {
+          "description": "Calls to Qdrant carry the shared QDRANT_API_KEY when one is configured.",
+          "requirements": [
+            {
+              "requirement-url": "https://quaia.finos.calm/controls/authentication.requirement.json",
+              "config": {
+                "control-id": "quaia-qdrant-api-key",
+                "name": "Qdrant API Key",
+                "description": "Every client into the vector database authenticates with the shared QDRANT_API_KEY when one is configured.",
+                "auth-method": "api-key",
+                "enforced": false
+              }
+            }
+          ]
+        }
+      },
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "requirements-review-agent"
+          },
+          "destination": {
+            "node": "qdrant"
+          }
+        }
+      }
+    },
+    {
+      "unique-id": "rel-requirements-review-jira",
+      "description": "Requirements Review Agent downloads the reviewed issue's attachments over the Jira REST API.",
+      "protocol": "HTTPS",
+      "controls": {
+        "jira-credential-origin-scope": {
+          "description": "Jira credentials are sent only to attachment URLs whose scheme, host and port match JIRA_URL; attachments on another origin are skipped.",
+          "requirements": [
+            {
+              "requirement-url": "https://quaia.finos.calm/controls/credential-scope.requirement.json",
+              "config": {
+                "control-id": "quaia-jira-credential-origin-scope-requirements-review",
+                "name": "Jira Credential Origin Scope",
+                "description": "The attachment downloader sends Jira basic auth only to the configured Jira origin.",
+                "allowed-origin": "JIRA_URL",
+                "on-mismatch": "skip",
+                "enforced": true
+              }
+            }
+          ]
+        }
+      },
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "requirements-review-agent"
+          },
+          "destination": {
+            "node": "jira"
+          }
+        }
+      }
+    },
+    {
+      "unique-id": "rel-test-case-generation-jira",
+      "description": "Test Case Generation Agent downloads the processed issue's attachments over the Jira REST API.",
+      "protocol": "HTTPS",
+      "controls": {
+        "jira-credential-origin-scope": {
+          "description": "Jira credentials are sent only to attachment URLs whose scheme, host and port match JIRA_URL; attachments on another origin are skipped.",
+          "requirements": [
+            {
+              "requirement-url": "https://quaia.finos.calm/controls/credential-scope.requirement.json",
+              "config": {
+                "control-id": "quaia-jira-credential-origin-scope-test-case-generation",
+                "name": "Jira Credential Origin Scope",
+                "description": "The attachment downloader sends Jira basic auth only to the configured Jira origin.",
+                "allowed-origin": "JIRA_URL",
+                "on-mismatch": "skip",
+                "enforced": true
+              }
+            }
+          ]
+        }
+      },
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "test-case-generation-agent"
+          },
+          "destination": {
+            "node": "jira"
+          }
+        }
+      }
+    },
+    {
+      "unique-id": "rel-test-case-review-jira",
+      "description": "Test Case Review Agent downloads the processed issue's attachments over the Jira REST API.",
+      "protocol": "HTTPS",
+      "controls": {
+        "jira-credential-origin-scope": {
+          "description": "Jira credentials are sent only to attachment URLs whose scheme, host and port match JIRA_URL; attachments on another origin are skipped.",
+          "requirements": [
+            {
+              "requirement-url": "https://quaia.finos.calm/controls/credential-scope.requirement.json",
+              "config": {
+                "control-id": "quaia-jira-credential-origin-scope-test-case-review",
+                "name": "Jira Credential Origin Scope",
+                "description": "The attachment downloader sends Jira basic auth only to the configured Jira origin.",
+                "allowed-origin": "JIRA_URL",
+                "on-mismatch": "skip",
+                "enforced": true
+              }
+            }
+          ]
+        }
+      },
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "test-case-review-agent"
+          },
+          "destination": {
+            "node": "jira"
+          }
         }
       }
     },
     {
       "unique-id": "rel-orchestrator-jira",
-      "description": "Orchestrator reads Jira issues over the Jira REST API to keep the RAG store in sync.",
+      "description": "Orchestrator reads test-management data from the Xray app over the Jira REST API when fetching automated test cases for execution.",
       "protocol": "HTTPS",
       "relationship-type": {
         "connects": {
-          "source": { "node": "orchestrator" },
-          "destination": { "node": "jira" }
+          "source": {
+            "node": "orchestrator"
+          },
+          "destination": {
+            "node": "jira"
+          }
         }
       }
     },
@@ -437,8 +773,281 @@
             "prompt-guard-service",
             "embedding-service",
             "qdrant",
-            "jira-mcp-server"
+            "atlassian-mcp-server",
+            "rag-sync-job"
           ]
+        }
+      }
+    },
+    {
+      "unique-id": "rel-orchestrator-rag-sync-job",
+      "description": "Orchestrator acquires the scope lock and starts the RAG sync job execution with per-execution container argument overrides (scope options and lock token).",
+      "protocol": "HTTPS",
+      "controls": {
+        "job-invocation-iam": {
+          "description": "The orchestrator's runtime service account may only run the sync job with overrides (least privilege, scoped to the job).",
+          "requirements": [
+            {
+              "requirement-url": "https://quaia.finos.calm/controls/job-invocation.requirement.json",
+              "config": {
+                "control-id": "quaia-rag-sync-job-invocation",
+                "name": "RAG Sync Job Invocation IAM",
+                "description": "The orchestrator's runtime identity holds run.jobs.runWithOverrides on the sync job only.",
+                "role": "roles/run.jobsExecutorWithOverrides",
+                "permissions": [
+                  "run.jobs.runWithOverrides"
+                ],
+                "scoped-to": "rag-sync-job",
+                "enforced": true
+              }
+            }
+          ]
+        }
+      },
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "orchestrator"
+          },
+          "destination": {
+            "node": "rag-sync-job"
+          }
+        }
+      }
+    },
+    {
+      "unique-id": "rel-rag-sync-job-jira",
+      "description": "The sync job reads Jira issues over the REST API during the Jira sync.",
+      "protocol": "HTTPS",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "rag-sync-job"
+          },
+          "destination": {
+            "node": "jira"
+          }
+        }
+      }
+    },
+    {
+      "unique-id": "rel-rag-sync-job-confluence",
+      "description": "The sync job reads Confluence pages and attachments over the REST API (document ingestion).",
+      "protocol": "HTTPS",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "rag-sync-job"
+          },
+          "destination": {
+            "node": "confluence"
+          }
+        }
+      }
+    },
+    {
+      "unique-id": "rel-rag-sync-job-qdrant",
+      "description": "The sync job writes issues, documents, locks and sync state to Qdrant.",
+      "protocol": "HTTPS",
+      "controls": {
+        "vector-db-api-key": {
+          "description": "Calls to Qdrant carry the shared QDRANT_API_KEY when one is configured.",
+          "requirements": [
+            {
+              "requirement-url": "https://quaia.finos.calm/controls/authentication.requirement.json",
+              "config": {
+                "control-id": "quaia-qdrant-api-key",
+                "name": "Qdrant API Key",
+                "description": "Every client into the vector database authenticates with the shared QDRANT_API_KEY when one is configured.",
+                "auth-method": "api-key",
+                "enforced": false
+              }
+            }
+          ]
+        }
+      },
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "rag-sync-job"
+          },
+          "destination": {
+            "node": "qdrant"
+          }
+        }
+      }
+    },
+    {
+      "unique-id": "rel-rag-sync-job-orchestrator-outcome",
+      "description": "The sync job posts its authenticated terminal outcome callback to the orchestrator when configured.",
+      "protocol": "HTTPS",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "rag-sync-job"
+          },
+          "destination": {
+            "node": "orchestrator"
+          }
+        }
+      }
+    },
+    {
+      "unique-id": "rel-rag-sync-job-embedding",
+      "description": "The sync job embeds issue and document text through the embedding service.",
+      "protocol": "HTTPS",
+      "controls": {
+        "internal-service-api-key": {
+          "description": "Calls to the embedding service carry the shared internal X-API-Key.",
+          "requirements": [
+            {
+              "requirement-url": "https://quaia.finos.calm/controls/authentication.requirement.json",
+              "config": {
+                "control-id": "quaia-internal-api-key-embedding",
+                "name": "Internal Service API Key",
+                "description": "Calls to the embedding service carry the shared X-API-Key (INTERNAL_SERVICE_API_KEY).",
+                "auth-method": "api-key",
+                "enforced": false
+              }
+            }
+          ]
+        }
+      },
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "rag-sync-job"
+          },
+          "destination": {
+            "node": "embedding-service"
+          }
+        }
+      }
+    },
+    {
+      "unique-id": "rel-rag-sync-job-sharepoint",
+      "description": "RAG Sync Job reads SharePoint drive items through the Microsoft Graph API with app-only access.",
+      "protocol": "HTTPS",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "rag-sync-job"
+          },
+          "destination": {
+            "node": "sharepoint"
+          }
+        }
+      },
+      "controls": {
+        "graph-oauth-client-credentials": {
+          "description": "Graph access uses Entra app-only (client-credentials) tokens; the least-privilege Sites.Selected application permission is granted per site.",
+          "requirements": [
+            {
+              "requirement-url": "https://quaia.finos.calm/controls/authentication.requirement.json",
+              "config": {
+                "control-id": "quaia-graph-oauth-client-credentials",
+                "name": "Graph OAuth Client Credentials",
+                "description": "Calls to Microsoft Graph authenticate with an app-only OAuth 2.0 client-credentials access token requested from the Entra token endpoint.",
+                "auth-method": "oauth2",
+                "enforced": true
+              }
+            }
+          ]
+        },
+        "graph-credential-origin-scope": {
+          "description": "The Graph bearer token is sent only to URLs whose scheme, host and port match SHAREPOINT_GRAPH_BASE_URL; a stored delta link on another origin is refused and a full enumeration starts instead.",
+          "requirements": [
+            {
+              "requirement-url": "https://quaia.finos.calm/controls/credential-scope.requirement.json",
+              "config": {
+                "control-id": "quaia-graph-credential-origin-scope-rag-sync",
+                "name": "Graph Credential Origin Scope",
+                "description": "The delta enumeration sends the app-only Graph token only to the configured Graph origin, never to a delta link taken from response data that names another origin.",
+                "allowed-origin": "SHAREPOINT_GRAPH_BASE_URL",
+                "on-mismatch": "skip",
+                "enforced": true
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "rel-test-case-review-qdrant",
+      "description": "Test Case Review Agent runs hybrid search over the test-case collection in Qdrant for duplicate detection.",
+      "protocol": "HTTPS",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "test-case-review-agent"
+          },
+          "destination": {
+            "node": "qdrant"
+          }
+        }
+      },
+      "controls": {
+        "vector-db-api-key": {
+          "description": "Calls to Qdrant carry the shared QDRANT_API_KEY when one is configured.",
+          "requirements": [
+            {
+              "requirement-url": "https://quaia.finos.calm/controls/authentication.requirement.json",
+              "config": {
+                "control-id": "quaia-qdrant-api-key",
+                "name": "Qdrant API Key",
+                "description": "Every client into the vector database authenticates with the shared QDRANT_API_KEY when one is configured.",
+                "auth-method": "api-key",
+                "enforced": false
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "rel-test-case-review-embedding",
+      "description": "Test Case Review Agent requests embeddings from the embedding service to index and search the batch under review.",
+      "protocol": "HTTPS",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "test-case-review-agent"
+          },
+          "destination": {
+            "node": "embedding-service"
+          }
+        }
+      },
+      "controls": {
+        "internal-service-api-key": {
+          "description": "Calls to the embedding service carry the shared internal X-API-Key.",
+          "requirements": [
+            {
+              "requirement-url": "https://quaia.finos.calm/controls/authentication.requirement.json",
+              "config": {
+                "control-id": "quaia-internal-api-key-embedding",
+                "name": "Internal Service API Key",
+                "description": "Calls to the embedding service carry the shared X-API-Key (INTERNAL_SERVICE_API_KEY).",
+                "auth-method": "api-key",
+                "enforced": false
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "rel-rag-sync-job-zephyr",
+      "description": "RAG Sync Job lists the project's test cases (full resync) through the test management system's REST API.",
+      "protocol": "HTTPS",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "rag-sync-job"
+          },
+          "destination": {
+            "node": "zephyr"
+          }
         }
       }
     }

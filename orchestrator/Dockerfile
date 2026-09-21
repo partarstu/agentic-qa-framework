@@ -55,6 +55,7 @@ WORKDIR ${WORK_DIR}
 
 # Copy Python application
 COPY orchestrator/ ${WORK_DIR}/orchestrator
+COPY prompts/ ${WORK_DIR}/prompts
 COPY common/ ${WORK_DIR}/common
 COPY config.py ${WORK_DIR}/config.py
 

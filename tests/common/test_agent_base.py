@@ -9,6 +9,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from a2a.helpers import get_message_text
 from a2a.types import Message
+from a2a.utils.constants import AGENT_CARD_WELL_KNOWN_PATH
+from fastapi.testclient import TestClient
+from pydantic_ai.models.test import TestModel
 from pydantic_ai.usage import RunUsage
 
 if TYPE_CHECKING:
@@ -17,8 +20,9 @@ if TYPE_CHECKING:
 import config
 from common.agent_base import AgentBase
 from common.agent_log_capture import AgentLogCaptureHandler
-from common.models import JsonSerializableModel
+from common.models import AgentSkillDeclaration, JsonSerializableModel
 from common.streaming import reset_current_log_handler, set_current_log_handler
+from common.token_usage import OperationMeter, operation_meter
 
 
 class TestAgent(AgentBase):
@@ -45,9 +49,14 @@ def test_agent_instance():
             port=8000,
             external_port=8000,
             model_name="openai:test-model",
+            version="2.5",
+            skill=AgentSkillDeclaration(
+                id="test-skill",
+                name="Test Skill",
+                description="Skill used by the unit-test agent",
+            ),
             output_type=MockOutput,
             instructions="test instructions",
-            mcp_servers=[],
         )
         return agent
 
@@ -73,9 +82,14 @@ def test_no_extra_tools_added_beyond_report_activity():
             port=8000,
             external_port=8000,
             model_name="openai:test-model",
+            version="2.5",
+            skill=AgentSkillDeclaration(
+                id="test-skill",
+                name="Test Skill",
+                description="Skill used by the unit-test agent",
+            ),
             output_type=MockOutput,
             instructions="instructions",
-            mcp_servers=[],
             tools=(),
         )
     assert agent.tools == [agent.report_activity]
@@ -93,7 +107,7 @@ async def test_usage_limits_tool_calls_limit_is_doubled(test_agent_instance):
     """tool_calls_limit must equal get_max_requests_per_task() * 2."""
     captured: list[UsageLimits] = []
 
-    async def fake_run(request, usage_limits=None):
+    async def fake_run(request, usage_limits=None, toolsets=None):
         captured.append(usage_limits)
         mock_result = MagicMock()
         mock_result.output = MockOutput(result="ok")
@@ -143,9 +157,185 @@ async def test_agent_run_success(test_agent_instance):
     assert test_agent_instance.latest_token_usage.total_tokens == 28
 
 
+def test_token_usage_includes_nested_calls_recorded_in_the_operation_meter(test_agent_instance):
+    meter = OperationMeter()
+    meter.add("main", "openai:test-model", RunUsage(requests=1, input_tokens=20, output_tokens=8))
+    meter.add("sub_agent", "openai:test-model", RunUsage(requests=3, input_tokens=40, output_tokens=12))
+    main_run_result = MagicMock()
+    main_run_result.usage.return_value = RunUsage(requests=1, input_tokens=20, output_tokens=8)
+
+    token = operation_meter.set(meter)
+    try:
+        test_agent_instance._capture_token_usage(main_run_result)
+    finally:
+        operation_meter.reset(token)
+
+    token_usage = test_agent_instance.latest_token_usage
+    assert token_usage.requests == 4
+    assert token_usage.input_tokens == 60
+    assert token_usage.total_tokens == 80
+    assert token_usage.operations == meter.entries()
+
+
 @pytest.mark.asyncio
 async def test_activity_queue_bounded_and_drops_items(test_agent_instance):
     """When the queue hits its max limit, report_activity drops new items without raising."""
     for i in range(1005):
         await test_agent_instance.report_activity(f"activity-{i}")
     assert test_agent_instance.activity_queue.qsize() == 1000
+
+
+def test_agent_card_carries_the_configured_version(test_agent_instance):
+    """The version reported by the A2A agent card must be the one the agent was configured with."""
+    client = TestClient(test_agent_instance.a2a_server)
+
+    card = client.get(AGENT_CARD_WELL_KNOWN_PATH).json()
+
+    assert card["version"] == "2.5"
+
+
+@pytest.mark.asyncio
+async def test_each_run_gets_a_fresh_mcp_toolset_whose_session_the_run_owns():
+    """Sessions must be per request, and opened by the run itself so it can also re-open them."""
+    built_toolsets: list[MagicMock] = []
+
+    def build_toolset() -> MagicMock:
+        toolset = MagicMock()
+        toolset.__aenter__ = AsyncMock(return_value=toolset)
+        toolset.__aexit__ = AsyncMock(return_value=None)
+        built_toolsets.append(toolset)
+        return toolset
+
+    with patch("common.agent_base.Agent"):
+        agent = TestAgent(
+            agent_name="test-agent",
+            base_url="http://localhost",
+            protocol="http",
+            port=8000,
+            external_port=8000,
+            model_name="openai:test-model",
+            version="2.5",
+            skill=AgentSkillDeclaration(
+                id="test-skill",
+                name="Test Skill",
+                description="Skill used by the unit-test agent",
+            ),
+            output_type=MockOutput,
+            instructions="test instructions",
+            mcp_toolset_factories=[build_toolset],
+        )
+
+    passed_toolsets: list[list[MagicMock]] = []
+
+    async def fake_run(request, usage_limits=None, toolsets=None):
+        passed_toolsets.append(toolsets)
+        mock_result = MagicMock()
+        mock_result.output = MockOutput(result="ok")
+        mock_result.usage.return_value = RunUsage(input_tokens=10, output_tokens=5)
+        return mock_result
+
+    agent.agent = AsyncMock()
+    agent.agent.run = fake_run
+    agent.agent.__aenter__.return_value = agent.agent
+    agent.agent.__aexit__.return_value = None
+
+    with patch("common.agent_base.get_message_text", return_value="hello"):
+        mock_message = MagicMock(spec=Message)
+        mock_message.parts = []
+        await agent.run(mock_message)
+        await agent.run(mock_message)
+
+    assert len(built_toolsets) == 2, "Each run must build its own toolset"
+    assert built_toolsets[0] is not built_toolsets[1]
+    assert passed_toolsets == [[built_toolsets[0]], [built_toolsets[1]]]
+    for toolset in built_toolsets:
+        # Entering it here as well would make the session count 2 and stop it from ever being torn
+        # down mid-run, which is exactly what the self-healing reconnect needs to be able to do.
+        toolset.__aenter__.assert_not_awaited()
+
+
+def test_skill_is_required_at_construction():
+    """An agent without a declared skill must fail instead of falling back to a generic one."""
+    with patch("common.agent_base.Agent"), pytest.raises(TypeError):
+        TestAgent(
+            agent_name="test-agent",
+            base_url="http://localhost",
+            protocol="http",
+            port=8000,
+            external_port=8000,
+            model_name="openai:test-model",
+            version="2.5",
+            output_type=MockOutput,
+            instructions="test instructions",
+        )
+
+
+def test_card_description_composes_model_version_and_skill():
+    """The card description carries model, version and skill name, line-separated."""
+    with patch("common.agent_base.Agent"):
+        agent = TestAgent(
+            agent_name="test-agent",
+            base_url="http://localhost",
+            protocol="http",
+            port=8000,
+            external_port=8000,
+            model_name="openai:test-model",
+            version="2.5",
+            skill=AgentSkillDeclaration(
+                id="test-skill",
+                name="Test Skill",
+                description="Skill used by the unit-test agent",
+            ),
+            output_type=MockOutput,
+            instructions="test instructions",
+        )
+    description = agent._compose_card_description()
+    assert "openai:test-model" in description
+    assert "2.5" in description
+    assert "Test Skill" in description
+    assert "<br>" in description
+
+
+@pytest.mark.asyncio
+async def test_agent_run_reaches_its_tools_with_their_arguments() -> None:
+    """A tool must receive everything it needs from its own parameters.
+
+    ``AgentBase.run`` starts the agent without dependencies, so a tool that expects them
+    (``ctx.deps``) fails at the first call. Running a tool through the real agent, instead of
+    calling it directly, is what catches that.
+    """
+    tool_calls: list[tuple[str, str]] = []
+
+    async def review_issue(jira_issue_key: str, jira_issue_content: str) -> str:
+        """Reviews the Jira issue with the given key."""
+        tool_calls.append((jira_issue_key, jira_issue_content))
+        return "reviewed"
+
+    agent = TestAgent(
+        agent_name="test-agent",
+        base_url="http://localhost",
+        protocol="http",
+        port=8000,
+        external_port=8000,
+        model_name="openai:test-model",
+        version="2.5",
+        skill=AgentSkillDeclaration(
+            id="test-skill",
+            name="Test Skill",
+            description="Skill used by the unit-test agent",
+        ),
+        output_type=MockOutput,
+        instructions="test instructions",
+        tools=[review_issue],
+    )
+
+    message = MagicMock(spec=Message)
+    message.parts = []
+    with (
+        agent.agent.override(model=TestModel()),
+        patch("common.agent_base.get_message_text", return_value="Jira user story with key PROJ-1"),
+    ):
+        await agent.run(message)
+
+    assert tool_calls, "The agent run never reached the tool."
+    assert all(key and content for key, content in tool_calls), f"A tool argument was empty: {tool_calls}"

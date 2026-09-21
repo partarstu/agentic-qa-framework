@@ -32,6 +32,15 @@ export const notifyAuthHandlers = (isAuthenticated: boolean) => {
   authHandlers.forEach(handler => handler(isAuthenticated));
 };
 
+/** The server's own message of a failed request (FastAPI's `detail`), or the transport error text. */
+export function getServerErrorMessage(error: unknown): string {
+  if (axios.isAxiosError(error)) {
+    const detail = (error.response?.data as { detail?: unknown } | undefined)?.detail;
+    return typeof detail === 'string' && detail ? detail : error.message;
+  }
+  return error instanceof Error ? error.message : String(error);
+}
+
 // Create axios instance
 export const apiClient = axios.create({
   baseURL: '/api/dashboard',

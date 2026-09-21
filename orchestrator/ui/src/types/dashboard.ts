@@ -22,6 +22,20 @@ export interface DashboardSummary {
   uptime_seconds: number;
   current_time: string;
   orchestrator_model: string;
+  orchestrator_version: string;
+}
+
+/** Usage of one operation (the main agent or one sub-agent) inside a task run. */
+export interface OperationUsage {
+  operation: string;
+  model_name: string;
+  requests: number;
+  uncached_input_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  output_tokens: number;
+  tool_calls: number;
+  cost_usd: number | null;
 }
 
 export interface TokenUsage {
@@ -33,6 +47,8 @@ export interface TokenUsage {
   requests: number;
   tool_calls: number;
   cost_usd: number | null;
+  /** Absent for external agents emitting the older usage shape. */
+  operations?: OperationUsage[];
 }
 
 export interface AgentCapabilities {
@@ -50,6 +66,7 @@ export interface CurrentTask {
 export interface AgentInfo {
   id: string;
   name: string;
+  version: string;
   description: string;
   url: string;
   status: 'AVAILABLE' | 'BUSY' | 'BROKEN';
@@ -89,6 +106,18 @@ export interface LogEntry {
   message: string;
   task_id?: string | null;
   agent_id?: string | null;
+  agent_name?: string | null;
+}
+
+export interface RagSyncOutcome {
+  sync_type: string;
+  scope: string;
+  status: string;
+  processed_count: number;
+  message: string;
+  started_at?: string;
+  updated_at: string;
+  stale: boolean;
 }
 
 // SSE live-state overlay (keyed by task_id in App.tsx)

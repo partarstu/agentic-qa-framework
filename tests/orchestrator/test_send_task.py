@@ -4,6 +4,7 @@
 
 import asyncio
 import contextlib
+import logging
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -15,10 +16,12 @@ from orchestrator.main import (
     AgentStatus,
     BrokenReason,
     _build_agent_auth_headers,
+    _get_agent_host,
     _retry_cancellation_task,
     _send_task_to_agent,
     cancellation_queue,
 )
+from tests.orchestrator.conftest import agent_card
 
 
 def test_build_agent_auth_headers_with_token():
@@ -31,6 +34,15 @@ def test_build_agent_auth_headers_without_token():
     """No header is attached when no token is configured (local no-auth agents)."""
     with patch("orchestrator.main.config.OrchestratorConfig.REMOTE_EXECUTION_AGENT_AUTH_TOKEN", ""):
         assert _build_agent_auth_headers() == {}
+
+
+def test_get_agent_host_returns_hostname_of_the_primary_interface():
+    assert _get_agent_host(agent_card()) == "agent-host"
+
+
+def test_get_agent_host_is_unknown_without_interfaces():
+    assert _get_agent_host(agent_card(url=None)) == "unknown"
+    assert _get_agent_host(None) == "unknown"
 
 
 @pytest.fixture
@@ -84,15 +96,15 @@ async def test_send_task_success(mock_registry):
 
 
 @pytest.mark.asyncio
-async def test_send_task_timeout(mock_registry):
-    mock_registry.get_card = AsyncMock(return_value=MagicMock())
+async def test_send_task_timeout(mock_registry, caplog):
+    mock_registry.get_card = AsyncMock(return_value=agent_card())
 
     with (
         patch("orchestrator.main.create_client", new_callable=AsyncMock) as mock_create_client,
         patch("orchestrator.main.config.OrchestratorConfig.TASK_EXECUTION_TIMEOUT", 0.1),
         patch("orchestrator.main.reserve_agent_waiting_if_needed", new_callable=AsyncMock) as mock_reserve,
     ):
-        mock_reserve.return_value = ("agent-1", MagicMock())
+        mock_reserve.return_value = ("agent-1", agent_card())
         mock_a2a_client = MagicMock()
         mock_create_client.return_value = mock_a2a_client
 
@@ -105,10 +117,11 @@ async def test_send_task_timeout(mock_registry):
 
         from fastapi import HTTPException
 
-        with pytest.raises(HTTPException) as exc:
+        with caplog.at_level(logging.ERROR, logger="orchestrator"), pytest.raises(HTTPException) as exc:
             await _send_task_to_agent("input", "desc")
 
         assert exc.value.status_code == 408
+        assert "agent-host" in caplog.text
         broken_calls = [
             c
             for c in mock_registry.update_status.call_args_list

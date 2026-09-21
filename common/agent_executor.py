@@ -17,11 +17,12 @@ from a2a.server.tasks import TaskUpdater
 from a2a.types import Part, TaskState
 
 import config
-from common import utils
+from common import telemetry, utils
 from common.a2a_contract import ArtifactName
 from common.agent_log_capture import AgentLogCaptureHandler
 from common.models import AgentRuntimeError
 from common.streaming import reset_current_log_handler, set_current_log_handler
+from common.token_usage import OperationMeter, operation_meter
 
 logger = utils.get_logger("agent_executor")
 
@@ -46,15 +47,22 @@ class DefaultAgentExecutor(AgentExecutor):
 
     async def _execute_task(self, context: RequestContext, event_queue: EventQueue) -> None:
         task_id = context.task_id
-        logger.info(f"Executing task {task_id}")
+        logger.info(
+            "Executing task %s with agent version %s using model %s", task_id, self.agent.version, self.agent.model_name
+        )
 
         updater = TaskUpdater(event_queue, task_id, context.context_id)
 
         log_handler = AgentLogCaptureHandler()
         log_handler.setLevel(config.LOG_LEVEL)
+        log_handler.addFilter(utils.StructuredLogFilter())
         root_logger = logging.getLogger()
         root_logger.addHandler(log_handler)
         handler_token = set_current_log_handler(log_handler)
+        meter = OperationMeter()
+        meter_token = operation_meter.set(meter)
+        # Every log line of this run carries the agent's and the task's identity, without call-site changes.
+        log_context_token = utils.log_context.set({"agent_name": self._agent_name(), "task_id": task_id})
 
         logs_artifact_id = str(uuid4())  # stable id correlating every log chunk for this task
         sent_any_logs = False
@@ -144,6 +152,7 @@ class DefaultAgentExecutor(AgentExecutor):
 
                 # 3. Detach the handler.
                 reset_current_log_handler(handler_token)
+                operation_meter.reset(meter_token)
                 root_logger.removeHandler(log_handler)
                 handler_detached = True
 
@@ -187,7 +196,18 @@ class DefaultAgentExecutor(AgentExecutor):
         finally:
             if not handler_detached:
                 reset_current_log_handler(handler_token)
+                operation_meter.reset(meter_token)
                 root_logger.removeHandler(log_handler)
+            # The task is over: publish the accumulated per-operation counters as OTel metrics.
+            # Reporting only — a metrics failure must not affect the task's terminal status.
+            try:
+                telemetry.record_operation_usage(self._agent_name(), meter.entries())
+            except Exception:
+                logger.exception("Failed to record token-usage metrics for task %s.", task_id)
+            utils.log_context.reset(log_context_token)
+
+    def _agent_name(self) -> str:
+        return getattr(self.agent, "agent_name", None) or getattr(self.agent, "name", "") or "agent"
 
     async def cancel(self, context: RequestContext, event_queue: EventQueue) -> None:
         task_id = context.task_id

@@ -94,7 +94,7 @@ async def test_execute_tests_endpoint():
         patch("orchestrator.main.get_test_management_client") as mock_get_client,
         patch("orchestrator.main._group_test_cases_by_labels", new_callable=AsyncMock) as mock_group,
         patch("orchestrator.main._request_all_test_cases_execution", new_callable=AsyncMock) as mock_exec,
-        patch("orchestrator.main._generate_test_report", new_callable=AsyncMock) as mock_report,
+        patch("orchestrator.main._generate_test_report", new_callable=AsyncMock, return_value=[]) as mock_report,
     ):
         mock_tm_client = MagicMock()
         mock_get_client.return_value = mock_tm_client
@@ -232,6 +232,39 @@ async def test_sse_hub_events_emits_auth_error_when_token_expired():
 
     assert len(events) == 1
     assert events[0].event == "auth_error"
+
+
+@pytest.mark.parametrize("test_case_key", ["SMOKE-T100", "PROJ-42"], ids=["zephyr", "xray"])
+async def test_execute_test_accepts_test_case_keys_of_both_systems_and_creates_no_incident(test_case_key):
+    result = MagicMock()
+    result.model_dump.return_value = {"testCaseKey": test_case_key, "testExecutionStatus": "failed"}
+    with (
+        patch("orchestrator.main.get_test_management_client") as mock_client,
+        patch("orchestrator.main._execute_single_test", new_callable=AsyncMock, return_value=result) as mock_execute,
+        patch("orchestrator.main._generate_test_report", new_callable=AsyncMock, return_value=[]) as mock_report,
+        patch("orchestrator.main._request_incident_creation", new_callable=AsyncMock) as mock_incident,
+    ):
+        response = client.post(
+            "/execute-test", json={"test_case_key": test_case_key, "agent_id": "agent-1", "project_key": "SMOKE"}
+        )
+
+    assert response.status_code == 200
+    assert response.json()["testCaseKey"] == test_case_key
+    assert response.json()["reporting_failures"] == []
+    mock_client.return_value.fetch_test_case_by_key.assert_called_once_with(test_case_key)
+    assert mock_execute.await_args.args[0] == "agent-1"
+    assert mock_execute.await_args.kwargs["pin_to_agent"] is True
+    mock_report.assert_awaited_once()
+    mock_incident.assert_not_awaited()
+
+
+@pytest.mark.parametrize("test_case_key", ["smoke-t1", "SMOKE-X1", "SMOKE-T", "SMOKE"])
+def test_execute_test_rejects_a_malformed_test_case_key(test_case_key):
+    response = client.post(
+        "/execute-test", json={"test_case_key": test_case_key, "agent_id": "agent-1", "project_key": "SMOKE"}
+    )
+
+    assert response.status_code == 422
 
 
 @pytest.mark.asyncio

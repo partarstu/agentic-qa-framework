@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://quaia.finos.calm/controls/job-invocation.requirement.json",
+  "title": "Job Invocation Requirement",
+  "description": "Requires that one service starts another Cloud Run job through IAM with least privilege.",
+  "allOf": [
+    {
+      "$ref": "https://calm.finos.org/release/1.2/meta/control-requirement.json"
+    }
+  ],
+  "properties": {
+    "role": {
+      "type": "string",
+      "description": "The IAM role granted to the calling service's runtime identity."
+    },
+    "permissions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "The permissions the role must be limited to."
+    },
+    "scoped-to": {
+      "type": "string",
+      "description": "The resource the grant is scoped to (single job, not project-wide)."
+    },
+    "enforced": {
+      "type": "boolean",
+      "description": "Whether the binding is required for the flow to function."
+    }
+  },
+  "required": [
+    "role",
+    "permissions",
+    "scoped-to",
+    "enforced"
+  ]
+}

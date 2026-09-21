@@ -108,9 +108,9 @@ def test_create_test_execution_ignores_invalid_timestamps(mock_request, xray_cli
     xray_client.create_test_execution(results, "PROJ", "PLAN-1")
 
     payload = mock_request.call_args.kwargs["json"]
-    assert payload["info"]["startDate"] == "2023-01-01T10:00:00"
+    assert payload["info"]["startDate"] == "2023-01-01T10:00:00+00:00"
     assert "finishDate" not in payload["info"]
-    assert payload["tests"][0]["start"] == "2023-01-01T10:00:00"
+    assert payload["tests"][0]["start"] == "2023-01-01T10:00:00+00:00"
     assert "finish" not in payload["tests"][0]
 
 
@@ -145,3 +145,25 @@ def test_fetch_test_cases_by_jira_issue(mock_post, xray_client):
     tcs = xray_client.fetch_test_cases_by_jira_issue("STORY-1")
     assert len(tcs) == 1
     assert tcs[0].key == "TEST-1"
+
+
+def _listed_test(issue_id: int) -> dict:
+    return {
+        "issueId": str(issue_id),
+        "steps": [{"id": "s1", "action": "Open", "data": "url", "result": "Page shown"}],
+        "jira": {"summary": f"Test {issue_id}", "labels": ["ui"], "status": {"name": "Approved"}},
+    }
+
+
+def test_fetch_test_cases_by_project_pages_within_the_api_limit(xray_client):
+    first_page = {"data": {"getTests": {"total": 150, "results": [_listed_test(i) for i in range(100)]}}}
+    second_page = {"data": {"getTests": {"total": 150, "results": [_listed_test(i) for i in range(100, 150)]}}}
+
+    with patch.object(XrayClient, "_execute_graphql_query", side_effect=[first_page, second_page]) as query:
+        listed = xray_client.fetch_test_cases_by_project("PROJ")
+
+    assert len(listed) == 150
+    assert [call.args[1]["start"] for call in query.call_args_list] == [0, 100]
+    assert {call.args[1]["limit"] for call in query.call_args_list} == {100}
+    assert query.call_args_list[0].args[1]["jql"] == 'project = "PROJ"'
+    assert (listed[0].status, listed[0].test_case.steps[0].expected_results) == ("Approved", "Page shown")

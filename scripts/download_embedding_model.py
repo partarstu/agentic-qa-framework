@@ -2,11 +2,8 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
-"""
-Script to download the embedding model for the VectorDbService.
-
-This script downloads the SentenceTransformer embedding model and saves it locally
-to avoid downloading it every time the service is initialized.
+"""Downloads the embedding model at image build time, so the service can run against the local copy under local_models/
+instead of downloading at runtime.
 """
 
 import os
@@ -15,22 +12,21 @@ import sys
 # Add the parent directory to the path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# Import config before sentence_transformers to ensure HF_HOME is set
-from config import QdrantConfig  # noqa: I001
 
-from sentence_transformers import SentenceTransformer
+def _download_text_model() -> None:
+    from FlagEmbedding import BGEM3FlagModel
+
+    from config import EmbeddingServiceConfig
+
+    model_name = EmbeddingServiceConfig.TEXT_MODEL_NAME
+    model_path = EmbeddingServiceConfig.TEXT_MODEL_PATH
+
+    os.makedirs(model_path, exist_ok=True)
+    print(f"Downloading embedding model '{model_name}' to '{model_path}'...")
+    model = BGEM3FlagModel(model_name, use_fp16=False)
+    model.save(model_path)
+    print("Embedding model download complete.")
+
 
 if __name__ == "__main__":
-    model_name = QdrantConfig.EMBEDDING_MODEL
-    model_path = QdrantConfig.EMBEDDING_MODEL_PATH
-
-    if not os.path.exists(model_path):
-        os.makedirs(model_path)
-
-    print(f"Downloading embedding model '{model_name}' to '{model_path}'...")
-
-    # Download and save the model
-    model = SentenceTransformer(model_name, trust_remote_code=True)
-    model.save(model_path)
-
-    print("Embedding model download complete.")
+    _download_text_model()

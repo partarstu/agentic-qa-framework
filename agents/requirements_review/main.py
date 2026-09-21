@@ -2,39 +2,108 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
-from typing import TYPE_CHECKING
-
-from pydantic_ai.mcp import MCPServerSSE
+from pydantic_ai.exceptions import ModelRetry
+from pydantic_ai.messages import BinaryContent
 from pydantic_ai.settings import ThinkingLevel
 
 import config
-from agents.requirements_review.prompt import RequirementsReviewSystemPrompt, RequirementsReviewWithAttachmentsPrompt
+from agents.requirements_review.prompt import (
+    RequirementsReviewRetrievalInstruction,
+    RequirementsReviewSystemPrompt,
+    RequirementsReviewWithAttachmentsPrompt,
+)
 from common import utils
-from common.agent_base import MCP_SERVER_ATTACHMENTS_FOLDER_PATH, AgentBase
+from common.agent_base import AgentBase
 from common.custom_llm_wrapper import CustomLlmWrapper
-from common.models import JiraUserStory, RequirementsReviewFeedback
-
-if TYPE_CHECKING:
-    from pydantic_ai.messages import BinaryContent
+from common.models import AgentSkillDeclaration, RequirementsReviewFeedback
+from common.services.atlassian_mcp import build_atlassian_mcp_server_toolset
+from common.services.atlassian_tools import JIRA_ADD_COMMENT, JIRA_GET_ISSUE
+from common.services.document_retrieval import (
+    RetrievalScope,
+    assemble_retrieved_parts,
+    retrieve_documents,
+)
+from common.services.jira_attachments import fetch_issue_attachments
+from common.services.vector_db_service import VectorDbService
 
 logger = utils.get_logger("reviewer_agent")
-jira_mcp_server = MCPServerSSE(url=config.JIRA_MCP_SERVER_URL, timeout=config.MCP_SERVER_TIMEOUT_SECONDS)
+
+_JIRA_TOOL_ALLOWLIST = (JIRA_GET_ISSUE, JIRA_ADD_COMMENT)
+
+_SCOPE_PARAM_LENGTH_CAP = 200
+
+
+def _capped(value: str | None) -> str | None:
+    """Defensive length cap on the tool's free-text scope parameters."""
+    if value is None:
+        return None
+    return value[:_SCOPE_PARAM_LENGTH_CAP]
+
+
+async def _get_issue_message_parts(issue_key: str, jira_issue_content: str) -> list[str | BinaryContent]:
+    """The issue content followed by every supported attachment of the issue."""
+    attachments_content = await fetch_issue_attachments(issue_key)
+    user_message_parts: list[str | BinaryContent] = [f"Jira Issue content:\n```{jira_issue_content}```"]
+    for filename, binary_content in attachments_content.items():
+        user_message_parts.append(f"Attachment: {filename}")
+        user_message_parts.append(binary_content)
+    logger.info("Reviewing issue %s with %d attachment(s)", issue_key, len(attachments_content))
+    return user_message_parts
 
 
 class RequirementsReviewAgent(AgentBase):
     def __init__(self):
+        # Startup validation is per source: a source whose retrieval switch is on
+        # without a configured embedding service fails fast, naming that source.
+        for source in ("Confluence", "SharePoint"):
+            enabled = getattr(config.DocumentRagConfig, f"{source.upper()}_RETRIEVAL_ENABLED")
+            if enabled and not config.QdrantConfig.EMBEDDING_SERVICE_URL:
+                raise ValueError(
+                    f"{source} retrieval is enabled but EMBEDDING_SERVICE_URL is not configured. "
+                    f"Disable {source.upper()}_RETRIEVAL_ENABLED or configure the embedding service."
+                )
+        self.confluence_retrieval_enabled = config.DocumentRagConfig.CONFLUENCE_RETRIEVAL_ENABLED
+        self.sharepoint_retrieval_enabled = config.DocumentRagConfig.SHAREPOINT_RETRIEVAL_ENABLED
+        retrieval_enabled = self.confluence_retrieval_enabled or self.sharepoint_retrieval_enabled
+        self.retrieval_enabled = retrieval_enabled
+        self.documents_db = None
+        self.sharepoint_db = None
+        if self.confluence_retrieval_enabled:
+            # The metadata collection makes retrieval refuse to query vectors of a different model.
+            self.documents_db = VectorDbService(
+                config.DocumentRagConfig.DOCUMENTS_COLLECTION_NAME,
+                metadata_collection_name=config.QdrantConfig.METADATA_COLLECTION_NAME,
+            )
+        if self.sharepoint_retrieval_enabled:
+            self.sharepoint_db = VectorDbService(
+                config.QdrantConfig.SHAREPOINT_COLLECTION_NAME,
+                metadata_collection_name=config.QdrantConfig.METADATA_COLLECTION_NAME,
+            )
+        if not retrieval_enabled:
+            logger.info(
+                "Document retrieval is disabled: no source has retrieval enabled. "
+                "The review proceeds on the issue and its attachments only."
+            )
+
         # Create a sub-agent for reviewing with attachments
         self.review_agent = CustomLlmWrapper.create_agent(
             model_name=config.RequirementsReviewAgentConfig.MODEL_NAME,
             output_type=RequirementsReviewFeedback,
-            system_prompt=RequirementsReviewWithAttachmentsPrompt().get_prompt(),
+            system_prompt=RequirementsReviewWithAttachmentsPrompt(
+                grounding_instruction=RequirementsReviewWithAttachmentsPrompt.grounding_suffix()
+                if retrieval_enabled
+                else None
+            ).get_prompt(),
             name="review_with_attachments",
             thinking_level=config.RequirementsReviewAgentConfig.THINKING_LEVEL,
+            max_output_tokens=config.RequirementsReviewAgentConfig.MAX_OUTPUT_TOKENS,
         )
 
-        instruction_prompt = RequirementsReviewSystemPrompt(
-            attachments_remote_folder_path=MCP_SERVER_ATTACHMENTS_FOLDER_PATH
-        )
+        instruction_prompt = RequirementsReviewSystemPrompt()
+        instructions = instruction_prompt.get_prompt()
+        if retrieval_enabled:
+            instructions += "\n\n" + RequirementsReviewRetrievalInstruction().get_prompt()
+        review_tool = self._review_with_reference_documentation if retrieval_enabled else self._review_with_attachments
         super().__init__(
             agent_name=config.RequirementsReviewAgentConfig.OWN_NAME,
             base_url=config.AGENT_BASE_URL,
@@ -42,12 +111,18 @@ class RequirementsReviewAgent(AgentBase):
             external_port=config.RequirementsReviewAgentConfig.EXTERNAL_PORT,
             protocol=config.RequirementsReviewAgentConfig.PROTOCOL,
             model_name=config.RequirementsReviewAgentConfig.MODEL_NAME,
+            version=config.RequirementsReviewAgentConfig.VERSION,
+            max_output_tokens=config.RequirementsReviewAgentConfig.MAX_OUTPUT_TOKENS,
             output_type=RequirementsReviewFeedback,
-            instructions=instruction_prompt.get_prompt(),
-            mcp_servers=[jira_mcp_server],
-            deps_type=JiraUserStory,
-            description="Agent which does the review of requirements including Jira user stories",
-            tools=[self._review_with_attachments, self.add_jira_comment],
+            instructions=instructions,
+            mcp_toolset_factories=[lambda: build_atlassian_mcp_server_toolset(_JIRA_TOOL_ALLOWLIST)],
+            skill=AgentSkillDeclaration(
+                id=config.RequirementsReviewAgentConfig.SKILL_ID,
+                name=config.RequirementsReviewAgentConfig.SKILL_NAME,
+                description=config.RequirementsReviewAgentConfig.SKILL_DESCRIPTION,
+            ),
+            # The advertised review tool reflects enablement: only with retrieval does it take a query and scope.
+            tools=[review_tool, self.add_jira_comment],
         )
 
     def get_thinking_level(self) -> ThinkingLevel:
@@ -57,30 +132,87 @@ class RequirementsReviewAgent(AgentBase):
         return config.RequirementsReviewAgentConfig.MAX_REQUESTS_PER_TASK
 
     async def _review_with_attachments(
-        self, jira_issue_content: str, attachment_paths: list[str]
+        self, jira_issue_key: str, jira_issue_content: str
     ) -> RequirementsReviewFeedback:
         """
         Reviews a Jira issue, taking into account all its attachments.
 
         Args:
+            jira_issue_key: The key of the Jira issue (e.g. PROJ-123), used to download its attachments.
             jira_issue_content: The complete content of the Jira issue.
-            attachment_paths: List of file paths to the downloaded attachments.
 
         Returns:
             Requirements review feedback with improvement suggestions.
         """
+        user_message_parts = await _get_issue_message_parts(jira_issue_key, jira_issue_content)
+        return await self._run_review(user_message_parts)
 
-        attachments_content = self._fetch_attachments(attachment_paths)
-        user_message_parts: list[str | BinaryContent] = [f"Jira Issue content:\n```{jira_issue_content}```"]
-        if attachments_content:
-            for filename, binary_content in attachments_content.items():
-                user_message_parts.append(f"Attachment: {filename}")
-                user_message_parts.append(binary_content)
-        logger.info("Starting requirements review with %d attachments", len(attachments_content))
+    async def _review_with_reference_documentation(
+        self,
+        jira_issue_key: str,
+        jira_issue_content: str,
+        retrieval_query: str,
+        space_key: str | None = None,
+        page_id: str | None = None,
+        document_name_pattern: str | None = None,
+        drive_id: str | None = None,
+        folder_path: str | None = None,
+    ) -> RequirementsReviewFeedback:
+        """
+        Reviews a Jira issue, taking into account all its attachments and the reference
+        documentation matching the retrieval query across every enabled source.
+
+        Args:
+            jira_issue_key: The key of the Jira issue (e.g. PROJ-123), used to download its attachments.
+            jira_issue_content: The complete content of the Jira issue.
+            retrieval_query: A concise documentation search query (key topics, feature
+                names, domain terms).
+            space_key: Optional Confluence space key scope.
+            page_id: Optional Confluence page ID scope.
+            document_name_pattern: Optional regex pattern on document names, applied to every source.
+            drive_id: Optional SharePoint drive ID scope.
+            folder_path: Optional SharePoint folder path scope, relative to the drive root.
+
+        Returns:
+            Requirements review feedback with improvement suggestions.
+        """
+        if not retrieval_query.strip():
+            # No fallback to the issue content: a missing query is an explicit tool error.
+            raise ModelRetry(
+                "A non-blank retrieval_query is required: distil key topics, feature names "
+                "and domain terms from the issue and pass them as retrieval_query."
+            )
+
+        user_message_parts = await _get_issue_message_parts(jira_issue_key, jira_issue_content)
+        scope = RetrievalScope(
+            space_key=_capped(space_key),
+            page_id=_capped(page_id),
+            document_name_pattern=_capped(document_name_pattern),
+            drive_id=_capped(drive_id),
+            folder_path=_capped(folder_path),
+        )
+        result = await retrieve_documents(self.documents_db, retrieval_query, scope, sharepoint_db=self.sharepoint_db)
+        for source in result.unavailable_sources:
+            # The review must say that a source could not be consulted, so nobody mistakes a
+            # partial result for the full knowledge base.
+            user_message_parts.append(
+                f"Note: the {source} knowledge base was unavailable during this review; "
+                f"its documents could not be consulted."
+            )
+        # Reference documentation comes after the issue content and the Jira attachments.
+        user_message_parts.extend(assemble_retrieved_parts(result.pages))
+        logger.info(
+            "Retrieved %d reference documentation page(s) for issue %s (unavailable sources: %s)",
+            len(result.pages),
+            jira_issue_key,
+            result.unavailable_sources or "none",
+        )
+        return await self._run_review(user_message_parts)
+
+    async def _run_review(self, user_message_parts: list[str | BinaryContent]) -> RequirementsReviewFeedback:
         result = await self.review_agent.run(user_message_parts)
-        feedback: RequirementsReviewFeedback = result.output
         logger.info("Generated improvement suggestions as a feedback")
-        return feedback
+        return result.output
 
 
 agent = RequirementsReviewAgent()

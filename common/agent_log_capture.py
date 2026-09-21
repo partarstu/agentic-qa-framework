@@ -2,25 +2,17 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
-"""
-In-memory log handler for capturing agent execution logs.
-
-This module provides a log handler that captures log records during agent
-execution and can export them as a string for inclusion in task artifacts.
-"""
+"""In-memory log handler that captures agent execution logs for inclusion in task artifacts."""
 
 import logging
 import threading
 from collections import deque
 
+from common.utils import StructuredJsonFormatter
+
 
 class AgentLogCaptureHandler(logging.Handler):
-    """
-    A logging handler that captures log records in memory during agent execution.
-
-    This handler is designed to be attached temporarily to a logger during agent
-    task execution, then detached and its logs extracted to be returned as artifacts.
-    """
+    """A logging handler that captures log records in memory while an agent task runs."""
 
     def __init__(self, max_records: int = 10000):
         super().__init__()
@@ -28,7 +20,7 @@ class AgentLogCaptureHandler(logging.Handler):
         self._lock = threading.Lock()
         self._drain_cursor: int = 0
         self._emitted_total: int = 0
-        self.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
+        self.setFormatter(StructuredJsonFormatter())
 
     def emit(self, record: logging.LogRecord) -> None:
         """Store the formatted log record in the buffer."""
@@ -41,13 +33,9 @@ class AgentLogCaptureHandler(logging.Handler):
             self.handleError(record)
 
     def drain(self) -> list[str]:
-        """Return lines appended since the last drain() and advance the cursor.
-
-        Thread-safe. Tracks emitted records by a monotonic total so draining keeps
-        working after the bounded buffer overflows: when more lines were emitted than
-        the buffer can hold, the oldest are unrecoverable and only the buffered tail
-        is returned.
-        """
+        """Return the lines appended since the last drain and advance the cursor."""
+        # Emitted records are counted by a monotonic total so draining survives an overflow of the
+        # bounded buffer: the oldest lines are then unrecoverable and only the buffered tail is returned.
         with self._lock:
             new_count = self._emitted_total - self._drain_cursor
             self._drain_cursor = self._emitted_total

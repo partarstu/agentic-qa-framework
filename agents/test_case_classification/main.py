@@ -2,18 +2,20 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
-from pydantic_ai.mcp import MCPServerSSE
 from pydantic_ai.settings import ThinkingLevel
 
 import config
 from agents.test_case_classification.prompt import TestCaseClassificationSystemPrompt
 from common import utils
 from common.agent_base import AgentBase
-from common.models import ClassifiedTestCases, TestCaseKeys
+from common.models import AgentSkillDeclaration, ClassifiedTestCases, TestCaseKeys
+from common.services.atlassian_mcp import build_atlassian_mcp_server_toolset
 from common.services.test_management_system_client_provider import get_test_management_client
 
 logger = utils.get_logger("test_case_classification_agent")
-jira_mcp_server = MCPServerSSE(url=config.JIRA_MCP_SERVER_URL, timeout=config.MCP_SERVER_TIMEOUT_SECONDS)
+
+# The agent labels the test cases through the test management system, so it needs no Atlassian tool.
+_JIRA_TOOL_ALLOWLIST: tuple[str, ...] = ()
 
 
 class TestCaseClassificationAgent(AgentBase):
@@ -28,11 +30,17 @@ class TestCaseClassificationAgent(AgentBase):
             external_port=config.TestCaseClassificationAgentConfig.EXTERNAL_PORT,
             protocol=config.TestCaseClassificationAgentConfig.PROTOCOL,
             model_name=config.TestCaseClassificationAgentConfig.MODEL_NAME,
+            version=config.TestCaseClassificationAgentConfig.VERSION,
+            max_output_tokens=config.TestCaseClassificationAgentConfig.MAX_OUTPUT_TOKENS,
             output_type=ClassifiedTestCases,
             instructions=instruction_prompt.get_prompt(),
-            mcp_servers=[jira_mcp_server],
+            mcp_toolset_factories=[lambda: build_atlassian_mcp_server_toolset(_JIRA_TOOL_ALLOWLIST)],
             deps_type=TestCaseKeys,
-            description="Agent which classifies test cases based on their content",
+            skill=AgentSkillDeclaration(
+                id=config.TestCaseClassificationAgentConfig.SKILL_ID,
+                name=config.TestCaseClassificationAgentConfig.SKILL_NAME,
+                description=config.TestCaseClassificationAgentConfig.SKILL_DESCRIPTION,
+            ),
             tools=[self.add_labels_to_test_case],
         )
 

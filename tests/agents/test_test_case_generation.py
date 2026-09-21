@@ -6,11 +6,9 @@ import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from pydantic_ai.messages import BinaryContent
 
-# Mock MCPServerSSE before importing the module
-with patch("pydantic_ai.mcp.MCPServerSSE"):
-    from agents.test_case_generation.main import TestCaseGenerationAgent
-
+from agents.test_case_generation.main import TestCaseGenerationAgent
 from common.models import AcceptanceCriteriaList, GeneratedTestCases, TestStepsSequenceList
 from common.services.test_management_base import TestManagementClientBase
 
@@ -24,9 +22,13 @@ def mock_config():
         mock_conf.TestCaseGenerationAgentConfig.EXTERNAL_PORT = 8002
         mock_conf.TestCaseGenerationAgentConfig.PROTOCOL = "http"
         mock_conf.TestCaseGenerationAgentConfig.MODEL_NAME = "test"
+        mock_conf.TestCaseGenerationAgentConfig.VERSION = "2.5"
+        mock_conf.TestCaseGenerationAgentConfig.SKILL_ID = "test-case-generation"
+        mock_conf.TestCaseGenerationAgentConfig.SKILL_NAME = "Test Case Generation"
+        mock_conf.TestCaseGenerationAgentConfig.SKILL_DESCRIPTION = "Generates test cases"
         mock_conf.TestCaseGenerationAgentConfig.THINKING_LEVEL = "MEDIUM"
         mock_conf.TestCaseGenerationAgentConfig.MAX_REQUESTS_PER_TASK = 10
-        mock_conf.JIRA_MCP_SERVER_URL = "http://jira-mcp"
+        mock_conf.ATLASSIAN_MCP_SERVER_URL = "http://jira-mcp"
         mock_conf.MCP_SERVER_TIMEOUT_SECONDS = 30
         yield mock_conf
 
@@ -76,16 +78,27 @@ async def test_generate_test_cases_flow(agent):
     mock_tc_result.output = GeneratedTestCases(test_cases=[])
     agent.test_case_creator_agent.run = AsyncMock(return_value=mock_tc_result)
 
-    # Mock _fetch_attachments to return empty dict
-    agent._fetch_attachments = MagicMock(return_value={})
+    policy = BinaryContent(data=b"At most 3 reset requests per hour.", media_type="text/plain", identifier="policy.md")
+    with patch("common.services.jira_attachments.download_issue_attachments", return_value={"policy.md": policy}):
+        # The AC extraction opens its own Jira MCP session; stub the factory so no connection is attempted.
+        jira_toolset = MagicMock()
+        jira_toolset.__aenter__ = AsyncMock(return_value=jira_toolset)
+        jira_toolset.__aexit__ = AsyncMock(return_value=None)
 
-    # Pass file paths instead of BinaryContent objects
-    result = await agent._generate_test_cases("Jira Content", ["/path/to/attachment.png"])
+        run_context = MagicMock()
+        with patch("agents.test_case_generation.main.build_atlassian_mcp_server_toolset", return_value=jira_toolset):
+            result = await agent._generate_test_cases(run_context, "Jira Content")
 
     assert isinstance(result, GeneratedTestCases)
-    agent._fetch_attachments.assert_called_once_with(["/path/to/attachment.png"])
+
     agent.ac_extractor_agent.run.assert_called_once()
-    agent.steps_generator_agent.run.assert_called_once()
+    assert agent.ac_extractor_agent.run.await_args.kwargs["toolsets"] == [jira_toolset]
+    jira_toolset.__aexit__.assert_awaited_once()
+    # Both sub-agents read the original attachments, each named right before its content.
+    for run in (agent.ac_extractor_agent.run, agent.steps_generator_agent.run):
+        message_parts = run.await_args.args[0]
+        assert message_parts[-2:] == ["Attachment: policy.md", policy]
+    assert agent.steps_generator_agent.run.await_args.args[0][0].startswith("Acceptance Criteria Items:\n")
     agent.test_case_creator_agent.run.assert_called_once()
 
 

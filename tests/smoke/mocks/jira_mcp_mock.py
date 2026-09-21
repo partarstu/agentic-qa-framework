@@ -6,24 +6,37 @@
 
 Advertises the three Jira tools the agents rely on (``jira_get_issue``,
 ``jira_download_attachments``, ``jira_add_comment``) with names and descriptions
-close to the real server so the model picks them. It seeds a single,
-attachment-free user story (so no shared attachment volume is needed) and records
-every ``jira_add_comment`` call for the smoke assertions.
+close to the real server so the model picks them. It seeds a single user story with
+one text attachment, handed back the way the real server does - as a base64 embedded
+resource over the protocol, with no shared attachment volume - and records every
+``jira_add_comment`` call for the smoke assertions.
 
-The MCP SSE transport is served under ``/sse`` (+ ``/messages/``); a plain
+The stateless Streamable HTTP transport is served under ``/mcp``; a plain
 ``GET /__recorded`` HTTP route is mounted alongside it for introspection.
 """
 
+import base64
+import contextlib
 import json
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
+from mcp.types import BlobResourceContents, EmbeddedResource
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Mount, Route
 
 SEEDED_ISSUE_KEY = "SMOKE-1"
+ATTACHMENT_FILE_NAME = "reset-policy.md"
+# A JSON attachment too: Jira serves those, and they only reach a model as a text equivalent.
+JSON_ATTACHMENT_FILE_NAME = "reset-request.json"
+JSON_ATTACHMENT_CONTENT = b'{"email": "user@example.com", "locale": "en-GB"}'
+# Content the review can only know about by actually receiving the attachment.
+ATTACHMENT_CONTENT = b"""Password reset policy
+- A reset link stays valid for 60 minutes.
+- At most 3 reset requests per account per hour.
+"""
 
 _SEEDED_STORY = {
     "key": SEEDED_ISSUE_KEY,
@@ -44,7 +57,10 @@ _SEEDED_STORY = {
             "4. Opening a valid link lets the user set a new password that must meet the complexity policy.\n"
             "5. An expired or already-used link shows an error and offers to request a new one."
         ),
-        "attachment": [],
+        "attachment": [
+            {"filename": ATTACHMENT_FILE_NAME, "mimeType": "text/plain"},
+            {"filename": JSON_ATTACHMENT_FILE_NAME, "mimeType": "application/json"},
+        ],
     },
 }
 
@@ -62,29 +78,51 @@ _issue_counter = 0
 # allows localhost/127.0.0.1). Disable it: this is a test mock on a private network.
 mcp = FastMCP(
     "jira-mock",
+    stateless_http=True,  # mirrors the production server's --stateless
     transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
 )
 
 
 @mcp.tool()
-async def jira_get_issue(issue_key: str) -> str:
+async def jira_get_issue(issue_key: str, fields: str = "") -> str:
     """Get the complete details of a Jira issue by its key (e.g. 'PROJ-123').
 
     Returns the issue as JSON, including its project, summary, description and
     acceptance criteria. Always call this first to read a Jira issue's content.
+    Optionally restrict the response to the given fields (a comma-separated list of
+    field names or custom field IDs); omitting it returns all fields.
     """
-    _recorded["get_issue"].append(issue_key)
+    _recorded["get_issue"].append({"issue_key": issue_key, "fields": fields})
     return json.dumps(_SEEDED_STORY)
 
 
 @mcp.tool()
-async def jira_download_attachments(issue_key: str, target_path: str) -> str:
-    """Download all attachments of a Jira issue to a folder on the server.
+async def jira_download_attachments(issue_key: str) -> list:
+    """Download attachments from a Jira issue.
 
-    Returns a summary of what was downloaded. This issue has no attachments.
+    Returns attachment contents as base64-encoded embedded resources so that they are available
+    over the MCP protocol without requiring filesystem access on the server.
     """
-    _recorded["download_attachments"].append({"issue_key": issue_key, "target_path": target_path})
-    return f"Issue {issue_key} has no attachments to download. No files were written to {target_path}."
+    _recorded["download_attachments"].append({"issue_key": issue_key})
+    return [
+        {"success": True, "issue_key": issue_key, "total": 2, "downloaded": 2, "failed": []},
+        EmbeddedResource(
+            type="resource",
+            resource=BlobResourceContents(
+                uri=f"attachment://{issue_key}/{ATTACHMENT_FILE_NAME}",
+                mimeType="text/plain",
+                blob=base64.b64encode(ATTACHMENT_CONTENT).decode(),
+            ),
+        ),
+        EmbeddedResource(
+            type="resource",
+            resource=BlobResourceContents(
+                uri=f"attachment://{issue_key}/{JSON_ATTACHMENT_FILE_NAME}",
+                mimeType="application/json",
+                blob=base64.b64encode(JSON_ATTACHMENT_CONTENT).decode(),
+            ),
+        ),
+    ]
 
 
 @mcp.tool()
@@ -162,9 +200,32 @@ async def _recorded_endpoint(_request: Request) -> JSONResponse:
     return JSONResponse(_recorded)
 
 
+async def _seeded_story_endpoint(_request: Request) -> JSONResponse:
+    """The story every flow starts from, for assertions that need the source requirement itself."""
+    return JSONResponse(_SEEDED_STORY)
+
+
+async def _seeded_attachments_endpoint(_request: Request) -> JSONResponse:
+    """The texts of the story's attachments, which the agents receive alongside the story."""
+    return JSONResponse(
+        {ATTACHMENT_FILE_NAME: ATTACHMENT_CONTENT.decode(), JSON_ATTACHMENT_FILE_NAME: JSON_ATTACHMENT_CONTENT.decode()}
+    )
+
+
+@contextlib.asynccontextmanager
+async def _lifespan(_app: Starlette):
+    # A mounted Streamable HTTP app does not run its own lifespan: the host app must keep the
+    # MCP session manager running, or every /mcp request fails with "Task group is not initialized".
+    async with mcp.session_manager.run():
+        yield
+
+
 app = Starlette(
     routes=[
         Route("/__recorded", _recorded_endpoint),
-        Mount("/", app=mcp.sse_app()),
-    ]
+        Route("/__seeded_story", _seeded_story_endpoint),
+        Route("/__seeded_attachments", _seeded_attachments_endpoint),
+        Mount("/", app=mcp.streamable_http_app()),
+    ],
+    lifespan=_lifespan,
 )

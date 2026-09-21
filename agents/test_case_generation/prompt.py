@@ -19,20 +19,19 @@ class TestCaseGenerationSystemPrompt(PromptBase):
     def get_script_dir(self) -> Path:
         return _get_prompts_root()
 
-    def __init__(self, attachments_remote_folder_path: str, template_file_name: str = "main_prompt_template.txt"):
+    def __init__(self, template_file_name: str = "main_prompt_template.md"):
         super().__init__(template_file_name)
-        self.attachments_remote_folder_path = attachments_remote_folder_path
 
     def get_prompt(self) -> str:
         logger.info("Generating test case generation main system prompt")
-        return self.template.format(attachments_remote_folder_path=self.attachments_remote_folder_path)
+        return self.template
 
 
 class AcExtractionPrompt(PromptBase):
     def get_script_dir(self) -> Path:
         return _get_prompts_root()
 
-    def __init__(self, template_file_name: str = "ac_extraction_prompt.txt"):
+    def __init__(self, template_file_name: str = "ac_extraction_prompt.md"):
         super().__init__(template_file_name)
 
     def get_prompt(self) -> str:
@@ -43,7 +42,7 @@ class StepsGenerationPrompt(PromptBase):
     def get_script_dir(self) -> Path:
         return _get_prompts_root()
 
-    def __init__(self, template_file_name: str = "steps_generation_prompt.txt"):
+    def __init__(self, template_file_name: str = "steps_generation_prompt.md"):
         super().__init__(template_file_name)
 
     def get_prompt(self) -> str:
@@ -54,7 +53,7 @@ class TestCaseCreationPrompt(PromptBase):
     def get_script_dir(self) -> Path:
         return _get_prompts_root()
 
-    def __init__(self, template_file_name: str = "test_case_creation_prompt.txt"):
+    def __init__(self, template_file_name: str = "test_case_creation_prompt.md"):
         super().__init__(template_file_name)
 
     def get_prompt(self) -> str:

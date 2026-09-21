@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 
-import { useRef, useEffect, useState } from 'react';
+import { useRef, useEffect, useState, useCallback } from 'react';
 import { X, Terminal, Filter, Loader2 } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { dashboardApi } from '../api/dashboardApi';
@@ -25,16 +25,50 @@ function parseTs(ts: string): Date {
   return new Date(ts.replace(' ', 'T').replace(/(\.\d{3})\d+/, '$1'));
 }
 
-function parseLiveLine(line: string) {
+interface ParsedLiveLine {
+  timestamp: string;
+  level: string;
+  logger: string;
+  message: string;
+}
+
+function formatTimestamp(rawTimestamp: string): string {
+  const date = parseTs(rawTimestamp.trim().replace(',', '.'));
+  return isNaN(date.getTime()) ? rawTimestamp.trim() : date.toLocaleTimeString();
+}
+
+/** A structured (JSON) log record as emitted by the shared Python formatter, or null for any other line. */
+function parseStructuredLine(line: string): ParsedLiveLine | null {
+  let record: unknown;
+  try {
+    record = JSON.parse(line);
+  } catch {
+    return null;
+  }
+  if (typeof record !== 'object' || record === null || !('message' in record)) return null;
+  const fields = record as Record<string, unknown>;
+  const exception = typeof fields.exception === 'string' && fields.exception ? `\n${fields.exception}` : '';
+  return {
+    timestamp: formatTimestamp(String(fields.timestamp ?? '')),
+    level: String(fields.level ?? 'INFO').toUpperCase(),
+    logger: String(fields.logger ?? ''),
+    message: `${String(fields.message)}${exception}`,
+  };
+}
+
+function parseLiveLine(line: string): ParsedLiveLine | null {
+  return parseStructuredLine(line) ?? parseTextLine(line);
+}
+
+function parseTextLine(line: string): ParsedLiveLine | null {
   const parts = line.split(' - ');
   if (parts.length < 4) return null;
   const rawTimestamp = parts[0];
   const loggerName = parts[1];
   const level = parts[2].trim().toUpperCase();
   const message = parts.slice(3).join(' - ');
-  const date = parseTs(rawTimestamp.trim().replace(',', '.'));
   return {
-    timestamp: isNaN(date.getTime()) ? rawTimestamp.trim() : date.toLocaleTimeString(),
+    timestamp: formatTimestamp(rawTimestamp),
     level,
     logger: loggerName.trim(),
     message,
@@ -53,11 +87,11 @@ export function LogModal({ isOpen, onClose, taskId, agentId, isRunning, title }:
   const [sseActive, setSseActive] = useState(false);
   const [isSseEnabled, setIsSseEnabled] = useState(false);
 
-  useEffect(() => {
-    if (isOpen) {
-      setAutoScroll(true);
-    }
-  }, [isOpen]);
+  // The one close path for the button and the Escape key: the next opening starts auto-scrolling again.
+  const handleClose = useCallback(() => {
+    setAutoScroll(true);
+    onClose();
+  }, [onClose]);
 
   const { data: logs, isLoading } = useQuery({
     queryKey: ['logs', taskId, agentId],
@@ -74,12 +108,13 @@ export function LogModal({ isOpen, onClose, taskId, agentId, isRunning, title }:
   }, [logs, streamedLines, autoScroll]);
 
   useEffect(() => {
+    if (!isOpen) return;
     const handleEsc = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
+      if (e.key === 'Escape') handleClose();
     };
     window.addEventListener('keydown', handleEsc);
     return () => window.removeEventListener('keydown', handleEsc);
-  }, [onClose]);
+  }, [isOpen, handleClose]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -173,10 +208,13 @@ export function LogModal({ isOpen, onClose, taskId, agentId, isRunning, title }:
             </div>
           </div>
           <button
-            onClick={onClose}
+            type="button"
+            onClick={handleClose}
+            aria-label="Close logs"
+            title="Close logs"
             className="p-2 hover:bg-slate-700 rounded-lg transition-colors text-slate-400 hover:text-white"
           >
-            <X className="w-5 h-5" />
+            <X className="w-5 h-5" aria-hidden="true" />
           </button>
         </div>
 
@@ -251,7 +289,7 @@ export function LogModal({ isOpen, onClose, taskId, agentId, isRunning, title }:
                 </div>
               ) : null}
 
-              {/* Live streamed lines (raw text from the Python formatter) */}
+              {/* Live streamed lines: structured JSON records first, the text layout as fallback */}
               {sseActive && streamedLines.length > 0 && (
                 <>
                   {filteredLogs && filteredLogs.length > 0 && (

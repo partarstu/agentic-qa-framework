@@ -4,6 +4,7 @@
 
 import asyncio
 import contextlib
+import json
 import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -11,6 +12,7 @@ import pytest
 from a2a.server.agent_execution import RequestContext
 from a2a.types import Message, TaskArtifactUpdateEvent, TaskState, TaskStatusUpdateEvent
 
+from common import utils
 from common.agent_executor import DefaultAgentExecutor
 from common.agent_log_capture import AgentLogCaptureHandler
 from common.streaming import current_log_handler
@@ -26,6 +28,8 @@ def mock_agent():
     # Real agents start with no captured usage; the executor only emits a usage
     # artifact when this is set, so default to None to mirror that contract.
     agent.latest_token_usage = None
+    agent.model_name = "openai:test-model"
+    agent.version = "2.5"
     return agent
 
 
@@ -245,6 +249,37 @@ async def test_contextvars_set_during_run_and_reset_after(mock_agent, mock_conte
     assert current_log_handler.get() is None
 
 
+@pytest.mark.asyncio
+async def test_captured_log_lines_carry_the_agent_name_and_task_id(mock_agent, mock_context, mock_event_queue):
+    """The run's log lines are stamped with the agent's and the task's identity without call-site changes."""
+    mock_agent.agent_name = "Stamped Agent"
+    executor = DefaultAgentExecutor(mock_agent)
+    mock_context.message = MagicMock()
+    agent_logger = utils.get_logger("stamped_agent")
+
+    async def log_during_run(_message):
+        agent_logger.info("Working on the task")
+        result = MagicMock()
+        result.parts = []
+        return result
+
+    mock_agent.run.side_effect = log_during_run
+
+    with patch("common.agent_executor._LOG_FLUSH_INTERVAL_SECONDS", 100):
+        await executor.execute(mock_context, mock_event_queue)
+
+    log_chunks = [
+        call[0][0].artifact.parts[0].raw.decode("utf-8")
+        for call in mock_event_queue.enqueue_event.call_args_list
+        if isinstance(call[0][0], TaskArtifactUpdateEvent) and call[0][0].artifact.name == "logs"
+    ]
+    records = [json.loads(line) for chunk in log_chunks for line in chunk.splitlines()]
+    working = next(record for record in records if record["message"] == "Working on the task")
+    assert working["agent_name"] == "Stamped Agent"
+    assert working["task_id"] == "test-task-123"
+    assert utils.log_context.get() is None
+
+
 # ---------------------------------------------------------------------------
 # Final log drain and TaskUpdater events
 # ---------------------------------------------------------------------------
@@ -362,7 +397,26 @@ async def test_execute_cancelled_swallowed_and_emits_canceled_event(mock_agent, 
 
     calls = mock_event_queue.enqueue_event.call_args_list
     canceled_calls = [
-        call[0][0] for call in calls
+        call[0][0]
+        for call in calls
         if isinstance(call[0][0], TaskStatusUpdateEvent) and call[0][0].status.state == TaskState.TASK_STATE_CANCELED
     ]
     assert len(canceled_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_task_start_log_names_model_and_agent_version(mock_agent, mock_context, mock_event_queue, caplog):
+    """Every task start must be traceable to the agent version and the model that served it."""
+    executor = DefaultAgentExecutor(mock_agent)
+    mock_context.message = MagicMock(spec=Message)
+    mock_result = MagicMock()
+    mock_result.parts = []
+    mock_agent.run.return_value = mock_result
+
+    with caplog.at_level(logging.INFO, logger="agent_executor"):
+        await executor.execute(mock_context, mock_event_queue)
+
+    start_records = [r for r in caplog.records if r.message.startswith("Executing task")]
+    assert start_records, f"No task-start record was emitted. Records: {caplog.text}"
+    assert "openai:test-model" in start_records[0].message
+    assert "2.5" in start_records[0].message

@@ -4,6 +4,7 @@
 
 import mimetypes
 import os
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import MagicMock, mock_open, patch
 
@@ -61,7 +62,7 @@ def test_fetch_media_file_content_from_local_invalid_mime():
         patch("mimetypes.guess_type", return_value=("text/plain", None)),
         pytest.raises(RuntimeError, match="not a media file"),
     ):
-        utils.fetch_media_file_content_from_local("test.txt", "/tmp")
+        utils.fetch_media_file_content_from_local("test.md", "/tmp")
 
 
 def test_parse_timestamp_cleans_trailing_comma_content():
@@ -75,5 +76,78 @@ def test_parse_timestamp_cleans_trailing_comma_content():
     assert timestamp.utcoffset().total_seconds() == 0
 
 
+@pytest.mark.parametrize(
+    "timestamp_str",
+    [
+        "2026-05-04T10:33:56",
+        "2026-05-04T12:33:56+02:00",
+        "2026-05-04T10:33:56Z",
+    ],
+)
+def test_parse_timestamp_normalizes_to_the_same_utc_instant(timestamp_str):
+    timestamp = utils.parse_timestamp(timestamp_str, "step execution start timestamp")
+
+    assert timestamp == datetime(2026, 5, 4, 10, 33, 56, tzinfo=UTC)
+
+
 def test_parse_timestamp_returns_none_for_invalid_value():
     assert utils.parse_timestamp("not-a-timestamp", "step execution start timestamp") is None
+
+
+_STRUCTURED_LINE = (
+    '{"timestamp": "2026-05-04T10:33:56+00:00", "level": "INFO", "severity": "INFO", "message": "Step done", '
+    '"logger": "ui_agent", "module": "main", "line": 7, "agent_name": "UI Agent", "task_id": "t-1", "agent_id": null}'
+)
+
+
+def test_render_log_record_turns_a_structured_line_into_a_readable_line():
+    assert utils.render_log_record(_STRUCTURED_LINE) == "2026-05-04T10:33:56+00:00 - ui_agent - INFO - Step done"
+
+
+def test_render_log_record_appends_the_exception_text():
+    line = '{"timestamp": "t", "level": "ERROR", "message": "Failed", "logger": "a", "exception": "Traceback: boom"}'
+
+    assert utils.render_log_record(line) == "t - a - ERROR - Failed\nTraceback: boom"
+
+
+@pytest.mark.parametrize(
+    "line",
+    ["2026-01-01 12:00:00,000 - agent - INFO - legacy text", "12:00:00.123 INFO Logger - logback", "[1, 2]", "{}"],
+    ids=["python-text", "logback", "json-non-record", "json-without-message"],
+)
+def test_render_log_record_leaves_lines_of_other_formats_untouched(line):
+    assert utils.render_log_record(line) == line
+
+
+def test_render_log_text_renders_every_line_of_a_mixed_chunk():
+    chunk = f"{_STRUCTURED_LINE}\nplain text line"
+
+    assert utils.render_log_text(chunk) == "2026-05-04T10:33:56+00:00 - ui_agent - INFO - Step done\nplain text line"
+
+
+@pytest.mark.parametrize(
+    "pattern",
+    ["report", r"^spec.*\.pdf$", "(draft|final)", "a{2,4}b", "[*+]+", r"\(a+\)+"],
+)
+def test_compile_name_pattern_accepts_ordinary_patterns(pattern):
+    assert utils.compile_name_pattern(pattern).search is not None
+
+
+@pytest.mark.parametrize(
+    "pattern",
+    ["(a+)+", "(a+)+b", "((a*)*)", "(x(y+))+"],
+    ids=["plain", "with_suffix", "star_in_star", "quantifier_one_level_down"],
+)
+def test_compile_name_pattern_rejects_exponential_backtracking(pattern):
+    with pytest.raises(ValueError, match="nested repetition"):
+        utils.compile_name_pattern(pattern)
+
+
+def test_compile_name_pattern_rejects_an_over_long_pattern():
+    with pytest.raises(ValueError, match="character limit"):
+        utils.compile_name_pattern("a" * (utils.MAX_NAME_PATTERN_LENGTH + 1))
+
+
+def test_compile_name_pattern_rejects_an_uncompilable_pattern():
+    with pytest.raises(ValueError, match="Invalid name pattern"):
+        utils.compile_name_pattern("([unclosed")

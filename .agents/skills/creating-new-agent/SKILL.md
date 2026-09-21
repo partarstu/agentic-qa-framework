@@ -1,194 +1,121 @@
 ---
 name: creating-new-agent
-description: Creates new A2A-compliant agents in the QuAIA framework. Use when adding a new specialized agent with custom tools, prompts, and MCP server integrations.
+description: Creates a new A2A agent service in the QuAIA framework - CALM architecture node first, then config class, output model, prompts, agent class, Dockerfile, unit tests and smoke-suite coverage. Use when the user asks to add a new specialized agent with its own tools, prompts or MCP integrations.
 ---
-
-// turbo-all
 
 # Creating a New Agent
 
-This skill provides a comprehensive guide for creating a new specialized agent in the QuAIA™ framework. Agents are A2A-compliant (Agent-to-Agent protocol) services that handle specific QA-related tasks.
+An agent is an A2A service under `agents/<agent_name>/` built on `common.agent_base.AgentBase`. There are no code templates: every step names the existing file to mirror. `agents/test_case_classification/` is the smallest complete agent (config, prompt, one custom tool, Dockerfile); `agents/test_case_generation/main.py` shows a sub-agent with its own MCP session per run; `agents/requirements_review/main.py` shows retrieval (RAG) over the vector database. All code follows `PYTHON_GUIDELINES.md` and the *Comments and docstrings* rule of `AGENTS.md`.
 
-## Overview
+Copy this checklist and track progress:
 
-Each agent in QuAIA consists of:
-1. **Main module** (`main.py`) - Agent class inheriting from `AgentBase`
-2. **Prompt module** (`prompt.py`) - Prompt classes inheriting from `PromptBase`
-3. **System prompts** (`system_prompts/`) - Text template files for LLM instructions
-4. **Dockerfile** - Container configuration for deployment
-5. **Configuration** - Class in `config.py` for agent-specific settings
-6. **Unit tests** - Test file in `tests/agents/`
+```
+- [ ] 1. CALM model (architecture first)
+- [ ] 2. Config class
+- [ ] 3. Output model
+- [ ] 4. Prompt class and system prompt
+- [ ] 5. Agent class
+- [ ] 6. Dockerfile and Cloud Build
+- [ ] 7. Unit tests
+- [ ] 8. Smoke suite
+- [ ] 9. Agent starts locally
+```
 
-## ⚡ Auto-Run Policy
-
-This skill is designed to run with minimal interruption.
-
-- **Always set `SafeToAutoRun: true`** for all `run_command` calls.
-- **Exceptions:** Only set `SafeToAutoRun: false` if a step specifically instructs you to "Ask" the user, "Wait" for approval, or "Verify" a destructive action before proceeding.
-- **Restricted Symbols:** Never use the redirection operator (`>`) or `2>` in commands. Use alternatives (e.g., `Set-Content`, `Out-File`, or ignoring errors explicitly).
-
-## Step-by-Step Instructions
-
-### Step 1: Create the Agent Directory Structure
-
-Create a new directory under `agents/` with the following structure:
+Target layout (no `__init__.py`; `agents/` uses namespace packages):
 
 ```
 agents/<agent_name>/
-├── __init__.py (empty file)
+├── Dockerfile
 ├── main.py
 ├── prompt.py
-├── Dockerfile
 └── system_prompts/
-    └── main_prompt_template.txt
+    └── main_prompt_template.md
 ```
 
-**Example command:**
-```bash
-mkdir -p agents/<agent_name>/system_prompts
-```
+## 1. CALM model (architecture first)
 
-### Step 2: Define the Configuration Class
+A new agent is a new architecture node, and *Architecture first* in `AGENTS.md` fixes the order: model, validate, render, approval, then code. Nothing below is written before the user has approved the architecture.
 
-Add a configuration class in `config.py` using the template:
-
-📄 **Template:** [resources/config_template.py](resources/config_template.py)
-
-**Configuration field descriptions:**
-- `THINKING_LEVEL`: Thinking level for chain-of-thought reasoning ("MINIMAL" disables it or keeps it to minimum)
-- `OWN_NAME`: Human-readable name displayed in the orchestrator dashboard
-- `PORT`: Internal container port the agent listens on
-- `EXTERNAL_PORT`: Externally accessible port (usually same as PORT)
-- `MODEL_NAME`: The LLM model to use (format: `provider:model-name`)
-- `MAX_REQUESTS_PER_TASK`: Limit on tool/MCP calls per task execution
-
-### Step 3: Define the Output Model
-
-If the agent returns structured output, add a Pydantic model in `common/models.py`:
-
-📄 **Template:** [resources/output_model_template.py](resources/output_model_template.py)
-
-**Important:** Inherit from `BaseAgentResult` to include the `llm_comments` field for debugging.
-
-### Step 4: Create the Prompt Classes
-
-Create `agents/<agent_name>/prompt.py`:
-
-📄 **Template:** [resources/prompt_template.py](resources/prompt_template.py)
-
-### Step 5: Create the System Prompt Template
-
-Create `agents/<agent_name>/system_prompts/main_prompt_template.txt`:
-
-📄 **Template:** [resources/system_prompt_template.txt](resources/system_prompt_template.txt)
-
-**Best practices for prompts:**
-- Be specific about the expected workflow
-- List tasks in numbered sequence
-- Include error handling instructions
-- Reference tools by describing their purpose, not implementation
-
-### Step 6: Create the Agent Class
-
-Create `agents/<agent_name>/main.py`:
-
-📄 **Template:** [resources/agent_template.py](resources/agent_template.py)
-
-**Key points:**
-- The agent class MUST inherit from `AgentBase`
-- Implement `get_thinking_level()` and `get_max_requests_per_task()`
-- Custom tools are defined as methods with full docstrings (LLM uses these)
-- The `app` variable exposes the A2A-compliant FastAPI application
-- `start_as_server()` runs the agent standalone with uvicorn
-
-### Step 7: Create the Dockerfile
-
-Create `agents/<agent_name>/Dockerfile`:
-
-📄 **Template:** [resources/dockerfile_template](resources/dockerfile_template)
-
-### Step 8: Update Cloud Build Configuration (Optional)
-
-If deploying to Google Cloud Run, add build and deploy steps to `cloudbuild.yaml`:
-
-1. Add a build step for the Docker image
-2. Add a push step for the image
-3. Add a deploy step for Cloud Run
-
-### Step 9: Register the Agent in the CALM Architecture Model
-
-The architecture is maintained as code with [FINOS CALM](https://calm.finos.org/) under `calm/`, and a **blocking** CI
-job validates it. A new agent is a new architecture node, so the model must be updated in the same change or the
-`Architecture (CALM)` CI job will fail.
-
-1. Add the agent as a `node` (`node-type: "service"`) in `calm/architecture/quaia.arch.json`, mirroring the existing
-   agent nodes. Give it the same `prompt-injection-guard` control block (with a unique `control-id`), since every agent
-   screens its input through the prompt guard service.
-2. Add the agent's `unique-id` to the `deployed-in` Cloud Run relationship's `nodes` list, plus any new
-   `relationships` it introduces (e.g. a new call to the embedding service or Qdrant).
-3. Add the agent (and its required control) to the `nodes` assertions in `calm/patterns/quaia.pattern.json` so its
-   presence is enforced.
-4. Validate locally from the `calm/` directory:
+1. Add a `node` (`node-type: "service"`) to `calm/architecture/quaia.arch.json`, mirroring the existing agent nodes, including the `prompt-injection-guard` control with a unique `control-id`.
+2. Add its `unique-id` to the Cloud Run `deployed-in` relationship's `nodes`, plus every new `relationship` it introduces (e.g. a call to the embedding service or Qdrant).
+3. Assert the node and its control in `calm/patterns/quaia.pattern.json`.
+4. Validate from the `calm/` directory; a clean run prints `No issues found.`:
    ```bash
-   npx -y @finos/calm-cli@1.46.0 validate -p patterns/quaia.pattern.json -a architecture/quaia.arch.json -u url-mapping.json --strict -f pretty
+   npx -y "@finos/calm-cli@1.46.0" validate -p patterns/quaia.pattern.json -a architecture/quaia.arch.json -u url-mapping.json --strict -f pretty
    ```
-   A clean run prints `No issues found.` See `calm/README.md` for details.
+5. Render the documentation with `npx -y @finos/calm-cli@1.46.0 docify -a architecture/quaia.arch.json -o <directory outside the repository>`, show the user the diagram and pages, and get their explicit approval.
 
-### Step 10: Create Unit Tests
+## 2. Config class
 
-Create `tests/agents/test_<agent_name>.py`:
+Add a `<AgentName>AgentConfig` class to `config.py`, mirroring `TestCaseClassificationAgentConfig`:
 
-📄 **Example:** [examples/test_agent_example.py](examples/test_agent_example.py)
+- `PORT`: pick a default no other agent uses (search `config.py` for `"PORT"`).
+- `THINKING_LEVEL`: a pydantic-ai `ThinkingLevel` literal in lowercase, e.g. `"minimal"` or `"medium"`.
+- `MODEL_NAME`: keep `DEFAULT_MODEL_NAME` unless the agent needs a different model.
+- `VERSION`: read from `<AGENT_NAME>_AGENT_VERSION` with the default `"1.0.0"` (*Versioning of agents and the orchestrator* in `AGENTS.md`); document the variable in the README *Environment Variables* block next to the other agent versions.
+- `MAX_REQUESTS_PER_TASK`: the tool-call budget per task.
+- `SKILL_ID`, `SKILL_NAME`, `SKILL_DESCRIPTION`: the declared skill every agent must have. `AgentBase` requires it and builds the agent card description from model, version and skill name, which the orchestrator's routing uses. Keep `SKILL_ID` stable and lower-kebab-case.
 
-### Step 11: Extend the Hermetic Smoke Suite
+## 3. Output model
 
-The smoke suite under `tests/smoke/` exercises the whole system end-to-end against the real orchestrator and agents in
-`docker-compose.smoke.yml`, and the `smoke` CI job runs it. A new agent is new end-to-end behaviour, so the smoke suite
-**must** be updated in the same change — it is not optional.
+Add the structured result to `common/models.py`, mirroring `ClassifiedTestCases`. It must inherit `BaseAgentResult`, which carries `llm_comments` for the model to report gaps or problems.
 
-1. Add the agent to the `docker-compose.smoke.yml` topology so it starts and registers with the orchestrator, mirroring
-   the existing agent services.
-2. If the agent reaches an external boundary, add or extend a recording mock under `tests/smoke/mocks/` so its effect is
-   captured.
-3. Add a smoke test in `tests/smoke/test_smoke.py` (plus any fixtures it needs in `tests/smoke/conftest.py`) that drives
-   the agent through the orchestrator's public webhooks and asserts on what reached the mocked boundary, following the
-   existing tests.
-4. Run the suite with the stack up:
-   ```bash
-   docker build -t agentic-qa-base:latest -f Dockerfile.base .
-   GOOGLE_API_KEY=<your-key> docker compose -f docker-compose.smoke.yml up -d --build
-   uv run pytest tests/smoke -m smoke -v
-   docker compose -f docker-compose.smoke.yml down -v
-   ```
+## 4. Prompt class and system prompt
 
-## Verification Checklist
+- `agents/<agent_name>/prompt.py`, mirroring `agents/requirements_review/prompt.py`: a `PromptBase` subclass whose `get_script_dir()` points at the agent's `system_prompts/` directory and whose default template name is `main_prompt_template.md` (the classification agent keeps its template next to `prompt.py` instead, so it is not the mirror for this file).
+- `agents/<agent_name>/system_prompts/main_prompt_template.md` from [resources/system_prompt_template.md](resources/system_prompt_template.md): the `# Input` section is mandatory; Markdown with headings, a numbered task sequence and fenced examples (escape literal braces as `{{`/`}}` when the prompt class formats placeholders), tools described by purpose, and an explicit instruction for what to return when a tool is missing or fails.
+- `AgentBase` appends the `report_activity` tool and its instruction automatically. Do not mention it in the template.
 
-After creating the agent, verify:
+## 5. Agent class
 
-- [ ] Agent directory structure is complete
-- [ ] Configuration class added to `config.py`
-- [ ] Output model (if any) added to `common/models.py`
-- [ ] Prompt class properly inherits from `PromptBase`
-- [ ] System prompt template exists and is well-structured
-- [ ] Agent class properly inherits from `AgentBase`
-- [ ] Dockerfile follows the standard pattern
-- [ ] Agent registered as a node (with its `prompt-injection-guard` control) in `calm/architecture/quaia.arch.json` and asserted in `calm/patterns/quaia.pattern.json`
-- [ ] CALM validation passes: `npx -y @finos/calm-cli@1.46.0 validate -p patterns/quaia.pattern.json -a architecture/quaia.arch.json -u url-mapping.json --strict` (from `calm/`)
-- [ ] Unit tests pass: `pytest tests/agents/test_<agent_name>.py -v`
-- [ ] Smoke suite extended: the agent runs in `docker-compose.smoke.yml` and a `tests/smoke/` test asserts its end-to-end behaviour
-- [ ] Agent starts successfully: `python agents/<agent_name>/main.py`
-- [ ] Agent card is discoverable at `http://localhost:<port>/.well-known/agent.json`
+Create `agents/<agent_name>/main.py`, mirroring `agents/test_case_classification/main.py`:
 
-## Running the Agent Locally
+- Build the Jira tool allowlist from the constants in `common/services/atlassian_tools.py` (`JIRA_GET_ISSUE`, `JIRA_ADD_COMMENT`, `JIRA_CREATE_ISSUE`, `JIRA_UPDATE_ISSUE`), never from string literals, and always pass it: the combined server also advertises Confluence tools, and an agent must not receive tools it was not built for. An agent that needs no Atlassian tool passes an empty tuple.
+- Pass MCP tools as **factories** (`mcp_toolset_factories=[lambda: build_atlassian_mcp_server_toolset(_JIRA_TOOL_ALLOWLIST)]`), never live toolsets: `AgentBase` opens a fresh MCP session for every run and closes it afterwards. Omit the argument if the agent needs no MCP tools.
+- A sub-agent needing Jira tools opens its own session per run, as `agents/test_case_generation/main.py` does with `async with build_atlassian_mcp_server_toolset(...) as toolset: await sub_agent.run(prompt, toolsets=[toolset])`.
+- Retrieval over the vector database follows `agents/requirements_review/main.py` (`common.services.document_retrieval` and `VectorDbService`).
+- Custom tools are methods passed via `tools=[...]`. The LLM sees their signature and docstring, so the docstring is the tool specification and keeps its `Args` and `Returns` (the one place the comment rule requires them).
+- A tool takes every value it needs as its own parameter, which the model fills from the task text (e.g. a Jira issue key). `AgentBase` runs the agent without dependencies, so a tool reading `ctx.deps` fails at its first call; do not declare `deps_type` (the classification agent's `deps_type=TestCaseKeys` is unused and not part of the pattern to mirror).
+- Pass the declared skill via `skill=AgentSkillDeclaration(...)` (required): it becomes the agent card's skill and feeds the composed card description.
+- Prompt-injection screening, agent registration and activity streaming are handled by `AgentBase`; do not reimplement them.
+- Module-level `app = agent.a2a_server` is what gunicorn serves.
+
+## 6. Dockerfile and Cloud Build
+
+- `agents/<agent_name>/Dockerfile`, copied from `agents/test_case_classification/Dockerfile` with the module path changed. It builds on `agentic-qa-base:latest` (`docker build -t agentic-qa-base:latest -f Dockerfile.base .`).
+- If the agent is deployed to Cloud Run, mirror every `requirements-review-agent` entry in `cloudbuild.yaml`: build, push, deploy, and the final `images` list.
+
+## 7. Unit tests
+
+Create `tests/agents/test_<agent_name>.py` with the `writing-unit-tests` skill. Model construction tests on `tests/agents/test_requirements_review.py` and custom tool tests on `tests/agents/test_test_case_review.py`.
 
 ```bash
-# Activate virtual environment
-.venv\Scripts\activate
-
-# Run the agent
-python agents/<agent_name>/main.py
+uv run pytest tests/agents/test_<agent_name>.py -v
 ```
 
-The agent will start listening on the configured port and automatically expose:
-- `/.well-known/agent.json` - Agent card for discovery
-- A2A task endpoints for receiving and processing tasks
+## 8. Smoke suite
+
+A new agent is new end-to-end behaviour, so `tests/smoke/` must cover it in the same change:
+
+1. Add a service to `docker-compose.smoke.yml` mirroring `requirements_review` (build, `<<: *agent-env`, `AGENT_BASE_URL`, `depends_on`, healthcheck). Add it to the orchestrator's `REMOTE_EXECUTION_AGENT_HOSTS` and `depends_on`.
+2. If the agent reaches a new external boundary, add or extend a recording mock under `tests/smoke/mocks/`.
+3. Add a test to `tests/smoke/test_smoke.py` (fixtures in `tests/smoke/conftest.py`) that drives the agent through the orchestrator's public endpoints and asserts on what reached the mocked boundary.
+
+The suite needs `GOOGLE_API_KEY` and makes billed LLM calls, so ask the user before running it:
+
+```bash
+docker build -t agentic-qa-base:latest -f Dockerfile.base .
+docker compose -f docker-compose.smoke.yml up -d --build --wait
+uv run pytest tests/smoke -m smoke -v
+docker compose -f docker-compose.smoke.yml down -v
+```
+
+## 9. Agent starts locally
+
+From the repository root (running `main.py` as a script cannot import `config`):
+
+```bash
+uv run python -m agents.<agent_name>.main
+```
+
+The agent card must be served at `http://localhost:<PORT>/.well-known/agent-card.json`.

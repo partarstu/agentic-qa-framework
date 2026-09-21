@@ -4,7 +4,7 @@
 
 import asyncio
 from abc import ABC, abstractmethod
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from contextlib import asynccontextmanager
 from typing import Any
 from urllib.parse import urlparse
@@ -17,28 +17,31 @@ from a2a.server.routes import create_agent_card_routes, create_jsonrpc_routes
 from a2a.server.tasks import InMemoryTaskStore
 from a2a.types import AgentCapabilities, AgentCard, AgentInterface, AgentSkill, Message
 from fastapi import FastAPI
-from jira import JIRA
 from pydantic import BaseModel
 from pydantic_ai import Agent, Tool
 from pydantic_ai.agent import AgentRunResult
 from pydantic_ai.exceptions import ModelHTTPError
-from pydantic_ai.mcp import MCPServerSSE
 from pydantic_ai.messages import BinaryContent, UserContent
 from pydantic_ai.settings import ThinkingLevel
 from pydantic_ai.tools import AgentDepsT, ToolFuncEither
+from pydantic_ai.toolsets import AbstractToolset
 from pydantic_ai.usage import UsageLimits
 
 import config
 from common import utils
 from common.agent_executor import DefaultAgentExecutor
 from common.custom_llm_wrapper import CustomLlmWrapper
-from common.models import AgentExecutionError, AgentRuntimeError, JsonSerializableModel
+from common.models import (
+    AgentExecutionError,
+    AgentRuntimeError,
+    AgentSkillDeclaration,
+    JsonSerializableModel,
+)
 from common.services.vector_db_service import VectorDbService
 from common.streaming import compute_activity_budget
-from common.token_usage import TokenUsage
+from common.token_usage import TokenUsage, operation_meter
 
 REGISTRATION_PATH = f"{config.ORCHESTRATOR_URL}/register"
-MCP_SERVER_ATTACHMENTS_FOLDER_PATH = config.MCP_SERVER_ATTACHMENTS_FOLDER_PATH
 ATTACHMENTS_LOCAL_DESTINATION_FOLDER_PATH = config.ATTACHMENTS_LOCAL_DESTINATION_FOLDER_PATH
 
 logger = utils.get_logger("agent_base")
@@ -46,6 +49,13 @@ logger = utils.get_logger("agent_base")
 # Bound the activity queue so report_activity calls cannot accumulate without a
 # consumer (e.g. standalone runs, where no executor drains the queue).
 _ACTIVITY_QUEUE_MAXSIZE = 1000
+
+
+def _contains_connect_error(exc: BaseException) -> bool:
+    """Whether a failure - possibly nested in exception groups - was a failure to connect."""
+    if isinstance(exc, ExceptionGroup):
+        return any(_contains_connect_error(member) for member in exc.exceptions)
+    return isinstance(exc, httpx.ConnectError)
 
 
 class AgentBase(ABC):
@@ -57,20 +67,17 @@ class AgentBase(ABC):
         port: int,
         external_port: int,
         model_name: str,
+        version: str,
+        skill: AgentSkillDeclaration,
         output_type: type[BaseModel],
         instructions: str,
-        mcp_servers: list[MCPServerSSE],
+        mcp_toolset_factories: Sequence[Callable[[], AbstractToolset]] = (),
         deps_type: type[BaseModel] | None = None,
-        description: str = "",
         tools: Sequence[Tool[AgentDepsT] | ToolFuncEither[AgentDepsT, ...]] = (),
         vector_db_collection_name: str | None = None,
+        max_output_tokens: int | None = None,
     ):
-        """Initialise the agent and its underlying A2A server.
-
-        Note for prompt-template authors: the ``report_activity`` tool and a one-line
-        instruction snippet are appended to *instructions* automatically here.
-        Do **not** include them in your system-prompt template files.
-        """
+        """Initialise the agent and its underlying A2A server."""
         self.agent_name = agent_name
         self.base_url = base_url
         self.port = port
@@ -78,12 +85,16 @@ class AgentBase(ABC):
         self.protocol = protocol
         self.url = f"{self.base_url}:{self.external_port}"
         self.model_name = model_name
+        self.max_output_tokens = max_output_tokens
+        self.version = version
+        self.skill = skill
         self.output_type = output_type
         self.instructions = instructions
         self.deps_type = deps_type
-        self.description = description
-        self.mcp_servers = mcp_servers or []
+        # Factories rather than live connections: a fresh MCP session is built for each agent run.
+        self.mcp_toolset_factories = list(mcp_toolset_factories)
         self._activity_queue: asyncio.Queue[str] = asyncio.Queue(maxsize=_ACTIVITY_QUEUE_MAXSIZE)
+        # The tool and its instruction are appended here, so a system-prompt template must not mention them.
         self.tools = [*tools, self.report_activity]
         self.instructions = (
             self.instructions
@@ -94,7 +105,12 @@ class AgentBase(ABC):
 
         self.vector_db_service = None
         if vector_db_collection_name:
-            self.vector_db_service = VectorDbService(vector_db_collection_name)
+            # The metadata collection makes the agent's reads/writes refuse to run against
+            # vectors produced by a different embedding model (model identity).
+            self.vector_db_service = VectorDbService(
+                vector_db_collection_name,
+                metadata_collection_name=config.QdrantConfig.METADATA_COLLECTION_NAME,
+            )
         self.latest_received_message: Message | None = None
         # Token usage of the most recent run; reset per task by the executor and read back
         # by it to emit the usage artifact. None until a run completes.
@@ -102,10 +118,8 @@ class AgentBase(ABC):
 
     @property
     def activity_queue(self) -> asyncio.Queue[str]:
-        """Queue of pending activity descriptions reported via report_activity.
-
-        Exposed so the executor can drain reported activities without reaching across
-        the privacy boundary into the internal queue.
+        """Queue of pending activity descriptions, exposed so the executor drains them without reaching into the
+        internal one.
         """
         return self._activity_queue
 
@@ -136,21 +150,27 @@ class AgentBase(ABC):
         logger.info(f"""Creating agent '{self.agent_name}' with the following configuration:
         - Model: {self.model_name}
         - Output Type: {self.output_type.__name__}
-        - MCP Servers: {[server.url for server in self.mcp_servers]}
+        - MCP Server: {self._get_mcp_server_description()}
         - Tools: {[getattr(tool, "__name__", None) or tool.name for tool in self.tools]}""")
 
+        # No toolsets here: the MCP toolsets are built per run and passed to agent.run(...).
         return CustomLlmWrapper.create_agent(
             model_name=self.model_name,
             output_type=self.output_type,
             instructions=self.instructions,
             name=self.agent_name,
             thinking_level=self.get_thinking_level(),
-            toolsets=self.mcp_servers,
             tools=self.tools,
             deps_type=self.deps_type,
             retries=config.RetryConfig.MAX_RETRIES,
             output_retries=config.RetryConfig.MAX_RETRIES,
+            max_output_tokens=self.max_output_tokens,
+            operation_name="main",
         )
+
+    def _get_mcp_server_description(self) -> str:
+        """The MCP server the per-run toolsets connect to, or a marker when the agent uses none."""
+        return config.ATLASSIAN_MCP_SERVER_URL if self.mcp_toolset_factories else "none"
 
     async def _get_agent_execution_result(self, received_request: list[UserContent]) -> AgentRunResult[Any] | None:
         usage_limits = UsageLimits(
@@ -161,14 +181,17 @@ class AgentBase(ABC):
             try:
                 logger.info(f"Starting agent run (attempt {attempt + 1}/{config.RetryConfig.MAX_RETRIES})...")
                 try:
+                    # Fresh MCP sessions per run - a retry therefore never reuses a broken session.
+                    # The run itself opens and closes them, so each session is entered exactly once
+                    # and a self-healing toolset can really tear its own session down.
+                    toolsets = [build_toolset() for build_toolset in self.mcp_toolset_factories]
                     async with self.agent:
-                        return await self.agent.run(received_request, usage_limits=usage_limits)
+                        return await self.agent.run(received_request, usage_limits=usage_limits, toolsets=toolsets)
                 except ExceptionGroup as eg:
-                    if any(isinstance(exc, httpx.ConnectError) for exc in eg.exceptions) and self.mcp_servers:
-                        mcp_urls = [server.url for server in self.mcp_servers]
+                    if _contains_connect_error(eg) and self.mcp_toolset_factories:
                         raise ConnectionError(
-                            f"MCP connection failed: could not connect to MCP server(s) {mcp_urls}. "
-                            "Ensure the MCP server(s) are running and accessible."
+                            f"MCP connection failed: could not connect to MCP server "
+                            f"{config.ATLASSIAN_MCP_SERVER_URL}. Ensure the MCP server is running and accessible."
                         ) from eg
                     raise
             except (ModelHTTPError, httpx.TransportError) as e:
@@ -216,15 +239,15 @@ class AgentBase(ABC):
         """Record and log the token usage and estimated cost of a completed run."""
         if result is None:
             return
-        self.latest_token_usage = TokenUsage.from_run_usage(result.usage(), self.model_name)
+        meter = operation_meter.get()
+        if meter is not None:
+            self.latest_token_usage = TokenUsage.from_operations(meter.entries(), self.model_name)
+        else:
+            self.latest_token_usage = TokenUsage.from_run_usage(result.usage(), self.model_name)
         logger.info(self.latest_token_usage.summary_line())
 
     def _log_llm_comments_if_result_incomplete(self, output: BaseModel | None | str) -> None:
-        """Logs LLM comments if the agent result appears empty or incomplete.
-
-        Args:
-            output: The output from the agent execution.
-        """
+        """Logs the LLM comments when the agent result appears empty or incomplete."""
         if output is None:
             logger.warning("Agent returned None result.")
             return
@@ -241,14 +264,7 @@ class AgentBase(ABC):
 
     @staticmethod
     def _check_if_result_incomplete(output: BaseModel) -> bool:
-        """Checks if the agent result appears to be empty or incomplete.
-
-        Args:
-            output: The output model from the agent execution.
-
-        Returns:
-            True if the result appears incomplete, False otherwise.
-        """
+        """Whether the agent result appears to be empty or incomplete."""
         if output is None:
             return True
 
@@ -280,37 +296,28 @@ class AgentBase(ABC):
     @asynccontextmanager
     async def _lifespan(self, app: FastAPI):
         logger.info(f"{self.agent_name} started.")
-        logger.info(f"Using following MCP server URLs: {[server.url for server in self.mcp_servers]}")
+        logger.info("Using following MCP server: %s", self._get_mcp_server_description())
         yield
         if self.vector_db_service:
             await self.vector_db_service.close()
         logger.info("Shutting down.")
 
-    @staticmethod
-    def _fetch_attachments(attachment_paths: list[str]) -> dict[str, BinaryContent]:
-        """Fetches all attachments, returning them as binary content for multimodal processing.
-
-        Args:
-            attachment_paths: List of file paths to the downloaded attachments.
-
-        Returns:
-            Dictionary mapping filename to BinaryContent for valid, supported attachments.
-        """
-        from common.attachment_handler import fetch_all_attachments
-
-        return fetch_all_attachments(attachment_paths)
+    def _compose_card_description(self) -> str:
+        """Compose the agent card description from model, version and skill name."""
+        # The dashboard tile renders it as sanitized HTML clamped to two lines, hence the explicit breaks.
+        return f"Model: {self.model_name}<br>Version: {self.version}<br>Skill: {self.skill.name}"
 
     def _get_server(self) -> FastAPI:
         primary_skill = AgentSkill(
-            id=f"{self.agent_name.lower().replace(' ', '-')}-skill",
-            name="Primary skill",
-            description=self.description,
-            tags=["qa"],
+            id=self.skill.id,
+            name=self.skill.name,
+            description=self.skill.description,
+            tags=self.skill.tags,
         )
         agent_card = AgentCard(
             name=self.agent_name,
-            description=f"Model: {self.model_name}",
-            version="1.0.0",
+            description=self._compose_card_description(),
+            version=self.version,
             default_input_modes=["text"],
             default_output_modes=["text", "image"],
             capabilities=AgentCapabilities(streaming=True),
@@ -397,7 +404,9 @@ class AgentBase(ABC):
         if not config.JIRA_BASE_URL or not config.JIRA_USER or not config.JIRA_TOKEN:
             logger.error("Jira configuration is missing (JIRA_URL, JIRA_USERNAME, or JIRA_API_TOKEN).")
             raise RuntimeError("Jira configuration is missing (JIRA_URL, JIRA_USERNAME, or JIRA_API_TOKEN).")
-        jira = JIRA(server=config.JIRA_BASE_URL, basic_auth=(config.JIRA_USER, config.JIRA_TOKEN))
+        from common.services.jira_client import build_jira_client
+
+        jira = build_jira_client()
 
         try:
             created_comment = jira.add_comment(issue_key, comment)

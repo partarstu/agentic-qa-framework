@@ -1,6 +1,5 @@
 .git
 .gitignore
-*.html
 
 # Python
 __pycache__/

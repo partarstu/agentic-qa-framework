@@ -7,7 +7,6 @@ import os
 import time
 import uuid
 
-from pydantic_ai.mcp import MCPServerSSE
 from pydantic_ai.settings import ThinkingLevel
 from qdrant_client import models as qdrant_models
 
@@ -17,24 +16,26 @@ from common import utils
 from common.agent_base import AgentBase
 from common.custom_llm_wrapper import CustomLlmWrapper
 from common.models import (
+    AgentSkillDeclaration,
     DuplicateCandidate,
     DuplicateDetectionResult,
     IncidentCreationInput,
     IncidentCreationResult,
     JiraIssue,
 )
+from common.services.atlassian_mcp import build_atlassian_mcp_server_toolset
+from common.services.atlassian_tools import JIRA_CREATE_ISSUE, JIRA_GET_ISSUE, JIRA_UPDATE_ISSUE
 from common.services.test_management_system_client_provider import get_test_management_client
 
 logger = utils.get_logger("incident_creation_agent")
+
+_JIRA_TOOL_ALLOWLIST = (JIRA_GET_ISSUE, JIRA_CREATE_ISSUE, JIRA_UPDATE_ISSUE)
 
 # Qdrant RAG Config
 QDRANT_COLLECTION_NAME = getattr(config.QdrantConfig, "TICKETS_COLLECTION_NAME", "jira_issues")
 RAG_MIN_SIMILARITY = getattr(config.IncidentCreationAgentConfig, "MIN_SIMILARITY_SCORE", 0.7)
 BUG_ISSUE_TYPE = getattr(config.QdrantConfig, "BUG_ISSUE_TYPE", "Bug")
 TERMINAL_STATUSES = set(getattr(config.IncidentCreationAgentConfig, "TERMINAL_STATUSES", []))
-JIRA_MCP_SERVER_URL = config.JIRA_MCP_SERVER_URL
-
-jira_mcp_server = MCPServerSSE(url=JIRA_MCP_SERVER_URL, timeout=config.MCP_SERVER_TIMEOUT_SECONDS)
 
 
 class IncidentCreationAgent(AgentBase):
@@ -50,6 +51,7 @@ class IncidentCreationAgent(AgentBase):
             system_prompt=self.dup_detect_prompt.get_prompt(),
             name="duplicate_detector",
             thinking_level=config.IncidentCreationAgentConfig.THINKING_LEVEL,
+            max_output_tokens=config.IncidentCreationAgentConfig.MAX_OUTPUT_TOKENS,
         )
 
         self._saved_artifact_paths: list[str] = []
@@ -62,11 +64,17 @@ class IncidentCreationAgent(AgentBase):
             port=config.IncidentCreationAgentConfig.PORT,
             external_port=config.IncidentCreationAgentConfig.EXTERNAL_PORT,
             model_name=model_name,
+            version=config.IncidentCreationAgentConfig.VERSION,
+            max_output_tokens=config.IncidentCreationAgentConfig.MAX_OUTPUT_TOKENS,
             output_type=IncidentCreationResult,
             instructions=self.main_prompt.get_prompt(),
-            mcp_servers=[jira_mcp_server],
+            mcp_toolset_factories=[lambda: build_atlassian_mcp_server_toolset(_JIRA_TOOL_ALLOWLIST)],
             deps_type=IncidentCreationInput,
-            description="Agent which creates detailed incident reports in Jira based on test execution results.",
+            skill=AgentSkillDeclaration(
+                id=config.IncidentCreationAgentConfig.SKILL_ID,
+                name=config.IncidentCreationAgentConfig.SKILL_NAME,
+                description=config.IncidentCreationAgentConfig.SKILL_DESCRIPTION,
+            ),
             tools=[
                 self._search_duplicate_candidates_in_rag,
                 self._get_linked_issues,
@@ -83,17 +91,20 @@ class IncidentCreationAgent(AgentBase):
     def get_max_requests_per_task(self) -> int:
         return config.IncidentCreationAgentConfig.MAX_REQUESTS_PER_TASK
 
-    async def _search_duplicate_candidates_in_rag(self, incident_description: str) -> list[JiraIssue]:
+    async def _search_duplicate_candidates_in_rag(self, incident_description: str, project_key: str) -> list[JiraIssue]:
         """Searches for potential duplicate incidents using the RAG vector database.
 
         Args:
             incident_description: Description of the incident including the error description,
                                 test case name, test step where the issue occurred, steps to reproduce, system info etc.
+            project_key: Exactly the project key given in the input; never inferred or altered.
 
         Returns:
             List of JiraIssue objects representing potential duplicate incidents.
         """
-        logger.info("Starting RAG duplicate candidate search...")
+        if not project_key.strip():
+            raise ValueError("project_key must not be blank for duplicate detection.")
+        logger.info("Starting RAG duplicate candidate search for project %s.", project_key)
         if not self.vector_db_service:
             logger.warning("Vector DB service not initialized, skipping RAG search.")
             return []
@@ -103,7 +114,11 @@ class IncidentCreationAgent(AgentBase):
                 qdrant_models.FieldCondition(
                     key="issue_type",
                     match=qdrant_models.MatchValue(value=BUG_ISSUE_TYPE),
-                )
+                ),
+                qdrant_models.FieldCondition(
+                    key="project_key",
+                    match=qdrant_models.MatchValue(value=project_key),
+                ),
             ],
             must_not=[
                 qdrant_models.FieldCondition(
@@ -115,7 +130,7 @@ class IncidentCreationAgent(AgentBase):
             else [],
         )
 
-        hits = await self.vector_db_service.search(
+        hits = await self.vector_db_service.hybrid_search(
             incident_description,
             limit=config.QdrantConfig.MAX_RESULTS,
             score_threshold=RAG_MIN_SIMILARITY,
@@ -217,9 +232,10 @@ class IncidentCreationAgent(AgentBase):
         unique_candidates: list[DuplicateCandidate] = []
         seen_keys: set[str] = set()
         for candidate in candidates:
-            if candidate.key in seen_keys:
+            candidate_key = candidate.key.casefold()
+            if candidate_key in seen_keys:
                 continue
-            seen_keys.add(candidate.key)
+            seen_keys.add(candidate_key)
             unique_candidates.append(candidate)
 
         duplicate_count = len(candidates) - len(unique_candidates)

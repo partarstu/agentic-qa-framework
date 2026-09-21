@@ -28,11 +28,12 @@ _execution_issue_links: list[dict] = []
 _counter = 0
 _test_execution_counter = 0
 
-# A pre-seeded, ready-for-execution test case for the /execute-tests flow. Kept in
-# its own store (and out of /__recorded) so it cannot satisfy the generation-flow
-# assertions; it is "Approved" and carries the "automated" label the orchestrator
-# selects on.
+# Pre-seeded, ready-for-execution test cases for the /execute-tests flow. Kept in
+# their own store (and out of /__recorded) so they cannot satisfy the generation-flow
+# assertions; both are "Approved" and carry the "automated" label the orchestrator
+# selects on, but only the first one has a recognized test-type label ("api").
 _EXECUTABLE_TC_KEY = "SMOKE-T100"
+_UNTYPED_TC_KEY = "SMOKE-T101"
 _executable_test_cases: dict[str, dict] = {
     _EXECUTABLE_TC_KEY: {
         "key": _EXECUTABLE_TC_KEY,
@@ -50,13 +51,32 @@ _executable_test_cases: dict[str, dict] = {
                 "testData": "email=registered@example.com",
             }
         ],
-    }
+    },
+    # Automated and ready, but without a recognized test-type label: /execute-tests must skip it.
+    _UNTYPED_TC_KEY: {
+        "key": _UNTYPED_TC_KEY,
+        "id": 1101,
+        "name": "Password reset link opens the reset form",
+        "objective": "Verify the emailed reset link opens the password reset form.",
+        "precondition": "A password reset email was received.",
+        "labels": ["automated"],
+        "status": {"id": 2, "name": "Approved"},
+        "customFields": {"Review Comments": ""},
+        "steps": [
+            {
+                "description": "Open the reset link from the email",
+                "expectedResult": "The password reset form is shown",
+                "testData": "",
+            }
+        ],
+    },
 }
 
 
 def _all_test_cases() -> dict[str, dict]:
     """Generation-created cases plus the pre-seeded executable case."""
     return {**_executable_test_cases, **_test_cases}
+
 
 _STATUSES = [
     {"id": 1, "name": "Draft", "archived": False},
@@ -161,6 +181,8 @@ async def create_test_execution(request: Request) -> dict:
             "testCycleKey": payload.get("testCycleKey"),
             "statusName": payload.get("statusName"),
             "comment": payload.get("comment", ""),
+            "actualStartDate": payload.get("actualStartDate"),
+            "actualEndDate": payload.get("actualEndDate"),
             "testScriptResults": payload.get("testScriptResults", []),
         }
     )
@@ -197,6 +219,8 @@ async def recorded() -> dict:
             {
                 "key": tc["key"],
                 "name": tc.get("name", ""),
+                "objective": tc.get("objective", ""),
+                "precondition": tc.get("precondition") or "",
                 "steps": tc.get("steps", []),
                 "labels": tc.get("labels", []),
                 "status": _resolve_status(tc.get("status", {})),

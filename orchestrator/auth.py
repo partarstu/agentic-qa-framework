@@ -2,13 +2,14 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
-"""
-Authentication utilities for the UI dashboard.
-"""
+"""Authentication utilities for the UI dashboard."""
 
 import hmac
+import time
+from collections import OrderedDict, deque
 from datetime import UTC, datetime, timedelta
 
+import bcrypt
 import jwt
 from fastapi import HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -47,9 +48,19 @@ class AuthService:
         """
         return bool(
             config.DashboardAuthConfig.USERNAME
-            and config.DashboardAuthConfig.PASSWORD
+            and config.DashboardAuthConfig.PASSWORD_HASH
             and config.DashboardAuthConfig.JWT_SECRET
         )
+
+    @staticmethod
+    def validate_configuration() -> None:
+        """Raise when dashboard credentials cannot securely authenticate a login."""
+        if not AuthService._is_configured():
+            raise RuntimeError("DASHBOARD_USERNAME, DASHBOARD_PASSWORD_HASH and DASHBOARD_JWT_SECRET are required.")
+        try:
+            bcrypt.checkpw(b"", config.DashboardAuthConfig.PASSWORD_HASH.encode("utf-8"))
+        except ValueError as exc:
+            raise RuntimeError("DASHBOARD_PASSWORD_HASH is not a valid bcrypt hash.") from exc
 
     def authenticate(self, username: str, password: str) -> bool:
         """Validate username and password against configured credentials.
@@ -62,7 +73,13 @@ class AuthService:
             logger.error("Dashboard authentication is not configured; rejecting login attempt.")
             return False
         username_ok = hmac.compare_digest(username, config.DashboardAuthConfig.USERNAME)
-        password_ok = hmac.compare_digest(password, config.DashboardAuthConfig.PASSWORD)
+        encoded_password = password.encode("utf-8")
+        # bcrypt truncates at 72 bytes, so a longer password is rejected rather than silently
+        # shortened. It is still hashed, so the rejection costs the same time as a wrong password.
+        password_ok = (
+            bcrypt.checkpw(encoded_password[:72], config.DashboardAuthConfig.PASSWORD_HASH.encode("utf-8"))
+            and len(encoded_password) <= 72
+        )
         return username_ok and password_ok
 
     def create_token(self, username: str) -> TokenResponse:
@@ -75,19 +92,16 @@ class AuthService:
             "exp": expires_at,
             "iat": datetime.now(UTC),
         }
-        token = jwt.encode(payload, config.DashboardAuthConfig.JWT_SECRET, algorithm=config.DashboardAuthConfig.JWT_ALGORITHM)
+        token = jwt.encode(
+            payload, config.DashboardAuthConfig.JWT_SECRET, algorithm=config.DashboardAuthConfig.JWT_ALGORITHM
+        )
         return TokenResponse(
             access_token=token,
             expires_at=expires_at.isoformat(),
         )
 
     def verify_token(self, token: str) -> str | None:
-        """
-        Verify a JWT token and return the username if valid.
-
-        Returns:
-            The username if the token is valid, None otherwise.
-        """
+        """Verify a JWT token and return the username if valid."""
         # Fail closed: without a configured secret, no token can be trusted.
         if not config.DashboardAuthConfig.JWT_SECRET:
             logger.error("DASHBOARD_JWT_SECRET is not configured; rejecting token verification.")
@@ -131,3 +145,40 @@ class DashboardAuthBearer(HTTPBearer):
 # Singleton instances
 auth_service = AuthService()
 dashboard_auth = DashboardAuthBearer(auth_service)
+
+
+class LoginRateLimiter:
+    """Bound login attempts per client in a bounded sliding time window."""
+
+    def __init__(self, max_addresses: int = 10_000) -> None:
+        # Ordered by last activity, so the bound evicts the address idle the longest rather
+        # than whichever one happened to be seen first.
+        self._attempts: OrderedDict[str, deque[float]] = OrderedDict()
+        self._max_addresses = max_addresses
+
+    def check(self, client_ip: str, now: float | None = None) -> int | None:
+        """Record an attempt and return retry seconds when the client is rate limited."""
+        timestamp = time.monotonic() if now is None else now
+        window = config.DashboardAuthConfig.LOGIN_RATE_LIMIT_WINDOW_SECONDS
+        attempts = self._attempts.setdefault(client_ip, deque())
+        self._attempts.move_to_end(client_ip)
+        while attempts and attempts[0] <= timestamp - window:
+            attempts.popleft()
+        if len(attempts) >= config.DashboardAuthConfig.LOGIN_RATE_LIMIT_ATTEMPTS:
+            return max(1, int(window - (timestamp - attempts[0])))
+        attempts.append(timestamp)
+        while len(self._attempts) > self._max_addresses:
+            self._attempts.popitem(last=False)
+        return None
+
+
+def client_ip(request: Request) -> str:
+    """Return the client address using only configured trusted proxy hops."""
+    hops = config.DashboardAuthConfig.LOGIN_RATE_LIMIT_TRUSTED_PROXY_HOPS
+    forwarded = [item.strip() for item in request.headers.get("X-Forwarded-For", "").split(",") if item.strip()]
+    if hops and len(forwarded) >= hops:
+        return forwarded[-hops]
+    return request.client.host if request.client else "unknown"
+
+
+login_rate_limiter = LoginRateLimiter()

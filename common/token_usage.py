@@ -4,6 +4,9 @@
 
 """Token usage and estimated cost captured from a single agent run."""
 
+from contextvars import ContextVar
+
+from pydantic import Field
 from pydantic_ai.usage import RunUsage
 
 import config
@@ -25,6 +28,7 @@ class TokenUsage(JsonSerializableModel):
     requests: int
     tool_calls: int
     cost_usd: float | None
+    operations: list["OperationUsage"] = Field(default_factory=list)
 
     @classmethod
     def from_run_usage(cls, usage: RunUsage, model_name: str) -> "TokenUsage":
@@ -36,7 +40,34 @@ class TokenUsage(JsonSerializableModel):
             cache_read_tokens=usage.cache_read_tokens,
             requests=usage.requests,
             tool_calls=usage.tool_calls,
-            cost_usd=estimate_cost_usd(usage.input_tokens, usage.output_tokens, model_name),
+            cost_usd=estimate_cost_usd(
+                max(0, usage.input_tokens - usage.cache_read_tokens - usage.cache_write_tokens),
+                usage.output_tokens,
+                model_name,
+                cache_read_tokens=usage.cache_read_tokens,
+                cache_write_tokens=usage.cache_write_tokens,
+            ),
+        )
+
+    @classmethod
+    def from_operations(cls, entries: list["OperationUsage"], model_name: str) -> "TokenUsage":
+        """Totals of every LLM call metered for a task, nested sub-agent calls included.
+
+        The cost is ``None`` when any operation is unpriced, so a partial sum is never reported as the total.
+        """
+        input_tokens = sum(e.uncached_input_tokens + e.cache_read_tokens + e.cache_write_tokens for e in entries)
+        output_tokens = sum(e.output_tokens for e in entries)
+        costs = [e.cost_usd for e in entries if e.cost_usd is not None]
+        return cls(
+            model_name=model_name,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            total_tokens=input_tokens + output_tokens,
+            cache_read_tokens=sum(e.cache_read_tokens for e in entries),
+            requests=sum(e.requests for e in entries),
+            tool_calls=sum(e.tool_calls for e in entries),
+            cost_usd=sum(costs) if len(costs) == len(entries) else None,
+            operations=entries,
         )
 
     def summary_line(self) -> str:
@@ -48,9 +79,81 @@ class TokenUsage(JsonSerializableModel):
         )
 
 
-def estimate_cost_usd(input_tokens: int, output_tokens: int, model_name: str) -> float | None:
-    """Estimate the USD cost of a run, or ``None`` when the model has no configured price."""
-    pricing = config.BudgetConfig.MODEL_PRICING.get(model_name)
+class OperationUsage(JsonSerializableModel):
+    """Usage counters attributed to one named LLM operation."""
+
+    operation: str
+    model_name: str
+    requests: int = 0
+    uncached_input_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
+    output_tokens: int = 0
+    tool_calls: int = 0
+    cost_usd: float | None = None
+
+
+class OperationMeter:
+    """Accumulate provider usage for one task without sharing state between tasks."""
+
+    def __init__(self) -> None:
+        self._operations: dict[tuple[str, str], OperationUsage] = {}
+
+    def add(self, operation: str, model_name: str, usage: RunUsage) -> None:
+        """Add a provider usage bucket, accounting for inclusive cache fields."""
+        key = (operation, model_name)
+        entry = self._operations.setdefault(key, OperationUsage(operation=operation, model_name=model_name))
+        entry.requests += usage.requests
+        entry.uncached_input_tokens += max(0, usage.input_tokens - usage.cache_read_tokens - usage.cache_write_tokens)
+        entry.cache_read_tokens += usage.cache_read_tokens
+        entry.cache_write_tokens += usage.cache_write_tokens
+        entry.output_tokens += usage.output_tokens
+        entry.tool_calls += usage.tool_calls
+        entry.cost_usd = estimate_cost_usd(
+            entry.uncached_input_tokens,
+            entry.output_tokens,
+            model_name,
+            cache_read_tokens=entry.cache_read_tokens,
+            cache_write_tokens=entry.cache_write_tokens,
+        )
+
+    def entries(self) -> list[OperationUsage]:
+        """Return operation entries in a stable display order."""
+        return sorted(self._operations.values(), key=lambda entry: (entry.operation, entry.model_name))
+
+
+operation_meter: ContextVar[OperationMeter | None] = ContextVar("operation_meter", default=None)
+
+
+def _pricing(model_name: str) -> dict[str, float] | None:
+    """The price table entry of a model, matched on the bare model id without a provider prefix."""
+    if model_name in config.BudgetConfig.MODEL_PRICING:
+        return config.BudgetConfig.MODEL_PRICING[model_name]
+    return config.BudgetConfig.MODEL_PRICING.get(model_name.split(":", 1)[-1])
+
+
+def estimate_cost_usd(
+    uncached_input_tokens: int,
+    output_tokens: int,
+    model_name: str,
+    cache_read_tokens: int = 0,
+    cache_write_tokens: int = 0,
+) -> float | None:
+    """Estimate the USD cost of a run, or ``None`` when the model has no configured price.
+
+    Cached tokens are priced at their own rates when the price table has them, and at the input
+    rate otherwise.
+    """
+    pricing = _pricing(model_name)
     if pricing is None:
         return None
-    return (input_tokens * pricing["input"] + output_tokens * pricing["output"]) / 1_000_000
+    input_rate = pricing["input"]
+    cache_read_rate = pricing.get("cache_read", input_rate)
+    cache_write_rate = pricing.get("cache_write", input_rate)
+    total = (
+        uncached_input_tokens * input_rate
+        + cache_read_tokens * cache_read_rate
+        + cache_write_tokens * cache_write_rate
+        + output_tokens * pricing["output"]
+    )
+    return total / 1_000_000
