@@ -12,6 +12,7 @@ from pydantic_ai.messages import BinaryContent
 from qdrant_client import models
 
 from common.services.document_retrieval import (
+    _HIT_PAYLOAD_INCLUDE,
     CONFLUENCE_SOURCE,
     SHAREPOINT_SOURCE,
     RetrievalScope,
@@ -228,6 +229,18 @@ def test_assemble_parts_prefers_image_over_text():
 def test_assemble_parts_falls_back_to_text():
     parts = assemble_retrieved_parts([_page(image=None)])
     assert parts[1] == "breadcrumb plus content"
+
+
+def test_assemble_parts_omits_a_page_with_neither_image_nor_text():
+    assert assemble_retrieved_parts([_page(image=None, text="")]) == []
+
+
+def test_the_hit_payload_selector_carries_every_field_a_page_part_requires():
+    """Without this the hits validate in the tests and fail in production, where the selector applies."""
+    from common.models import DocumentPagePart
+
+    required = {name for name, field in DocumentPagePart.model_fields.items() if field.is_required()}
+    assert required <= set(_HIT_PAYLOAD_INCLUDE)
 
 
 def _page(image: bytes | None = None, **overrides) -> RetrievedPage:

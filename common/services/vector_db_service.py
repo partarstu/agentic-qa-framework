@@ -724,7 +724,7 @@ class VectorDbService:
         """Read one record's payload without creating the collection.
 
         Returns None when the collection doesn't exist yet, so legacy-format reads
-        never materialize a collection with the wrong (vector) schema (A7).
+        never materialize a collection with the wrong (vector) schema.
         """
         if not await self._collection_exists():
             return None

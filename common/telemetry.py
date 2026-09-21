@@ -41,6 +41,7 @@ _PROVIDER_BY_PREFIX = {
 
 _meter: metrics.Meter | None = None
 _meter_provider: MeterProvider | None = None
+_histogram: metrics.Histogram | None = None
 
 
 def get_meter() -> metrics.Meter:
@@ -57,15 +58,23 @@ def get_meter() -> metrics.Meter:
     return _meter
 
 
+def get_histogram() -> metrics.Histogram:
+    """The process-wide token-usage instrument; re-creating it per task logs a duplicate registration."""
+    global _histogram
+    if _histogram is None:
+        _histogram = get_meter().create_histogram(
+            TOKEN_USAGE_HISTOGRAM,
+            unit="{token}",
+            description="Tokens consumed per LLM operation and token type.",
+        )
+    return _histogram
+
+
 def record_operation_usage(agent_name: str, entries: list[OperationUsage]) -> None:
     """Record the counters of one completed task, one data point per operation and token type."""
     if not entries:
         return
-    histogram = get_meter().create_histogram(
-        TOKEN_USAGE_HISTOGRAM,
-        unit="{token}",
-        description="Tokens consumed per LLM operation and token type.",
-    )
+    histogram = get_histogram()
     for entry in entries:
         base_attributes = {
             "gen_ai.operation.name": "invoke_agent",

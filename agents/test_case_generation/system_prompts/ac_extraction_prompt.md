@@ -16,7 +16,6 @@ Issue according to the following rules:
   criteria. The first-level items of such list are acceptance criteria. Every nested item inside them belongs to the
   parent acceptance criterion (AC). For example, list item 2.1 belongs to AC 2, 3.5 belongs to AC 3. This is also
   applicable to bullet-lists.
-- Each derived by you acceptance criterion must contain all relevant for it information from the provided to you
-  attachments.
+- Each derived by you acceptance criterion must carry, as its additional information, everything from the content of the Jira issue which is relevant to it and which its own text doesn't already state (e.g. preconditions, constraints, data, expected behaviour described elsewhere in the issue). The attachments are handed over in their original form to the next step together with the acceptance criteria, so don't summarize their content.
 
 Return all derived acceptance criteria in the specified format.

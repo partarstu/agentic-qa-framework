@@ -261,7 +261,7 @@ class DashboardPersistenceConfig:
 # Requirements Review Agent
 class RequirementsReviewAgentConfig:
     THINKING_LEVEL: ThinkingLevel = "medium"
-    VERSION = os.environ.get("REQUIREMENTS_REVIEW_AGENT_VERSION", "1.1.0")
+    VERSION = os.environ.get("REQUIREMENTS_REVIEW_AGENT_VERSION", "1.1.1")
     OWN_NAME = "Jira Requirements Reviewer"
     SKILL_ID = "jira-requirements-review"
     SKILL_NAME = "Jira Requirements Review"
@@ -276,8 +276,8 @@ class RequirementsReviewAgentConfig:
 
 # Test Case Classification Agent
 class TestCaseClassificationAgentConfig:
-    THINKING_LEVEL: ThinkingLevel = "low"
-    VERSION = os.environ.get("TEST_CASE_CLASSIFICATION_AGENT_VERSION", "1.1.0")
+    THINKING_LEVEL: ThinkingLevel = "medium"
+    VERSION = os.environ.get("TEST_CASE_CLASSIFICATION_AGENT_VERSION", "1.2.0")
     OWN_NAME = "Test Case Classification Agent"
     SKILL_ID = "test-case-classification"
     SKILL_NAME = "Test Case Classification"
@@ -292,8 +292,8 @@ class TestCaseClassificationAgentConfig:
 
 # Test Case Generation Agent
 class TestCaseGenerationAgentConfig:
-    THINKING_LEVEL: ThinkingLevel = "low"
-    VERSION = os.environ.get("TEST_CASE_GENERATION_AGENT_VERSION", "1.1.0")
+    THINKING_LEVEL: ThinkingLevel = "medium"
+    VERSION = os.environ.get("TEST_CASE_GENERATION_AGENT_VERSION", "1.2.0")
     OWN_NAME = "Test Case Generation Agent"
     SKILL_ID = "test-case-generation"
     SKILL_NAME = "Test Case Generation"

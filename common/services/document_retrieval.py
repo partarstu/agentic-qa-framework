@@ -47,6 +47,7 @@ logger = utils.get_logger("document_retrieval")
 # Payload fields fetched per hit; the heavy base64 image is excluded here and read
 # separately only for the surviving pages.
 _HIT_PAYLOAD_INCLUDE = [
+    "source",
     "space_key",
     "page_id",
     "page_title",
@@ -294,24 +295,25 @@ async def _attach_page_images(documents_db: VectorDbService | None, pages: list[
 
 
 def assemble_retrieved_parts(pages: list[RetrievedPage]) -> list[str | BinaryContent]:
-    """Assembles retrieved pages into review-ready message parts (plan §9).
+    """Assembles retrieved pages into review-ready message parts.
 
     Each page contributes a header text part plus exactly one content part: the
     page image (identified by attachment name and page number) when present,
-    otherwise the page text; a page with neither is omitted.
+    otherwise the page text; a page with neither is omitted, header included.
     """
     parts: list[str | BinaryContent] = []
     for page in pages:
         part = page.part
-        parts.append(_header(part))
         if page.image is not None:
-            parts.append(
-                BinaryContent(
-                    data=page.image,
-                    media_type="image/png",
-                    identifier=f"{part.attachment_name} page {part.page_number}",
-                )
+            content: str | BinaryContent = BinaryContent(
+                data=page.image,
+                media_type="image/png",
+                identifier=f"{part.attachment_name} page {part.page_number}",
             )
         elif part.text:
-            parts.append(part.text)
+            content = part.text
+        else:
+            continue
+        parts.append(_header(part))
+        parts.append(content)
     return parts

@@ -925,7 +925,7 @@ async def update_sharepoint_db(request: SharePointSyncRequest, api_key: str = De
 
 @orchestrator_app.post("/update-confluence-db")
 async def update_confluence_db(request: ConfluenceSyncRequest, api_key: str = Depends(_validate_api_key)):
-    """Triggers the Confluence documents sync for the given scope (ingestion ships next)."""
+    """Triggers the Confluence documents sync for the given scope."""
     result = await _trigger_rag_sync("confluence", request.space_key, request)
     return _sync_response(result)
 

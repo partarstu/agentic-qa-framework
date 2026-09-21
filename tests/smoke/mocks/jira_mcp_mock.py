@@ -205,6 +205,13 @@ async def _seeded_story_endpoint(_request: Request) -> JSONResponse:
     return JSONResponse(_SEEDED_STORY)
 
 
+async def _seeded_attachments_endpoint(_request: Request) -> JSONResponse:
+    """The texts of the story's attachments, which the agents receive alongside the story."""
+    return JSONResponse(
+        {ATTACHMENT_FILE_NAME: ATTACHMENT_CONTENT.decode(), JSON_ATTACHMENT_FILE_NAME: JSON_ATTACHMENT_CONTENT.decode()}
+    )
+
+
 @contextlib.asynccontextmanager
 async def _lifespan(_app: Starlette):
     # A mounted Streamable HTTP app does not run its own lifespan: the host app must keep the
@@ -217,6 +224,7 @@ app = Starlette(
     routes=[
         Route("/__recorded", _recorded_endpoint),
         Route("/__seeded_story", _seeded_story_endpoint),
+        Route("/__seeded_attachments", _seeded_attachments_endpoint),
         Mount("/", app=mcp.streamable_http_app()),
     ],
     lifespan=_lifespan,

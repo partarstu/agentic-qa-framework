@@ -22,12 +22,17 @@ import httpx
 
 from tests.smoke.conftest import (
     JIRA_MCP_RECORDED_URL,
+    JIRA_MCP_SEEDED_ATTACHMENTS_URL,
     JIRA_MCP_SEEDED_STORY_URL,
     JIRA_REST_RECORDED_URL,
+    PROMPT_OVERRIDE_MARKER,
+    SEEDED_EXECUTABLE_TC_KEY,
     SEEDED_ISSUE_KEY,
     ZEPHYR_RECORDED_URL,
 )
 from tests.smoke.recordings import wait_for_recorded
+
+ZEPHYR_URL = ZEPHYR_RECORDED_URL.removesuffix("/__recorded")
 
 # The output dimensions a run is compared on, each produced by a different agent.
 DIMENSIONS = ("requirements_review", "test_case_generation", "test_case_review", "incident_report")
@@ -45,9 +50,12 @@ class RunSnapshot:
     label: str
     captured_at: str
     story: dict
+    attachments: dict[str, str]
     review_comments: list[str]
     test_cases: list[dict]
     bugs: list[dict]
+    execution: dict
+    """The failed test execution the bug was created from: the executed test case and its failure."""
 
 
 @dataclass(slots=True)
@@ -85,6 +93,7 @@ def collect_snapshot(http_client: httpx.Client, label: str) -> RunSnapshot:
         label=label,
         captured_at=datetime.now(UTC).isoformat(timespec="seconds"),
         story=http_client.get(JIRA_MCP_SEEDED_STORY_URL).json(),
+        attachments=http_client.get(JIRA_MCP_SEEDED_ATTACHMENTS_URL).json(),
         review_comments=_review_comments(jira_rest, jira_mcp),
         test_cases=[_normalized_test_case(tc) for tc in zephyr.get("test_cases", [])],
         bugs=[
@@ -92,7 +101,20 @@ def collect_snapshot(http_client: httpx.Client, label: str) -> RunSnapshot:
             for issue in jira_mcp.get("created_issues", [])
             if issue.get("issue_type") == "Bug"
         ],
+        execution=_failed_execution(http_client, zephyr),
     )
+
+
+def _failed_execution(http_client: httpx.Client, zephyr: dict) -> dict:
+    """The seeded test case /execute-tests ran, with the failure the executor reported for it."""
+    test_case = http_client.get(f"{ZEPHYR_URL}/testcases/{SEEDED_EXECUTABLE_TC_KEY}").json()
+    failures = [
+        step.get("actualResult", "")
+        for execution in zephyr.get("test_executions", [])
+        if execution.get("testCaseKey") == SEEDED_EXECUTABLE_TC_KEY and execution.get("statusName") == "Fail"
+        for step in execution.get("testScriptResults", [])
+    ]
+    return {**_normalized_test_case(test_case), "failure": next(iter(failures), "")}
 
 
 def save_snapshot(path: Path, snapshot: RunSnapshot) -> None:
@@ -150,9 +172,24 @@ def find_metric_regressions(
 
 
 def story_context(snapshot: RunSnapshot) -> str:
-    """The requirement every output of the run was produced from."""
+    """The requirement every output of the run was produced from: the story and the attachments handed over with it.
+
+    The attachments belong here because the agents read them: a review finding grounded in an attachment is
+    correct, and a judge that never saw the attachment would take it for an invention.
+    """
     fields = snapshot.story.get("fields", {})
-    return f"{fields.get('summary', '')}\n\n{fields.get('description', '')}".strip()
+    story = f"{snapshot.story.get('key', '')}: {fields.get('summary', '')}\n\n{fields.get('description', '')}".strip()
+    attachments = [f"Attachment {name}:\n{text.strip()}" for name, text in snapshot.attachments.items()]
+    return "\n\n".join([story, *attachments])
+
+
+def execution_context(snapshot: RunSnapshot) -> str:
+    """The failed execution the bug report was produced from, as the plain text a judge reads."""
+    execution = snapshot.execution
+    return (
+        f"Failed automated test case {execution['key']}:\n{_render_test_case(execution)}\n"
+        f"Failure: {execution['failure']}"
+    )
 
 
 def render_for_judge(dimension: str, snapshot: RunSnapshot) -> str:
@@ -175,10 +212,15 @@ def render_for_judge(dimension: str, snapshot: RunSnapshot) -> str:
 
 
 def _review_comments(jira_rest: dict, jira_mcp: dict) -> list[str]:
-    """The non-empty review comments that reached the seeded story, over either Jira transport."""
+    """The non-empty review comments that reached the seeded story, over either Jira transport.
+
+    The prompt-override marker the smoke stack makes the agent append is stripped: it is a fixture of the
+    suite, not of the review, and a judge reads it as a stray artifact.
+    """
     rest = [c.get("body", "") for c in jira_rest.get("comments", []) if c.get("issue_key") == SEEDED_ISSUE_KEY]
     mcp = [c.get("comment", "") for c in jira_mcp.get("comments", []) if c.get("issue_key") == SEEDED_ISSUE_KEY]
-    return [text.strip() for text in rest + mcp if text.strip()]
+    comments = [text.replace(PROMPT_OVERRIDE_MARKER, "").strip() for text in rest + mcp]
+    return [text for text in comments if text]
 
 
 def _normalized_test_case(test_case: dict) -> dict:

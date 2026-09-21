@@ -10,8 +10,7 @@ title, URL, attachment name). Fingerprints live in the metadata collection as
 payload records and never call the embedding service.
 
 Change detection is version numbers plus raw-content hashes; the per-scope cursor
-records the last successful sync but does not decide what gets skipped (see the
-implementation plan's decisions table).
+records the last successful sync but does not decide what gets skipped.
 """
 
 import hashlib

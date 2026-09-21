@@ -345,9 +345,9 @@ PORT=8001 # Default: 8001. The internal port an agent listens on.
 EXTERNAL_PORT=8001 # Default: 8001. The externally accessible port for the agent.
 # Version each agent reports in its A2A agent card (visible in the dashboard) and, for execution agents,
 # on every test execution result. Each agent reads its own variable.
-REQUIREMENTS_REVIEW_AGENT_VERSION=1.1.0 # Default: 1.1.0.
-TEST_CASE_CLASSIFICATION_AGENT_VERSION=1.1.0 # Default: 1.1.0.
-TEST_CASE_GENERATION_AGENT_VERSION=1.1.0 # Default: 1.1.0.
+REQUIREMENTS_REVIEW_AGENT_VERSION=1.1.1 # Default: 1.1.1.
+TEST_CASE_CLASSIFICATION_AGENT_VERSION=1.2.0 # Default: 1.2.0.
+TEST_CASE_GENERATION_AGENT_VERSION=1.2.0 # Default: 1.2.0.
 TEST_CASE_REVIEW_AGENT_VERSION=1.1.1 # Default: 1.1.1.
 INCIDENT_CREATION_AGENT_VERSION=1.1.0 # Default: 1.1.0.
 
@@ -868,13 +868,7 @@ two levels:
 * **Structural metrics** (`tests/smoke/artifacts.py`) - test cases per run, steps per case, share of cases carrying an
   objective, labels and a review comment, bugs created, output lengths. Each is "higher is better", so a candidate below
   its baseline value means the run produced *less*.
-* **Judged quality** (`tests/smoke/judge.py`) - both runs' outputs for a dimension are handed to a judge model as
-  anonymous "Output A" and "Output B" and judged against the requirement they came from on a five-level scale -
-  `much_better`, `better`, `same`, `worse`, `much_worse`, read from the candidate's side - with a rationale that must
-  name the concrete content behind the label. The pair is judged a second time with the two swapped: a verdict only
-  counts when both orders agree on its direction (at the milder of the two magnitudes), and orders that disagree are
-  reported as `inconsistent` - judge noise, never a regression. A candidate judged `worse` or `much_worse` in both
-  orders means the run produced something *worse*.
+* **Judged quality** (`tests/smoke/judge.py`) - both runs' outputs for a dimension are handed to a judge model as anonymous "Output A" and "Output B" and judged against the requirement they came from - the seeded story together with the attachments the agents received, and for the bug report also the failed execution it was written from, so a detail grounded in those is not mistaken for an invention; the prompt-override marker the review flow appends is stripped before judging - on a five-level scale - `much_better`, `better`, `same`, `worse`, `much_worse`, read from the candidate's side - with a rationale that must name the concrete content behind the label. The pair is judged a second time with the two swapped: a verdict only counts when both orders agree on its direction (at the milder of the two magnitudes), and orders that disagree are reported as `inconsistent` - judge noise, never a regression. A candidate judged `worse` or `much_worse` in both orders means the run produced something *worse*.
 
 Metrics apply a 25% tolerance because the artifacts come from a non-deterministic model; the judge's tolerance is the
 agreement of both orders. A regression on either level fails the run. Every comparison writes a full report - per-metric
@@ -899,13 +893,7 @@ SMOKE_BASELINE_NAME=gemini SMOKE_RUN_LABEL=qwen3-vl-32b uv run pytest tests/smok
 | `SMOKE_RUN_LABEL` | `google-gla:gemini-3.8-flash` | What the candidate run is called in the report (the stack's own model is configured in compose). |
 | `SMOKE_JUDGE_MODEL` | `google-gla:gemini-3.8-flash` | The judge, the same model the smoke stack runs on. |
 
-The committed `tests/smoke/baselines/default.json` is an **authored reference**, not a recording of a run: its review,
-test cases, review comments and bug report were written by hand for the seeded `SMOKE-1` story, so the bar is a
-deliberate quality floor from the very first run rather than whatever a model happened to emit on the day the baseline
-was taken. Its metric values are set to be clearable by a good but terser run - the tolerance leaves roughly a quarter of
-each value as headroom. Replace it with a recorded run at any time by capturing over it (`SMOKE_WRITE_BASELINE=1`), and
-keep additional named baselines beside it for the configurations you compare against. Asking for a baseline name that
-does not exist skips the comparison with the capture command in its message.
+The committed `tests/smoke/baselines/default.json` is a recorded run of the stack's configured model (its `label` and `captured_at` say which and when), so the bar is what the current prompts and model produced on the seeded `SMOKE-1` story, and a later run must not fall below it beyond the tolerance. Refresh it by capturing over it (`SMOKE_WRITE_BASELINE=1`) whenever the outputs are meant to change, and keep additional named baselines beside it for the configurations you compare against. Asking for a baseline name that does not exist skips the comparison with the capture command in its message.
 
 When a change is *meant* to alter what the agents produce, refresh the baseline in the same change instead of loosening
 the checks; deselect the comparison with `-m "smoke and not ab"` while iterating.

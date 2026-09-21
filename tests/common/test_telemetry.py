@@ -16,6 +16,8 @@ def _reader_meter(monkeypatch) -> InMemoryMetricReader:
     reader = InMemoryMetricReader()
     provider = MeterProvider(metric_readers=[reader])
     monkeypatch.setattr(telemetry, "get_meter", lambda: provider.get_meter("test"))
+    # The instrument is cached process-wide, so each test starts from an unbuilt one.
+    monkeypatch.setattr(telemetry, "_histogram", None)
     return reader
 
 
@@ -80,3 +82,15 @@ def test_no_metrics_are_recorded_without_entries(monkeypatch):
     telemetry.record_operation_usage("incident_creation", [])
 
     assert _data_points(reader, telemetry.TOKEN_USAGE_HISTOGRAM) == []
+
+
+def test_the_instrument_is_built_once_across_tasks(monkeypatch):
+    """A second create_histogram for the same name makes the SDK log a duplicate registration."""
+    _reader_meter(monkeypatch)
+    entry = OperationUsage(operation="main", model_name="claude-opus-5", requests=1, output_tokens=1)
+
+    telemetry.record_operation_usage("test_case_review", [entry])
+    first = telemetry.get_histogram()
+    telemetry.record_operation_usage("test_case_review", [entry])
+
+    assert telemetry.get_histogram() is first

@@ -33,6 +33,9 @@ ORCHESTRATOR_URL = os.environ.get("SMOKE_ORCHESTRATOR_URL", "http://localhost:80
 JIRA_REST_RECORDED_URL = os.environ.get("SMOKE_JIRA_REST_RECORDED_URL", "http://localhost:8080/__recorded")
 JIRA_MCP_RECORDED_URL = os.environ.get("SMOKE_JIRA_MCP_RECORDED_URL", "http://localhost:9000/__recorded")
 JIRA_MCP_SEEDED_STORY_URL = os.environ.get("SMOKE_JIRA_MCP_STORY_URL", "http://localhost:9000/__seeded_story")
+JIRA_MCP_SEEDED_ATTACHMENTS_URL = os.environ.get(
+    "SMOKE_JIRA_MCP_ATTACHMENTS_URL", "http://localhost:9000/__seeded_attachments"
+)
 ZEPHYR_RECORDED_URL = os.environ.get("SMOKE_ZEPHYR_RECORDED_URL", "http://localhost:8090/__recorded")
 QDRANT_RECORDED_URL = os.environ.get("SMOKE_QDRANT_RECORDED_URL", "http://localhost:6333/__recorded")
 CONFLUENCE_RECORDED_URL = os.environ.get("SMOKE_CONFLUENCE_RECORDED_URL", "http://localhost:8095/__recorded")
@@ -94,6 +97,9 @@ LOGIN_RATE_LIMIT_ATTEMPTS = config.DashboardAuthConfig.LOGIN_RATE_LIMIT_ATTEMPTS
 # Heading of the duplicate-check section of a review comment; must match
 # agents.test_case_review.main.DUPLICATE_CHECK_HEADING (not imported: importing it starts the agent).
 DUPLICATE_CHECK_HEADING = "Duplicate check"
+# The token the prompt override mounted from tests/smoke/overrides/ makes the review agent end its
+# Jira comment with; it proves the override reached the agent and is no part of the review itself.
+PROMPT_OVERRIDE_MARKER = "OVERRIDE-7f3d-active"
 
 # Agents the /execute-tests + incident-creation flow needs (beyond the core four).
 EXECUTION_FLOW_AGENT_NAMES: set[str] = {EXECUTION_AGENT_NAME, config.IncidentCreationAgentConfig.OWN_NAME}

@@ -264,9 +264,9 @@ class RequirementsReviewFeedback(BaseAgentResult):
 class AcceptanceCriteriaItem(JsonSerializableModel):
     id: str = Field(description="The ID of the acceptance criterion (e.g., 'AC-1')")
     text: str = Field(description="The text of the acceptance criterion")
-    attachment_info: str = Field(
-        description="All information extracted from the attachments which might be relevant "
-        "to this acceptance criteria item"
+    additional_info: str = Field(
+        description="All information from the Jira issue content, beyond the criterion's own text, which is "
+        "relevant to this acceptance criteria item"
     )
 
 

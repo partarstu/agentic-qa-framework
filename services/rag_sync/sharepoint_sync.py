@@ -259,8 +259,12 @@ class SharePointRagSyncRunner:
         wanted = [segment for segment in folder_path.strip("/").split("/") if segment]
         for folder_id in folders:
             chain: list[str] = []
+            # The tree is merged across runs, so a folder moved under its own former descendant can
+            # leave a cycle behind until the next full enumeration; walking it unguarded never ends.
+            visited: set[str] = set()
             parent: str | None = folder_id
-            while parent:
+            while parent and parent not in visited:
+                visited.add(parent)
                 chain.insert(0, folders.get(parent, {}).get("name", ""))
                 parent = folders.get(parent, {}).get("parent")
             if [segment for segment in chain if segment] == wanted:

@@ -13,13 +13,16 @@ import pytest
 from tests.smoke.artifacts import (
     METRIC_TOLERANCE,
     RunSnapshot,
+    _review_comments,
     compute_metrics,
+    execution_context,
     find_metric_regressions,
     load_snapshot,
     render_for_judge,
     save_snapshot,
     story_context,
 )
+from tests.smoke.conftest import PROMPT_OVERRIDE_MARKER, SEEDED_ISSUE_KEY
 from tests.smoke.judge import Comparison, verdict_for_candidate
 
 
@@ -28,7 +31,8 @@ def _snapshot(**overrides) -> RunSnapshot:
     defaults = {
         "label": "test-model",
         "captured_at": "2026-01-01T00:00:00+00:00",
-        "story": {"fields": {"summary": "Reset password", "description": "As a user..."}},
+        "story": {"key": "SMOKE-1", "fields": {"summary": "Reset password", "description": "As a user..."}},
+        "attachments": {},
         "review_comments": ["The expiry of the reset link is not specified."],
         "test_cases": [
             {
@@ -44,6 +48,16 @@ def _snapshot(**overrides) -> RunSnapshot:
             }
         ],
         "bugs": [{"summary": "Reset link never expires", "description": "The link stays valid after 60 minutes."}],
+        "execution": {
+            "key": "SMOKE-T100",
+            "name": "Reset link expiry",
+            "objective": "",
+            "precondition": "",
+            "labels": [],
+            "review_comments": "",
+            "steps": [{"description": "Wait 61 minutes", "expected_result": "The link is rejected", "test_data": ""}],
+            "failure": "AssertionError: the link was accepted",
+        },
     }
     return RunSnapshot(**(defaults | overrides))
 
@@ -122,7 +136,26 @@ class TestRenderForJudge:
             render_for_judge("nonsense", _snapshot())
 
     def test_story_context_carries_the_requirement(self):
-        assert story_context(_snapshot()) == "Reset password\n\nAs a user..."
+        assert story_context(_snapshot()) == "SMOKE-1: Reset password\n\nAs a user..."
+
+    def test_story_context_carries_the_attachments_the_agents_received(self):
+        snapshot = _snapshot(attachments={"policy.md": "Links expire after 60 minutes.\n"})
+        assert story_context(snapshot) == (
+            "SMOKE-1: Reset password\n\nAs a user...\n\nAttachment policy.md:\nLinks expire after 60 minutes."
+        )
+
+    def test_execution_context_carries_the_failed_test_case_and_its_failure(self):
+        context = execution_context(_snapshot())
+        assert context.startswith("Failed automated test case SMOKE-T100:\nName: Reset link expiry\n")
+        assert "1. Wait 61 minutes -> expected: The link is rejected" in context
+        assert context.endswith("Failure: AssertionError: the link was accepted")
+
+
+class TestReviewComments:
+    def test_the_prompt_override_marker_is_no_part_of_the_review(self):
+        rest = {"comments": [{"issue_key": SEEDED_ISSUE_KEY, "body": f"AC 2 is untestable.\n{PROMPT_OVERRIDE_MARKER}"}]}
+        mcp = {"comments": [{"issue_key": SEEDED_ISSUE_KEY, "comment": PROMPT_OVERRIDE_MARKER}]}
+        assert _review_comments(rest, mcp) == ["AC 2 is untestable."]
 
 
 class TestVerdictForCandidate:

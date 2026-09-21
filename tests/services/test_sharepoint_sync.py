@@ -219,6 +219,13 @@ class TestFolderScoping:
         ingested = [part for batch in runner._documents_db.upsert_batch.await_args_list for part in batch.args[0]]
         assert {part.attachment_id for part in ingested} == {"i-in"}
 
+    def test_a_cyclic_folder_tree_resolves_to_no_folder_instead_of_hanging(self, runner):
+        """A folder moved under its own former descendant leaves a cycle in the merged tree."""
+        folders = {"f-a": {"name": "A", "parent": "f-b"}, "f-b": {"name": "B", "parent": "f-a"}}
+
+        # Returning at all is the assertion: without the guard the parent walk never ends.
+        assert runner._resolve_folder_id(folders, DRIVE_ID, "Docs") is None
+
 
 class TestCtagEtagClassification:
     def _stored(self, item, point_ids=None, **overrides):

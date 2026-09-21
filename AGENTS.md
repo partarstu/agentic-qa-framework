@@ -55,6 +55,7 @@ Always use relevant skills from ".agents" folder while executing your tasks.
 * Before implementing anything, always let the user know what you plan to do and ask the user to confirm it.
 * Never duplicate existing functionality. If you've noticed any existing logic or functionality which you need for your implementation, always reuse it. If reusing it directly can't be done, always extract it so that it's accessible (inheritance or composition) and then reuse it.
 * Never commit changes you've made into git unless explicitly asked by the user.
+* Always clean up everything you created temporarily during a task before reporting it as done, without being asked: tear down any stack you started (e.g. `docker compose -f docker-compose.smoke.yml down -v`), remove containers, networks and volumes, and delete scratch scripts, outputs, probe baselines and any other file that isn't part of the deliverable. Never leave such things running or lying around "in case they're needed later".
 * Never trust user-supplied data. Always validate and sanitize inputs to prevent injection attacks (e.g., SQL injection, XSS).
 * Store secrets like API keys and passwords in environment variables or a secrets management tool, never hardcoded in the source code.
 

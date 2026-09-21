@@ -31,6 +31,11 @@ logger = utils.get_logger("test_case_generation_agent")
 _JIRA_TOOL_ALLOWLIST = (JIRA_GET_ISSUE,)
 
 
+def _attachment_parts(attachments_content: dict[str, BinaryContent]) -> list[str | BinaryContent]:
+    """Each attachment as a user-message pair: its file name, then its original content."""
+    return [part for filename, content in attachments_content.items() for part in (f"Attachment: {filename}", content)]
+
+
 class TestCaseGenerationAgent(AgentBase):
     __test__ = False
 
@@ -113,7 +118,7 @@ class TestCaseGenerationAgent(AgentBase):
 
         attachments_content = await fetch_issue_attachments(jira_issue_key)
         extracted_acceptance_criteria = await self.extract_acceptance_criteria(attachments_content, jira_issue_content)
-        test_steps_sequences = await self.generate_test_steps(extracted_acceptance_criteria)
+        test_steps_sequences = await self.generate_test_steps(extracted_acceptance_criteria, attachments_content)
         generated_test_cases = await self.create_test_cases_from_steps(
             extracted_acceptance_criteria, jira_issue_content, test_steps_sequences
         )
@@ -143,10 +148,17 @@ Test Step Sequences:
         logger.info(f"Generated {len(generated_test_cases.test_cases)} test cases.")
         return generated_test_cases
 
-    async def generate_test_steps(self, extracted_acceptance_criteria: AcceptanceCriteriaList) -> TestStepsSequenceList:
-        logger.info("Generating Steps for all ACs")
-        user_message = f"Acceptance Criteria Items:\n{extracted_acceptance_criteria.model_dump_json()}"
-        result = await self.steps_generator_agent.run(user_message)
+    async def generate_test_steps(
+        self, extracted_acceptance_criteria: AcceptanceCriteriaList, attachments_content: dict[str, BinaryContent]
+    ) -> TestStepsSequenceList:
+        """The steps are built from the criteria and the original attachments: a criterion carries what the
+        issue text adds to it, while the attachments are handed over as they are, not as a summary."""
+        logger.info("Generating Steps for all ACs with %d attachments", len(attachments_content))
+        user_message_parts: list[str | BinaryContent] = [
+            f"Acceptance Criteria Items:\n{extracted_acceptance_criteria.model_dump_json()}",
+            *_attachment_parts(attachments_content),
+        ]
+        result = await self.steps_generator_agent.run(user_message_parts)
         test_steps_sequences: TestStepsSequenceList = result.output
         logger.info(
             f"Generated {len(test_steps_sequences.items)} test step sequences with total "
@@ -157,13 +169,10 @@ Test Step Sequences:
     async def extract_acceptance_criteria(
         self, attachments_content: dict[str, BinaryContent], jira_issue_content: str
     ) -> AcceptanceCriteriaList:
-        user_message_parts: list[str | BinaryContent] = [f"Jira Issue content:\n{jira_issue_content}"]
-        # Add attachment identifiers as context
-        if attachments_content:
-            for filename, binary_content in attachments_content.items():
-                user_message_parts.append(f"Attachment: {filename}")
-                user_message_parts.append(binary_content)
-
+        user_message_parts: list[str | BinaryContent] = [
+            f"Jira Issue content:\n{jira_issue_content}",
+            *_attachment_parts(attachments_content),
+        ]
         logger.info("Starting AC extraction with %d attachments", len(attachments_content))
         # Own, short-lived Jira MCP session for this sub-agent run, as for the main agent.
         async with build_atlassian_mcp_server_toolset(_JIRA_TOOL_ALLOWLIST) as jira_toolset:

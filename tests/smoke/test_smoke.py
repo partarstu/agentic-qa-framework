@@ -69,6 +69,7 @@ from tests.smoke.conftest import (
     LOGIN_RATE_LIMIT_ATTEMPTS,
     ORCHESTRATOR_URL,
     ORCHESTRATOR_VERSION,
+    PROMPT_OVERRIDE_MARKER,
     QDRANT_RECORDED_URL,
     REVIEW_COMPLETE_STATUS,
     SEEDED_CLOSED_ISSUE_KEY,
@@ -89,8 +90,6 @@ from tests.smoke.conftest import (
 from tests.smoke.recordings import wait_for_any_recorded, wait_for_recorded
 
 pytestmark = pytest.mark.smoke
-
-PROMPT_OVERRIDE_MARKER = "OVERRIDE-7f3d-active"
 
 
 # --- Requirements review flow ----------------------------------------------------------

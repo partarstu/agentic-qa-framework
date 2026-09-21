@@ -5,8 +5,7 @@
 """Embedding backends, one per model family.
 
 Each backend is imported and loaded lazily: importing this package (or the service
-module) must never import an ML library. The text backend is always available; the
-visual backend is opt-in and fully independent of the text path.
+module) must never import an ML library.
 """
 
 from dataclasses import dataclass, field

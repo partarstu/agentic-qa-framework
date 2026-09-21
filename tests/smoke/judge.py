@@ -23,7 +23,7 @@ from pydantic_ai import Agent
 from common import utils
 from common.model_factory import build_model
 from common.token_usage import TokenUsage
-from tests.smoke.artifacts import DIMENSIONS, RunSnapshot, render_for_judge, story_context
+from tests.smoke.artifacts import DIMENSIONS, RunSnapshot, execution_context, render_for_judge, story_context
 
 # The judge runs the same model the smoke stack is configured with in docker-compose.smoke.yml.
 # Overridable for a stack that cannot reach Gemini.
@@ -144,15 +144,18 @@ def verdict_for_candidate(label: Label, candidate_slot: Literal["A", "B"]) -> Ve
 def compare(baseline: RunSnapshot, candidate: RunSnapshot) -> list[Comparison]:
     """Judge the candidate against the baseline on every dimension either of them produced something for."""
     agent = Agent(build_model(JUDGE_MODEL_NAME), output_type=_Judgement, instructions=JUDGE_INSTRUCTIONS)
-    requirement = story_context(baseline)
+    story = story_context(baseline)
+    # The bug report is written from the failed execution, so its judge must see that too - the
+    # test case key, its test data and the failure are facts of the run, not inventions.
+    contexts = dict.fromkeys(DIMENSIONS, story) | {"incident_report": f"{story}\n\n{execution_context(baseline)}"}
     comparisons: list[Comparison] = []
     for dimension in DIMENSIONS:
         baseline_output = render_for_judge(dimension, baseline)
         candidate_output = render_for_judge(dimension, candidate)
         if not baseline_output.strip() and not candidate_output.strip():
             continue
-        forward = _judge(agent, dimension, requirement, baseline_output, candidate_output)
-        swapped = _judge(agent, dimension, requirement, candidate_output, baseline_output)
+        forward = _judge(agent, dimension, contexts[dimension], baseline_output, candidate_output)
+        swapped = _judge(agent, dimension, contexts[dimension], candidate_output, baseline_output)
         comparisons.append(
             Comparison(
                 dimension=dimension,
