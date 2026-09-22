@@ -33,13 +33,18 @@ class BgeM3TextBackend(EmbeddingBackend):
 
     def load(self) -> None:
         from FlagEmbedding import BGEM3FlagModel
+        from huggingface_hub import snapshot_download
 
         os.environ.setdefault("TOKENIZERS_PARALLELISM", "true")
-        model_name = _configured_model_name()
         if _model_available_locally():
-            self._model = BGEM3FlagModel(_configured_model_path(), use_fp16=False)
+            model_path = _configured_model_path()
         else:
-            self._model = BGEM3FlagModel(model_name, use_fp16=False)
+            model_path = snapshot_download(
+                _configured_model_name(),
+                revision=config.EmbeddingServiceConfig.TEXT_MODEL_REVISION,
+                ignore_patterns=list(config.EmbeddingServiceConfig.TEXT_MODEL_DOWNLOAD_IGNORE_PATTERNS),
+            )
+        self._model = BGEM3FlagModel(model_path, use_fp16=False)
 
     def is_loaded(self) -> bool:
         return self._model is not None

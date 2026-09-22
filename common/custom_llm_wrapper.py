@@ -93,8 +93,9 @@ class CustomLlmWrapper(WrapperModel):
             tools=list(tools),
             toolsets=list(toolsets),
             deps_type=deps_type,
-            retries=retries,
-            output_retries=output_retries,
+            retries={"tools": retries, "output": output_retries},
+            # pydantic-ai 2 defaults to "graceful", which also runs the tools requested alongside the final output.
+            end_strategy="early",
         )
 
     def _get_model_settings(self, provided_settings: ModelSettings | None) -> ModelSettings:
@@ -174,7 +175,7 @@ class CustomLlmWrapper(WrapperModel):
         duration = time.monotonic() - start_time
         logger.info(f"LLM streaming request to '{self.wrapped_model_name}' completed in {duration:.3f}s")
         # Streaming usage is only final once the stream is closed, which the context exit above ensures.
-        self._record_usage(response_stream.get())
+        self._record_usage(response_stream.response)
 
     @staticmethod
     def _get_prompt_from_messages(messages: list[ModelMessage]) -> GuardPrompt | None:

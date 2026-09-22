@@ -33,6 +33,7 @@ def test_download_enabled(mock_transformers):
     mock_config.PROMPT_INJECTION_CHECK_ENABLED = True
     mock_config.PROMPT_INJECTION_DETECTION_MODEL_PATH = "models/pi"
     mock_config.PROMPT_INJECTION_DETECTION_MODEL_NAME = "model-name"
+    mock_config.PROMPT_INJECTION_DETECTION_MODEL_REVISION = "abc123"
 
     with (
         patch.dict(sys.modules, {"config": mock_config}),
@@ -44,9 +45,11 @@ def test_download_enabled(mock_transformers):
 
         # Verify interactions
         mock_makedirs.assert_called_with("models/pi")
-        mock_transformers.AutoTokenizer.from_pretrained.assert_called_with("model-name")
+        mock_transformers.AutoTokenizer.from_pretrained.assert_called_with("model-name", revision="abc123")
         mock_tokenizer.save_pretrained.assert_called_with("models/pi")
-        mock_transformers.AutoModelForSequenceClassification.from_pretrained.assert_called_with("model-name")
+        mock_transformers.AutoModelForSequenceClassification.from_pretrained.assert_called_with(
+            "model-name", revision="abc123"
+        )
         mock_model.save_pretrained.assert_called_with("models/pi")
 
 

@@ -10,4 +10,4 @@ COPY agents/requirements_review/ ${WORK_DIR}/agents/requirements_review
 COPY common/ ${WORK_DIR}/common
 COPY config.py ${WORK_DIR}/config.py
 
-CMD gunicorn -w 1 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT agents.requirements_review.main:app
+CMD gunicorn -w 1 -k uvicorn_worker.UvicornWorker --bind 0.0.0.0:$PORT agents.requirements_review.main:app

@@ -215,8 +215,8 @@ to run the validation locally (requires Node.js 20+).
 The project utilizes Docker for containerization of the orchestrator and agent services. A common base image, `agentic-qa-base:latest`, is built from `Dockerfile.base` to ensure consistency and reduce build times.
 
 Each service runs using `gunicorn` as the WSGI server. The command for agents is
-`gunicorn -w 1 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT agents.<agent_name>.main:app`, and for the
-orchestrator, it is `gunicorn -w 1 -k uvicorn.workers.UvicornWorker orchestrator.main:orchestrator_app`. Note that
+`gunicorn -w 1 -k uvicorn_worker.UvicornWorker --bind 0.0.0.0:$PORT agents.<agent_name>.main:app`, and for the
+orchestrator, it is `gunicorn -w 1 -k uvicorn_worker.UvicornWorker orchestrator.main:orchestrator_app`. Note that
 `$PORT` refers to the internal port the agent listens on, while the `AgentCard` will use the `EXTERNAL_PORT` for its
 URL.
 
@@ -285,7 +285,7 @@ JIRA_URL=YOUR_JIRA_INSTANCE_URL # Required for Xray, the RAG sync runtime and th
                                  # MCP server (see "Jira MCP Server Setup" below), which has its own .env file.
 JIRA_USERNAME=YOUR_JIRA_USERNAME # Required alongside JIRA_URL. The email address associated with your Jira account.
 JIRA_API_TOKEN=YOUR_JIRA_API_TOKEN # Required alongside JIRA_URL. A Jira API token for authentication.
-ORCHESTRATOR_VERSION=2.0.0 # Default: 2.0.0. Version of the orchestrator, reported for traceability.
+ORCHESTRATOR_VERSION=2.0.1 # Default: 2.0.1. Version of the orchestrator, reported for traceability.
 TEST_ENVIRONMENT_LABEL=Standard Test Environment # Default: Standard Test Environment. Label describing the
                                  # environment tests are executed against. Reported on every test execution
                                  # result and emitted as an Allure tag.
@@ -345,11 +345,11 @@ PORT=8001 # Default: 8001. The internal port an agent listens on.
 EXTERNAL_PORT=8001 # Default: 8001. The externally accessible port for the agent.
 # Version each agent reports in its A2A agent card (visible in the dashboard) and, for execution agents,
 # on every test execution result. Each agent reads its own variable.
-REQUIREMENTS_REVIEW_AGENT_VERSION=1.1.1 # Default: 1.1.1.
-TEST_CASE_CLASSIFICATION_AGENT_VERSION=1.2.0 # Default: 1.2.0.
-TEST_CASE_GENERATION_AGENT_VERSION=1.2.0 # Default: 1.2.0.
-TEST_CASE_REVIEW_AGENT_VERSION=1.1.1 # Default: 1.1.1.
-INCIDENT_CREATION_AGENT_VERSION=1.1.0 # Default: 1.1.0.
+REQUIREMENTS_REVIEW_AGENT_VERSION=1.1.2 # Default: 1.1.2.
+TEST_CASE_CLASSIFICATION_AGENT_VERSION=1.2.1 # Default: 1.2.1.
+TEST_CASE_GENERATION_AGENT_VERSION=1.2.1 # Default: 1.2.1.
+TEST_CASE_REVIEW_AGENT_VERSION=1.1.2 # Default: 1.1.2.
+INCIDENT_CREATION_AGENT_VERSION=1.1.1 # Default: 1.1.1.
 
 # Agent Discovery (for remote agents)
 REMOTE_EXECUTION_AGENT_HOSTS=http://localhost # Default: http://localhost. Comma-separated URLs of remote agent hosts.
@@ -421,6 +421,7 @@ RAG_OCR_TEXT_THRESHOLD_CHARACTERS=20 # Default: 20. Pages below this native-text
 # Embedding Service Configuration
 EMBEDDING_BACKENDS=text # Default: text. Comma-separated enabled backends; "text" is the only one implemented.
 EMBEDDING_TEXT_MODEL=BAAI/bge-m3 # Default: BAAI/bge-m3. Multilingual model producing dense and learned-sparse output in one pass.
+EMBEDDING_TEXT_MODEL_REVISION=5617a9f61b028005a4858fdac845db406aefb181 # Default: 5617a9f61b028005a4858fdac845db406aefb181. Hugging Face commit of EMBEDDING_TEXT_MODEL downloaded at image build time; set it together with EMBEDDING_TEXT_MODEL.
 EMBEDDING_MAX_BATCH_SIZE=32 # Default: 32. Maximum number of texts per embedding request.
 EMBEDDING_MAX_TEXT_LENGTH=50000 # Default: 50000. Maximum text length (characters) per input.
 
@@ -444,6 +445,7 @@ PROMPT_GUARD_SERVICE_URL= # Required if PROMPT_INJECTION_CHECK_ENABLED is True. 
 INTERNAL_SERVICE_API_KEY= # Optional shared secret. When set, the embedding and prompt-guard services require a matching X-API-Key header (and their clients send it). Recommended whenever those services are not strictly network-isolated.
 PROMPT_INJECTION_MIN_SCORE=0.8 # Default: 0.8. The minimum score for a prompt to be considered an injection.
 PROMPT_INJECTION_MODEL_NAME=ProtectAI/deberta-v3-base-prompt-injection-v2 # Default: ProtectAI/deberta-v3-base-prompt-injection-v2. The name of the model used for prompt injection detection.
+PROMPT_INJECTION_MODEL_REVISION=90c9989b1a342275dd0d1a95aad283c04e075671 # Default: 90c9989b1a342275dd0d1a95aad283c04e075671. Hugging Face commit of PROMPT_INJECTION_MODEL_NAME downloaded at image build time; set it together with PROMPT_INJECTION_MODEL_NAME.
 ```
 
 **Note on Local Models:**
@@ -617,15 +619,9 @@ orchestrator, and then start the dev server on top of that build.
 
 ### Model Settings and the pydantic-ai Version
 
-Provider-specific request settings (Claude 5 thinking and effort, Qwen reasoning, the maximum output tokens and the
-transport-level retries) are resolved in one place, `common/model_factory.py`, on **pydantic-ai 1.89.0**.
+Provider-specific request settings (Claude 5 thinking and effort, Qwen reasoning, the maximum output tokens and the transport-level retries) are resolved in one place, `common/model_factory.py`, on **pydantic-ai 2.46.0**. Every model client (Gemini, Claude and the OpenAI-compatible Qwen endpoint) runs on `httpx2`, with pydantic-ai's `AsyncHTTPX2TenacityTransport` as the retry transport, and the Atlassian MCP server is reached through pydantic-ai's `MCPToolset`.
 
-An upgrade to pydantic-ai 2.x was evaluated and deliberately **not** done (decision of 2026-09-18). The 2.x line would
-bring native Claude 5 handling, the unified MCP toolset and the renamed retry transport, but it also replaces the
-per-transport MCP clients and the `Agent(...)` options with capabilities, and its `mcp` 2.x dependency moves the HTTP
-stack to `httpx2` - a migration across every agent, the MCP session recovery and the Qwen provider, with no change in
-behaviour. The explicit settings path on 1.89.0 produces the same requests (adaptive thinking and effort for Claude 5,
-never a sampling parameter or a thinking budget), so the version stays pinned until a release requires the upgrade.
+The agents keep the pydantic-ai 1.x run semantics: `end_strategy="early"` (tools requested alongside the final output are skipped rather than run) and a single retry per MCP tool call. A custom `MODEL_NAME` left to pydantic-ai follows its 2.x prefixes: `openai:` now targets the Responses API (`openai-chat:` for Chat Completions), and `google-vertex:` is `google-cloud:`; the `google-gla:`, `anthropic:` and `qwen:` names are built by the model factory and are unaffected.
 
 ### Token Budget and Cost Oversight
 
@@ -779,7 +775,7 @@ gcloud builds submit --config 'path/to/your/cloudbuild.yaml' --substitutions "`^
   `_RAG_MAX_PAGES_PER_DOCUMENT`, `_RAG_RENDER_DPI`, `_RAG_MAX_IMAGE_DIMENSION`: The sync job's settings of the same names
   (see *Environment Variables*); `_QDRANT_DOCUMENTS_COLLECTION_NAME` sets `QDRANT_CONFLUENCE_COLLECTION_NAME`.
 * `_ATLASSIAN_MCP_IMAGE_TAG` / `_QDRANT_IMAGE_TAG`: The image tags of the Atlassian MCP server and of Qdrant, which
-  are also their redeploy versions. Defaults: `0.21.1` / `v1.16.3`.
+  are also their redeploy versions. Defaults: `0.21.1` / `v1.19.1`.
 * `_PROMPT_OVERRIDES_DIR` / `_PROMPT_OVERRIDES_BUCKET` / `_PROMPT_OVERRIDES_FOLDER`: Optional prompt overrides. When
   `_PROMPT_OVERRIDES_DIR` is set, the folder `_PROMPT_OVERRIDES_FOLDER` of the bucket `_PROMPT_OVERRIDES_BUCKET` is
   mounted at that path into the orchestrator and every agent, and `PROMPT_OVERRIDES_DIR` points to it.

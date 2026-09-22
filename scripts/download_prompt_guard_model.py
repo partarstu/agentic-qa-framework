@@ -17,6 +17,7 @@ from config import (  # noqa: I001
     PROMPT_INJECTION_CHECK_ENABLED,
     PROMPT_INJECTION_DETECTION_MODEL_NAME,
     PROMPT_INJECTION_DETECTION_MODEL_PATH,
+    PROMPT_INJECTION_DETECTION_MODEL_REVISION,
 )
 
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
@@ -34,11 +35,15 @@ if __name__ == "__main__":
         )
 
         # Download and save the tokenizer
-        tokenizer = AutoTokenizer.from_pretrained(PROMPT_INJECTION_DETECTION_MODEL_NAME)
+        tokenizer = AutoTokenizer.from_pretrained(
+            PROMPT_INJECTION_DETECTION_MODEL_NAME, revision=PROMPT_INJECTION_DETECTION_MODEL_REVISION
+        )
         tokenizer.save_pretrained(PROMPT_INJECTION_DETECTION_MODEL_PATH)
 
         # Download and save the model
-        model = AutoModelForSequenceClassification.from_pretrained(PROMPT_INJECTION_DETECTION_MODEL_NAME)
+        model = AutoModelForSequenceClassification.from_pretrained(
+            PROMPT_INJECTION_DETECTION_MODEL_NAME, revision=PROMPT_INJECTION_DETECTION_MODEL_REVISION
+        )
         model.save_pretrained(PROMPT_INJECTION_DETECTION_MODEL_PATH)
 
         print("Model download complete.")

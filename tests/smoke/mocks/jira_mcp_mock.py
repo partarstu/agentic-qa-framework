@@ -19,7 +19,7 @@ import base64
 import contextlib
 import json
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import BlobResourceContents, EmbeddedResource
 from starlette.applications import Starlette
@@ -51,11 +51,10 @@ _SEEDED_STORY = {
             "Project Key: SMOKE\n"
             "Issue ID (numeric): 10001\n\n"
             "Acceptance Criteria:\n"
-            "1. A 'Forgot password' link on the login page opens a form that accepts an email address.\n"
-            "2. Submitting a registered email sends a password-reset link that expires after 60 minutes.\n"
-            "3. Submitting an unregistered email shows the same confirmation message (no account enumeration).\n"
-            "4. Opening a valid link lets the user set a new password that must meet the complexity policy.\n"
-            "5. An expired or already-used link shows an error and offers to request a new one."
+            "1. Submitting a registered email address on the 'Forgot password' form sends an email with a "
+            "single-use password-reset link that is valid for 60 minutes.\n"
+            "2. Opening a reset link more than 60 minutes after it was sent shows the message "
+            "'This reset link has expired' and a 'Request a new link' button."
         ),
         "attachment": [
             {"filename": ATTACHMENT_FILE_NAME, "mimeType": "text/plain"},
@@ -73,14 +72,7 @@ _recorded: dict[str, list] = {
 }
 _issue_counter = 0
 
-# Agents reach this mock by its compose service-name host (e.g. "jira_mcp_mock:9000"),
-# which the MCP SDK's DNS-rebinding protection rejects with 421 by default (it only
-# allows localhost/127.0.0.1). Disable it: this is a test mock on a private network.
-mcp = FastMCP(
-    "jira-mock",
-    stateless_http=True,  # mirrors the production server's --stateless
-    transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
-)
+mcp = MCPServer("jira-mock")
 
 
 @mcp.tool()
@@ -110,7 +102,7 @@ async def jira_download_attachments(issue_key: str) -> list:
             type="resource",
             resource=BlobResourceContents(
                 uri=f"attachment://{issue_key}/{ATTACHMENT_FILE_NAME}",
-                mimeType="text/plain",
+                mime_type="text/plain",
                 blob=base64.b64encode(ATTACHMENT_CONTENT).decode(),
             ),
         ),
@@ -118,7 +110,7 @@ async def jira_download_attachments(issue_key: str) -> list:
             type="resource",
             resource=BlobResourceContents(
                 uri=f"attachment://{issue_key}/{JSON_ATTACHMENT_FILE_NAME}",
-                mimeType="application/json",
+                mime_type="application/json",
                 blob=base64.b64encode(JSON_ATTACHMENT_CONTENT).decode(),
             ),
         ),
@@ -212,6 +204,15 @@ async def _seeded_attachments_endpoint(_request: Request) -> JSONResponse:
     )
 
 
+# Agents reach this mock by its compose service-name host (e.g. "jira_mcp_mock:9000"),
+# which the MCP SDK's DNS-rebinding protection rejects with 421 by default (it only
+# allows localhost/127.0.0.1). Disable it: this is a test mock on a private network.
+_mcp_app = mcp.streamable_http_app(
+    stateless_http=True,  # mirrors the production server's --stateless
+    transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
+)
+
+
 @contextlib.asynccontextmanager
 async def _lifespan(_app: Starlette):
     # A mounted Streamable HTTP app does not run its own lifespan: the host app must keep the
@@ -225,7 +226,7 @@ app = Starlette(
         Route("/__recorded", _recorded_endpoint),
         Route("/__seeded_story", _seeded_story_endpoint),
         Route("/__seeded_attachments", _seeded_attachments_endpoint),
-        Mount("/", app=mcp.streamable_http_app()),
+        Mount("/", app=_mcp_app),
     ],
     lifespan=_lifespan,
 )

@@ -13,7 +13,7 @@ if errorlevel 1 (
 )
 
 set CONTAINER_NAME=qdrant
-if not defined QDRANT_IMAGE_TAG set QDRANT_IMAGE_TAG=v1.16.3
+if not defined QDRANT_IMAGE_TAG set QDRANT_IMAGE_TAG=v1.19.1
 set IMAGE_NAME=qdrant/qdrant:%QDRANT_IMAGE_TAG%
 set PORT_MAPPING=-p 127.0.0.1:6333:6333 -p 127.0.0.1:6334:6334
 set VOLUME_NAME=qdrant_data

@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 from typing import Any
 from urllib.parse import urlparse
 
-import httpx
+import httpx2
 import uvicorn
 from a2a.helpers import get_message_text, new_text_message
 from a2a.server.request_handlers import DefaultRequestHandler
@@ -51,11 +51,13 @@ logger = utils.get_logger("agent_base")
 _ACTIVITY_QUEUE_MAXSIZE = 1000
 
 
-def _contains_connect_error(exc: BaseException) -> bool:
-    """Whether a failure - possibly nested in exception groups - was a failure to connect."""
+def _is_mcp_connect_failure(exc: BaseException) -> bool:
+    """Whether a failure - possibly nested in exception groups - is the MCP client failing to connect."""
     if isinstance(exc, ExceptionGroup):
-        return any(_contains_connect_error(member) for member in exc.exceptions)
-    return isinstance(exc, httpx.ConnectError)
+        return any(_is_mcp_connect_failure(member) for member in exc.exceptions)
+    # The MCP client wraps its connect error in a RuntimeError; a model client lets it propagate or wraps it
+    # in its own SDK error, which the outer retry handles.
+    return isinstance(exc, RuntimeError) and isinstance(exc.__cause__, httpx2.ConnectError)
 
 
 class AgentBase(ABC):
@@ -187,15 +189,15 @@ class AgentBase(ABC):
                     toolsets = [build_toolset() for build_toolset in self.mcp_toolset_factories]
                     async with self.agent:
                         return await self.agent.run(received_request, usage_limits=usage_limits, toolsets=toolsets)
-                except ExceptionGroup as eg:
-                    if _contains_connect_error(eg) and self.mcp_toolset_factories:
+                except Exception as e:
+                    if _is_mcp_connect_failure(e) and self.mcp_toolset_factories:
                         raise ConnectionError(
                             f"MCP connection failed: could not connect to MCP server "
                             f"{config.ATLASSIAN_MCP_SERVER_URL}. Ensure the MCP server is running and accessible."
-                        ) from eg
+                        ) from e
                     raise
-            except (ModelHTTPError, httpx.TransportError) as e:
-                is_retryable = isinstance(e, httpx.TransportError) or (
+            except (ModelHTTPError, httpx2.TransportError) as e:
+                is_retryable = isinstance(e, httpx2.TransportError) or (
                     isinstance(e, ModelHTTPError) and e.status_code in config.RetryConfig.RETRYABLE_STATUS_CODES
                 )
                 if is_retryable and attempt < config.RetryConfig.MAX_RETRIES - 1:
@@ -243,10 +245,10 @@ class AgentBase(ABC):
         if meter is not None:
             self.latest_token_usage = TokenUsage.from_operations(meter.entries(), self.model_name)
         else:
-            self.latest_token_usage = TokenUsage.from_run_usage(result.usage(), self.model_name)
+            self.latest_token_usage = TokenUsage.from_run_usage(result.usage, self.model_name)
         logger.info(self.latest_token_usage.summary_line())
 
-    def _log_llm_comments_if_result_incomplete(self, output: BaseModel | None | str) -> None:
+    def _log_llm_comments_if_result_incomplete(self, output: BaseModel | str | None) -> None:
         """Logs the LLM comments when the agent result appears empty or incomplete."""
         if output is None:
             logger.warning("Agent returned None result.")

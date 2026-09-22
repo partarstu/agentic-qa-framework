@@ -5,7 +5,7 @@
 # =============================================================================
 # Stage 1: Build the React UI
 # =============================================================================
-FROM node:20-alpine AS ui-builder
+FROM node:24.21.0-alpine3.24 AS ui-builder
 
 WORKDIR /ui
 
@@ -36,6 +36,7 @@ RUN mkdir -p /usr/share/man/man1 /usr/share/man/man2 && \
 
 # Set the Allure version as an argument
 ARG ALLURE_VERSION=2.34.1
+ARG ALLURE_SHA256=6eb2e037604744d4ba1f9cad3676cf286974aca48f7839d9b2f7688e1efd79f2
 
 # Define environment variables for Allure
 ENV ALLURE_HOME=/opt/allure-${ALLURE_VERSION}
@@ -43,6 +44,7 @@ ENV PATH="${ALLURE_HOME}/bin:${PATH}"
 
 # Download, extract, and set up Allure Commandline
 RUN wget -q https://github.com/allure-framework/allure2/releases/download/${ALLURE_VERSION}/allure-${ALLURE_VERSION}.zip -O /tmp/allure.zip && \
+    echo "${ALLURE_SHA256}  /tmp/allure.zip" | sha256sum -c - && \
     unzip /tmp/allure.zip -d /opt && \
     rm /tmp/allure.zip
 
@@ -62,4 +64,4 @@ COPY config.py ${WORK_DIR}/config.py
 # Copy built UI from the ui-builder stage
 COPY --from=ui-builder /ui/dist ${WORK_DIR}/orchestrator/static
 
-CMD ["gunicorn", "-w", "1", "-k", "uvicorn.workers.UvicornWorker", "orchestrator.main:orchestrator_app"]
+CMD ["gunicorn", "-w", "1", "-k", "uvicorn_worker.UvicornWorker", "orchestrator.main:orchestrator_app"]

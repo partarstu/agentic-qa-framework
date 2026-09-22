@@ -3,8 +3,10 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 
 import asyncio
+import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx2
 import pytest
 from a2a.types import (
     AgentCapabilities,
@@ -16,6 +18,7 @@ from a2a.types import (
     TaskArtifactUpdateEvent,
 )
 from fastapi import HTTPException
+from pydantic_ai.usage import RunUsage
 
 import config
 from common.models import RoutingOutcome
@@ -29,8 +32,10 @@ from orchestrator.main import (
     _get_agents_info,
     _handle_stream_chunk,
     _health_check_agents,
+    _log_orchestrator_usage,
     _LogStreamState,
     _route_task,
+    _run_agent_with_retry,
     _run_manual_discovery,
     _selected_agent_if_available,
     agent_registry,
@@ -745,3 +750,24 @@ async def test_finalize_task_includes_error_message_when_provided():
 
     global_event = mock_hub.publish_global.call_args[0][0]
     assert global_event["error_message"] == "something broke"
+
+
+def test_orchestrator_run_usage_is_logged(caplog):
+    result = MagicMock()
+    result.usage = RunUsage(requests=1, input_tokens=12, output_tokens=3)
+
+    with caplog.at_level(logging.INFO, logger="orchestrator"):
+        _log_orchestrator_usage(result)
+
+    assert "input=12, output=3, total=15" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_model_transport_error_in_an_orchestrator_run_is_retried():
+    result = MagicMock()
+    result.usage = RunUsage()
+    agent_call = AsyncMock(side_effect=[httpx2.ReadError("reset"), result])
+
+    with patch("orchestrator.main.asyncio.sleep", new=AsyncMock()):
+        assert await _run_agent_with_retry(agent_call) is result
+    assert agent_call.await_count == 2

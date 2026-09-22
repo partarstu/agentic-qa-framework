@@ -64,7 +64,7 @@ If tests fail, fix them with the `running-unit-tests` skill before continuing.
 ## 5. Security and dependency checks
 
 ```bash
-uv run bandit -r . -x "./tests,./orchestrator/ui,./.venv" -f txt
+uv run bandit -r . -x "./tests,./orchestrator/ui,./.venv,./.uv-cache" -f txt
 uv audit --preview-features audit-command --frozen --no-dev
 ```
 

@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 
 # Use an official Python runtime as a parent image
-FROM python:3.14-slim
+FROM python:3.14.7-slim-trixie
 
 # Install the uv package manager (pinned for reproducible builds)
 COPY --from=ghcr.io/astral-sh/uv:0.11.21 /uv /uvx /bin/
@@ -18,6 +18,9 @@ ENV UV_LINK_MODE=copy \
     UV_NO_CACHE=1 \
     UV_PROJECT_ENVIRONMENT=/app/.venv \
     PATH="/app/.venv/bin:$PATH"
+
+# pydantic-ai otherwise prints an observability advertisement banner into every service's logs.
+ENV PYDANTIC_AI_NO_BANNER=1
 
 # Install the shared runtime dependencies from the lock file (no dev tools, no
 # optional service extras). Only the dependency manifests are copied, so this

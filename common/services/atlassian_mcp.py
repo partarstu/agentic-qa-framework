@@ -20,10 +20,10 @@ from dataclasses import dataclass
 from typing import Any
 
 import anyio
-import httpx
-from mcp.shared.exceptions import McpError
+import httpx2
+from mcp.shared.exceptions import MCPError
 from pydantic_ai.exceptions import ModelRetry
-from pydantic_ai.mcp import MCPServerStreamableHTTP
+from pydantic_ai.mcp import MCPToolset
 from pydantic_ai.tools import AgentDepsT, RunContext
 from pydantic_ai.toolsets import AbstractToolset, ToolsetTool, WrapperToolset
 
@@ -39,9 +39,9 @@ _RECOVERABLE_EXCEPTION_TYPES = (
     anyio.EndOfStream,
     TimeoutError,
     EOFError,
-    httpx.TimeoutException,
-    httpx.NetworkError,
-    httpx.RemoteProtocolError,
+    httpx2.TimeoutException,
+    httpx2.NetworkError,
+    httpx2.RemoteProtocolError,
 )
 
 
@@ -63,7 +63,7 @@ def _is_recoverable(exc: BaseException) -> bool:
         return any(_is_recoverable(member) for member in exc.exceptions)
     if isinstance(exc, _RECOVERABLE_EXCEPTION_TYPES):
         return True
-    if isinstance(exc, McpError):
+    if isinstance(exc, MCPError):
         return _mentions_timeout(exc.error.message)
     if isinstance(exc, ModelRetry):
         return _mentions_timeout(exc.message)
@@ -106,7 +106,7 @@ class SelfHealingAtlassianToolset(WrapperToolset[AgentDepsT]):
     agent only ever sees the tools it was built to use.
     """
 
-    wrapped: MCPServerStreamableHTTP
+    wrapped: MCPToolset
     allowed_tools: frozenset[str] | None = None
 
     async def get_tools(self, ctx: RunContext[AgentDepsT]) -> dict[str, ToolsetTool[AgentDepsT]]:
@@ -131,9 +131,7 @@ class SelfHealingAtlassianToolset(WrapperToolset[AgentDepsT]):
             return None
         return await self.wrapped.__aexit__(*args)
 
-    async def _healing(
-        self, operation: str, run: Callable[[MCPServerStreamableHTTP], Awaitable[Any]], repeatable: bool
-    ) -> Any:
+    async def _healing(self, operation: str, run: Callable[[MCPToolset], Awaitable[Any]], repeatable: bool) -> Any:
         """Run an MCP operation, retrying it once on an isolated session if it is safe to."""
         try:
             return await run(self.wrapped)
@@ -145,9 +143,7 @@ class SelfHealingAtlassianToolset(WrapperToolset[AgentDepsT]):
                 raise
             return await self._retry_on_isolated_session(operation, run)
 
-    async def _retry_on_isolated_session(
-        self, operation: str, run: Callable[[MCPServerStreamableHTTP], Awaitable[Any]]
-    ) -> Any:
+    async def _retry_on_isolated_session(self, operation: str, run: Callable[[MCPToolset], Awaitable[Any]]) -> Any:
         """Retry ``run`` against a fresh session owned by this task."""
         # A cancelled task stops here instead of firing another request.
         await anyio.lowlevel.checkpoint()
@@ -171,11 +167,13 @@ class SelfHealingAtlassianToolset(WrapperToolset[AgentDepsT]):
                 logger.warning("Atlassian MCP session tear-down after %s failed: %s", operation, teardown_error)
 
 
-def build_atlassian_mcp_server() -> MCPServerStreamableHTTP:
+def build_atlassian_mcp_server() -> MCPToolset:
     """Create a fresh, not yet connected Atlassian MCP server client."""
-    return MCPServerStreamableHTTP(
-        url=config.ATLASSIAN_MCP_SERVER_URL,
-        timeout=config.MCP_SERVER_TIMEOUT_SECONDS,
+    return MCPToolset(
+        config.ATLASSIAN_MCP_SERVER_URL,
+        # A failed Jira or Confluence call gets one model retry, not the agent's whole retry budget.
+        max_retries=1,
+        init_timeout=config.MCP_SERVER_TIMEOUT_SECONDS,
         read_timeout=config.MCP_SERVER_TIMEOUT_SECONDS,
     )
 

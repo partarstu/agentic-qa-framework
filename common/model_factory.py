@@ -6,11 +6,9 @@
 
 import asyncio
 from collections.abc import AsyncIterator, Callable
-from types import ModuleType
 from urllib.parse import urlparse
 
 import google.auth
-import httpx
 import httpx2
 from anthropic import AsyncAnthropic
 from google.auth import impersonated_credentials
@@ -30,7 +28,7 @@ from pydantic_ai.profiles.qwen import qwen_model_profile
 from pydantic_ai.providers.anthropic import AnthropicProvider
 from pydantic_ai.providers.google import GoogleProvider
 from pydantic_ai.providers.openai import OpenAIProvider
-from pydantic_ai.retries import AsyncTenacityTransport, RetryConfig, wait_retry_after
+from pydantic_ai.retries import AsyncHTTPX2TenacityTransport, RetryConfig, wait_retry_after
 from pydantic_ai.settings import ThinkingLevel
 from tenacity import RetryCallState, retry_if_exception_type, stop_after_attempt, wait_exponential
 
@@ -117,10 +115,11 @@ def build_model(model_name: str | Model, thinking_level: ThinkingLevel | None = 
     if model_name.startswith(QWEN_MODEL_PREFIX):
         if not config.QWEN_ENDPOINT:
             raise ValueError(f"QWEN_ENDPOINT must be set to use the model '{model_name}'.")
+        qwen_model_name = model_name.removeprefix(QWEN_MODEL_PREFIX)
         return OpenAIChatModel(
-            model_name.removeprefix(QWEN_MODEL_PREFIX),
+            qwen_model_name,
             provider=_build_qwen_provider(config.QWEN_ENDPOINT, model_name),
-            profile=qwen_model_profile,
+            profile=qwen_model_profile(qwen_model_name),
             settings=_build_qwen_settings(thinking_level),
         )
     if model_name.startswith(ANTHROPIC_PROVIDER_PREFIX) or is_claude_5(model_name):
@@ -131,15 +130,11 @@ def build_model(model_name: str | Model, thinking_level: ThinkingLevel | None = 
 
 
 def _build_anthropic_model(model_name: str) -> AnthropicModel:
-    """The Anthropic model with the SDK's own retries disabled in favour of the retry transport.
-
-    The Anthropic SDK speaks httpx2, so the retry transport wraps an httpx2 transport and the
-    client is an httpx2 client.
-    """
+    """The Anthropic model with the SDK's own retries disabled in favour of the retry transport."""
     client = AsyncAnthropic(
         api_key=config.ANTHROPIC_API_KEY,
         max_retries=0,
-        http_client=_retry_http_client(model_name, httpx2, httpx2.AsyncHTTPTransport()),
+        http_client=_retry_http_client(model_name),
     )
     return AnthropicModel(
         model_name.removeprefix(ANTHROPIC_PROVIDER_PREFIX),
@@ -160,36 +155,25 @@ def _build_google_model(model_name: str) -> GoogleModel:
     return GoogleModel(model_name.removeprefix(GOOGLE_PROVIDER_PREFIX), provider=GoogleProvider(client=client))
 
 
-def _retry_http_client(
-    model_name: str,
-    httpx_module: ModuleType = httpx,
-    wrapped_transport: httpx.AsyncBaseTransport | httpx2.AsyncBaseTransport | None = None,
-) -> httpx.AsyncClient | httpx2.AsyncClient:
-    """An HTTP client whose transport retries transport errors and 429/502/503/504.
-
-    The attempt budget and back-off are the existing agent-run retry budget; ``Retry-After``
-    headers take precedence over the exponential back-off, capped at its maximum. Each retry is
-    logged with the model, the attempt, the reason and the upcoming delay, so retries stay visible.
-    ``httpx_module`` selects the httpx or the httpx2 flavour (the Anthropic SDK requires httpx2).
-    """
-    transport = AsyncTenacityTransport(
-        wrapped=wrapped_transport,
+def _retry_http_client(model_name: str) -> httpx2.AsyncClient:
+    """An HTTP client retrying transport errors and 429/502/503/504 within the agent-run retry budget, honouring ``Retry-After``."""
+    transport = AsyncHTTPX2TenacityTransport(
         config=RetryConfig(
             stop=stop_after_attempt(config.RetryConfig.MAX_RETRIES),
             wait=wait_retry_after(
                 fallback_strategy=wait_exponential(multiplier=config.RetryConfig.RETRY_BASE_DELAY_SECONDS),
                 max_wait=config.RetryConfig.RETRY_BASE_DELAY_SECONDS * (2 ** (config.RetryConfig.MAX_RETRIES - 1)),
             ),
-            retry=retry_if_exception_type((httpx_module.TransportError, httpx_module.HTTPStatusError)),
+            retry=retry_if_exception_type((httpx2.TransportError, httpx2.HTTPStatusError)),
             before_sleep=_log_retry_attempt(model_name),
             reraise=True,
         ),
         validate_response=_raise_if_retryable_status,
     )
-    return httpx_module.AsyncClient(transport=transport)
+    return httpx2.AsyncClient(transport=transport)
 
 
-def _raise_if_retryable_status(response: httpx.Response) -> None:
+def _raise_if_retryable_status(response: httpx2.Response) -> None:
     """Raise (and so retry) only the statuses the transport level owns; every other response passes."""
     if response.status_code in RETRYABLE_STATUS_CODES:
         response.raise_for_status()
@@ -200,8 +184,7 @@ def _log_retry_attempt(model_name: str) -> Callable[[RetryCallState], None]:
 
     def log_attempt(retry_state: RetryCallState) -> None:
         exception = retry_state.outcome.exception() if retry_state.outcome else None
-        # The Anthropic client speaks httpx2, whose status error is a different class.
-        if isinstance(exception, (httpx.HTTPStatusError, httpx2.HTTPStatusError)):
+        if isinstance(exception, httpx2.HTTPStatusError):
             reason = f"HTTP {exception.response.status_code}"
         else:
             reason = type(exception).__name__ if exception is not None else "unknown"
@@ -257,7 +240,7 @@ def _cloud_run_audience(endpoint: str) -> str | None:
     return f"{url.scheme}://{url.hostname}"
 
 
-class _CloudRunIdentityAuth(httpx.Auth):
+class _CloudRunIdentityAuth(httpx2.Auth):
     """Signs every request with a Cloud Run identity token.
 
     A model served by Cloud Run authenticates through IAM rather than through an API key, and the identity
@@ -270,7 +253,7 @@ class _CloudRunIdentityAuth(httpx.Auth):
         # would otherwise all refresh at once and mutate it while another one reads it.
         self._lock = asyncio.Lock()
 
-    async def async_auth_flow(self, request: httpx.Request) -> AsyncIterator[httpx.Request]:
+    async def async_auth_flow(self, request: httpx2.Request) -> AsyncIterator[httpx2.Request]:
         async with self._lock:
             if not self._credentials.valid:
                 await asyncio.to_thread(self._credentials.refresh, GoogleAuthRequest())

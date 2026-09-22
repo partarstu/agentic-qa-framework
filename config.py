@@ -207,13 +207,17 @@ PROMPT_INJECTION_DETECTION_MODEL_PATH = os.path.join(LOCAL_MODELS_PATH, "prompt_
 PROMPT_INJECTION_DETECTION_MODEL_NAME = os.environ.get(
     "PROMPT_INJECTION_MODEL_NAME", "ProtectAI/deberta-v3-base-prompt-injection-v2"
 )
+# A pinned commit keeps a later upload to the model repository out of the image; it must belong to the model above.
+PROMPT_INJECTION_DETECTION_MODEL_REVISION = os.environ.get(
+    "PROMPT_INJECTION_MODEL_REVISION", "90c9989b1a342275dd0d1a95aad283c04e075671"
+)
 PROMPT_GUARD_SERVICE_URL = os.environ.get("PROMPT_GUARD_SERVICE_URL")
 
 
 # Orchestrator
 class OrchestratorConfig:
     THINKING_LEVEL: ThinkingLevel = "low"
-    VERSION = os.environ.get("ORCHESTRATOR_VERSION", "2.0.0")
+    VERSION = os.environ.get("ORCHESTRATOR_VERSION", "2.0.1")
     # Label describing the environment the execution agents run their test cases against; reported
     # alongside every test execution result.
     TEST_ENVIRONMENT_LABEL = os.environ.get("TEST_ENVIRONMENT_LABEL", "Standard Test Environment")
@@ -261,7 +265,7 @@ class DashboardPersistenceConfig:
 # Requirements Review Agent
 class RequirementsReviewAgentConfig:
     THINKING_LEVEL: ThinkingLevel = "medium"
-    VERSION = os.environ.get("REQUIREMENTS_REVIEW_AGENT_VERSION", "1.1.1")
+    VERSION = os.environ.get("REQUIREMENTS_REVIEW_AGENT_VERSION", "1.1.2")
     OWN_NAME = "Jira Requirements Reviewer"
     SKILL_ID = "jira-requirements-review"
     SKILL_NAME = "Jira Requirements Review"
@@ -277,7 +281,7 @@ class RequirementsReviewAgentConfig:
 # Test Case Classification Agent
 class TestCaseClassificationAgentConfig:
     THINKING_LEVEL: ThinkingLevel = "medium"
-    VERSION = os.environ.get("TEST_CASE_CLASSIFICATION_AGENT_VERSION", "1.2.0")
+    VERSION = os.environ.get("TEST_CASE_CLASSIFICATION_AGENT_VERSION", "1.2.1")
     OWN_NAME = "Test Case Classification Agent"
     SKILL_ID = "test-case-classification"
     SKILL_NAME = "Test Case Classification"
@@ -293,7 +297,7 @@ class TestCaseClassificationAgentConfig:
 # Test Case Generation Agent
 class TestCaseGenerationAgentConfig:
     THINKING_LEVEL: ThinkingLevel = "medium"
-    VERSION = os.environ.get("TEST_CASE_GENERATION_AGENT_VERSION", "1.2.0")
+    VERSION = os.environ.get("TEST_CASE_GENERATION_AGENT_VERSION", "1.2.1")
     OWN_NAME = "Test Case Generation Agent"
     SKILL_ID = "test-case-generation"
     SKILL_NAME = "Test Case Generation"
@@ -309,7 +313,7 @@ class TestCaseGenerationAgentConfig:
 # Test Case Review Agent
 class TestCaseReviewAgentConfig:
     THINKING_LEVEL: ThinkingLevel = "high"
-    VERSION = os.environ.get("TEST_CASE_REVIEW_AGENT_VERSION", "1.1.1")
+    VERSION = os.environ.get("TEST_CASE_REVIEW_AGENT_VERSION", "1.1.2")
     REVIEW_COMPLETE_STATUS_NAME = "Review Complete"
     OWN_NAME = "Test Case Review Agent"
     SKILL_ID = "test-case-review"
@@ -326,7 +330,7 @@ class TestCaseReviewAgentConfig:
 # Incident Creation Agent
 class IncidentCreationAgentConfig:
     THINKING_LEVEL: ThinkingLevel = "medium"
-    VERSION = os.environ.get("INCIDENT_CREATION_AGENT_VERSION", "1.1.0")
+    VERSION = os.environ.get("INCIDENT_CREATION_AGENT_VERSION", "1.1.1")
     OWN_NAME = "Incident Creation Agent"
     SKILL_ID = "incident-creation"
     SKILL_NAME = "Incident Creation"
@@ -405,6 +409,10 @@ class EmbeddingServiceConfig:
     )
     # One multilingual model producing dense and learned-sparse output in a single pass.
     TEXT_MODEL_NAME = os.environ.get("EMBEDDING_TEXT_MODEL", "BAAI/bge-m3")
+    # A pinned commit keeps a later upload to the model repository out of the image; it must belong to TEXT_MODEL_NAME.
+    TEXT_MODEL_REVISION = os.environ.get("EMBEDDING_TEXT_MODEL_REVISION", "5617a9f61b028005a4858fdac845db406aefb181")
+    # The repository also ships an ONNX export (~2.3 GB) and README images the service never loads.
+    TEXT_MODEL_DOWNLOAD_IGNORE_PATTERNS = ("onnx/*", "imgs/*")
     TEXT_MODEL_PATH = os.path.join(LOCAL_MODELS_PATH, "embedding_model")
     # Input limits guarding against memory exhaustion.
     MAX_BATCH_SIZE = int(os.environ.get("EMBEDDING_MAX_BATCH_SIZE", "32"))

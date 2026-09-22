@@ -13,4 +13,4 @@ COPY tests/smoke/mocks/ ${WORK_DIR}/mocks/
 COPY common/ ${WORK_DIR}/common
 COPY config.py ${WORK_DIR}/config.py
 
-CMD gunicorn -w 1 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT mocks.execution_agent:app
+CMD gunicorn -w 1 -k uvicorn_worker.UvicornWorker --bind 0.0.0.0:$PORT mocks.execution_agent:app

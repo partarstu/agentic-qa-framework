@@ -5,13 +5,13 @@
 import logging
 from unittest.mock import MagicMock, patch
 
-import httpx
+import httpx2
 import pytest
 from pydantic_ai.models import Model
 from pydantic_ai.models.anthropic import AnthropicModel
 from pydantic_ai.models.google import GoogleModel
 from pydantic_ai.models.openai import OpenAIChatModel
-from pydantic_ai.retries import AsyncTenacityTransport
+from pydantic_ai.retries import AsyncHTTPX2TenacityTransport
 
 import config
 from common.model_factory import _CloudRunIdentityAuth, build_claude_5_settings, build_model
@@ -28,15 +28,15 @@ def test_google_name_builds_gemini_model_with_retry_transport():
 
     assert isinstance(model, GoogleModel)
     transport = model.client._api_client._async_httpx_client._transport
-    assert isinstance(transport, AsyncTenacityTransport)
+    assert isinstance(transport, AsyncHTTPX2TenacityTransport)
 
 
-def test_anthropic_name_builds_anthropic_model_with_httpx2_retry_transport():
+def test_anthropic_name_builds_anthropic_model_with_retry_transport():
     model = build_model("anthropic:claude-opus-5")
 
     assert isinstance(model, AnthropicModel)
     transport = model.client._client._transport
-    assert isinstance(transport, AsyncTenacityTransport)
+    assert isinstance(transport, AsyncHTTPX2TenacityTransport)
 
 
 def test_model_instance_is_left_untouched():
@@ -57,6 +57,8 @@ def test_qwen_model_uses_configured_endpoint_and_key():
     assert model.model_name == "Qwen/Qwen3.8-27B-FP8"
     assert model.base_url == "http://localhost:8080/v1/"
     assert model.client.api_key == "local-key"
+    assert isinstance(model.client._client._transport, AsyncHTTPX2TenacityTransport)
+    assert model.profile["ignore_streamed_leading_whitespace"] is True
 
 
 @pytest.mark.parametrize(
@@ -107,8 +109,8 @@ async def test_identity_token_is_refreshed_once_expired(mock_credentials):
     mock_credentials.return_value = credentials
     auth = _CloudRunIdentityAuth("https://qwen-3-8-123456.europe-west4.run.app")
 
-    async def sign() -> httpx.Request:
-        request = httpx.Request("POST", f"{CLOUD_RUN_ENDPOINT}chat/completions")
+    async def sign() -> httpx2.Request:
+        request = httpx2.Request("POST", f"{CLOUD_RUN_ENDPOINT}chat/completions")
         return await anext(auth.async_auth_flow(request))
 
     assert (await sign()).headers["Authorization"] == "Bearer minted-token"
@@ -123,10 +125,10 @@ def test_retry_transport_retries_retryable_status_and_logs_the_attempt(caplog, m
     client = build_model("google-gla:gemini-3.5-flash").client._api_client._async_httpx_client
     calls = []
 
-    class _StubTransport(httpx.AsyncBaseTransport):
+    class _StubTransport(httpx2.AsyncBaseTransport):
         async def handle_async_request(self, request):
             calls.append(request)
-            return httpx.Response(503) if len(calls) == 1 else httpx.Response(200)
+            return httpx2.Response(503) if len(calls) == 1 else httpx2.Response(200)
 
     client._transport.wrapped = _StubTransport()
 
@@ -140,11 +142,8 @@ def test_retry_transport_retries_retryable_status_and_logs_the_attempt(caplog, m
     assert "retrying in" in retry_line.message
 
 
-def test_anthropic_retry_logs_the_http_status_of_an_httpx2_error(caplog, monkeypatch):
-    """The Anthropic client speaks httpx2, whose status error is not httpx's: the reason must still be the status."""
+def test_anthropic_retry_logs_the_http_status(caplog, monkeypatch):
     import asyncio
-
-    import httpx2
 
     monkeypatch.setattr(config.RetryConfig, "RETRY_BASE_DELAY_SECONDS", 0.01)
     client = build_model("anthropic:claude-sonnet-5").client._client
@@ -170,10 +169,10 @@ def test_retry_transport_propagates_client_errors_untouched():
     client = build_model("google-gla:gemini-3.5-flash").client._api_client._async_httpx_client
     calls = []
 
-    class _StubTransport(httpx.AsyncBaseTransport):
+    class _StubTransport(httpx2.AsyncBaseTransport):
         async def handle_async_request(self, request):
             calls.append(request)
-            return httpx.Response(400)
+            return httpx2.Response(400)
 
     client._transport.wrapped = _StubTransport()
 
