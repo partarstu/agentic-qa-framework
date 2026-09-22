@@ -6,8 +6,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
-from pydantic_ai.messages import ModelRequest, ModelResponse, UserPromptPart
+from pydantic import BaseModel
+from pydantic_ai import Tool
+from pydantic_ai.exceptions import UnexpectedModelBehavior
+from pydantic_ai.messages import ModelRequest, ModelResponse, ToolCallPart, UserPromptPart
 from pydantic_ai.models import Model
+from pydantic_ai.models.function import AgentInfo, FunctionModel
 
 from common.custom_llm_wrapper import CustomLlmWrapper
 
@@ -167,7 +171,7 @@ async def test_streaming_request_records_usage_after_the_stream_closes(mock_wrap
         wrapper = CustomLlmWrapper(model_name="google-gla:gemini-3.5-flash", operation_name="main")
 
     streamed = MagicMock()
-    streamed.get.return_value = ModelResponse(
+    streamed.response = ModelResponse(
         parts=[], usage=RequestUsage(input_tokens=50, output_tokens=8, cache_read_tokens=10)
     )
 
@@ -191,6 +195,50 @@ async def test_streaming_request_records_usage_after_the_stream_closes(mock_wrap
     assert entry.operation == "main"
     assert entry.uncached_input_tokens == 40
     assert entry.output_tokens == 8
+
+
+class _Verdict(BaseModel):
+    verdict: str
+
+
+def _agent_on(respond, **kwargs):
+    with patch("common.custom_llm_wrapper.build_model", return_value=FunctionModel(respond)):
+        return CustomLlmWrapper.create_agent("function-model", output_type=_Verdict, **kwargs)
+
+
+@pytest.mark.asyncio
+async def test_created_agent_skips_tools_requested_alongside_the_final_output():
+    side_effects = []
+
+    def record() -> str:
+        side_effects.append("ran")
+        return "recorded"
+
+    def respond(_messages, info: AgentInfo) -> ModelResponse:
+        final = info.output_tools[0].name
+        return ModelResponse(parts=[ToolCallPart("record", {}), ToolCallPart(final, {"verdict": "done"})])
+
+    agent = _agent_on(respond, tools=[Tool(record, takes_ctx=False)])
+    with patch("config.PROMPT_INJECTION_CHECK_ENABLED", False):
+        result = await agent.run("go")
+
+    assert result.output == _Verdict(verdict="done")
+    assert side_effects == []
+
+
+@pytest.mark.asyncio
+async def test_created_agent_gives_invalid_output_its_own_retry_budget():
+    requests = []
+
+    def respond(_messages, info: AgentInfo) -> ModelResponse:
+        requests.append(1)
+        return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, {"unexpected": "field"})])
+
+    agent = _agent_on(respond, retries=1, output_retries=3)
+    with patch("config.PROMPT_INJECTION_CHECK_ENABLED", False), pytest.raises(UnexpectedModelBehavior):
+        await agent.run("go")
+
+    assert len(requests) == 4
 
 
 class TestOutputTokenCap:

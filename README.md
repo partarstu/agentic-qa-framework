@@ -285,7 +285,7 @@ JIRA_URL=YOUR_JIRA_INSTANCE_URL # Required for Xray, the RAG sync runtime and th
                                  # MCP server (see "Jira MCP Server Setup" below), which has its own .env file.
 JIRA_USERNAME=YOUR_JIRA_USERNAME # Required alongside JIRA_URL. The email address associated with your Jira account.
 JIRA_API_TOKEN=YOUR_JIRA_API_TOKEN # Required alongside JIRA_URL. A Jira API token for authentication.
-ORCHESTRATOR_VERSION=2.0.0 # Default: 2.0.0. Version of the orchestrator, reported for traceability.
+ORCHESTRATOR_VERSION=2.0.1 # Default: 2.0.1. Version of the orchestrator, reported for traceability.
 TEST_ENVIRONMENT_LABEL=Standard Test Environment # Default: Standard Test Environment. Label describing the
                                  # environment tests are executed against. Reported on every test execution
                                  # result and emitted as an Allure tag.
@@ -345,11 +345,11 @@ PORT=8001 # Default: 8001. The internal port an agent listens on.
 EXTERNAL_PORT=8001 # Default: 8001. The externally accessible port for the agent.
 # Version each agent reports in its A2A agent card (visible in the dashboard) and, for execution agents,
 # on every test execution result. Each agent reads its own variable.
-REQUIREMENTS_REVIEW_AGENT_VERSION=1.1.1 # Default: 1.1.1.
-TEST_CASE_CLASSIFICATION_AGENT_VERSION=1.2.0 # Default: 1.2.0.
-TEST_CASE_GENERATION_AGENT_VERSION=1.2.0 # Default: 1.2.0.
-TEST_CASE_REVIEW_AGENT_VERSION=1.1.1 # Default: 1.1.1.
-INCIDENT_CREATION_AGENT_VERSION=1.1.0 # Default: 1.1.0.
+REQUIREMENTS_REVIEW_AGENT_VERSION=1.1.2 # Default: 1.1.2.
+TEST_CASE_CLASSIFICATION_AGENT_VERSION=1.2.1 # Default: 1.2.1.
+TEST_CASE_GENERATION_AGENT_VERSION=1.2.1 # Default: 1.2.1.
+TEST_CASE_REVIEW_AGENT_VERSION=1.1.2 # Default: 1.1.2.
+INCIDENT_CREATION_AGENT_VERSION=1.1.1 # Default: 1.1.1.
 
 # Agent Discovery (for remote agents)
 REMOTE_EXECUTION_AGENT_HOSTS=http://localhost # Default: http://localhost. Comma-separated URLs of remote agent hosts.
@@ -617,15 +617,9 @@ orchestrator, and then start the dev server on top of that build.
 
 ### Model Settings and the pydantic-ai Version
 
-Provider-specific request settings (Claude 5 thinking and effort, Qwen reasoning, the maximum output tokens and the
-transport-level retries) are resolved in one place, `common/model_factory.py`, on **pydantic-ai 1.106.0**.
+Provider-specific request settings (Claude 5 thinking and effort, Qwen reasoning, the maximum output tokens and the transport-level retries) are resolved in one place, `common/model_factory.py`, on **pydantic-ai 2.46.0**. Every model client (Gemini, Claude and the OpenAI-compatible Qwen endpoint) runs on `httpx2`, with pydantic-ai's `AsyncHTTPX2TenacityTransport` as the retry transport, and the Atlassian MCP server is reached through pydantic-ai's `MCPToolset`.
 
-An upgrade to pydantic-ai 2.x was evaluated and deliberately **not** done (decision of 2026-09-18). The 2.x line would
-bring native Claude 5 handling, the unified MCP toolset and the renamed retry transport, but it also replaces the
-per-transport MCP clients and the `Agent(...)` options with capabilities, and its `mcp` 2.x dependency moves the HTTP
-stack to `httpx2` - a migration across every agent, the MCP session recovery and the Qwen provider, with no change in
-behaviour. The explicit settings path on 1.106.0 produces the same requests (adaptive thinking and effort for Claude 5,
-never a sampling parameter or a thinking budget), so the version stays pinned until a release requires the upgrade.
+The agents keep the pydantic-ai 1.x run semantics: `end_strategy="early"` (tools requested alongside the final output are skipped rather than run) and a single retry per MCP tool call. A custom `MODEL_NAME` left to pydantic-ai follows its 2.x prefixes: `openai:` now targets the Responses API (`openai-chat:` for Chat Completions), and `google-vertex:` is `google-cloud:`; the `google-gla:`, `anthropic:` and `qwen:` names are built by the model factory and are unaffected.
 
 ### Token Budget and Cost Oversight
 

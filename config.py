@@ -213,7 +213,7 @@ PROMPT_GUARD_SERVICE_URL = os.environ.get("PROMPT_GUARD_SERVICE_URL")
 # Orchestrator
 class OrchestratorConfig:
     THINKING_LEVEL: ThinkingLevel = "low"
-    VERSION = os.environ.get("ORCHESTRATOR_VERSION", "2.0.0")
+    VERSION = os.environ.get("ORCHESTRATOR_VERSION", "2.0.1")
     # Label describing the environment the execution agents run their test cases against; reported
     # alongside every test execution result.
     TEST_ENVIRONMENT_LABEL = os.environ.get("TEST_ENVIRONMENT_LABEL", "Standard Test Environment")
@@ -261,7 +261,7 @@ class DashboardPersistenceConfig:
 # Requirements Review Agent
 class RequirementsReviewAgentConfig:
     THINKING_LEVEL: ThinkingLevel = "medium"
-    VERSION = os.environ.get("REQUIREMENTS_REVIEW_AGENT_VERSION", "1.1.1")
+    VERSION = os.environ.get("REQUIREMENTS_REVIEW_AGENT_VERSION", "1.1.2")
     OWN_NAME = "Jira Requirements Reviewer"
     SKILL_ID = "jira-requirements-review"
     SKILL_NAME = "Jira Requirements Review"
@@ -277,7 +277,7 @@ class RequirementsReviewAgentConfig:
 # Test Case Classification Agent
 class TestCaseClassificationAgentConfig:
     THINKING_LEVEL: ThinkingLevel = "medium"
-    VERSION = os.environ.get("TEST_CASE_CLASSIFICATION_AGENT_VERSION", "1.2.0")
+    VERSION = os.environ.get("TEST_CASE_CLASSIFICATION_AGENT_VERSION", "1.2.1")
     OWN_NAME = "Test Case Classification Agent"
     SKILL_ID = "test-case-classification"
     SKILL_NAME = "Test Case Classification"
@@ -293,7 +293,7 @@ class TestCaseClassificationAgentConfig:
 # Test Case Generation Agent
 class TestCaseGenerationAgentConfig:
     THINKING_LEVEL: ThinkingLevel = "medium"
-    VERSION = os.environ.get("TEST_CASE_GENERATION_AGENT_VERSION", "1.2.0")
+    VERSION = os.environ.get("TEST_CASE_GENERATION_AGENT_VERSION", "1.2.1")
     OWN_NAME = "Test Case Generation Agent"
     SKILL_ID = "test-case-generation"
     SKILL_NAME = "Test Case Generation"
@@ -309,7 +309,7 @@ class TestCaseGenerationAgentConfig:
 # Test Case Review Agent
 class TestCaseReviewAgentConfig:
     THINKING_LEVEL: ThinkingLevel = "high"
-    VERSION = os.environ.get("TEST_CASE_REVIEW_AGENT_VERSION", "1.1.1")
+    VERSION = os.environ.get("TEST_CASE_REVIEW_AGENT_VERSION", "1.1.2")
     REVIEW_COMPLETE_STATUS_NAME = "Review Complete"
     OWN_NAME = "Test Case Review Agent"
     SKILL_ID = "test-case-review"
@@ -326,7 +326,7 @@ class TestCaseReviewAgentConfig:
 # Incident Creation Agent
 class IncidentCreationAgentConfig:
     THINKING_LEVEL: ThinkingLevel = "medium"
-    VERSION = os.environ.get("INCIDENT_CREATION_AGENT_VERSION", "1.1.0")
+    VERSION = os.environ.get("INCIDENT_CREATION_AGENT_VERSION", "1.1.1")
     OWN_NAME = "Incident Creation Agent"
     SKILL_ID = "incident-creation"
     SKILL_NAME = "Incident Creation"

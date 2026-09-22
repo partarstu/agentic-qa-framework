@@ -14,17 +14,15 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 def _download_text_model() -> None:
-    from FlagEmbedding import BGEM3FlagModel
+    from huggingface_hub import snapshot_download
 
     from config import EmbeddingServiceConfig
 
     model_name = EmbeddingServiceConfig.TEXT_MODEL_NAME
     model_path = EmbeddingServiceConfig.TEXT_MODEL_PATH
 
-    os.makedirs(model_path, exist_ok=True)
     print(f"Downloading embedding model '{model_name}' to '{model_path}'...")
-    model = BGEM3FlagModel(model_name, use_fp16=False)
-    model.save(model_path)
+    snapshot_download(model_name, local_dir=model_path, ignore_patterns=["onnx/*", "imgs/*"])
     print("Embedding model download complete.")
 
 

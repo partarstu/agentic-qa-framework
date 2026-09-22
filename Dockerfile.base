@@ -19,6 +19,9 @@ ENV UV_LINK_MODE=copy \
     UV_PROJECT_ENVIRONMENT=/app/.venv \
     PATH="/app/.venv/bin:$PATH"
 
+# pydantic-ai otherwise prints an observability advertisement banner into every service's logs.
+ENV PYDANTIC_AI_NO_BANNER=1
+
 # Install the shared runtime dependencies from the lock file (no dev tools, no
 # optional service extras). Only the dependency manifests are copied, so this
 # layer stays cached as long as the locked dependencies don't change.

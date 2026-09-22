@@ -6,6 +6,7 @@ import logging
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx2
 import pytest
 from a2a.helpers import get_message_text
 from a2a.types import Message
@@ -111,7 +112,7 @@ async def test_usage_limits_tool_calls_limit_is_doubled(test_agent_instance):
         captured.append(usage_limits)
         mock_result = MagicMock()
         mock_result.output = MockOutput(result="ok")
-        mock_result.usage.return_value = RunUsage(input_tokens=10, output_tokens=5)
+        mock_result.usage = RunUsage(input_tokens=10, output_tokens=5)
         return mock_result
 
     test_agent_instance.agent = AsyncMock()
@@ -133,7 +134,7 @@ async def test_usage_limits_tool_calls_limit_is_doubled(test_agent_instance):
 async def test_agent_run_success(test_agent_instance):
     mock_run_result = MagicMock()
     mock_run_result.output = MockOutput(result="success")
-    mock_run_result.usage.return_value = RunUsage(input_tokens=20, output_tokens=8)
+    mock_run_result.usage = RunUsage(input_tokens=20, output_tokens=8)
 
     # Mock the internal agent's run method
     test_agent_instance.agent = AsyncMock()
@@ -162,7 +163,7 @@ def test_token_usage_includes_nested_calls_recorded_in_the_operation_meter(test_
     meter.add("main", "openai:test-model", RunUsage(requests=1, input_tokens=20, output_tokens=8))
     meter.add("sub_agent", "openai:test-model", RunUsage(requests=3, input_tokens=40, output_tokens=12))
     main_run_result = MagicMock()
-    main_run_result.usage.return_value = RunUsage(requests=1, input_tokens=20, output_tokens=8)
+    main_run_result.usage = RunUsage(requests=1, input_tokens=20, output_tokens=8)
 
     token = operation_meter.set(meter)
     try:
@@ -231,7 +232,7 @@ async def test_each_run_gets_a_fresh_mcp_toolset_whose_session_the_run_owns():
         passed_toolsets.append(toolsets)
         mock_result = MagicMock()
         mock_result.output = MockOutput(result="ok")
-        mock_result.usage.return_value = RunUsage(input_tokens=10, output_tokens=5)
+        mock_result.usage = RunUsage(input_tokens=10, output_tokens=5)
         return mock_result
 
     agent.agent = AsyncMock()
@@ -252,6 +253,65 @@ async def test_each_run_gets_a_fresh_mcp_toolset_whose_session_the_run_owns():
         # Entering it here as well would make the session count 2 and stop it from ever being torn
         # down mid-run, which is exactly what the self-healing reconnect needs to be able to do.
         toolset.__aenter__.assert_not_awaited()
+
+
+def _agent_whose_run_raises(agent: TestAgent, *effects) -> AsyncMock:
+    agent.agent = AsyncMock()
+    agent.agent.run = AsyncMock(side_effect=list(effects))
+    agent.agent.__aenter__.return_value = agent.agent
+    agent.agent.__aexit__.return_value = None
+    return agent.agent.run
+
+
+def _mcp_connect_failure() -> RuntimeError:
+    try:
+        raise RuntimeError("Client failed to connect") from httpx2.ConnectError("All connection attempts failed")
+    except RuntimeError as e:
+        return e
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failure",
+    [_mcp_connect_failure(), ExceptionGroup("g", [_mcp_connect_failure()])],
+    ids=["bare", "exception-group"],
+)
+async def test_mcp_connect_failure_is_reported_as_a_connection_error(test_agent_instance, failure):
+    test_agent_instance.mcp_toolset_factories = [MagicMock]
+    _agent_whose_run_raises(test_agent_instance, failure)
+
+    with pytest.raises(ConnectionError, match="MCP connection failed"):
+        await test_agent_instance._get_agent_execution_result([])
+
+
+@pytest.mark.asyncio
+async def test_run_failure_without_a_connect_error_propagates_unchanged(test_agent_instance):
+    test_agent_instance.mcp_toolset_factories = [MagicMock]
+    _agent_whose_run_raises(test_agent_instance, RuntimeError("boom"))
+
+    with pytest.raises(RuntimeError, match="boom"):
+        await test_agent_instance._get_agent_execution_result([])
+
+
+@pytest.mark.asyncio
+async def test_model_transport_error_is_retried(test_agent_instance):
+    result = MagicMock()
+    run = _agent_whose_run_raises(test_agent_instance, httpx2.ReadError("reset"), result)
+
+    with patch("common.agent_base.asyncio.sleep", new=AsyncMock()):
+        assert await test_agent_instance._get_agent_execution_result([]) is result
+    assert run.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_model_connect_error_in_an_mcp_agent_is_retried_not_blamed_on_mcp(test_agent_instance):
+    test_agent_instance.mcp_toolset_factories = [MagicMock]
+    result = MagicMock()
+    run = _agent_whose_run_raises(test_agent_instance, httpx2.ConnectError("model endpoint unreachable"), result)
+
+    with patch("common.agent_base.asyncio.sleep", new=AsyncMock()):
+        assert await test_agent_instance._get_agent_execution_result([]) is result
+    assert run.await_count == 2
 
 
 def test_skill_is_required_at_construction():

@@ -6,13 +6,11 @@
 
 import logging
 from unittest.mock import AsyncMock, MagicMock
-from urllib.parse import urlparse
 
 import anyio
-import httpx
+import httpx2
 import pytest
-from mcp.shared.exceptions import McpError
-from mcp.types import ErrorData
+from mcp.shared.exceptions import MCPError
 from pydantic_ai.exceptions import ModelRetry
 
 import config
@@ -30,10 +28,10 @@ RECOVERABLE_ERRORS = [
     anyio.EndOfStream(),
     TimeoutError("timed out"),
     EOFError("stream closed"),
-    httpx.ReadTimeout("timed out"),
-    httpx.ConnectError("connection refused"),
-    httpx.RemoteProtocolError("peer closed connection"),
-    McpError(ErrorData(code=-32001, message="Request timed out")),
+    httpx2.ReadTimeout("timed out"),
+    httpx2.ConnectError("connection refused"),
+    httpx2.RemoteProtocolError("peer closed connection"),
+    MCPError(-32001, "Request timed out"),
     ModelRetry("The tool response timed out, please try again"),
 ]
 
@@ -66,10 +64,10 @@ def test_recoverable_errors_are_recognised(error):
     "error",
     [
         ValueError("bad arguments"),
-        McpError(ErrorData(code=-32602, message="Invalid params")),
+        MCPError(-32602, "Invalid params"),
         ModelRetry("The issue key you passed does not exist"),
     ],
-    ids=["ValueError", "McpError", "ModelRetry"],
+    ids=["ValueError", "MCPError", "ModelRetry"],
 )
 def test_non_recoverable_errors_are_recognised(error):
     assert _is_recoverable(error) is False
@@ -346,13 +344,13 @@ async def test_no_allowlist_keeps_every_advertised_tool():
     assert len(await toolset.get_tools(MagicMock())) == 2
 
 
-def test_factory_reads_the_atlassian_server_url(monkeypatch):
-    monkeypatch.setattr(config, "ATLASSIAN_MCP_SERVER_URL", "http://atlassian-mcp:9000/sse")
-    server = build_atlassian_mcp_server()
-    assert urlparse(server.url).netloc == "atlassian-mcp:9000"
-
-
-def test_factory_applies_the_client_timeout_to_connecting_and_reading(monkeypatch):
+def test_factory_connects_to_the_configured_server_with_its_timeout_and_one_tool_retry(monkeypatch):
+    monkeypatch.setattr(config, "ATLASSIAN_MCP_SERVER_URL", "http://atlassian-mcp:9000/mcp")
     monkeypatch.setattr(config, "MCP_SERVER_TIMEOUT_SECONDS", 45)
-    server = build_atlassian_mcp_server()
-    assert (server.timeout, server.read_timeout) == (45, 45)
+    mcp_toolset = MagicMock()
+    monkeypatch.setattr(atlassian_mcp_module, "MCPToolset", mcp_toolset)
+
+    assert build_atlassian_mcp_server() is mcp_toolset.return_value
+    mcp_toolset.assert_called_once_with(
+        "http://atlassian-mcp:9000/mcp", max_retries=1, init_timeout=45, read_timeout=45
+    )

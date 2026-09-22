@@ -22,6 +22,7 @@ from urllib.parse import urlparse
 from uuid import uuid4
 
 import httpx
+import httpx2
 import uvicorn
 from a2a.client import ClientConfig, create_client
 from a2a.client.card_resolver import parse_agent_card
@@ -663,7 +664,7 @@ def _log_orchestrator_usage(result) -> None:
     if result is None:
         return
     try:
-        usage = TokenUsage.from_run_usage(result.usage(), config.OrchestratorConfig.MODEL_NAME)
+        usage = TokenUsage.from_run_usage(result.usage, config.OrchestratorConfig.MODEL_NAME)
         logger.info(usage.summary_line())
     except Exception as e:
         logger.debug(f"Could not record orchestrator token usage: {e}")
@@ -676,8 +677,8 @@ async def _run_agent_with_retry(agent_call, base_delay: float = config.RetryConf
             result = await agent_call()
             _log_orchestrator_usage(result)
             return result
-        except (ModelHTTPError, httpx.TransportError) as e:
-            is_retryable = isinstance(e, httpx.TransportError) or (
+        except (ModelHTTPError, httpx2.TransportError) as e:
+            is_retryable = isinstance(e, httpx2.TransportError) or (
                 isinstance(e, ModelHTTPError) and e.status_code in config.RetryConfig.RETRYABLE_STATUS_CODES
             )
             if is_retryable and attempt < config.RetryConfig.MAX_RETRIES - 1:

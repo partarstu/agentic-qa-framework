@@ -190,6 +190,6 @@ def _judge(agent: Agent, dimension: str, requirement: str, output_a: str, output
         "Judge [%s]: %s - %s",
         dimension,
         result.output.label,
-        TokenUsage.from_run_usage(result.usage(), JUDGE_MODEL_NAME).summary_line(),
+        TokenUsage.from_run_usage(result.usage, JUDGE_MODEL_NAME).summary_line(),
     )
     return result.output
