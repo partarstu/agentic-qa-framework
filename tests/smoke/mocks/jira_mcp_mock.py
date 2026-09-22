@@ -51,11 +51,8 @@ _SEEDED_STORY = {
             "Project Key: SMOKE\n"
             "Issue ID (numeric): 10001\n\n"
             "Acceptance Criteria:\n"
-            "1. A 'Forgot password' link on the login page opens a form that accepts an email address.\n"
-            "2. Submitting a registered email sends a password-reset link that expires after 60 minutes.\n"
-            "3. Submitting an unregistered email shows the same confirmation message (no account enumeration).\n"
-            "4. Opening a valid link lets the user set a new password that must meet the complexity policy.\n"
-            "5. An expired or already-used link shows an error and offers to request a new one."
+            "1. Submitting a registered email sends a password-reset link that expires after 60 minutes.\n"
+            "2. An expired or already-used link shows an error and offers to request a new one."
         ),
         "attachment": [
             {"filename": ATTACHMENT_FILE_NAME, "mimeType": "text/plain"},
