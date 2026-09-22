@@ -51,8 +51,10 @@ _SEEDED_STORY = {
             "Project Key: SMOKE\n"
             "Issue ID (numeric): 10001\n\n"
             "Acceptance Criteria:\n"
-            "1. Submitting a registered email sends a password-reset link that expires after 60 minutes.\n"
-            "2. An expired or already-used link shows an error and offers to request a new one."
+            "1. Submitting a registered email address on the 'Forgot password' form sends an email with a "
+            "single-use password-reset link that is valid for 60 minutes.\n"
+            "2. Opening a reset link more than 60 minutes after it was sent shows the message "
+            "'This reset link has expired' and a 'Request a new link' button."
         ),
         "attachment": [
             {"filename": ATTACHMENT_FILE_NAME, "mimeType": "text/plain"},
