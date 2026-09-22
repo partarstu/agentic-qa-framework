@@ -421,6 +421,7 @@ RAG_OCR_TEXT_THRESHOLD_CHARACTERS=20 # Default: 20. Pages below this native-text
 # Embedding Service Configuration
 EMBEDDING_BACKENDS=text # Default: text. Comma-separated enabled backends; "text" is the only one implemented.
 EMBEDDING_TEXT_MODEL=BAAI/bge-m3 # Default: BAAI/bge-m3. Multilingual model producing dense and learned-sparse output in one pass.
+EMBEDDING_TEXT_MODEL_REVISION=5617a9f61b028005a4858fdac845db406aefb181 # Default: 5617a9f61b028005a4858fdac845db406aefb181. Hugging Face commit of EMBEDDING_TEXT_MODEL downloaded at image build time; set it together with EMBEDDING_TEXT_MODEL.
 EMBEDDING_MAX_BATCH_SIZE=32 # Default: 32. Maximum number of texts per embedding request.
 EMBEDDING_MAX_TEXT_LENGTH=50000 # Default: 50000. Maximum text length (characters) per input.
 
@@ -444,6 +445,7 @@ PROMPT_GUARD_SERVICE_URL= # Required if PROMPT_INJECTION_CHECK_ENABLED is True. 
 INTERNAL_SERVICE_API_KEY= # Optional shared secret. When set, the embedding and prompt-guard services require a matching X-API-Key header (and their clients send it). Recommended whenever those services are not strictly network-isolated.
 PROMPT_INJECTION_MIN_SCORE=0.8 # Default: 0.8. The minimum score for a prompt to be considered an injection.
 PROMPT_INJECTION_MODEL_NAME=ProtectAI/deberta-v3-base-prompt-injection-v2 # Default: ProtectAI/deberta-v3-base-prompt-injection-v2. The name of the model used for prompt injection detection.
+PROMPT_INJECTION_MODEL_REVISION=90c9989b1a342275dd0d1a95aad283c04e075671 # Default: 90c9989b1a342275dd0d1a95aad283c04e075671. Hugging Face commit of PROMPT_INJECTION_MODEL_NAME downloaded at image build time; set it together with PROMPT_INJECTION_MODEL_NAME.
 ```
 
 **Note on Local Models:**
@@ -773,7 +775,7 @@ gcloud builds submit --config 'path/to/your/cloudbuild.yaml' --substitutions "`^
   `_RAG_MAX_PAGES_PER_DOCUMENT`, `_RAG_RENDER_DPI`, `_RAG_MAX_IMAGE_DIMENSION`: The sync job's settings of the same names
   (see *Environment Variables*); `_QDRANT_DOCUMENTS_COLLECTION_NAME` sets `QDRANT_CONFLUENCE_COLLECTION_NAME`.
 * `_ATLASSIAN_MCP_IMAGE_TAG` / `_QDRANT_IMAGE_TAG`: The image tags of the Atlassian MCP server and of Qdrant, which
-  are also their redeploy versions. Defaults: `0.21.1` / `v1.16.3`.
+  are also their redeploy versions. Defaults: `0.21.1` / `v1.19.1`.
 * `_PROMPT_OVERRIDES_DIR` / `_PROMPT_OVERRIDES_BUCKET` / `_PROMPT_OVERRIDES_FOLDER`: Optional prompt overrides. When
   `_PROMPT_OVERRIDES_DIR` is set, the folder `_PROMPT_OVERRIDES_FOLDER` of the bucket `_PROMPT_OVERRIDES_BUCKET` is
   mounted at that path into the orchestrator and every agent, and `PROMPT_OVERRIDES_DIR` points to it.

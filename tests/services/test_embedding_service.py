@@ -16,6 +16,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
+import config
+
 # The Docker image copies services/embedding_service/ to /app/embedding_service, so the
 # service's own imports use the flat "embedding_service.backends" layout. Mirror the same
 # layout by putting services/ on the path (embedding_service is a namespace package).
@@ -226,3 +228,36 @@ class TestModuleImport:
 
         _ = registry_module.create_registry  # module import alone is ML-free
         assert "FlagEmbedding" not in sys.modules
+
+
+class TestTextBackendLoad:
+    @pytest.fixture
+    def ml_modules(self):
+        flag_embedding, hub = MagicMock(), MagicMock()
+        with patch.dict(sys.modules, {"FlagEmbedding": flag_embedding, "huggingface_hub": hub}):
+            yield flag_embedding, hub
+
+    def test_local_copy_is_loaded_without_a_download(self, ml_modules, tmp_path, monkeypatch):
+        from embedding_service.backends.text_backend import BgeM3TextBackend
+
+        flag_embedding, hub = ml_modules
+        (tmp_path / "config.json").write_text("{}")
+        monkeypatch.setattr(config.EmbeddingServiceConfig, "TEXT_MODEL_PATH", str(tmp_path))
+
+        BgeM3TextBackend().load()
+
+        hub.snapshot_download.assert_not_called()
+        flag_embedding.BGEM3FlagModel.assert_called_once_with(str(tmp_path), use_fp16=False)
+
+    def test_missing_local_copy_downloads_the_pinned_revision(self, ml_modules, tmp_path, monkeypatch):
+        from embedding_service.backends.text_backend import BgeM3TextBackend
+
+        flag_embedding, hub = ml_modules
+        monkeypatch.setattr(config.EmbeddingServiceConfig, "TEXT_MODEL_PATH", str(tmp_path / "missing"))
+        monkeypatch.setattr(config.EmbeddingServiceConfig, "TEXT_MODEL_NAME", "BAAI/bge-m3")
+        monkeypatch.setattr(config.EmbeddingServiceConfig, "TEXT_MODEL_REVISION", "abc123")
+
+        BgeM3TextBackend().load()
+
+        hub.snapshot_download.assert_called_once_with("BAAI/bge-m3", revision="abc123")
+        flag_embedding.BGEM3FlagModel.assert_called_once_with(hub.snapshot_download.return_value, use_fp16=False)

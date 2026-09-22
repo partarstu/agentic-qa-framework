@@ -11,6 +11,8 @@ WORKDIR ${WORK_DIR}
 # heavy layer is cached independently of the service source code below.
 ARG EMBEDDING_TEXT_MODEL=BAAI/bge-m3
 ENV EMBEDDING_TEXT_MODEL=${EMBEDDING_TEXT_MODEL}
+ARG EMBEDDING_TEXT_MODEL_REVISION=5617a9f61b028005a4858fdac845db406aefb181
+ENV EMBEDDING_TEXT_MODEL_REVISION=${EMBEDDING_TEXT_MODEL_REVISION}
 RUN uv sync --frozen --no-dev --extra embedding-service
 
 COPY services/embedding_service/ ${WORK_DIR}/embedding_service

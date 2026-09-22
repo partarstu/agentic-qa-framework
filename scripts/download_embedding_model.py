@@ -20,9 +20,10 @@ def _download_text_model() -> None:
 
     model_name = EmbeddingServiceConfig.TEXT_MODEL_NAME
     model_path = EmbeddingServiceConfig.TEXT_MODEL_PATH
+    revision = EmbeddingServiceConfig.TEXT_MODEL_REVISION
 
-    print(f"Downloading embedding model '{model_name}' to '{model_path}'...")
-    snapshot_download(model_name, local_dir=model_path, ignore_patterns=["onnx/*", "imgs/*"])
+    print(f"Downloading embedding model '{model_name}@{revision}' to '{model_path}'...")
+    snapshot_download(model_name, revision=revision, local_dir=model_path, ignore_patterns=["onnx/*", "imgs/*"])
     print("Embedding model download complete.")
 
 

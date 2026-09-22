@@ -5,7 +5,7 @@
 steps:
 
   # Build the base image
-  - name: 'gcr.io/cloud-builders/docker'
+  - name: 'gcr.io/cloud-builders/docker:20.10.24'
     args: [ 'build', '-t', 'agentic-qa-base:latest', '-f', 'Dockerfile.base', '.' ]
 
   # Render every workload's configuration from deploy/manifest.yaml into deploy/rendered/:
@@ -53,63 +53,63 @@ steps:
         QUAIA_DEPLOY_OVERRIDE_AGENT_BASE_URL="$_INCIDENT_CREATION_AGENT_BASE_URL" render incident-creation-agent
 
   # Build the orchestrator image
-  - name: 'gcr.io/cloud-builders/docker'
+  - name: 'gcr.io/cloud-builders/docker:20.10.24'
     args: [ 'build', '-t', 'gcr.io/$PROJECT_ID/orchestrator', '-f', 'orchestrator/Dockerfile', '.' ]
 
   # Build the requirements-review-agent image
-  - name: 'gcr.io/cloud-builders/docker'
+  - name: 'gcr.io/cloud-builders/docker:20.10.24'
     args: [ 'build', '-t', 'gcr.io/$PROJECT_ID/requirements-review-agent', '-f', 'agents/requirements_review/Dockerfile', '.' ]
 
   # Build the test-case-generation-agent image
-  - name: 'gcr.io/cloud-builders/docker'
+  - name: 'gcr.io/cloud-builders/docker:20.10.24'
     args: [ 'build', '-t', 'gcr.io/$PROJECT_ID/test-case-generation-agent', '-f', 'agents/test_case_generation/Dockerfile', '.' ]
 
   # Build the test-case-classification-agent image
-  - name: 'gcr.io/cloud-builders/docker'
+  - name: 'gcr.io/cloud-builders/docker:20.10.24'
     args: [ 'build', '-t', 'gcr.io/$PROJECT_ID/test-case-classification-agent', '-f', 'agents/test_case_classification/Dockerfile', '.' ]
 
   # Build the test-case-review-agent image
-  - name: 'gcr.io/cloud-builders/docker'
+  - name: 'gcr.io/cloud-builders/docker:20.10.24'
     args: [ 'build', '-t', 'gcr.io/$PROJECT_ID/test-case-review-agent', '-f', 'agents/test_case_review/Dockerfile', '.' ]
 
   # Build the incident-creation-agent image
-  - name: 'gcr.io/cloud-builders/docker'
+  - name: 'gcr.io/cloud-builders/docker:20.10.24'
     args: [ 'build', '-t', 'gcr.io/$PROJECT_ID/incident-creation-agent', '-f', 'agents/incident_creation/Dockerfile', '.' ]
 
   # Build the rag-sync-job image (runs the sync runtime as a Cloud Run Job)
-  - name: 'gcr.io/cloud-builders/docker'
+  - name: 'gcr.io/cloud-builders/docker:20.10.24'
     args: [ 'build', '-t', 'gcr.io/$PROJECT_ID/rag-sync-job', '-f', 'services/rag_sync/Dockerfile', '.' ]
 
   # Push the orchestrator image to Container Registry
-  - name: 'gcr.io/cloud-builders/docker'
+  - name: 'gcr.io/cloud-builders/docker:20.10.24'
     args: [ 'push', 'gcr.io/$PROJECT_ID/orchestrator' ]
 
   # Push the requirements-review-agent image to Container Registry
-  - name: 'gcr.io/cloud-builders/docker'
+  - name: 'gcr.io/cloud-builders/docker:20.10.24'
     args: [ 'push', 'gcr.io/$PROJECT_ID/requirements-review-agent' ]
 
   # Push the test-case-generation-agent image to Container Registry
-  - name: 'gcr.io/cloud-builders/docker'
+  - name: 'gcr.io/cloud-builders/docker:20.10.24'
     args: [ 'push', 'gcr.io/$PROJECT_ID/test-case-generation-agent' ]
 
   # Push the test-case-classification-agent image to Container Registry
-  - name: 'gcr.io/cloud-builders/docker'
+  - name: 'gcr.io/cloud-builders/docker:20.10.24'
     args: [ 'push', 'gcr.io/$PROJECT_ID/test-case-classification-agent' ]
 
   # Push the test-case-review-agent image to Container Registry
-  - name: 'gcr.io/cloud-builders/docker'
+  - name: 'gcr.io/cloud-builders/docker:20.10.24'
     args: [ 'push', 'gcr.io/$PROJECT_ID/test-case-review-agent' ]
 
   # Push the incident-creation-agent image to Container Registry
-  - name: 'gcr.io/cloud-builders/docker'
+  - name: 'gcr.io/cloud-builders/docker:20.10.24'
     args: [ 'push', 'gcr.io/$PROJECT_ID/incident-creation-agent' ]
 
   # Push the rag-sync-job image to Container Registry
-  - name: 'gcr.io/cloud-builders/docker'
+  - name: 'gcr.io/cloud-builders/docker:20.10.24'
     args: [ 'push', 'gcr.io/$PROJECT_ID/rag-sync-job' ]
 
   # Pull, tag, and push atlassian-mcp-server image (conditional)
-  - name: 'gcr.io/cloud-builders/docker'
+  - name: 'gcr.io/cloud-builders/docker:20.10.24'
     entrypoint: 'bash'
     args:
       - '-c'
@@ -127,7 +127,7 @@ steps:
 
   # Deploy atlassian-mcp-server to Cloud Run (conditional). The combined Jira + Confluence
   # toolset: the Confluence part is enabled by its credentials.
-  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:586.0.0'
     entrypoint: 'bash'
     args:
       - '-c'
@@ -162,7 +162,7 @@ steps:
         fi
 
   # Build and push embedding-service image (conditional)
-  - name: 'gcr.io/cloud-builders/docker'
+  - name: 'gcr.io/cloud-builders/docker:20.10.24'
     entrypoint: 'bash'
     args:
       - '-c'
@@ -177,7 +177,7 @@ steps:
         fi
 
   # Deploy embedding-service to Cloud Run (conditional)
-  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:586.0.0'
     entrypoint: 'bash'
     args:
       - '-c'
@@ -212,7 +212,7 @@ steps:
         fi
 
   # Build and push prompt-guard-service image (conditional)
-  - name: 'gcr.io/cloud-builders/docker'
+  - name: 'gcr.io/cloud-builders/docker:20.10.24'
     entrypoint: 'bash'
     args:
       - '-c'
@@ -227,7 +227,7 @@ steps:
         fi
 
   # Deploy prompt-guard-service to Cloud Run (conditional)
-  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:586.0.0'
     entrypoint: 'bash'
     args:
       - '-c'
@@ -260,7 +260,7 @@ steps:
 
 
   # Deploy Qdrant Vector DB to Cloud Run (conditional)
-  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:586.0.0'
     entrypoint: 'bash'
     args:
       - '-c'
@@ -297,7 +297,7 @@ steps:
   # Deploy to Cloud Run orchestrator. The prompt-override directory is mounted only
   # when the _PROMPT_OVERRIDES_DIR substitution is set (a Cloud Run volume mount from the
   # overrides bucket); the rendered env file then carries PROMPT_OVERRIDES_DIR.
-  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:586.0.0'
     entrypoint: 'bash'
     args:
       - '-c'
@@ -331,7 +331,7 @@ steps:
 
   # Deploy the RAG sync job to Cloud Run and grant the orchestrator's runtime identity
   # the least-privilege role to run it with overrides
-  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:586.0.0'
     entrypoint: 'bash'
     args:
       - '-c'
@@ -365,7 +365,7 @@ steps:
           --role=roles/run.jobsExecutorWithOverrides
 
   # Deploy to Cloud Run requirements-review-agent
-  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:586.0.0'
     entrypoint: 'bash'
     args:
       - '-c'
@@ -398,7 +398,7 @@ steps:
           $$PROMPT_OVERRIDE_ARGS
 
   # Deploy to Cloud Run test-case-generation-agent
-  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:586.0.0'
     entrypoint: 'bash'
     args:
       - '-c'
@@ -431,7 +431,7 @@ steps:
           $$PROMPT_OVERRIDE_ARGS
 
   # Deploy to Cloud Run test-case-classification-agent
-  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:586.0.0'
     entrypoint: 'bash'
     args:
       - '-c'
@@ -464,7 +464,7 @@ steps:
           $$PROMPT_OVERRIDE_ARGS
 
   # Deploy to Cloud Run test-case-review-agent
-  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:586.0.0'
     entrypoint: 'bash'
     args:
       - '-c'
@@ -497,7 +497,7 @@ steps:
           $$PROMPT_OVERRIDE_ARGS
 
   # Deploy to Cloud Run incident-creation-agent
-  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:586.0.0'
     entrypoint: 'bash'
     args:
       - '-c'
@@ -539,7 +539,7 @@ substitutions:
   _DEPLOY_PROMPT_GUARD: 'false'
   _DEPLOY_QDRANT: 'false'
   _ATLASSIAN_MCP_IMAGE_TAG: '0.21.1'
-  _QDRANT_IMAGE_TAG: 'v1.16.3'
+  _QDRANT_IMAGE_TAG: 'v1.19.1'
   _JIRA_ATTACHMENTS_FOLDER: 'jira'
   _LOCAL_ATTACHMENTS_MOUNT_PATH: '/tmp'
   _JIRA_MCP_SERVER_ATTACHMENTS_MOUNT_PATH: '/tmp'

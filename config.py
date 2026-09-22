@@ -207,6 +207,10 @@ PROMPT_INJECTION_DETECTION_MODEL_PATH = os.path.join(LOCAL_MODELS_PATH, "prompt_
 PROMPT_INJECTION_DETECTION_MODEL_NAME = os.environ.get(
     "PROMPT_INJECTION_MODEL_NAME", "ProtectAI/deberta-v3-base-prompt-injection-v2"
 )
+# A pinned commit keeps a later upload to the model repository out of the image; it must belong to the model above.
+PROMPT_INJECTION_DETECTION_MODEL_REVISION = os.environ.get(
+    "PROMPT_INJECTION_MODEL_REVISION", "90c9989b1a342275dd0d1a95aad283c04e075671"
+)
 PROMPT_GUARD_SERVICE_URL = os.environ.get("PROMPT_GUARD_SERVICE_URL")
 
 
@@ -405,6 +409,8 @@ class EmbeddingServiceConfig:
     )
     # One multilingual model producing dense and learned-sparse output in a single pass.
     TEXT_MODEL_NAME = os.environ.get("EMBEDDING_TEXT_MODEL", "BAAI/bge-m3")
+    # A pinned commit keeps a later upload to the model repository out of the image; it must belong to TEXT_MODEL_NAME.
+    TEXT_MODEL_REVISION = os.environ.get("EMBEDDING_TEXT_MODEL_REVISION", "5617a9f61b028005a4858fdac845db406aefb181")
     TEXT_MODEL_PATH = os.path.join(LOCAL_MODELS_PATH, "embedding_model")
     # Input limits guarding against memory exhaustion.
     MAX_BATCH_SIZE = int(os.environ.get("EMBEDDING_MAX_BATCH_SIZE", "32"))
