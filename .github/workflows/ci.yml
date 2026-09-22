@@ -19,6 +19,11 @@ permissions:
   contents: read
   pull-requests: write
 
+# A new push to a pull request supersedes its running CI, which would otherwise keep billing Gemini and compete for its rate limit.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   lint:
     name: Lint
@@ -205,7 +210,7 @@ jobs:
         env:
           # The A/B judge runs its model in the pytest process, not in a container.
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
-        run: uv run pytest tests/smoke -m smoke -v
+        run: uv run pytest tests/smoke -m smoke -v --durations=10 -o log_cli=true --log-cli-level=INFO
 
       - name: Upload smoke A/B report
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

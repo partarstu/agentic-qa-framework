@@ -27,6 +27,7 @@ import httpx
 import pytest
 
 import config
+from common import utils
 from tests.conftest import CONFIGURED_GOOGLE_API_KEY
 
 ORCHESTRATOR_URL = os.environ.get("SMOKE_ORCHESTRATOR_URL", "http://localhost:8000").rstrip("/")
@@ -111,6 +112,8 @@ AGENT_READY_TIMEOUT = 240.0
 WEBHOOK_TIMEOUT = httpx.Timeout(1200.0)
 POLL_INTERVAL = 5.0
 
+logger = utils.get_logger("smoke")
+
 
 @pytest.fixture(scope="session")
 def judge_google_api_key() -> Iterator[None]:
@@ -194,8 +197,11 @@ def all_agents_ready(http_client: httpx.Client, auth_headers: dict[str, str]) ->
 
 
 def _post_webhook(path: str, headers: dict[str, str], payload: dict[str, str]) -> httpx.Response:
+    started = time.monotonic()
     with httpx.Client(timeout=WEBHOOK_TIMEOUT, follow_redirects=True) as client:
-        return client.post(f"{ORCHESTRATOR_URL}{path}", headers=headers, json=payload)
+        response = client.post(f"{ORCHESTRATOR_URL}{path}", headers=headers, json=payload)
+    logger.info("Webhook %s returned %s after %.0fs", path, response.status_code, time.monotonic() - started)
+    return response
 
 
 # The flows are mutually independent: requirements review writes Jira comments;
