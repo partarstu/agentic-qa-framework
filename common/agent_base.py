@@ -246,7 +246,7 @@ class AgentBase(ABC):
             self.latest_token_usage = TokenUsage.from_run_usage(result.usage(), self.model_name)
         logger.info(self.latest_token_usage.summary_line())
 
-    def _log_llm_comments_if_result_incomplete(self, output: BaseModel | None | str) -> None:
+    def _log_llm_comments_if_result_incomplete(self, output: BaseModel | str | None) -> None:
         """Logs the LLM comments when the agent result appears empty or incomplete."""
         if output is None:
             logger.warning("Agent returned None result.")

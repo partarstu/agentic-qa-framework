@@ -62,4 +62,4 @@ COPY config.py ${WORK_DIR}/config.py
 # Copy built UI from the ui-builder stage
 COPY --from=ui-builder /ui/dist ${WORK_DIR}/orchestrator/static
 
-CMD ["gunicorn", "-w", "1", "-k", "uvicorn.workers.UvicornWorker", "orchestrator.main:orchestrator_app"]
+CMD ["gunicorn", "-w", "1", "-k", "uvicorn_worker.UvicornWorker", "orchestrator.main:orchestrator_app"]

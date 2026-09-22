@@ -215,8 +215,8 @@ to run the validation locally (requires Node.js 20+).
 The project utilizes Docker for containerization of the orchestrator and agent services. A common base image, `agentic-qa-base:latest`, is built from `Dockerfile.base` to ensure consistency and reduce build times.
 
 Each service runs using `gunicorn` as the WSGI server. The command for agents is
-`gunicorn -w 1 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT agents.<agent_name>.main:app`, and for the
-orchestrator, it is `gunicorn -w 1 -k uvicorn.workers.UvicornWorker orchestrator.main:orchestrator_app`. Note that
+`gunicorn -w 1 -k uvicorn_worker.UvicornWorker --bind 0.0.0.0:$PORT agents.<agent_name>.main:app`, and for the
+orchestrator, it is `gunicorn -w 1 -k uvicorn_worker.UvicornWorker orchestrator.main:orchestrator_app`. Note that
 `$PORT` refers to the internal port the agent listens on, while the `AgentCard` will use the `EXTERNAL_PORT` for its
 URL.
 
@@ -618,13 +618,13 @@ orchestrator, and then start the dev server on top of that build.
 ### Model Settings and the pydantic-ai Version
 
 Provider-specific request settings (Claude 5 thinking and effort, Qwen reasoning, the maximum output tokens and the
-transport-level retries) are resolved in one place, `common/model_factory.py`, on **pydantic-ai 1.89.0**.
+transport-level retries) are resolved in one place, `common/model_factory.py`, on **pydantic-ai 1.106.0**.
 
 An upgrade to pydantic-ai 2.x was evaluated and deliberately **not** done (decision of 2026-09-18). The 2.x line would
 bring native Claude 5 handling, the unified MCP toolset and the renamed retry transport, but it also replaces the
 per-transport MCP clients and the `Agent(...)` options with capabilities, and its `mcp` 2.x dependency moves the HTTP
 stack to `httpx2` - a migration across every agent, the MCP session recovery and the Qwen provider, with no change in
-behaviour. The explicit settings path on 1.89.0 produces the same requests (adaptive thinking and effort for Claude 5,
+behaviour. The explicit settings path on 1.106.0 produces the same requests (adaptive thinking and effort for Claude 5,
 never a sampling parameter or a thinking budget), so the version stays pinned until a release requires the upgrade.
 
 ### Token Budget and Cost Oversight

@@ -19,4 +19,4 @@ COPY scripts/download_prompt_guard_model.py ${WORK_DIR}/scripts/download_prompt_
 # Download model
 RUN python ${WORK_DIR}/scripts/download_prompt_guard_model.py
 
-CMD gunicorn -w 1 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT prompt_guard_service.main:app
+CMD gunicorn -w 1 -k uvicorn_worker.UvicornWorker --bind 0.0.0.0:$PORT prompt_guard_service.main:app

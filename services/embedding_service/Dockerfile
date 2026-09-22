@@ -25,4 +25,4 @@ RUN python ${WORK_DIR}/scripts/download_embedding_model.py
 RUN python -c "import config, os, sys; sys.exit(0 if os.listdir(config.EmbeddingServiceConfig.TEXT_MODEL_PATH) else 1)" \
     || (echo 'embedding model files missing after download' && exit 1)
 
-CMD gunicorn -w 1 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT embedding_service.main:app
+CMD gunicorn -w 1 -k uvicorn_worker.UvicornWorker --bind 0.0.0.0:$PORT embedding_service.main:app
