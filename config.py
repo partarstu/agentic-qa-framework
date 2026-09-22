@@ -411,6 +411,8 @@ class EmbeddingServiceConfig:
     TEXT_MODEL_NAME = os.environ.get("EMBEDDING_TEXT_MODEL", "BAAI/bge-m3")
     # A pinned commit keeps a later upload to the model repository out of the image; it must belong to TEXT_MODEL_NAME.
     TEXT_MODEL_REVISION = os.environ.get("EMBEDDING_TEXT_MODEL_REVISION", "5617a9f61b028005a4858fdac845db406aefb181")
+    # The repository also ships an ONNX export (~2.3 GB) and README images the service never loads.
+    TEXT_MODEL_DOWNLOAD_IGNORE_PATTERNS = ("onnx/*", "imgs/*")
     TEXT_MODEL_PATH = os.path.join(LOCAL_MODELS_PATH, "embedding_model")
     # Input limits guarding against memory exhaustion.
     MAX_BATCH_SIZE = int(os.environ.get("EMBEDDING_MAX_BATCH_SIZE", "32"))

@@ -40,7 +40,9 @@ class BgeM3TextBackend(EmbeddingBackend):
             model_path = _configured_model_path()
         else:
             model_path = snapshot_download(
-                _configured_model_name(), revision=config.EmbeddingServiceConfig.TEXT_MODEL_REVISION
+                _configured_model_name(),
+                revision=config.EmbeddingServiceConfig.TEXT_MODEL_REVISION,
+                ignore_patterns=list(config.EmbeddingServiceConfig.TEXT_MODEL_DOWNLOAD_IGNORE_PATTERNS),
             )
         self._model = BGEM3FlagModel(model_path, use_fp16=False)
 

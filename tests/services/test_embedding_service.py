@@ -249,15 +249,18 @@ class TestTextBackendLoad:
         hub.snapshot_download.assert_not_called()
         flag_embedding.BGEM3FlagModel.assert_called_once_with(str(tmp_path), use_fp16=False)
 
-    def test_missing_local_copy_downloads_the_pinned_revision(self, ml_modules, tmp_path, monkeypatch):
+    def test_missing_local_copy_downloads_the_pinned_revision_without_unused_files(
+        self, ml_modules, tmp_path, monkeypatch
+    ):
         from embedding_service.backends.text_backend import BgeM3TextBackend
 
         flag_embedding, hub = ml_modules
         monkeypatch.setattr(config.EmbeddingServiceConfig, "TEXT_MODEL_PATH", str(tmp_path / "missing"))
         monkeypatch.setattr(config.EmbeddingServiceConfig, "TEXT_MODEL_NAME", "BAAI/bge-m3")
         monkeypatch.setattr(config.EmbeddingServiceConfig, "TEXT_MODEL_REVISION", "abc123")
+        monkeypatch.setattr(config.EmbeddingServiceConfig, "TEXT_MODEL_DOWNLOAD_IGNORE_PATTERNS", ("onnx/*",))
 
         BgeM3TextBackend().load()
 
-        hub.snapshot_download.assert_called_once_with("BAAI/bge-m3", revision="abc123")
+        hub.snapshot_download.assert_called_once_with("BAAI/bge-m3", revision="abc123", ignore_patterns=["onnx/*"])
         flag_embedding.BGEM3FlagModel.assert_called_once_with(hub.snapshot_download.return_value, use_fp16=False)

@@ -147,11 +147,11 @@ provides-extras = ["embedding-service", "prompt-guard-service", "rag-sync"]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "bandit" },
+    { name = "bandit", specifier = "==1.9.4" },
     { name = "pytest", specifier = "==9.1.1" },
     { name = "pytest-asyncio", specifier = "==1.4.0" },
     { name = "pytest-cov", specifier = "==7.1.0" },
-    { name = "ruff" },
+    { name = "ruff", specifier = "==0.16.8" },
 ]
 
 [[package]]

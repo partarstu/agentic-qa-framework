@@ -9,6 +9,10 @@ WORKDIR ${WORK_DIR}
 # Install service-specific (ML) dependencies on top of the shared base. The
 # pyproject.toml and uv.lock are already present from the base image, so this
 # heavy layer is cached independently of the service source code below.
+ARG PROMPT_INJECTION_MODEL_NAME=ProtectAI/deberta-v3-base-prompt-injection-v2
+ENV PROMPT_INJECTION_MODEL_NAME=${PROMPT_INJECTION_MODEL_NAME}
+ARG PROMPT_INJECTION_MODEL_REVISION=90c9989b1a342275dd0d1a95aad283c04e075671
+ENV PROMPT_INJECTION_MODEL_REVISION=${PROMPT_INJECTION_MODEL_REVISION}
 RUN uv sync --frozen --no-dev --extra prompt-guard-service
 
 COPY services/prompt_guard_service/ ${WORK_DIR}/prompt_guard_service

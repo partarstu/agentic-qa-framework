@@ -13,6 +13,7 @@ def test_download_fetches_model_snapshot_without_onnx_and_images():
     mock_config.EmbeddingServiceConfig.TEXT_MODEL_NAME = "BAAI/bge-m3"
     mock_config.EmbeddingServiceConfig.TEXT_MODEL_PATH = "models/embedding_model"
     mock_config.EmbeddingServiceConfig.TEXT_MODEL_REVISION = "abc123"
+    mock_config.EmbeddingServiceConfig.TEXT_MODEL_DOWNLOAD_IGNORE_PATTERNS = ("onnx/*", "imgs/*")
 
     with patch.dict(sys.modules, {"huggingface_hub": mock_hub, "config": mock_config}):
         runpy.run_module("scripts.download_embedding_model", run_name="__main__")
