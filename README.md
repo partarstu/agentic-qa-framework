@@ -240,10 +240,11 @@ QWEN_API_KEY= # Optional. Static API key for the Qwen endpoint. An endpoint serv
                                  # credentials instead, so it needs either a service account key file in
                                  # GOOGLE_APPLICATION_CREDENTIALS, or 'gcloud auth application-default login
                                  # --impersonate-service-account=<invoker service account>'.
-QWEN_THINKING_ENABLED=True # Default: True, meaning each agent's configured thinking level grades Qwen's reasoning
-                                 # effort (Qwen accepts low, medium and xhigh, so "minimal" is sent as "low" and "high"
-                                 # as "xhigh"). Set to False to disable thinking entirely through Qwen's chat template,
-                                 # e.g. to compare the model with and without it.
+QWEN_THINKING_ENABLED=False # Default: False, meaning thinking is disabled entirely through Qwen's chat template and
+                                 # the requests carry the global temperature and top_p. Set to True to let each agent's
+                                 # configured thinking level grade Qwen's reasoning effort (Qwen accepts low, medium and
+                                 # xhigh, so "minimal" is sent as "low" and "high" as "xhigh"), with the model card's
+                                 # thinking-mode sampling (temperature 1.0, top_p 0.95).
 
 # Logging
 LOG_LEVEL=INFO # Default: INFO. Controls the verbosity of logging.
@@ -623,6 +624,18 @@ Provider-specific request settings (Claude 5 thinking and effort, Qwen reasoning
 
 The agents keep the pydantic-ai 1.x run semantics: `end_strategy="early"` (tools requested alongside the final output are skipped rather than run) and a single retry per MCP tool call. A custom `MODEL_NAME` left to pydantic-ai follows its 2.x prefixes: `openai:` now targets the Responses API (`openai-chat:` for Chat Completions), and `google-vertex:` is `google-cloud:`; the `google-gla:`, `anthropic:` and `qwen:` names are built by the model factory and are unaffected.
 
+#### Qwen3.8-27B: thinking stays off
+
+Run `qwen:Qwen/Qwen3.8-27B-FP8` with thinking off, which is the default (`QWEN_THINKING_ENABLED=False`): the chat template's `enable_thinking` is set to `false` and the requests carry the global temperature (0.0) and top_p (1.0). This is the configuration the model was evaluated in with the hermetic smoke suite and its A/B comparison against the Gemini baseline, over eight runs in three configurations:
+
+| Configuration | Runs | Outcome |
+| --- | --- | --- |
+| Thinking off | 4 | Every flow completed; one intermittent instruction slip in four runs; the whole suite in about 9 minutes. Test-case review and incident reports judged on par with Gemini or better, requirements review and test-case generation somewhat below it. |
+| Thinking on, `medium` (`high` mapped to `xhigh` for test-case review) | 2 | About twice as slow; at `xhigh` the test-case review exceeded the orchestrator's 500 s task timeout; one intermittent instruction slip. No quality gain over thinking off. |
+| Thinking on, `low` | 2 | Every flow completed, but no quality gain over thinking off, and one test-case generation judged much worse than the baseline. |
+
+The quality gaps against Gemini did not depend on thinking: test-case generation repeatedly asserted that a single-use link was consumed without the test ever completing the action that consumes it, and the requirements review tended to pad its feedback with generic checklist items and advice addressed to testers rather than to the story author. Thinking only added latency and the risk of timeouts, so it is not worth enabling for this model.
+
 ### Token Budget and Cost Oversight
 
 Every LLM call made by the agents and the orchestrator is metered. After each agent run, the consumed token counts
@@ -841,8 +854,10 @@ each mocked boundary:
 The five webhooks are fired once, concurrently (the flows are mutually independent), so the suite's wall time is the
 longest flow rather than the sum of all flows.
 
-It runs in GitHub Actions (the `smoke` job in `.github/workflows/ci.yml`) on pull requests and on manual
-`workflow_dispatch` only — never on pushes to `main` — because every run makes real, billed Gemini calls. The job needs a
+Set `SMOKE_SEQUENTIAL_WEBHOOKS=1` to fire them one at a time instead: the RAG syncs first, since they call no model and fill the vector DB the other flows retrieve from, then the model-driven flows one after another. This suits a self-hosted model that should not serve several flows at once; the suite's wall time becomes the sum of the flows.
+
+It runs in GitHub Actions (the `smoke` job in `.github/workflows/ci.yml`) on manual
+`workflow_dispatch` only — never on pull requests or pushes to `main` — because every run makes real, billed Gemini calls. The job needs a
 `GOOGLE_API_KEY` repository secret. To run it locally:
 
 ```bash
@@ -1342,7 +1357,7 @@ uv run pytest tests/common/
 The suite under `tests/smoke/` is marked `smoke` and drives the hermetic docker-compose topology described in
 [Hermetic smoke tests](#hermetic-smoke-tests) above, not local code in isolation. Because it needs that stack running, it
 is excluded from a bare `uv run pytest` by default (via `addopts` in `pytest.ini`), so local runs stay harmless. Once the
-stack is up, run it explicitly with `uv run pytest -m smoke`. It runs in CI on pull requests and on manual
+stack is up, run it explicitly with `uv run pytest -m smoke`. It runs in CI on manual
 `workflow_dispatch` only (see *Hermetic smoke tests* above).
 
 ## Contributing

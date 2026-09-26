@@ -55,6 +55,10 @@ QWEN_REASONING_EFFORT_MAP: dict[ThinkingLevel, ReasoningEffort] = {
     "xhigh": "xhigh",
 }
 THINKING_DISABLED_BODY = {"chat_template_kwargs": {"enable_thinking": False}}
+# Qwen3.8's model card sampling for thinking mode, where it warns that greedy decoding repeats endlessly; its
+# top_k of 20 comes from the checkpoint's generation config, which the server applies when a request omits it.
+QWEN_THINKING_TEMPERATURE = 1.0
+QWEN_THINKING_TOP_P = 0.95
 CLAUDE_5_PREFIXES = ("claude-opus-5", "claude-sonnet-5", "claude-fable-5", "claude-mythos-5")
 # Models whose API rejects explicitly disabled thinking: they run adaptive at effort low instead.
 DISABLED_THINKING_UNSUPPORTED_PREFIXES = ("claude-fable-5", "claude-mythos-5")
@@ -156,27 +160,80 @@ def _build_google_model(model_name: str) -> GoogleModel:
 
 
 def _retry_http_client(model_name: str) -> httpx2.AsyncClient:
-    """An HTTP client retrying transport errors and 429/502/503/504 within the agent-run retry budget, honouring ``Retry-After``."""
+    """An HTTP client retrying transport errors and 429/502/503/504 within the agent-run retry budget, honouring the delay the provider asks for."""
     transport = AsyncHTTPX2TenacityTransport(
         config=RetryConfig(
             stop=stop_after_attempt(config.RetryConfig.MAX_RETRIES),
             wait=wait_retry_after(
-                fallback_strategy=wait_exponential(multiplier=config.RetryConfig.RETRY_BASE_DELAY_SECONDS),
-                max_wait=config.RetryConfig.RETRY_BASE_DELAY_SECONDS * (2 ** (config.RetryConfig.MAX_RETRIES - 1)),
+                fallback_strategy=_wait_body_retry_delay(
+                    wait_exponential(multiplier=config.RetryConfig.RETRY_BASE_DELAY_SECONDS)
+                ),
+                max_wait=config.RetryConfig.PROVIDER_RETRY_DELAY_CAP_SECONDS,
             ),
             retry=retry_if_exception_type((httpx2.TransportError, httpx2.HTTPStatusError)),
             before_sleep=_log_retry_attempt(model_name),
             reraise=True,
         ),
+        wrapped=_RetryableBodyReadingTransport(),
         validate_response=_raise_if_retryable_status,
     )
     return httpx2.AsyncClient(transport=transport)
+
+
+class _RetryableBodyReadingTransport(httpx2.AsyncBaseTransport):
+    """Reads the body of a retryable response, which the retry wait parses the provider's requested delay from."""
+
+    def __init__(self) -> None:
+        self._wrapped = httpx2.AsyncHTTPTransport()
+
+    async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
+        response = await self._wrapped.handle_async_request(request)
+        if response.status_code in RETRYABLE_STATUS_CODES:
+            await response.aread()
+        return response
+
+    async def aclose(self) -> None:
+        await self._wrapped.aclose()
 
 
 def _raise_if_retryable_status(response: httpx2.Response) -> None:
     """Raise (and so retry) only the statuses the transport level owns; every other response passes."""
     if response.status_code in RETRYABLE_STATUS_CODES:
         response.raise_for_status()
+
+
+# Gemini names the wait a quota needs only in the response body and sends no Retry-After header.
+def _wait_body_retry_delay(fallback_strategy: Callable[[RetryCallState], float]) -> Callable[[RetryCallState], float]:
+    """A wait honouring the capped ``google.rpc.RetryInfo`` delay of a response body, else the fallback."""
+
+    def wait(retry_state: RetryCallState) -> float:
+        exception = retry_state.outcome.exception() if retry_state.outcome else None
+        if isinstance(exception, httpx2.HTTPStatusError):
+            delay = _body_retry_delay_seconds(exception.response)
+            if delay is not None:
+                return min(delay, config.RetryConfig.PROVIDER_RETRY_DELAY_CAP_SECONDS)
+        return fallback_strategy(retry_state)
+
+    return wait
+
+
+def _body_retry_delay_seconds(response: httpx2.Response) -> float | None:
+    for detail in _error_payload(response).get("details") or []:
+        if isinstance(detail, dict) and str(detail.get("@type", "")).endswith("google.rpc.RetryInfo"):
+            try:
+                return float(str(detail.get("retryDelay", "")).removesuffix("s"))
+            except ValueError:
+                return None
+    return None
+
+
+def _error_payload(response: httpx2.Response) -> dict:
+    try:
+        payload = response.json()
+    except (httpx2.ResponseNotRead, ValueError):
+        return {}
+    error = payload.get("error") if isinstance(payload, dict) else None
+    return error if isinstance(error, dict) else {}
 
 
 def _log_retry_attempt(model_name: str) -> Callable[[RetryCallState], None]:
@@ -186,6 +243,8 @@ def _log_retry_attempt(model_name: str) -> Callable[[RetryCallState], None]:
         exception = retry_state.outcome.exception() if retry_state.outcome else None
         if isinstance(exception, httpx2.HTTPStatusError):
             reason = f"HTTP {exception.response.status_code}"
+            if provider_message := _error_payload(exception.response).get("message"):
+                reason += f": {provider_message}"
         else:
             reason = type(exception).__name__ if exception is not None else "unknown"
         delay = retry_state.next_action.sleep if retry_state.next_action else 0
@@ -202,17 +261,13 @@ def _log_retry_attempt(model_name: str) -> Callable[[RetryCallState], None]:
 
 
 def _build_qwen_settings(thinking_level: ThinkingLevel | None) -> OpenAIChatModelSettings:
-    """Thinking as Qwen expects it: switched off through its chat template, or graded through the effort.
-
-    pydantic-ai maps the unified thinking levels onto the OpenAI efforts verbatim, which Qwen rejects for the
-    two levels it does not have, so the effort is resolved here instead. It is resolved once, because every
-    agent keeps the thinking level it was created with.
-    """
+    """Return Qwen's thinking settings: off via its chat template, or model-card sampling plus any effort."""
     if not config.QWEN_THINKING_ENABLED or thinking_level is False:
         return OpenAIChatModelSettings(extra_body=THINKING_DISABLED_BODY)
-    if thinking_level is None:
-        return OpenAIChatModelSettings()
-    return OpenAIChatModelSettings(openai_reasoning_effort=QWEN_REASONING_EFFORT_MAP[thinking_level])
+    settings = OpenAIChatModelSettings(temperature=QWEN_THINKING_TEMPERATURE, top_p=QWEN_THINKING_TOP_P)
+    if thinking_level is not None:
+        settings["openai_reasoning_effort"] = QWEN_REASONING_EFFORT_MAP[thinking_level]
+    return settings
 
 
 def _build_qwen_provider(endpoint: str, model_name: str) -> OpenAIProvider:

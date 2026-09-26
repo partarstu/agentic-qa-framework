@@ -29,7 +29,7 @@ from pydantic_ai.models import (
     StreamedResponse,
 )
 from pydantic_ai.models.wrapper import WrapperModel
-from pydantic_ai.settings import ThinkingLevel
+from pydantic_ai.settings import ThinkingLevel, merge_model_settings
 from pydantic_ai.usage import RunUsage
 
 import config
@@ -99,8 +99,10 @@ class CustomLlmWrapper(WrapperModel):
         )
 
     def _get_model_settings(self, provided_settings: ModelSettings | None) -> ModelSettings:
-        if provided_settings is not None:
-            return provided_settings
+        """Return the defaults overridden key by key by the provided settings, which carry the model's own."""
+        return merge_model_settings(self._default_model_settings(), provided_settings) or ModelSettings()
+
+    def _default_model_settings(self) -> ModelSettings:
         if is_claude_5(self.wrapped_model_name):
             return build_claude_5_settings(self.thinking_level, self.max_output_tokens, self.wrapped_model_name)
         settings = ModelSettings(top_p=config.TOP_P, temperature=config.TEMPERATURE)

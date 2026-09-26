@@ -174,7 +174,7 @@ QWEN_ENDPOINT = os.environ.get("QWEN_ENDPOINT", "")
 QWEN_API_KEY = os.environ.get("QWEN_API_KEY", "")
 # Master switch for Qwen's thinking. When on, each agent's THINKING_LEVEL grades it; when off, thinking is
 # disabled through Qwen's chat template, which is the only way to switch it off entirely.
-QWEN_THINKING_ENABLED = os.environ.get("QWEN_THINKING_ENABLED", "True").lower() in ("true", "1", "t")
+QWEN_THINKING_ENABLED = os.environ.get("QWEN_THINKING_ENABLED", "False").lower() in ("true", "1", "t")
 
 
 class BudgetConfig:
@@ -364,6 +364,7 @@ class RetryConfig:
     RETRYABLE_STATUS_CODES = {404, 429, 500, 502, 503, 504}
     RETRY_BASE_DELAY_SECONDS = 5.0
     LLM_RESULTS_EXTRACTOR_RETRY_BASE_DELAY_SECONDS = 60.0
+    PROVIDER_RETRY_DELAY_CAP_SECONDS = 60.0
 
 
 class QdrantConfig:
