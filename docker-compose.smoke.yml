@@ -194,6 +194,8 @@ services:
       # proves prompt overrides reach the agent - the override file under
       # tests/smoke/overrides/ replaces the bundled main prompt template.
       PROMPT_OVERRIDES_DIR: "/prompt-overrides"
+      # two focus areas keep the run cheap while still exercising parallel reviews and their merge.
+      REQUIREMENTS_REVIEW_FOCUS_AREA_COUNT: "2"
       # retrieval enabled, Confluence-only - the review grounds itself in the
       # documents the concurrently running Confluence sync ingests into the mocked vector DB.
       CONFLUENCE_RETRIEVAL_ENABLED: "true"

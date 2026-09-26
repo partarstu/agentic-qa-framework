@@ -265,7 +265,7 @@ class DashboardPersistenceConfig:
 # Requirements Review Agent
 class RequirementsReviewAgentConfig:
     THINKING_LEVEL: ThinkingLevel = "medium"
-    VERSION = os.environ.get("REQUIREMENTS_REVIEW_AGENT_VERSION", "1.1.2")
+    VERSION = os.environ.get("REQUIREMENTS_REVIEW_AGENT_VERSION", "1.2.0")
     OWN_NAME = "Jira Requirements Reviewer"
     SKILL_ID = "jira-requirements-review"
     SKILL_NAME = "Jira Requirements Review"
@@ -276,6 +276,7 @@ class RequirementsReviewAgentConfig:
     MODEL_NAME = DEFAULT_MODEL_NAME
     MAX_OUTPUT_TOKENS = _optional_positive_int("REQUIREMENTS_REVIEW_MAX_OUTPUT_TOKENS") or MAX_OUTPUT_TOKENS
     MAX_REQUESTS_PER_TASK = 30
+    FOCUS_AREA_COUNT = _optional_positive_int("REQUIREMENTS_REVIEW_FOCUS_AREA_COUNT") or 5
 
 
 # Test Case Classification Agent

@@ -21,6 +21,7 @@ boundary, read back from its ``/__recorded`` endpoint:
 * Test-case classification -> labels reached Zephyr.
 * Requirements review   -> a Confluence-only configuration queries only the Confluence collection, with the
                            source pinned; the agent's log lines carry its name and task id.
+* Requirements review   -> the usage artifact meters the focused reviews, at most the configured count, and a merge run whenever at least two focused reviews succeeded.
 * Test-case review      -> a non-empty "Review Comments" value reached Zephyr for every generated test case.
 * Test-case review      -> at least one test case reached the "Review Complete" status.
 * Test-case review      -> every review comment carries the duplicate-check section, after the batch was
@@ -48,6 +49,7 @@ boundary, read back from its ``/__recorded`` endpoint:
                            token (401).
 """
 
+import re
 import subprocess
 import time
 from datetime import UTC, datetime, timedelta
@@ -271,6 +273,37 @@ def test_agent_log_lines_carry_agent_name_and_task_id(
     assert stamped, f"No log line of the task carries the agent name and a task id: {entries[:5]}"
     foreign = {e.get("agent_name") for e in entries if e.get("agent_name")} - {agent_name}
     assert not foreign, f"Log lines of the task carry other agents' names: {foreign}"
+
+
+def test_requirements_review_usage_carries_focused_review_and_merge_operations(
+    requirements_review_response: httpx.Response, http_client: httpx.Client, auth_headers: dict[str, str]
+) -> None:
+    """The review task meters its focused reviews and, once at least two of them succeeded, the merge run."""
+    agent_name = config.RequirementsReviewAgentConfig.OWN_NAME
+    tasks = _completed_tasks_of(http_client, auth_headers, agent_name)
+    assert tasks, f"No completed task of '{agent_name}' is listed on the dashboard."
+    operations = (tasks[0].get("token_usage") or {}).get("operations") or []
+    requests_by_name = {operation["operation"]: operation["requests"] for operation in operations}
+    assert {"main", "review_with_attachments"} <= set(requests_by_name), f"Operations: {operations}"
+    assert requests_by_name["review_with_attachments"] >= 1, operations
+
+    response = http_client.get(
+        f"{ORCHESTRATOR_URL}/api/dashboard/logs",
+        params={"task_id": tasks[0]["task_id"], "limit": 1000},
+        headers=auth_headers,
+    )
+    assert response.status_code == 200, response.text
+    summaries = [
+        match
+        for entry in response.json()
+        if (match := re.search(r"(\d+) of (\d+) focused review\(s\)", entry.get("message", "")))
+    ]
+    assert summaries, "No focused-review summary line reached the task's dashboard logs."
+    succeeded, requested = (int(count) for count in summaries[-1].groups())
+    # docker-compose.smoke.yml caps the focus areas at 2.
+    assert 1 <= requested <= 2, summaries[-1].group(0)
+    if succeeded >= 2:
+        assert requests_by_name.get("merge_reviews", 0) >= 1, f"No merge run was metered: {operations}"
 
 
 def test_usage_artifact_carries_per_operation_counters(

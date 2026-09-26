@@ -8,6 +8,7 @@ import re
 
 import pytest
 
+import config
 from agents.incident_creation import prompt as incident_prompts
 from agents.requirements_review import prompt as requirements_prompts
 from agents.test_case_classification import prompt as classification_prompts
@@ -25,6 +26,7 @@ _PROMPTS = {
     "requirements-review": requirements_prompts.RequirementsReviewSystemPrompt,
     "requirements-review-with-attachments": requirements_prompts.RequirementsReviewWithAttachmentsPrompt,
     "requirements-review-retrieval": requirements_prompts.RequirementsReviewRetrievalInstruction,
+    "requirements-review-merge": requirements_prompts.MergeReviewsPrompt,
     "test-case-classification": classification_prompts.TestCaseClassificationSystemPrompt,
     "test-case-generation": generation_prompts.TestCaseGenerationSystemPrompt,
     "ac-extraction": generation_prompts.AcExtractionPrompt,
@@ -60,6 +62,14 @@ def test_orchestrator_prompt_is_markdown(template_file_name):
 
 def test_the_grounding_suffix_is_markdown():
     assert requirements_prompts.RequirementsReviewWithAttachmentsPrompt.grounding_suffix().startswith("#")
+
+
+def test_requirements_review_prompt_renders_the_configured_focus_area_count(monkeypatch):
+    monkeypatch.setattr(config.RequirementsReviewAgentConfig, "FOCUS_AREA_COUNT", 7)
+
+    prompt = requirements_prompts.RequirementsReviewSystemPrompt().get_prompt()
+
+    assert "select up to 7 of the most important review focus areas" in prompt
 
 
 def test_classification_prompt_lists_every_test_type_with_its_label():
