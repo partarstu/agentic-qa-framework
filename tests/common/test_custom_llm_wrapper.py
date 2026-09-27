@@ -9,9 +9,10 @@ from fastapi import HTTPException
 from pydantic import BaseModel
 from pydantic_ai import Tool
 from pydantic_ai.exceptions import UnexpectedModelBehavior
-from pydantic_ai.messages import ModelRequest, ModelResponse, ToolCallPart, UserPromptPart
-from pydantic_ai.models import Model
+from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse, ToolCallPart, UserPromptPart
+from pydantic_ai.models import Model, ModelRequestParameters
 from pydantic_ai.models.function import AgentInfo, FunctionModel
+from pydantic_ai.settings import ModelSettings, ThinkingLevel
 
 from common.custom_llm_wrapper import CustomLlmWrapper
 
@@ -32,7 +33,7 @@ def custom_llm(mock_wrapped_model):
 @pytest.mark.asyncio
 async def test_request_passthrough(custom_llm, mock_wrapped_model):
     messages = [ModelRequest(parts=[UserPromptPart(content="Hello")])]
-    model_settings = MagicMock()
+    model_settings = {"temperature": 0.5}
     request_params = MagicMock()
 
     mock_response = ModelResponse(parts=[], timestamp=MagicMock())
@@ -42,7 +43,12 @@ async def test_request_passthrough(custom_llm, mock_wrapped_model):
         response = await custom_llm.request(messages, model_settings, request_params)
 
     assert response == mock_response
-    mock_wrapped_model.request.assert_called_once_with(messages, model_settings, request_params)
+    mock_wrapped_model.request.assert_called_once()
+    sent_messages, sent_settings, sent_params = mock_wrapped_model.request.call_args.args
+    assert sent_messages is messages
+    assert sent_params is request_params
+    assert sent_settings["temperature"] == 0.5
+    assert sent_settings["top_p"] == 1.0
 
 
 @pytest.mark.asyncio
@@ -259,3 +265,72 @@ class TestOutputTokenCap:
             settings = wrapper._get_model_settings(None)
 
         assert "max_tokens" not in settings
+
+
+@pytest.mark.asyncio
+async def test_defaults_reach_a_model_built_without_settings_of_its_own():
+    """Gemini and Claude are built without settings of their own, so the wrapper's defaults are all they receive."""
+    received_settings: dict = {}
+
+    def respond(_messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        received_settings.update(info.model_settings or {})
+        return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, {"verdict": "done"})])
+
+    agent = _agent_on(respond, thinking_level="low", max_output_tokens=2048)
+    with patch("config.PROMPT_INJECTION_CHECK_ENABLED", False):
+        await agent.run("go")
+
+    assert received_settings["temperature"] == 0.0
+    assert received_settings["top_p"] == 1.0
+    assert received_settings["max_tokens"] == 2048
+
+
+async def _settings_reaching_qwen(thinking_level: ThinkingLevel) -> dict:
+    """Run an agent on the Qwen model and return the request settings its OpenAI client would send."""
+    with patch("config.QWEN_ENDPOINT", "http://localhost:8080/v1/"):
+        agent = CustomLlmWrapper.create_agent(
+            "qwen:Qwen/Qwen3.8-27B-FP8", _Verdict, thinking_level=thinking_level, max_output_tokens=4096
+        )
+    qwen_model = agent.model.wrapped
+    sent_settings: dict = {}
+
+    async def request(
+        _messages: list[ModelMessage],
+        model_settings: ModelSettings | None,
+        model_request_parameters: ModelRequestParameters,
+    ) -> ModelResponse:
+        sent_settings.update(qwen_model.prepare_request(model_settings, model_request_parameters)[0])
+        return ModelResponse(parts=[ToolCallPart("final_result", {"verdict": "done"})])
+
+    with patch.object(qwen_model, "request", request), patch("config.PROMPT_INJECTION_CHECK_ENABLED", False):
+        await agent.run("go")
+    return sent_settings
+
+
+@pytest.mark.asyncio
+async def test_qwen_thinking_request_carries_the_model_card_sampling_the_cap_and_the_effort():
+    with patch("config.QWEN_THINKING_ENABLED", True):
+        settings = await _settings_reaching_qwen("medium")
+
+    assert settings == {"temperature": 1.0, "top_p": 0.95, "max_tokens": 4096, "openai_reasoning_effort": "medium"}
+
+
+@pytest.mark.asyncio
+async def test_qwen_request_without_thinking_carries_the_global_sampling_and_the_cap():
+    with patch("config.QWEN_THINKING_ENABLED", False):
+        settings = await _settings_reaching_qwen("medium")
+
+    assert settings == {
+        "temperature": 0.0,
+        "top_p": 1.0,
+        "max_tokens": 4096,
+        "extra_body": {"chat_template_kwargs": {"enable_thinking": False}},
+    }
+
+
+def test_provided_settings_override_the_defaults_key_by_key(mock_wrapped_model):
+    wrapper = CustomLlmWrapper(mock_wrapped_model, thinking_level="low", max_output_tokens=2048)
+
+    settings = wrapper._get_model_settings({"temperature": 0.5})
+
+    assert settings == {"temperature": 0.5, "top_p": 1.0, "thinking": "low", "max_tokens": 2048}

@@ -163,8 +163,8 @@ jobs:
   smoke:
     name: Smoke (hermetic, real LLM)
     runs-on: ubuntu-latest
-    # Real, billed Gemini calls: only on pull requests and manual runs, never on pushes to main.
-    if: github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request'
+    # Real, billed Gemini calls: only on manual runs, until the cost of running it on every pull request is justified.
+    if: github.event_name == 'workflow_dispatch'
     timeout-minutes: 45
     steps:
       - name: Checkout repository

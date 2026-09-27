@@ -2,12 +2,16 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
+import asyncio
+
 from pydantic_ai.exceptions import ModelRetry
 from pydantic_ai.messages import BinaryContent
 from pydantic_ai.settings import ThinkingLevel
+from pydantic_ai.usage import UsageLimits
 
 import config
 from agents.requirements_review.prompt import (
+    MergeReviewsPrompt,
     RequirementsReviewRetrievalInstruction,
     RequirementsReviewSystemPrompt,
     RequirementsReviewWithAttachmentsPrompt,
@@ -30,14 +34,23 @@ logger = utils.get_logger("reviewer_agent")
 
 _JIRA_TOOL_ALLOWLIST = (JIRA_GET_ISSUE, JIRA_ADD_COMMENT)
 
-_SCOPE_PARAM_LENGTH_CAP = 200
+# Fits the longest SharePoint folder path; IDs, keys and focus areas are far shorter.
+_TOOL_PARAM_MAX_LENGTH = 400
 
 
-def _capped(value: str | None) -> str | None:
-    """Defensive length cap on the tool's free-text scope parameters."""
-    if value is None:
-        return None
-    return value[:_SCOPE_PARAM_LENGTH_CAP]
+def _check_length(name: str, value: str | None) -> None:
+    if value is not None and len(value) > _TOOL_PARAM_MAX_LENGTH:
+        raise ModelRetry(f"{name} must be at most {_TOOL_PARAM_MAX_LENGTH} characters long; got {len(value)}.")
+
+
+def _validate_focus_areas(focus_areas: list[str]) -> None:
+    max_count = config.RequirementsReviewAgentConfig.FOCUS_AREA_COUNT
+    if not 1 <= len(focus_areas) <= max_count:
+        raise ModelRetry(f"focus_areas must hold between 1 and {max_count} review focus areas; got {len(focus_areas)}.")
+    if any(not focus_area.strip() for focus_area in focus_areas):
+        raise ModelRetry("Every item of focus_areas must be a non-blank review focus area.")
+    for index, focus_area in enumerate(focus_areas):
+        _check_length(f"focus_areas[{index}]", focus_area)
 
 
 async def _get_issue_message_parts(issue_key: str, jira_issue_content: str) -> list[str | BinaryContent]:
@@ -98,6 +111,14 @@ class RequirementsReviewAgent(AgentBase):
             thinking_level=config.RequirementsReviewAgentConfig.THINKING_LEVEL,
             max_output_tokens=config.RequirementsReviewAgentConfig.MAX_OUTPUT_TOKENS,
         )
+        self.merge_agent = CustomLlmWrapper.create_agent(
+            model_name=config.RequirementsReviewAgentConfig.MODEL_NAME,
+            output_type=RequirementsReviewFeedback,
+            system_prompt=MergeReviewsPrompt().get_prompt(),
+            name="merge_reviews",
+            thinking_level=config.RequirementsReviewAgentConfig.THINKING_LEVEL,
+            max_output_tokens=config.RequirementsReviewAgentConfig.MAX_OUTPUT_TOKENS,
+        )
 
         instruction_prompt = RequirementsReviewSystemPrompt()
         instructions = instruction_prompt.get_prompt()
@@ -132,25 +153,29 @@ class RequirementsReviewAgent(AgentBase):
         return config.RequirementsReviewAgentConfig.MAX_REQUESTS_PER_TASK
 
     async def _review_with_attachments(
-        self, jira_issue_key: str, jira_issue_content: str
+        self, jira_issue_key: str, jira_issue_content: str, focus_areas: list[str]
     ) -> RequirementsReviewFeedback:
         """
-        Reviews a Jira issue, taking into account all its attachments.
+        Reviews a Jira issue, taking into account all its attachments, with one focused review per focus area.
 
         Args:
             jira_issue_key: The key of the Jira issue (e.g. PROJ-123), used to download its attachments.
             jira_issue_content: The complete content of the Jira issue.
+            focus_areas: The review focus areas for this issue, each a topic of the issue as a short phrase,
+                never a quality criterion; at least one, at most the number the instructions allow.
 
         Returns:
-            Requirements review feedback with improvement suggestions.
+            Requirements review feedback with improvement suggestions, merged across all focus areas.
         """
+        _validate_focus_areas(focus_areas)
         user_message_parts = await _get_issue_message_parts(jira_issue_key, jira_issue_content)
-        return await self._run_review(user_message_parts)
+        return await self._run_review(jira_issue_key, user_message_parts, focus_areas)
 
     async def _review_with_reference_documentation(
         self,
         jira_issue_key: str,
         jira_issue_content: str,
+        focus_areas: list[str],
         retrieval_query: str,
         space_key: str | None = None,
         page_id: str | None = None,
@@ -160,13 +185,15 @@ class RequirementsReviewAgent(AgentBase):
     ) -> RequirementsReviewFeedback:
         """
         Reviews a Jira issue, taking into account all its attachments and the reference
-        documentation matching the retrieval query across every enabled source.
+        documentation matching the retrieval query across every enabled source, with one
+        focused review per focus area.
 
         Args:
             jira_issue_key: The key of the Jira issue (e.g. PROJ-123), used to download its attachments.
             jira_issue_content: The complete content of the Jira issue.
-            retrieval_query: A concise documentation search query (key topics, feature
-                names, domain terms).
+            focus_areas: The review focus areas for this issue, each a topic of the issue as a short phrase,
+                never a quality criterion; at least one, at most the number the instructions allow.
+            retrieval_query: A concise documentation search query (key topics, feature names, domain terms).
             space_key: Optional Confluence space key scope.
             page_id: Optional Confluence page ID scope.
             document_name_pattern: Optional regex pattern on document names, applied to every source.
@@ -174,7 +201,7 @@ class RequirementsReviewAgent(AgentBase):
             folder_path: Optional SharePoint folder path scope, relative to the drive root.
 
         Returns:
-            Requirements review feedback with improvement suggestions.
+            Requirements review feedback with improvement suggestions, merged across all focus areas.
         """
         if not retrieval_query.strip():
             # No fallback to the issue content: a missing query is an explicit tool error.
@@ -182,36 +209,118 @@ class RequirementsReviewAgent(AgentBase):
                 "A non-blank retrieval_query is required: distil key topics, feature names "
                 "and domain terms from the issue and pass them as retrieval_query."
             )
+        _validate_focus_areas(focus_areas)
+        scope_params = {
+            "space_key": space_key,
+            "page_id": page_id,
+            "document_name_pattern": document_name_pattern,
+            "drive_id": drive_id,
+            "folder_path": folder_path,
+        }
+        for name, value in scope_params.items():
+            _check_length(name, value)
 
         user_message_parts = await _get_issue_message_parts(jira_issue_key, jira_issue_content)
-        scope = RetrievalScope(
-            space_key=_capped(space_key),
-            page_id=_capped(page_id),
-            document_name_pattern=_capped(document_name_pattern),
-            drive_id=_capped(drive_id),
-            folder_path=_capped(folder_path),
+
+        await self._enrich_user_message_with_rag(
+            document_name_pattern,
+            drive_id,
+            folder_path,
+            jira_issue_key,
+            page_id,
+            retrieval_query,
+            space_key,
+            user_message_parts,
         )
-        result = await retrieve_documents(self.documents_db, retrieval_query, scope, sharepoint_db=self.sharepoint_db)
-        for source in result.unavailable_sources:
-            # The review must say that a source could not be consulted, so nobody mistakes a
-            # partial result for the full knowledge base.
+
+        return await self._run_review(jira_issue_key, user_message_parts, focus_areas)
+
+    async def _enrich_user_message_with_rag(
+        self,
+        document_name_pattern: str | None,
+        drive_id: str | None,
+        folder_path: str | None,
+        jira_issue_key: str,
+        page_id: str | None,
+        retrieval_query: str,
+        space_key: str | None,
+        user_message_parts: list[str | BinaryContent],
+    ) -> None:
+        rag_scope = RetrievalScope(
+            space_key=space_key,
+            page_id=page_id,
+            document_name_pattern=document_name_pattern,
+            drive_id=drive_id,
+            folder_path=folder_path,
+        )
+        rag_result = await retrieve_documents(
+            self.documents_db, retrieval_query, rag_scope, sharepoint_db=self.sharepoint_db
+        )
+        for source in rag_result.unavailable_sources:
             user_message_parts.append(
-                f"Note: the {source} knowledge base was unavailable during this review; "
-                f"its documents could not be consulted."
+                f"Note: the {source} knowledge base was unavailable during this review; its documents were not fetched."
             )
-        # Reference documentation comes after the issue content and the Jira attachments.
-        user_message_parts.extend(assemble_retrieved_parts(result.pages))
+
+        user_message_parts.extend(assemble_retrieved_parts(rag_result.pages))
         logger.info(
             "Retrieved %d reference documentation page(s) for issue %s (unavailable sources: %s)",
-            len(result.pages),
+            len(rag_result.pages),
             jira_issue_key,
-            result.unavailable_sources or "none",
+            rag_result.unavailable_sources or "none",
         )
-        return await self._run_review(user_message_parts)
 
-    async def _run_review(self, user_message_parts: list[str | BinaryContent]) -> RequirementsReviewFeedback:
-        result = await self.review_agent.run(user_message_parts)
-        logger.info("Generated improvement suggestions as a feedback")
+    async def _run_review(
+        self, jira_issue_key: str, user_message_parts: list[str | BinaryContent], focus_areas: list[str]
+    ) -> RequirementsReviewFeedback:
+        """Runs one reviewer per focus area in parallel and merges the reviews that succeeded."""
+
+        usage_limits = UsageLimits(total_tokens_limit=config.BudgetConfig.TOTAL_TOKENS_LIMIT_PER_TASK)
+        results = await asyncio.gather(
+            *[
+                self.review_agent.run(
+                    [f"Review focus area: {focus_area}", *user_message_parts], usage_limits=usage_limits
+                )
+                for focus_area in focus_areas
+            ],
+            return_exceptions=True,
+        )
+
+        reviews: list[tuple[str, RequirementsReviewFeedback]] = []
+        failures: list[BaseException] = []
+        failed_focus_areas: list[str] = []
+        for focus_area, result in zip(focus_areas, results, strict=True):
+            if isinstance(result, BaseException):
+                logger.error(
+                    "Review of focus area %r for issue %s failed; continuing without it.",
+                    focus_area,
+                    jira_issue_key,
+                    exc_info=result,
+                )
+                failures.append(result)
+                failed_focus_areas.append(focus_area)
+            else:
+                reviews.append((focus_area, result.output))
+        logger.info("%d of %d focused review(s) of issue %s succeeded", len(reviews), len(focus_areas), jira_issue_key)
+        if not reviews:
+            raise failures[0]
+
+        feedback = reviews[0][1] if len(reviews) == 1 else await self._merge_reviews(reviews, usage_limits)
+        if failed_focus_areas:
+            feedback.suggested_improvements += (
+                "\n\nNote: the following focus areas were not reviewed because of an error: "
+                f"{', '.join(failed_focus_areas)}."
+            )
+        return feedback
+
+    async def _merge_reviews(
+        self, reviews: list[tuple[str, RequirementsReviewFeedback]], usage_limits: UsageLimits
+    ) -> RequirementsReviewFeedback:
+        labelled_reviews = [
+            f"Review focused on '{focus_area}':\n```{review.suggested_improvements}```"
+            for focus_area, review in reviews
+        ]
+        result = await self.merge_agent.run("\n\n".join(labelled_reviews), usage_limits=usage_limits)
+        logger.info("Merged %d focused review(s) into one feedback", len(reviews))
         return result.output
 
 

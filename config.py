@@ -174,7 +174,7 @@ QWEN_ENDPOINT = os.environ.get("QWEN_ENDPOINT", "")
 QWEN_API_KEY = os.environ.get("QWEN_API_KEY", "")
 # Master switch for Qwen's thinking. When on, each agent's THINKING_LEVEL grades it; when off, thinking is
 # disabled through Qwen's chat template, which is the only way to switch it off entirely.
-QWEN_THINKING_ENABLED = os.environ.get("QWEN_THINKING_ENABLED", "True").lower() in ("true", "1", "t")
+QWEN_THINKING_ENABLED = os.environ.get("QWEN_THINKING_ENABLED", "False").lower() in ("true", "1", "t")
 
 
 class BudgetConfig:
@@ -265,7 +265,7 @@ class DashboardPersistenceConfig:
 # Requirements Review Agent
 class RequirementsReviewAgentConfig:
     THINKING_LEVEL: ThinkingLevel = "medium"
-    VERSION = os.environ.get("REQUIREMENTS_REVIEW_AGENT_VERSION", "1.1.2")
+    VERSION = os.environ.get("REQUIREMENTS_REVIEW_AGENT_VERSION", "1.2.0")
     OWN_NAME = "Jira Requirements Reviewer"
     SKILL_ID = "jira-requirements-review"
     SKILL_NAME = "Jira Requirements Review"
@@ -276,6 +276,7 @@ class RequirementsReviewAgentConfig:
     MODEL_NAME = DEFAULT_MODEL_NAME
     MAX_OUTPUT_TOKENS = _optional_positive_int("REQUIREMENTS_REVIEW_MAX_OUTPUT_TOKENS") or MAX_OUTPUT_TOKENS
     MAX_REQUESTS_PER_TASK = 30
+    FOCUS_AREA_COUNT = _optional_positive_int("REQUIREMENTS_REVIEW_FOCUS_AREA_COUNT") or 5
 
 
 # Test Case Classification Agent
@@ -364,6 +365,7 @@ class RetryConfig:
     RETRYABLE_STATUS_CODES = {404, 429, 500, 502, 503, 504}
     RETRY_BASE_DELAY_SECONDS = 5.0
     LLM_RESULTS_EXTRACTOR_RETRY_BASE_DELAY_SECONDS = 60.0
+    PROVIDER_RETRY_DELAY_CAP_SECONDS = 60.0
 
 
 class QdrantConfig:

@@ -217,15 +217,25 @@ _WEBHOOKS: dict[str, tuple[str, dict[str, str]]] = {
     "update_test_case_db": ("/update-test-case-db", {"project_key": SEEDED_PROJECT_KEY}),
     "update_sharepoint_db": ("/update-sharepoint-db", {"drive_id": "drive-smoke"}),
 }
+# The syncs call no model and fill the vector DB the model-driven flows retrieve from, so they go first.
+_SYNC_WEBHOOKS = ("update_jira_db", "update_confluence_db", "update_test_case_db", "update_sharepoint_db")
+SEQUENTIAL_WEBHOOKS = os.environ.get("SMOKE_SEQUENTIAL_WEBHOOKS", "").lower() in ("true", "1", "t")
 
 
 @pytest.fixture(scope="session")
 def webhook_responses(all_agents_ready: None, webhook_headers: dict[str, str]) -> dict[str, httpx.Response]:
-    """Fire every webhook once, concurrently, and share the responses.
+    """Fire every webhook once, concurrently or one at a time, and share the responses.
 
     Each webhook returns only after its whole flow completes, so posting them from
     a thread pool cuts the suite's wall time from the sum of the flows to the max.
     """
+    if SEQUENTIAL_WEBHOOKS:
+        order = [*_SYNC_WEBHOOKS, *(name for name in _WEBHOOKS if name not in _SYNC_WEBHOOKS)]
+        responses = {}
+        for name in order:
+            path, payload = _WEBHOOKS[name]
+            responses[name] = _post_webhook(path, webhook_headers, payload)
+        return responses
     with ThreadPoolExecutor(max_workers=len(_WEBHOOKS)) as pool:
         futures = {
             name: pool.submit(_post_webhook, path, webhook_headers, payload)

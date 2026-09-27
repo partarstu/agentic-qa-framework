@@ -4,6 +4,7 @@
 
 from pathlib import Path
 
+import config
 from common import utils
 from common.prompt_base import PromptBase
 
@@ -49,7 +50,7 @@ class RequirementsReviewSystemPrompt(PromptBase):
     def get_prompt(self) -> str:
         """Returns the formatted prompt as a string."""
         logger.info("Generating main requirements reviewer system prompt")
-        return self.template
+        return self.template.format(focus_area_count=config.RequirementsReviewAgentConfig.FOCUS_AREA_COUNT)
 
 
 class RequirementsReviewWithAttachmentsPrompt(PromptBase):
@@ -80,6 +81,20 @@ class RequirementsReviewWithAttachmentsPrompt(PromptBase):
         )
         if self.grounding_instruction:
             return f"{self.template}\n\n{self.grounding_instruction}"
+        return self.template
+
+
+class MergeReviewsPrompt(PromptBase):
+    """Prompt for the sub-agent that merges the focused reviews into one feedback."""
+
+    def get_script_dir(self) -> Path:
+        return _get_prompts_root()
+
+    def __init__(self, template_file_name: str = "merge_reviews_prompt.md"):
+        super().__init__(template_file_name)
+
+    def get_prompt(self) -> str:
+        logger.info("Generating system prompt for sub-agent which merges the focused requirements reviews")
         return self.template
 
 
