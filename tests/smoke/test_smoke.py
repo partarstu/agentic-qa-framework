@@ -300,8 +300,8 @@ def test_requirements_review_usage_carries_focused_review_and_merge_operations(
     ]
     assert summaries, "No focused-review summary line reached the task's dashboard logs."
     succeeded, requested = (int(count) for count in summaries[-1].groups())
-    # docker-compose.smoke.yml caps the focus areas at 2.
-    assert 1 <= requested <= 2, summaries[-1].group(0)
+    # docker-compose.smoke.yml caps the focus areas at 3.
+    assert 1 <= requested <= 3, summaries[-1].group(0)
     if succeeded >= 2:
         assert requests_by_name.get("merge_reviews", 0) >= 1, f"No merge run was metered: {operations}"
 

@@ -818,7 +818,7 @@ each mocked boundary:
 * **Requirements review** (`POST /new-requirements-available`) → a non-empty review comment reaches Jira (REST or MCP),
   and the agent first fetched the source story via the Jira MCP. The comment carries the marker of the prompt override
   mounted from `tests/smoke/overrides/`, the story attachment is downloaded over Jira REST, and the review issues a
-  hybrid documents query whose text is non-empty and shorter than the issue content. With `REQUIREMENTS_REVIEW_FOCUS_AREA_COUNT` set to 2, the usage artifact meters the focused reviews (`review_with_attachments`) and, whenever at least two of them succeeded, the merge run (`merge_reviews`).
+  hybrid documents query whose text is non-empty and shorter than the issue content. With `REQUIREMENTS_REVIEW_FOCUS_AREA_COUNT` set to 3, the usage artifact meters the focused reviews (`review_with_attachments`) and, whenever at least two of them succeeded, the merge run (`merge_reviews`).
 * **Additional Jira fields** (`JIRA_ADDITIONAL_FIELD_IDS`) → the Jira MCP mock records that the review and generation
   flows requested the configured custom field IDs.
 * **Routing and cards** → routing decisions with justifications reach the dashboard logs, and every agent's card
