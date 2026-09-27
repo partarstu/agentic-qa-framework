@@ -36,7 +36,31 @@
           "contains": {
             "properties": {
               "unique-id": {
-                "const": "test-case-design-agent"
+                "const": "test-case-generation-agent"
+              }
+            },
+            "required": [
+              "unique-id"
+            ]
+          }
+        },
+        {
+          "contains": {
+            "properties": {
+              "unique-id": {
+                "const": "test-case-classification-agent"
+              }
+            },
+            "required": [
+              "unique-id"
+            ]
+          }
+        },
+        {
+          "contains": {
+            "properties": {
+              "unique-id": {
+                "const": "test-case-review-agent"
               }
             },
             "required": [
@@ -179,7 +203,41 @@
           "contains": {
             "properties": {
               "unique-id": {
-                "const": "test-case-design-agent"
+                "const": "test-case-generation-agent"
+              },
+              "controls": {
+                "required": [
+                  "prompt-injection-guard"
+                ]
+              }
+            },
+            "required": [
+              "controls"
+            ]
+          }
+        },
+        {
+          "contains": {
+            "properties": {
+              "unique-id": {
+                "const": "test-case-classification-agent"
+              },
+              "controls": {
+                "required": [
+                  "prompt-injection-guard"
+                ]
+              }
+            },
+            "required": [
+              "controls"
+            ]
+          }
+        },
+        {
+          "contains": {
+            "properties": {
+              "unique-id": {
+                "const": "test-case-review-agent"
               },
               "controls": {
                 "required": [
@@ -410,7 +468,24 @@
           "contains": {
             "properties": {
               "unique-id": {
-                "const": "rel-test-case-design-jira"
+                "const": "rel-test-case-generation-jira"
+              },
+              "controls": {
+                "required": [
+                  "jira-credential-origin-scope"
+                ]
+              }
+            },
+            "required": [
+              "controls"
+            ]
+          }
+        },
+        {
+          "contains": {
+            "properties": {
+              "unique-id": {
+                "const": "rel-test-case-review-jira"
               },
               "controls": {
                 "required": [
@@ -502,7 +577,7 @@
           "contains": {
             "properties": {
               "unique-id": {
-                "const": "rel-test-case-design-qdrant"
+                "const": "rel-test-case-review-qdrant"
               },
               "controls": {
                 "required": [

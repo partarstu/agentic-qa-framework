@@ -88,7 +88,7 @@ Compare the scope from step 1 with:
 - **`README.md`**: sections describing changed endpoints, environment variables, setup or features. Remove statements that are no longer true.
 - **Versions**: for every agent and the orchestrator whose logic the branch alters (prompts, tools, workflow, routing, output content, integration behaviour), the `VERSION` default in `config.py` and the README *Environment Variables* block is bumped at the level *Versioning of agents and the orchestrator* in `AGENTS.md` prescribes. Add a missing bump and list every bump in the PR description.
 - **Skills in `.agents/skills/`**: any instruction, template or referenced code path the change made inaccurate.
-- **Smoke suite**: a new agent, endpoint or integration, or changed agent output, must be covered in `tests/smoke/` by this branch, including a refreshed A/B baseline when outputs changed intentionally. If coverage is missing, stop and tell the user. Do not run the smoke suite unless the user asks: it needs the docker-compose stack and makes billed LLM calls, and CI runs it on the PR. A pure refactor needs no smoke change; say so explicitly.
+- **Smoke suite**: a new agent, endpoint or integration, or changed agent output, must be covered in `tests/smoke/` by this branch, including a refreshed A/B baseline when outputs changed intentionally. If coverage is missing, stop and tell the user. Do not run the smoke suite unless the user asks: it needs the docker-compose stack and makes billed LLM calls, and CI runs it only on a manual `workflow_dispatch`. A pure refactor needs no smoke change; say so explicitly.
 
 ## 8. Review with the user and get approval
 

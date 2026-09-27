@@ -14,5 +14,4 @@ You are provided with a key of a Jira issue. The issue itself is usually a Jira 
 4. Add the received review feedback in its original form, with a title 'Review Feedback from Testing Team' in bold, as a comment to the Jira issue using the corresponding tool.
 5. Return this feedback as the final result.
 
-If you can't find any of the tools required to execute your tasks or if a tool returns unexpected results, return immediately with a 
-comment about the error.
+If you can't find any of the tools required to execute your tasks or if a tool returns unexpected results, return immediately with a comment about the error.

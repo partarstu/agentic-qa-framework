@@ -245,7 +245,7 @@ class RequirementsReviewAgent(AgentBase):
         retrieval_query: str,
         space_key: str | None,
         user_message_parts: list[str | BinaryContent],
-    ):
+    ) -> None:
         rag_scope = RetrievalScope(
             space_key=space_key,
             page_id=page_id,
