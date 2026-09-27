@@ -52,7 +52,8 @@ Always use relevant skills from ".agents" folder while executing your tasks.
 * Every time you work with OS-specific commands, check the OS version and type in order to know which commands are correct.
 * Never reformat the code which you haven't modified!
 * Never hard-wrap Markdown or any other text file you create or edit: a paragraph, a list item or a table row is one line, however long it gets. The files are read in an editor with soft wraps, so hard wraps only add noise. This applies to every generated file, including plans, skills, prompts and documentation.
-* Before implementing anything, always let the user know what you plan to do and ask the user to confirm it.
+* Before implementing anything, always let the user know what you plan to do, in a very short and concise form, and ask the user to confirm it.
+* When asked by the user or instruction to create a plan (implementation plan, TO-DO list or similar), write it straight to an .MD file in the "plans" folder of this project and reply with only its path and a short summary. Never print the plan in the conversation.
 * Never duplicate existing functionality. If you've noticed any existing logic or functionality which you need for your implementation, always reuse it. If reusing it directly can't be done, always extract it so that it's accessible (inheritance or composition) and then reuse it.
 * Never commit changes you've made into git unless explicitly asked by the user.
 * Always clean up everything you created temporarily during a task before reporting it as done, without being asked: tear down any stack you started (e.g. `docker compose -f docker-compose.smoke.yml down -v`), remove containers, networks and volumes, and delete scratch scripts, outputs, probe baselines and any other file that isn't part of the deliverable. Never leave such things running or lying around "in case they're needed later".

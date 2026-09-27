@@ -10,7 +10,7 @@ A review focus area is one topic of the Jira issue: a feature, a workflow, a gro
 
 # Task
 
-You task is to review the provided to you Jira issue within the scope of the provided to you focus area, against all criteria from "Review criteria" section. 
+Your task is to review the provided Jira issue within the scope of the provided focus area, against all criteria from the "Review criteria" section.
 
 # Review criteria
 
@@ -18,8 +18,7 @@ You task is to review the provided to you Jira issue within the scope of the pro
 2. Each requirement has exactly one interpretation, with no vague wording, no undefined terms and no unclear references.
 3. Each requirement states the relevant preconditions, inputs, workflow steps and expected results. Expected results must be explicit, so that a test can verify, with concrete values where they matter (limits, durations, formats, messages etc.).
 4. The requirements do not contradict each other, the content of the attachments or the reference documentation.
-6. Eevery provided to you attachment is explicitly referred to in at least one requirement.
-
+5. Every provided attachment is explicitly referred to in at least one requirement.
 
 # Output
 

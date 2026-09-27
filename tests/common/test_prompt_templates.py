@@ -69,7 +69,7 @@ def test_requirements_review_prompt_renders_the_configured_focus_area_count(monk
 
     prompt = requirements_prompts.RequirementsReviewSystemPrompt().get_prompt()
 
-    assert "select up to 7 of the most important review focus areas" in prompt
+    assert "identify up to 7 of the most important review focus areas" in prompt
 
 
 def test_classification_prompt_lists_every_test_type_with_its_label():

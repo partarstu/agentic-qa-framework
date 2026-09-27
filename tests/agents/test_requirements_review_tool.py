@@ -132,21 +132,32 @@ async def test_documentation_parts_are_appended_after_issue_and_attachments(agen
 
 
 @pytest.mark.asyncio
-async def test_scope_parameters_are_length_capped(agent, retrieval):
+@pytest.mark.parametrize("param", ["space_key", "page_id", "document_name_pattern", "drive_id", "folder_path"])
+async def test_oversized_scope_parameter_raises_model_retry(agent, retrieval, param):
+    with pytest.raises(ModelRetry, match=f"{param} must be at most 400 characters long; got 401"):
+        await agent._review_with_reference_documentation(
+            ISSUE_KEY, "issue content", focus_areas=FOCUS_AREAS, retrieval_query="q", **{param: "X" * 401}
+        )
+
+    retrieval[0].assert_not_awaited()
+    retrieval[1].assert_not_awaited()
+    agent.review_agent.run.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_scope_parameters_at_the_length_limit_pass_unchanged(agent, retrieval):
     await agent._review_with_reference_documentation(
         ISSUE_KEY,
         "issue content",
         focus_areas=FOCUS_AREAS,
         retrieval_query="q",
-        space_key="S" * 500,
-        page_id="P" * 500,
-        document_name_pattern="D" * 500,
+        space_key="S" * 400,
+        folder_path="F" * 400,
     )
 
     scope = retrieval[1].await_args.args[2]
-    assert scope.space_key == "S" * 200
-    assert scope.page_id == "P" * 200
-    assert scope.document_name_pattern == "D" * 200
+    assert scope.space_key == "S" * 400
+    assert scope.folder_path == "F" * 400
 
 
 @pytest.fixture
@@ -259,14 +270,23 @@ async def test_blank_focus_area_raises_model_retry(agent, retrieval) -> None:
 
 
 @pytest.mark.asyncio
-async def test_each_focus_area_gets_its_own_capped_review_on_material_prepared_once(agent, retrieval) -> None:
+async def test_oversized_focus_area_raises_model_retry(agent, retrieval) -> None:
+    with pytest.raises(ModelRetry, match=r"focus_areas\[1\] must be at most 400 characters long; got 401"):
+        await agent._review_with_attachments(ISSUE_KEY, "issue content", focus_areas=["security", "F" * 401])
+
+    retrieval[0].assert_not_awaited()
+    agent.review_agent.run.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_each_focus_area_gets_its_own_review_on_material_prepared_once(agent, retrieval) -> None:
     await agent._review_with_reference_documentation(
-        ISSUE_KEY, "issue content", focus_areas=["security", "F" * 500], retrieval_query="login flow"
+        ISSUE_KEY, "issue content", focus_areas=["security", "F" * 400], retrieval_query="login flow"
     )
 
     retrieval[0].assert_awaited_once()
     retrieval[1].assert_awaited_once()
-    assert _focus_areas_of_review_runs(agent) == ["Review focus area: security", f"Review focus area: {'F' * 200}"]
+    assert _focus_areas_of_review_runs(agent) == ["Review focus area: security", f"Review focus area: {'F' * 400}"]
     for call in agent.review_agent.run.await_args_list:
         assert call.args[0][1:] == ["Jira Issue content:\n```issue content```", "DOC-PART"]
     runs = [*agent.review_agent.run.await_args_list, *agent.merge_agent.run.await_args_list]

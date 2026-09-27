@@ -4,7 +4,6 @@
 
 import asyncio
 
-from pydantic_ai import BinaryContent
 from pydantic_ai.exceptions import ModelRetry
 from pydantic_ai.messages import BinaryContent
 from pydantic_ai.settings import ThinkingLevel
@@ -35,17 +34,23 @@ logger = utils.get_logger("reviewer_agent")
 
 _JIRA_TOOL_ALLOWLIST = (JIRA_GET_ISSUE, JIRA_ADD_COMMENT)
 
-_SCOPE_PARAM_LENGTH_CAP = 200
+# Fits the longest SharePoint folder path; IDs, keys and focus areas are far shorter.
+_TOOL_PARAM_MAX_LENGTH = 400
 
 
-def _validated_focus_areas(focus_areas: list[str]) -> list[str]:
-    """Checks the focus areas chosen by the model and caps the length of each."""
+def _check_length(name: str, value: str | None) -> None:
+    if value is not None and len(value) > _TOOL_PARAM_MAX_LENGTH:
+        raise ModelRetry(f"{name} must be at most {_TOOL_PARAM_MAX_LENGTH} characters long; got {len(value)}.")
+
+
+def _validate_focus_areas(focus_areas: list[str]) -> None:
     max_count = config.RequirementsReviewAgentConfig.FOCUS_AREA_COUNT
     if not 1 <= len(focus_areas) <= max_count:
         raise ModelRetry(f"focus_areas must hold between 1 and {max_count} review focus areas; got {len(focus_areas)}.")
     if any(not focus_area.strip() for focus_area in focus_areas):
         raise ModelRetry("Every item of focus_areas must be a non-blank review focus area.")
-    return focus_areas
+    for index, focus_area in enumerate(focus_areas):
+        _check_length(f"focus_areas[{index}]", focus_area)
 
 
 async def _get_issue_message_parts(issue_key: str, jira_issue_content: str) -> list[str | BinaryContent]:
@@ -148,7 +153,7 @@ class RequirementsReviewAgent(AgentBase):
         return config.RequirementsReviewAgentConfig.MAX_REQUESTS_PER_TASK
 
     async def _review_with_attachments(
-            self, jira_issue_key: str, jira_issue_content: str, focus_areas: list[str]
+        self, jira_issue_key: str, jira_issue_content: str, focus_areas: list[str]
     ) -> RequirementsReviewFeedback:
         """
         Reviews a Jira issue, taking into account all its attachments, with one focused review per focus area.
@@ -157,26 +162,26 @@ class RequirementsReviewAgent(AgentBase):
             jira_issue_key: The key of the Jira issue (e.g. PROJ-123), used to download its attachments.
             jira_issue_content: The complete content of the Jira issue.
             focus_areas: The review focus areas for this issue, each a topic of the issue as a short phrase,
-             never a quality criterion; at least one, at most the number the instructions allow.
+                never a quality criterion; at least one, at most the number the instructions allow.
 
         Returns:
             Requirements review feedback with improvement suggestions, merged across all focus areas.
         """
-        focus_areas = _validated_focus_areas(focus_areas)
+        _validate_focus_areas(focus_areas)
         user_message_parts = await _get_issue_message_parts(jira_issue_key, jira_issue_content)
         return await self._run_review(jira_issue_key, user_message_parts, focus_areas)
 
     async def _review_with_reference_documentation(
-            self,
-            jira_issue_key: str,
-            jira_issue_content: str,
-            focus_areas: list[str],
-            retrieval_query: str,
-            space_key: str | None = None,
-            page_id: str | None = None,
-            document_name_pattern: str | None = None,
-            drive_id: str | None = None,
-            folder_path: str | None = None,
+        self,
+        jira_issue_key: str,
+        jira_issue_content: str,
+        focus_areas: list[str],
+        retrieval_query: str,
+        space_key: str | None = None,
+        page_id: str | None = None,
+        document_name_pattern: str | None = None,
+        drive_id: str | None = None,
+        folder_path: str | None = None,
     ) -> RequirementsReviewFeedback:
         """
         Reviews a Jira issue, taking into account all its attachments and the reference
@@ -187,7 +192,7 @@ class RequirementsReviewAgent(AgentBase):
             jira_issue_key: The key of the Jira issue (e.g. PROJ-123), used to download its attachments.
             jira_issue_content: The complete content of the Jira issue.
             focus_areas: The review focus areas for this issue, each a topic of the issue as a short phrase,
-             never a quality criterion; at least one, at most the number the instructions allow.
+                never a quality criterion; at least one, at most the number the instructions allow.
             retrieval_query: A concise documentation search query (key topics, feature names, domain terms).
             space_key: Optional Confluence space key scope.
             page_id: Optional Confluence page ID scope.
@@ -204,18 +209,43 @@ class RequirementsReviewAgent(AgentBase):
                 "A non-blank retrieval_query is required: distil key topics, feature names "
                 "and domain terms from the issue and pass them as retrieval_query."
             )
-        focus_areas = _validated_focus_areas(focus_areas)
+        _validate_focus_areas(focus_areas)
+        scope_params = {
+            "space_key": space_key,
+            "page_id": page_id,
+            "document_name_pattern": document_name_pattern,
+            "drive_id": drive_id,
+            "folder_path": folder_path,
+        }
+        for name, value in scope_params.items():
+            _check_length(name, value)
 
         user_message_parts = await _get_issue_message_parts(jira_issue_key, jira_issue_content)
 
-        await self._enrich_user_message_with_rag(document_name_pattern, drive_id, folder_path, jira_issue_key, page_id, retrieval_query,
-                                                 space_key, user_message_parts)
+        await self._enrich_user_message_with_rag(
+            document_name_pattern,
+            drive_id,
+            folder_path,
+            jira_issue_key,
+            page_id,
+            retrieval_query,
+            space_key,
+            user_message_parts,
+        )
 
         return await self._run_review(jira_issue_key, user_message_parts, focus_areas)
 
-    async def _enrich_user_message_with_rag(self, document_name_pattern: str | None, drive_id: str | None, folder_path: str | None,
-                                            jira_issue_key: str, page_id: str | None, retrieval_query: str, space_key: str | None,
-                                            user_message_parts: list[str | BinaryContent]):
+    async def _enrich_user_message_with_rag(
+        self,
+        document_name_pattern: str | None,
+        drive_id: str | None,
+        folder_path: str | None,
+        jira_issue_key: str,
+        page_id: str | None,
+        retrieval_query: str,
+        space_key: str | None,
+        user_message_parts: list[str | BinaryContent],
+    ):
         rag_scope = RetrievalScope(
             space_key=space_key,
             page_id=page_id,
@@ -223,7 +253,9 @@ class RequirementsReviewAgent(AgentBase):
             drive_id=drive_id,
             folder_path=folder_path,
         )
-        rag_result = await retrieve_documents(self.documents_db, retrieval_query, rag_scope, sharepoint_db=self.sharepoint_db)
+        rag_result = await retrieve_documents(
+            self.documents_db, retrieval_query, rag_scope, sharepoint_db=self.sharepoint_db
+        )
         for source in rag_result.unavailable_sources:
             user_message_parts.append(
                 f"Note: the {source} knowledge base was unavailable during this review; its documents were not fetched."
@@ -238,7 +270,7 @@ class RequirementsReviewAgent(AgentBase):
         )
 
     async def _run_review(
-            self, jira_issue_key: str, user_message_parts: list[str | BinaryContent], focus_areas: list[str]
+        self, jira_issue_key: str, user_message_parts: list[str | BinaryContent], focus_areas: list[str]
     ) -> RequirementsReviewFeedback:
         """Runs one reviewer per focus area in parallel and merges the reviews that succeeded."""
 
@@ -281,7 +313,7 @@ class RequirementsReviewAgent(AgentBase):
         return feedback
 
     async def _merge_reviews(
-            self, reviews: list[tuple[str, RequirementsReviewFeedback]], usage_limits: UsageLimits
+        self, reviews: list[tuple[str, RequirementsReviewFeedback]], usage_limits: UsageLimits
     ) -> RequirementsReviewFeedback:
         labelled_reviews = [
             f"Review focused on '{focus_area}':\n```{review.suggested_improvements}```"
