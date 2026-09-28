@@ -3,35 +3,39 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 
 import logging
+from collections.abc import Iterator
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pydantic_ai import ModelRetry
+from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart
+from pydantic_ai.models.function import AgentInfo, FunctionModel
+from pydantic_ai.usage import RunUsage
 
 from agents.test_case_review import main as review_main
-from agents.test_case_review.main import (
-    DUPLICATE_CHECK_HEADING,
-    TestCaseDuplicateCheckError,
-    TestCaseReviewAgent,
-    render_duplicate_check,
-)
-from common.agent_base import AgentBase
+from agents.test_case_review.main import TestCaseDuplicateCheckError, TestCaseReviewAgent
+from common import agent_base
 from common.models import (
+    FindingAction,
+    FindingSeverity,
     OverlappingTestCase,
+    ReviewFinding,
     TestCase,
+    TestCaseDesignSession,
     TestCaseDuplicateCheck,
     TestCaseDuplicateJudgement,
     TestCaseReviewFeedback,
-    TestCaseReviewFeedbacks,
+    TestSuiteReview,
 )
-from common.services.test_management_base import TestManagementClientBase
+from common.services.test_management_tools import hide_while_designing
 
 PROJECT_KEY = "PROJ"
+_WRITE_TOOLS = {"add_review_feedback", "set_test_case_status_to_review_complete", "index_test_cases"}
 
 
 @pytest.fixture
-def mock_config():
+def mock_config() -> Iterator[MagicMock]:
     with patch("agents.test_case_review.main.config") as mock_conf:
         mock_conf.TestCaseReviewAgentConfig.OWN_NAME = "review_agent"
         mock_conf.AGENT_BASE_URL = "http://localhost"
@@ -46,21 +50,17 @@ def mock_config():
         mock_conf.TestCaseReviewAgentConfig.THINKING_LEVEL = "LOW"
         mock_conf.TestCaseReviewAgentConfig.MAX_REQUESTS_PER_TASK = 8
         mock_conf.TestCaseReviewAgentConfig.MAX_OUTPUT_TOKENS = None
-        mock_conf.TestCaseReviewAgentConfig.REVIEW_COMPLETE_STATUS_NAME = "Review Complete"
         mock_conf.QdrantConfig.TEST_CASES_COLLECTION_NAME = "test_cases"
         mock_conf.QdrantConfig.TEST_CASE_DUPLICATE_MAX_CANDIDATES = 5
         mock_conf.QdrantConfig.TEST_CASE_DUPLICATE_MIN_SCORE = 0.8
         mock_conf.ATLASSIAN_MCP_SERVER_URL = "http://jira-mcp"
         mock_conf.MCP_SERVER_TIMEOUT_SECONDS = 30
-        mock_conf.BudgetConfig.TOTAL_TOKENS_LIMIT_PER_TASK = 500_000
         yield mock_conf
 
 
 @pytest.fixture
-def agent(mock_config):
-    # Patch PromptBase.get_prompt to avoid file reading issues
-    with patch("agents.test_case_review.prompt.TestCaseReviewSystemPrompt.get_prompt", return_value="Prompt"):
-        review_agent = TestCaseReviewAgent()
+def agent(mock_config: MagicMock) -> TestCaseReviewAgent:
+    review_agent = TestCaseReviewAgent()
     review_agent.vector_db_service = MagicMock()
     review_agent.vector_db_service.upsert_batch = AsyncMock()
     review_agent.vector_db_service.hybrid_search = AsyncMock(return_value=[])
@@ -69,38 +69,71 @@ def agent(mock_config):
 
 
 @pytest.fixture
-def duplicate_checks():
-    """The verdict store of a running review task, as the agent's run() sets it."""
-    checks: dict[str, TestCaseDuplicateCheck] = {}
-    token = review_main._duplicate_checks.set(checks)
-    yield checks
-    review_main._duplicate_checks.reset(token)
+def delegated() -> Iterator[None]:
+    """Runs the test as inside a review the design agent delegated."""
+    token = agent_base._delegated_run.set(True)
+    yield
+    agent_base._delegated_run.reset(token)
 
 
 @pytest.fixture
-def no_attachments():
-    with patch("common.services.jira_attachments.download_issue_attachments", return_value={}):
-        yield
+def download() -> Iterator[MagicMock]:
+    with patch("common.services.jira_attachments.download_issue_attachments", return_value={}) as mock_download:
+        yield mock_download
 
 
-def _test_case(key: str | None, name: str) -> TestCase:
+def _test_case(name: str) -> TestCase:
     return TestCase(
-        key=key,
+        key=None,
         name=name,
         summary=f"Summary of {name}",
         steps=[],
         labels=[],
         comment="",
         preconditions="",
-        parent_issue_key="STORY-1",
+        parent_issue_key="PROJ-1",
     )
 
 
-def _feedback_runs(test_cases: list[TestCase]) -> AsyncMock:
+def _drafts(*names: str, changed: set[str] | None = None) -> TestCaseDesignSession:
+    session = TestCaseDesignSession(story_key="PROJ-1", story_content="Story content")
+    for name in names:
+        session.add_draft(_test_case(name))
+    if changed is not None:
+        session.changed_test_case_ids = changed
+    return session
+
+
+def _saved(*keys: str) -> TestCaseDesignSession:
+    session = TestCaseDesignSession(story_key="PROJ-1")
+    session.test_cases = {key: _test_case(f"Name of {key}").model_copy(update={"key": key}) for key in keys}
+    return session
+
+
+def _ctx(session: TestCaseDesignSession) -> SimpleNamespace:
+    return SimpleNamespace(deps=session, usage=RunUsage())
+
+
+def _finding(
+    owner: str | None,
+    action: FindingAction = FindingAction.MODIFY,
+    related: list[str] | None = None,
+) -> ReviewFinding:
+    return ReviewFinding(
+        owner_test_case_id=owner,
+        action=action,
+        severity=FindingSeverity.HIGH,
+        category="coverage",
+        description="A problem",
+        suggested_fix="A fix",
+        related_test_case_ids=related or [],
+    )
+
+
+def _feedback_runs(count: int, findings: list[ReviewFinding] | None = None) -> AsyncMock:
     return AsyncMock(
         side_effect=[
-            MagicMock(output=TestCaseReviewFeedback(test_case_id=tc.key, review_feedback=["Improve it"]))
-            for tc in test_cases
+            MagicMock(output=TestCaseReviewFeedback(test_case_id="any", findings=findings or [])) for _ in range(count)
         ]
     )
 
@@ -114,267 +147,313 @@ def _judgement(*keys: str) -> MagicMock:
     return MagicMock(output=TestCaseDuplicateJudgement(overlapping_test_cases=overlaps))
 
 
-def test_agent_init(agent, mock_config):
+def test_agent_init(agent):
     assert agent.agent_name == "review_agent"
     assert agent.get_thinking_level() == "LOW"
     assert agent.get_max_requests_per_task() == 8
 
 
-@patch("agents.test_case_review.main.get_test_management_client")
-async def test_add_review_feedback_appends_the_duplicate_check_to_the_comment(mock_get_client, agent, duplicate_checks):
-    mock_client = MagicMock(spec=TestManagementClientBase)
-    mock_get_client.return_value = mock_client
-    duplicate_checks["TEST-1"] = TestCaseDuplicateCheck()
+def test_write_tools_are_the_shared_ones_hidden_while_designing(agent):
+    tools = agent.agent._function_toolset.tools
 
-    result = await agent.add_review_feedback("TEST-1", "<ul><li>Feedback</li></ul>")
-
-    mock_client.add_test_case_review_comment.assert_called_once_with(
-        "TEST-1", f"<ul><li>Feedback</li></ul>\n{render_duplicate_check(TestCaseDuplicateCheck())}"
+    assert {name for name, tool in tools.items() if tool.prepare is hide_while_designing} == _WRITE_TOOLS
+    assert tools["add_review_feedback"].function is review_main.add_review_feedback
+    assert (
+        tools["set_test_case_status_to_review_complete"].function is review_main.set_test_case_status_to_review_complete
     )
-    assert "Successfully added" in result
+    assert tools["add_review_feedback"].sequential
+    assert tools["set_test_case_status_to_review_complete"].sequential
 
 
-@patch("agents.test_case_review.main.get_test_management_client")
-async def test_add_review_feedback_without_a_duplicate_check_is_an_error(mock_get_client, agent, duplicate_checks):
-    with pytest.raises(ModelRetry, match="No duplicate check exists for the test case 'TEST-1'"):
-        await agent.add_review_feedback("TEST-1", "Feedback")
+def _offering_model(offered: list[set[str]], instructions: list[str]) -> FunctionModel:
+    def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        offered.append({tool.name for tool in info.function_tools})
+        instructions.append(info.instructions or "")
+        return ModelResponse(parts=[TextPart("done")])
 
-    mock_get_client.return_value.add_test_case_review_comment.assert_not_called()
-
-
-@patch("agents.test_case_review.main.get_test_management_client")
-def test_set_test_case_status(mock_get_client, agent):
-    mock_client = MagicMock(spec=TestManagementClientBase)
-    mock_get_client.return_value = mock_client
-
-    result = agent.set_test_case_status_to_review_complete("PROJ", "TEST-1")
-
-    mock_client.change_test_case_status.assert_called_once_with("PROJ", "TEST-1", "Review Complete")
-    assert "Successfully set status" in result
+    return FunctionModel(respond)
 
 
-async def test_review_with_attachments_runs_once_per_test_case(agent, duplicate_checks, no_attachments):
-    test_cases = [_test_case("TC-1", "First"), _test_case("TC-2", "Second"), _test_case("TC-3", "Third")]
-    agent.review_agent.run = _feedback_runs(test_cases)
+async def test_a_delegated_review_is_offered_no_write_tools_and_the_designing_tasks(agent):
+    offered: list[set[str]] = []
+    instructions: list[str] = []
+    agent.designing_instructions, agent.standalone_instructions = "DESIGNING TASKS", "STANDALONE TASKS"
+    agent.mcp_toolset_factories = []
 
-    feedbacks = await agent._review_test_cases_with_attachments(
-        PROJECT_KEY, "STORY-1", "Jira issue content", test_cases
-    )
+    with agent.agent.override(model=_offering_model(offered, instructions)):
+        assert await agent.run_delegated("Review", _drafts("First"), RunUsage()) == "done"
 
-    assert agent.review_agent.run.await_count == 3
-    assert [feedback.test_case_id for feedback in feedbacks.review_feedbacks] == ["TC-1", "TC-2", "TC-3"]
-    for call, test_case in zip(agent.review_agent.run.await_args_list, test_cases, strict=True):
-        review_target = call.args[0][1]
-        assert f"Summary of {test_case.name}" in review_target
-        others = call.args[0][2]
-        for other in test_cases:
-            if other is not test_case:
-                assert f"Summary of {other.name}" in others
+    assert not offered[0] & _WRITE_TOOLS
+    assert {"review_test_cases", "review_test_suite"} <= offered[0]
+    assert "DESIGNING TASKS" in instructions[0]
 
 
-async def test_review_with_attachments_shares_one_token_budget_across_the_runs(
-    agent, mock_config, duplicate_checks, no_attachments
-):
-    """The sub-agent runs are outside the main run's budget, so they must carry their own."""
-    test_cases = [_test_case("TC-1", "First"), _test_case("TC-2", "Second")]
-    agent.review_agent.run = _feedback_runs(test_cases)
-    agent.vector_db_service.hybrid_search.return_value = [_hit("TC-9")]
-    agent.duplicate_judge.run.return_value = _judgement()
+async def test_a_standalone_review_is_offered_the_write_tools_and_the_standalone_tasks(agent):
+    offered: list[set[str]] = []
+    instructions: list[str] = []
+    agent.designing_instructions, agent.standalone_instructions = "DESIGNING TASKS", "STANDALONE TASKS"
 
-    await agent._review_test_cases_with_attachments(PROJECT_KEY, "STORY-1", "Jira issue content", test_cases)
+    with agent.agent.override(model=_offering_model(offered, instructions)):
+        await agent.agent.run("Review", deps=_saved("PROJ-T1"), output_type=str)
 
-    calls = agent.review_agent.run.await_args_list + agent.duplicate_judge.run.await_args_list
-    usages = {id(call.kwargs["usage"]) for call in calls}
-    assert len(usages) == 1, "All the runs must accumulate into the same usage, or the cap bounds none of them"
-    for call in calls:
-        assert call.kwargs["usage_limits"].total_tokens_limit == mock_config.BudgetConfig.TOTAL_TOKENS_LIMIT_PER_TASK
+    assert offered[0] >= _WRITE_TOOLS
+    assert "STANDALONE TASKS" in instructions[0]
 
 
-async def test_review_indexes_the_batch_under_review_before_reviewing(agent, duplicate_checks, no_attachments):
-    test_cases = [_test_case("TC-1", "First"), _test_case("TC-2", "Second")]
-    agent.review_agent.run = _feedback_runs(test_cases)
-
-    await agent._review_test_cases_with_attachments(PROJECT_KEY, "STORY-1", "Jira issue content", test_cases)
-
-    records = agent.vector_db_service.upsert_batch.await_args.args[0]
-    assert [record.test_case_key for record in records] == ["TC-1", "TC-2"]
-    assert {record.project_key for record in records} == {PROJECT_KEY}
+async def test_a_run_without_a_session_fails_with_a_clear_error(agent):
+    with (
+        agent.agent.override(model=_offering_model([], [])),
+        pytest.raises(ValueError, match="structured data part"),
+    ):
+        await agent.agent.run("Review", output_type=str)
 
 
-async def test_review_rejects_a_test_case_without_a_key(agent, duplicate_checks, no_attachments):
+async def test_designing_review_covers_only_the_changed_drafts(agent, download, delegated, caplog):
+    session = _drafts("First", "Second", "Third", changed={"DRAFT-2"})
+    output = TestCaseReviewFeedback(test_case_id="DRAFT-2", findings=[], llm_comments="An attachment was unreadable")
+    agent.review_agent.run = AsyncMock(return_value=MagicMock(output=output))
+
+    with caplog.at_level(logging.WARNING, logger="test_case_review_agent"):
+        feedbacks = await agent.review_test_cases(_ctx(session))
+
+    assert "Review of test case 'DRAFT-2' reported: An attachment was unreadable" in caplog.text
+    assert agent.review_agent.run.await_count == 1
+    message = agent.review_agent.run.await_args.args[0]
+    assert message[0] == "Jira Issue content:\n```Story content```"
+    assert "(ID DRAFT-2)" in message[1]
+    assert "Summary of Second" in message[1]
+    assert not any("First" in part or "Third" in part for part in message if isinstance(part, str)), message
+    assert [feedback.test_case_id for feedback in feedbacks.review_feedbacks] == ["DRAFT-2"]
+    assert set(session.duplicate_checks) == {"DRAFT-2"}
+    assert session.findings == {"DRAFT-2": []}
+    assert session.changed_test_case_ids == set()
+
+
+async def test_saved_test_cases_are_all_reviewed_with_the_passed_story_content(agent, download):
+    session = _saved("PROJ-T1", "PROJ-T2")
+    agent.review_agent.run = _feedback_runs(2)
+
+    await agent.review_test_cases(_ctx(session), jira_issue_content="Fetched story")
+
+    assert agent.review_agent.run.await_count == 2
+    assert session.story_content == "Fetched story"
+    assert set(session.duplicate_checks) == {"PROJ-T1", "PROJ-T2"}
+
+
+async def test_review_without_any_story_content_asks_for_it(agent, download):
     agent.review_agent.run = AsyncMock()
 
-    with pytest.raises(ValueError, match="needs a key"):
-        await agent._review_test_cases_with_attachments(
-            PROJECT_KEY, "STORY-1", "content", [_test_case(None, "Keyless")]
-        )
+    with pytest.raises(ModelRetry, match="content of the Jira issue"):
+        await agent.review_test_cases(_ctx(_saved("PROJ-T1")))
 
-    agent.vector_db_service.upsert_batch.assert_not_awaited()
     agent.review_agent.run.assert_not_awaited()
 
 
-async def test_review_rejects_a_blank_project_key(agent, duplicate_checks, no_attachments):
-    with pytest.raises(ValueError, match="project_key must not be blank"):
-        await agent._review_test_cases_with_attachments(" ", "STORY-1", "content", [_test_case("TC-1", "First")])
+async def test_attachments_are_downloaded_once_per_session(agent, download, delegated):
+    session = _drafts("First")
+    agent.review_agent.run = _feedback_runs(2)
+
+    await agent.review_test_cases(_ctx(session))
+    session.changed_test_case_ids = {"DRAFT-1"}
+    await agent.review_test_cases(_ctx(session))
+
+    download.assert_called_once_with("PROJ-1")
 
 
-async def test_duplicate_search_is_scoped_to_the_project_and_excludes_the_test_case_itself(
-    agent, duplicate_checks, no_attachments
+async def test_sub_agent_runs_share_the_task_usage_within_its_token_budget(agent, mock_config, download, delegated):
+    session = _drafts("First", "Second")
+    agent.review_agent.run = _feedback_runs(2)
+    agent.vector_db_service.hybrid_search.return_value = [_hit("PROJ-T9")]
+    agent.duplicate_judge.run.return_value = _judgement()
+    ctx = _ctx(session)
+
+    await agent.review_test_cases(ctx)
+
+    calls = agent.review_agent.run.await_args_list + agent.duplicate_judge.run.await_args_list
+    assert all(call.kwargs["usage"] is ctx.usage for call in calls)
+    for call in calls:
+        assert call.kwargs["usage_limits"] == agent.get_sub_agent_usage_limits()
+        assert call.kwargs["usage_limits"].tool_calls_limit is None
+
+
+async def test_a_single_review_keeps_only_its_own_findings_and_leaves_the_whole_set_ones_out(
+    agent, download, delegated
 ):
-    test_cases = [_test_case("TC-1", "First")]
-    agent.review_agent.run = _feedback_runs(test_cases)
+    session = _drafts("First", "Second", changed={"DRAFT-1"})
+    findings = [
+        _finding("DRAFT-2", related=["DRAFT-2", "PROJ-T404", "DRAFT-1"]),
+        _finding("DRAFT-1", FindingAction.DELETE_TEST_CASE),
+        _finding(None, FindingAction.ADD_TEST_CASE),
+        _finding("DRAFT-1", FindingAction.REMOVE_DUPLICATE_STEPS, related=["DRAFT-2"]),
+    ]
+    agent.review_agent.run = _feedback_runs(1, findings)
 
-    await agent._review_test_cases_with_attachments(PROJECT_KEY, "STORY-1", "content", test_cases)
+    await agent.review_test_cases(_ctx(session))
 
+    owned = session.findings["DRAFT-1"]
+    assert [finding.action for finding in owned] == [FindingAction.MODIFY, FindingAction.DELETE_TEST_CASE]
+    assert all(finding.owner_test_case_id == "DRAFT-1" for finding in owned)
+    assert all(finding.related_test_case_ids == [] for finding in owned)
+
+
+async def test_drafts_are_searched_for_duplicates_in_the_project_without_being_indexed(agent, download, delegated):
+    session = _drafts("First")
+    agent.review_agent.run = _feedback_runs(1)
+
+    await agent.review_test_cases(_ctx(session))
+
+    agent.vector_db_service.upsert_batch.assert_not_awaited()
     call = agent.vector_db_service.hybrid_search.await_args
     assert "Name: First" in call.args[0]
     assert call.kwargs["limit"] == 5
     assert call.kwargs["score_threshold"] == 0.8
     query_filter = call.kwargs["query_filter"]
     assert {(c.key, c.match.value) for c in query_filter.must} == {("source", "test_case"), ("project_key", "PROJ")}
-    assert [(c.key, c.match.value) for c in query_filter.must_not] == [("test_case_key", "TC-1")]
+    assert [(c.key, c.match.value) for c in query_filter.must_not] == [("test_case_key", "DRAFT-1")]
 
 
-async def test_no_candidates_means_no_duplicates_without_asking_the_judge(agent, duplicate_checks, no_attachments):
-    test_cases = [_test_case("TC-1", "First")]
-    agent.review_agent.run = _feedback_runs(test_cases)
+async def test_no_candidates_means_no_duplicates_without_asking_the_judge(agent, download, delegated):
+    session = _drafts("First")
+    agent.review_agent.run = _feedback_runs(1)
 
-    feedbacks = await agent._review_test_cases_with_attachments(PROJECT_KEY, "STORY-1", "content", test_cases)
+    feedbacks = await agent.review_test_cases(_ctx(session))
 
     agent.duplicate_judge.run.assert_not_awaited()
     assert feedbacks.review_feedbacks[0].duplicate_check == TestCaseDuplicateCheck()
-    assert duplicate_checks == {"TC-1": TestCaseDuplicateCheck()}
+    assert session.duplicate_checks == {"DRAFT-1": TestCaseDuplicateCheck()}
 
 
-async def test_candidates_are_deduplicated_by_key_before_judging(agent, duplicate_checks, no_attachments):
-    test_cases = [_test_case("TC-1", "First")]
-    agent.review_agent.run = _feedback_runs(test_cases)
+async def test_candidates_are_deduplicated_by_key_before_judging(agent, download, delegated):
+    session = _drafts("First")
+    agent.review_agent.run = _feedback_runs(1)
     agent.vector_db_service.hybrid_search.return_value = [
-        _hit("TC-7", "seven"),
-        _hit("TC-7", "seven again"),
-        _hit("TC-1", "itself"),
-        _hit("TC-8", "eight"),
+        _hit("PROJ-T7", "seven"),
+        _hit("PROJ-T7", "seven again"),
+        _hit("DRAFT-1", "itself"),
+        _hit("PROJ-T8", "eight"),
     ]
-    agent.duplicate_judge.run.return_value = _judgement("TC-7")
+    agent.duplicate_judge.run.return_value = _judgement("PROJ-T7", "PROJ-T404")
 
-    feedbacks = await agent._review_test_cases_with_attachments(PROJECT_KEY, "STORY-1", "content", test_cases)
+    await agent.review_test_cases(_ctx(session))
 
     judge_message = agent.duplicate_judge.run.await_args.args[0]
-    assert judge_message.count("Candidate TC-7") == 1
-    assert "Candidate TC-8" in judge_message
-    assert "Candidate TC-1" not in judge_message
+    assert judge_message.count("Candidate PROJ-T7") == 1
+    assert "Candidate PROJ-T8" in judge_message
+    assert "Candidate DRAFT-1" not in judge_message
     expected = TestCaseDuplicateCheck(
-        overlapping_test_cases=[OverlappingTestCase(test_case_key="TC-7", overlap_explanation="Same as TC-7")]
+        overlapping_test_cases=[OverlappingTestCase(test_case_key="PROJ-T7", overlap_explanation="Same as PROJ-T7")]
     )
-    assert feedbacks.review_feedbacks[0].duplicate_check == expected
-    assert duplicate_checks["TC-1"] == expected
+    assert session.duplicate_checks["DRAFT-1"] == expected
 
 
-async def test_judge_verdicts_about_unknown_keys_are_dropped(agent, duplicate_checks, no_attachments):
-    test_cases = [_test_case("TC-1", "First")]
-    agent.review_agent.run = _feedback_runs(test_cases)
-    agent.vector_db_service.hybrid_search.return_value = [_hit("TC-7")]
-    agent.duplicate_judge.run.return_value = _judgement("TC-7", "TC-404")
+@pytest.mark.parametrize("stage", ["search", "judgement"])
+async def test_duplicate_check_failure_aborts_the_review(agent, download, delegated, caplog, stage):
+    session = _drafts("First")
+    agent.review_agent.run = _feedback_runs(1)
+    agent.vector_db_service.hybrid_search.return_value = [_hit("PROJ-T7")]
+    failing = agent.vector_db_service.hybrid_search if stage == "search" else agent.duplicate_judge.run
+    failing.side_effect = ConnectionError("down")
 
-    feedbacks = await agent._review_test_cases_with_attachments(PROJECT_KEY, "STORY-1", "content", test_cases)
+    with (
+        caplog.at_level(logging.ERROR, logger="test_case_review_agent"),
+        pytest.raises(
+            TestCaseDuplicateCheckError, match=f"{stage} failed for test case\\(s\\) DRAFT-1 of project PROJ"
+        ),
+    ):
+        await agent.review_test_cases(_ctx(session))
 
-    check = feedbacks.review_feedbacks[0].duplicate_check
-    assert [overlap.test_case_key for overlap in check.overlapping_test_cases] == ["TC-7"]
+    assert session.duplicate_checks == {}
+    assert session.changed_test_case_ids == {"DRAFT-1"}
 
 
-async def test_indexing_failure_aborts_the_review(agent, duplicate_checks, no_attachments, caplog):
-    agent.review_agent.run = AsyncMock()
+async def test_suite_review_runs_after_every_test_case_was_reviewed(agent, download):
+    session = _drafts("First", "Second")
+    agent.test_suite_reviewer.run = AsyncMock()
+
+    with pytest.raises(ModelRetry, match="review tool first"):
+        await agent.review_test_suite(_ctx(session))
+
+    agent.test_suite_reviewer.run.assert_not_awaited()
+
+
+async def test_suite_review_sees_every_test_case_with_its_findings_and_duplicate_check(agent, download):
+    session = _drafts("First", "Second", changed=set())
+    session.duplicate_checks = {"DRAFT-1": TestCaseDuplicateCheck(), "DRAFT-2": TestCaseDuplicateCheck()}
+    session.findings = {"DRAFT-1": [_finding("DRAFT-1")]}
+    gap = _finding(None, FindingAction.ADD_TEST_CASE)
+    agent.test_suite_reviewer.run = AsyncMock(return_value=MagicMock(output=TestSuiteReview(findings=[gap])))
+    ctx = _ctx(session)
+
+    result = await agent.review_test_suite(ctx)
+
+    call = agent.test_suite_reviewer.run.await_args
+    test_cases_part = call.args[0][1]
+    assert "ID DRAFT-1" in test_cases_part
+    assert "ID DRAFT-2" in test_cases_part
+    assert '"owner_test_case_id":"DRAFT-1"' in test_cases_part
+    assert "overlapping_test_cases" in test_cases_part
+    assert call.kwargs["deps"] is session
+    assert call.kwargs["usage"] is ctx.usage
+    assert session.suite_findings == [gap]
+    assert session.suite_reviewed
+    assert result.findings == [gap]
+
+
+@pytest.mark.parametrize(
+    ("finding", "error"),
+    [
+        (_finding("DRAFT-9"), "Unknown test case IDs \\['DRAFT-9'\\]"),
+        (_finding("DRAFT-1", related=["PROJ-T5"]), "Unknown test case IDs \\['PROJ-T5'\\]"),
+        (_finding("DRAFT-1", FindingAction.ADD_TEST_CASE), "has no owner test case"),
+        (_finding(None, FindingAction.DELETE_TEST_CASE), "needs exactly one owner test case"),
+    ],
+)
+def test_suite_review_output_with_unusable_findings_is_rejected(finding, error):
+    ctx = SimpleNamespace(deps=_drafts("First", "Second"))
+
+    with pytest.raises(ModelRetry, match=error):
+        review_main._validate_test_suite_review(ctx, TestSuiteReview(findings=[finding]))
+
+
+def test_suite_review_output_with_usable_findings_passes():
+    ctx = SimpleNamespace(deps=_drafts("First", "Second"))
+    output = TestSuiteReview(
+        findings=[
+            _finding("DRAFT-1", FindingAction.REMOVE_DUPLICATE_STEPS, related=["DRAFT-2"]),
+            _finding(None, FindingAction.ADD_TEST_CASE),
+        ]
+    )
+
+    assert review_main._validate_test_suite_review(ctx, output) is output
+
+
+async def test_indexing_indexes_the_saved_set_once(agent):
+    session = _saved("PROJ-T1", "PROJ-T2")
+
+    await agent.index_test_cases(_ctx(session))
+    with pytest.raises(ModelRetry, match="already indexed"):
+        await agent.index_test_cases(_ctx(session))
+
+    records = agent.vector_db_service.upsert_batch.await_args.args[0]
+    assert [record.test_case_key for record in records] == ["PROJ-T1", "PROJ-T2"]
+    assert {record.project_key for record in records} == {PROJECT_KEY}
+    assert session.indexed
+
+
+async def test_drafts_are_never_indexed(agent):
+    with pytest.raises(ModelRetry, match="drafts are never indexed"):
+        await agent.index_test_cases(_ctx(_drafts("First")))
+
+    agent.vector_db_service.upsert_batch.assert_not_awaited()
+
+
+async def test_indexing_failure_fails_loudly(agent):
+    session = _saved("PROJ-T1")
     agent.vector_db_service.upsert_batch.side_effect = ConnectionError("qdrant down")
 
-    with (
-        caplog.at_level(logging.ERROR, logger="test_case_review_agent"),
-        pytest.raises(TestCaseDuplicateCheckError, match="indexing failed for test case\\(s\\) TC-1 of project PROJ"),
+    with pytest.raises(
+        TestCaseDuplicateCheckError, match="indexing failed for test case\\(s\\) PROJ-T1 of project PROJ"
     ):
-        await agent._review_test_cases_with_attachments(PROJECT_KEY, "STORY-1", "content", [_test_case("TC-1", "A")])
+        await agent.index_test_cases(_ctx(session))
 
-    agent.review_agent.run.assert_not_awaited()
-    assert "TC-1" in caplog.text
-    assert "PROJ" in caplog.text
-
-
-async def test_search_failure_aborts_the_review(agent, duplicate_checks, no_attachments, caplog):
-    test_cases = [_test_case("TC-1", "First")]
-    agent.review_agent.run = _feedback_runs(test_cases)
-    agent.vector_db_service.hybrid_search.side_effect = ConnectionError("embedding service down")
-
-    with (
-        caplog.at_level(logging.ERROR, logger="test_case_review_agent"),
-        pytest.raises(TestCaseDuplicateCheckError, match="search failed for test case\\(s\\) TC-1 of project PROJ"),
-    ):
-        await agent._review_test_cases_with_attachments(PROJECT_KEY, "STORY-1", "content", test_cases)
-
-    assert "Duplicate check search failed for test case(s) TC-1 of project PROJ" in caplog.text
-    assert duplicate_checks == {}
-
-
-async def test_judge_failure_aborts_the_review(agent, duplicate_checks, no_attachments):
-    test_cases = [_test_case("TC-1", "First")]
-    agent.review_agent.run = _feedback_runs(test_cases)
-    agent.vector_db_service.hybrid_search.return_value = [_hit("TC-7")]
-    agent.duplicate_judge.run.side_effect = RuntimeError("model unavailable")
-
-    with pytest.raises(TestCaseDuplicateCheckError, match="judgement failed for test case\\(s\\) TC-1"):
-        await agent._review_test_cases_with_attachments(PROJECT_KEY, "STORY-1", "content", test_cases)
-
-    assert duplicate_checks == {}
-
-
-async def test_review_outside_a_task_run_has_no_verdict_store(agent, no_attachments):
-    with pytest.raises(RuntimeError, match="only available inside a review task run"):
-        await agent._review_test_cases_with_attachments(PROJECT_KEY, "STORY-1", "content", [_test_case("TC-1", "A")])
-
-
-async def test_run_provides_a_fresh_verdict_store_and_removes_it_afterwards(agent):
-    stores = []
-
-    async def fake_run(self, message):
-        stores.append(review_main._duplicate_checks.get())
-        return message
-
-    with patch.object(AgentBase, "run", fake_run):
-        await agent.run(MagicMock())
-
-    assert stores == [{}]
-    assert review_main._duplicate_checks.get() is None
-
-
-def test_final_output_carries_the_verdicts_computed_in_code(duplicate_checks):
-    overlap = OverlappingTestCase(test_case_key="TC-7", overlap_explanation="Same flow")
-    duplicate_checks["TC-1"] = TestCaseDuplicateCheck(overlapping_test_cases=[overlap])
-    output = TestCaseReviewFeedbacks(
-        review_feedbacks=[
-            TestCaseReviewFeedback(test_case_id="TC-1", review_feedback=["a"]),
-            TestCaseReviewFeedback(test_case_id="TC-2", review_feedback=["b"]),
-        ]
-    )
-
-    result = review_main._attach_duplicate_checks(output)
-
-    assert result.review_feedbacks[0].duplicate_check.overlapping_test_cases == [overlap]
-    assert result.review_feedbacks[1].duplicate_check is None
-
-
-def test_rendered_check_without_duplicates_says_so():
-    rendered = render_duplicate_check(TestCaseDuplicateCheck())
-
-    assert rendered == f"<h4>{DUPLICATE_CHECK_HEADING}</h4><p>No duplicate test cases found.</p>"
-
-
-def test_rendered_check_lists_every_overlap_escaped():
-    check = TestCaseDuplicateCheck(
-        overlapping_test_cases=[
-            OverlappingTestCase(test_case_key="TC-7", overlap_explanation="Both check <script>login</script>"),
-            OverlappingTestCase(test_case_key="TC-8", overlap_explanation="Same logout"),
-        ]
-    )
-
-    rendered = render_duplicate_check(check)
-
-    assert rendered.startswith(f"<h4>{DUPLICATE_CHECK_HEADING}</h4><p>This test case overlaps in coverage with:</p>")
-    assert "<li><b>TC-7</b>: Both check &lt;script&gt;login&lt;/script&gt;</li>" in rendered
-    assert "<li><b>TC-8</b>: Same logout</li>" in rendered
+    assert not session.indexed

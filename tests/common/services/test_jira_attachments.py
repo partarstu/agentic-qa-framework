@@ -8,8 +8,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from pydantic_ai.exceptions import ModelRetry
+from pydantic_ai.messages import BinaryContent
 
-from common.services.jira_attachments import download_issue_attachments
+from common.models import TestCaseDesignSession
+from common.services.jira_attachments import attachment_parts, download_issue_attachments, fetch_session_attachments
 from common.services.jira_client import build_jira_client
 
 
@@ -255,3 +257,27 @@ def test_valid_issue_key_reaches_jira(mock_client, mock_config) -> None:
 
     assert download_issue_attachments("PROJ-123") == {}
     mock_client.return_value.issue.assert_called_once_with("PROJ-123", fields="attachment")
+
+
+async def test_session_attachments_are_downloaded_once_and_then_reused() -> None:
+    session = TestCaseDesignSession(story_key="PROJ-5")
+    attachment = BinaryContent(data=b"x", media_type="text/plain")
+
+    with patch("common.services.jira_attachments.download_issue_attachments", return_value={"a.txt": attachment}) as dl:
+        first = await fetch_session_attachments(session)
+        second = await fetch_session_attachments(session)
+
+    dl.assert_called_once_with("PROJ-5")
+    assert first == second == {"a.txt": attachment}
+    assert session.attachments == {"a.txt": attachment}
+
+
+def test_attachment_parts_pair_every_file_name_with_its_content() -> None:
+    first, second = BinaryContent(data=b"1", media_type="text/plain"), BinaryContent(data=b"2", media_type="image/png")
+
+    assert attachment_parts({"a.txt": first, "b.png": second}) == [
+        "Attachment: a.txt",
+        first,
+        "Attachment: b.png",
+        second,
+    ]

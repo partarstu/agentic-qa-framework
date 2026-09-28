@@ -6,12 +6,13 @@ import asyncio
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Sequence
 from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from typing import Any
 from urllib.parse import urlparse
 
 import httpx2
 import uvicorn
-from a2a.helpers import get_message_text, new_text_message
+from a2a.helpers import get_data_parts, get_message_text, new_text_message
 from a2a.server.request_handlers import DefaultRequestHandler
 from a2a.server.routes import create_agent_card_routes, create_jsonrpc_routes
 from a2a.server.tasks import InMemoryTaskStore
@@ -25,7 +26,7 @@ from pydantic_ai.messages import BinaryContent, UserContent
 from pydantic_ai.settings import ThinkingLevel
 from pydantic_ai.tools import AgentDepsT, ToolFuncEither
 from pydantic_ai.toolsets import AbstractToolset
-from pydantic_ai.usage import UsageLimits
+from pydantic_ai.usage import RunUsage, UsageLimits
 
 import config
 from common import utils
@@ -49,6 +50,16 @@ logger = utils.get_logger("agent_base")
 # Bound the activity queue so report_activity calls cannot accumulate without a
 # consumer (e.g. standalone runs, where no executor drains the queue).
 _ACTIVITY_QUEUE_MAXSIZE = 1000
+
+# Set for the duration of a task, so agents it delegates to in-process report and budget against that task.
+_task_activity_queue: ContextVar[asyncio.Queue[str] | None] = ContextVar("task_activity_queue", default=None)
+_task_usage_limits: ContextVar[UsageLimits | None] = ContextVar("task_usage_limits", default=None)
+_delegated_run: ContextVar[bool] = ContextVar("delegated_run", default=False)
+
+
+def is_delegated_run() -> bool:
+    """Whether the current agent run was delegated in-process by another agent rather than started as a task."""
+    return _delegated_run.get()
 
 
 def _is_mcp_connect_failure(exc: BaseException) -> bool:
@@ -133,6 +144,9 @@ class AgentBase(ABC):
     def get_max_requests_per_task(self) -> int:
         pass
 
+    def get_total_tokens_limit(self) -> int:
+        return config.BudgetConfig.TOTAL_TOKENS_LIMIT_PER_TASK
+
     async def report_activity(self, description: str) -> None:
         """Report your current activity to the dashboard.
 
@@ -141,8 +155,10 @@ class AgentBase(ABC):
         any other tool. You may call it in parallel with other tool calls.
         Examples: "Fetching Jira issue PROJ-123", "Generating test steps for AC-2".
         """
+        # A delegated run reports to the queue of the task that delegated it, the only one drained.
+        queue = _task_activity_queue.get() or self._activity_queue
         try:
-            self._activity_queue.put_nowait(description)
+            queue.put_nowait(description)
         except asyncio.QueueFull:
             # No active consumer (e.g. standalone run) or the consumer fell behind:
             # drop the update rather than letting the queue grow without bound.
@@ -174,11 +190,38 @@ class AgentBase(ABC):
         """The MCP server the per-run toolsets connect to, or a marker when the agent uses none."""
         return config.ATLASSIAN_MCP_SERVER_URL if self.mcp_toolset_factories else "none"
 
-    async def _get_agent_execution_result(self, received_request: list[UserContent]) -> AgentRunResult[Any] | None:
-        usage_limits = UsageLimits(
+    def _get_usage_limits(self) -> UsageLimits:
+        # No request cap: delegated runs share one cumulative usage, which pydantic-ai's default of 50 requests would
+        # cut short; the tool-call and token budgets bound the run instead.
+        return UsageLimits(
+            request_limit=None,
             tool_calls_limit=compute_activity_budget(self.get_max_requests_per_task()),
-            total_tokens_limit=config.BudgetConfig.TOTAL_TOKENS_LIMIT_PER_TASK,
+            total_tokens_limit=self.get_total_tokens_limit(),
         )
+
+    def get_sub_agent_usage_limits(self) -> UsageLimits:
+        """Token-only limits for a sub-agent run sharing the task's usage, whose calls are not the task's tool calls."""
+        task_limits = _task_usage_limits.get() or self._get_usage_limits()
+        return UsageLimits(request_limit=None, total_tokens_limit=task_limits.total_tokens_limit)
+
+    async def run_delegated(self, prompt: str, deps: BaseModel, usage: RunUsage) -> str:
+        """Runs this agent in-process within the delegating task's usage and limits, returning only its closing text."""
+        usage_limits = _task_usage_limits.get() or self._get_usage_limits()
+        delegated_token = _delegated_run.set(True)
+        try:
+            result = await self._get_agent_execution_result([prompt], deps, usage_limits, usage=usage, output_type=str)
+        finally:
+            _delegated_run.reset(delegated_token)
+        return result.output
+
+    async def _get_agent_execution_result(
+        self,
+        received_request: list[UserContent],
+        deps: BaseModel | None,
+        usage_limits: UsageLimits,
+        usage: RunUsage | None = None,
+        output_type: type | None = None,
+    ) -> AgentRunResult[Any] | None:
         for attempt in range(config.RetryConfig.MAX_RETRIES):
             try:
                 logger.info(f"Starting agent run (attempt {attempt + 1}/{config.RetryConfig.MAX_RETRIES})...")
@@ -188,7 +231,14 @@ class AgentBase(ABC):
                     # and a self-healing toolset can really tear its own session down.
                     toolsets = [build_toolset() for build_toolset in self.mcp_toolset_factories]
                     async with self.agent:
-                        return await self.agent.run(received_request, usage_limits=usage_limits, toolsets=toolsets)
+                        return await self.agent.run(
+                            received_request,
+                            output_type=output_type,
+                            deps=deps,
+                            usage=usage,
+                            usage_limits=usage_limits,
+                            toolsets=toolsets,
+                        )
                 except Exception as e:
                     if _is_mcp_connect_failure(e) and self.mcp_toolset_factories:
                         raise ConnectionError(
@@ -214,9 +264,13 @@ class AgentBase(ABC):
     async def run(self, received_message: Message) -> Message:
         self.latest_received_message = received_message
         received_request = self._get_all_received_contents(received_message)
+        usage_limits = self._get_usage_limits()
+        activity_token = _task_activity_queue.set(self._activity_queue)
+        limits_token = _task_usage_limits.set(usage_limits)
 
         try:
-            result = await self._get_agent_execution_result(received_request)
+            deps = self._get_deps(received_message)
+            result = await self._get_agent_execution_result(received_request, deps, usage_limits)
             self._capture_token_usage(result)
             self._log_llm_comments_if_result_incomplete(result.output)
             return self._get_text_message_from_results(result)
@@ -236,6 +290,18 @@ class AgentBase(ABC):
                 else str(e)
             )
             raise AgentRuntimeError(list(error_message.parts), error_text) from e
+        finally:
+            _task_usage_limits.reset(limits_token)
+            _task_activity_queue.reset(activity_token)
+
+    def _get_deps(self, received_message: Message) -> BaseModel | None:
+        """The run's deps, validated from the message's structured data part when the agent declares a deps type."""
+        data_parts = get_data_parts(received_message.parts)
+        if self.deps_type is None or not data_parts:
+            return None
+        if len(data_parts) > 1:
+            raise ValueError(f"Expected at most one structured data part, got {len(data_parts)}.")
+        return self.deps_type.model_validate(data_parts[0])
 
     def _capture_token_usage(self, result: AgentRunResult[Any] | None) -> None:
         """Record and log the token usage and estimated cost of a completed run."""

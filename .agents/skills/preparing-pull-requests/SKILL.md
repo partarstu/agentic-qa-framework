@@ -47,7 +47,7 @@ Fix and format only files in scope; formatting the whole repository rewrites cod
 
 ruff enforces only part of `PYTHON_GUIDELINES.md`. Read the changed Python code against the whole document and fix violations in the lines this change touches; report the ones whose fix would change behaviour to the user.
 
-Check every docstring and comment in scope against the *Comments and docstrings* rule of `AGENTS.md` and compact the ones that violate it (a function docstring longer than one sentence, a class or module docstring longer than two, `Args`/`Returns` that repeat names and types outside LLM tools, a comment that restates the code or records history).
+Check every docstring and comment in the lines this change touches against the *Comments and docstrings* rule of `AGENTS.md` and compact the ones that violate it (a function docstring longer than one sentence, a class or module docstring longer than two, `Args`/`Returns` that repeat names and types outside LLM tools, a comment that restates the code or records history).
 
 ## 3. License headers
 

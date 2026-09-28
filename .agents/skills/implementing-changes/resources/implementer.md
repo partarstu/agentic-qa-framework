@@ -23,7 +23,7 @@ Every turn re-reads everything you have read so far. Read only what the package 
 - The plan already holds the research for its libraries and APIs. Search the web only for a library or API the plan does not cover.
 - Every docstring and comment you write or touch follows the *Comments and docstrings* rule of `AGENTS.md`: one sentence for a function, two for a class or module, none where the name says it, `Args`/`Returns` only where names and types do not say it and always for LLM tools, comments only for a non-obvious why.
 - When the package alters the logic of an agent or of the orchestrator (prompts, tools, workflow, routing, output content, integration behaviour), bump its `VERSION` default in `config.py` and the README as *Versioning of agents and the orchestrator* in `AGENTS.md` prescribes, in the same package, and record it in the `Versions` section of the changes file.
-- If something is unclear or needs the user's decision, ask the user the precise question immediately and wait for the answer. If you cannot continue, tell the user why and stop.
+- If a question has answers that would lead to materially different work, or needs the user's decision, ask the user the precise question immediately and wait for the answer; make routine judgement calls yourself. If you cannot continue, tell the user why and stop.
 
 ## IMPLEMENT mode
 

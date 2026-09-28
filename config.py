@@ -226,6 +226,8 @@ class OrchestratorConfig:
     AGENT_HEALTH_CHECK_INTERVAL_SECONDS = 60
     AGENT_HEALTH_CHECK_TIMEOUT_SECONDS = 10
     TASK_EXECUTION_TIMEOUT = 500.0
+    # Kept below the orchestrator's 3500 s request timeout, which the whole workflow call has to fit into.
+    TEST_CASE_DESIGN_TASK_TIMEOUT_SECONDS = float(os.environ.get("TEST_CASE_DESIGN_TASK_TIMEOUT_SECONDS", "3300"))
     AGENT_DISCOVERY_TIMEOUT_SECONDS = 120
     INCOMING_REQUEST_WAIT_TIMEOUT = AGENT_DISCOVERY_TIMEOUT_SECONDS + 5
     MODEL_NAME = DEFAULT_MODEL_NAME
@@ -311,9 +313,33 @@ class TestCaseGenerationAgentConfig:
     MAX_REQUESTS_PER_TASK = 30
 
 
+# Test Case Design Agent
+class TestCaseDesignAgentConfig:
+    THINKING_LEVEL: ThinkingLevel = "medium"
+    VERSION = os.environ.get("TEST_CASE_DESIGN_AGENT_VERSION", "1.0.0")
+    OWN_NAME = "Test Case Design Agent"
+    SKILL_ID = "test-case-design"
+    SKILL_NAME = "Test Case Design"
+    SKILL_DESCRIPTION = (
+        "Design of the test cases of a Jira user story: generation, review and fixing in a loop, then saving, "
+        "classification and publishing of the final review of every test case"
+    )
+    PORT = int(os.environ.get("PORT", "8005"))
+    EXTERNAL_PORT = int(os.environ.get("EXTERNAL_PORT", PORT))
+    PROTOCOL = "http"
+    MODEL_NAME = DEFAULT_MODEL_NAME
+    MAX_OUTPUT_TOKENS = _optional_positive_int("TEST_CASE_DESIGN_MAX_OUTPUT_TOKENS") or MAX_OUTPUT_TOKENS
+    # The delegated generation, review and classification runs share this budget with the design agent.
+    MAX_REQUESTS_PER_TASK = 150
+    MAX_ITERATIONS = _optional_positive_int("TEST_CASE_DESIGN_MAX_ITERATIONS") or 4
+    # One of low, medium, high, critical: a review finding at or above it blocks the design and gets fixed.
+    FIX_MIN_SEVERITY = os.environ.get("TEST_CASE_DESIGN_FIX_MIN_SEVERITY", "medium").strip().lower()
+    TOTAL_TOKENS_LIMIT = _optional_positive_int("TEST_CASE_DESIGN_TOTAL_TOKENS_LIMIT") or 4_000_000
+
+
 # Test Case Review Agent
 class TestCaseReviewAgentConfig:
-    THINKING_LEVEL: ThinkingLevel = "high"
+    THINKING_LEVEL: ThinkingLevel = "medium"
     VERSION = os.environ.get("TEST_CASE_REVIEW_AGENT_VERSION", "1.1.2")
     REVIEW_COMPLETE_STATUS_NAME = "Review Complete"
     OWN_NAME = "Test Case Review Agent"

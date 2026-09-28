@@ -14,13 +14,13 @@ import contextlib
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from a2a.helpers import get_message_text
 from fastapi.testclient import TestClient
 
 import config
 from orchestrator.main import (
     _build_jira_issue_task_text,
-    _request_test_cases_generation,
-    _request_test_cases_review,
+    _request_test_case_design,
     _validate_api_key,
     orchestrator_app,
 )
@@ -113,21 +113,23 @@ async def _run_requirements_review_flow(issue_key: str) -> None:
         TestClient(orchestrator_app).post("/new-requirements-available", json={"issue_key": issue_key})
 
 
-@pytest.mark.parametrize(
-    "run_flow",
-    [
-        _run_requirements_review_flow,
-        _request_test_cases_generation,
-        lambda issue_key: _request_test_cases_review([], issue_key),
-    ],
-    ids=["requirements-review", "test-case-generation", "test-case-review"],
-)
-async def test_every_jira_issue_flow_sends_the_additional_fields_instruction(monkeypatch, run_flow):
+async def test_the_requirements_review_flow_sends_the_additional_fields_instruction(monkeypatch):
     monkeypatch.setattr(config, "JIRA_ADDITIONAL_FIELD_IDS", ("customfield_10001",))
     with patch("orchestrator.main._send_task_to_agent", new_callable=AsyncMock) as mock_send:
         mock_send.side_effect = _FlowStopped
         with contextlib.suppress(_FlowStopped):
-            await run_flow("PROJ-42")
+            await _run_requirements_review_flow("PROJ-42")
 
     mock_send.assert_awaited_once()
     assert build_additional_fields_instruction() in mock_send.await_args.args[0]
+
+
+async def test_the_test_case_design_flow_sends_the_additional_fields_instruction(monkeypatch):
+    monkeypatch.setattr(config, "JIRA_ADDITIONAL_FIELD_IDS", ("customfield_10001",))
+    with patch("orchestrator.main._send_task_to_agent_with_message", new_callable=AsyncMock) as mock_send:
+        mock_send.side_effect = _FlowStopped
+        with contextlib.suppress(_FlowStopped):
+            await _request_test_case_design("PROJ-42")
+
+    mock_send.assert_awaited_once()
+    assert build_additional_fields_instruction() in get_message_text(mock_send.await_args.args[0])

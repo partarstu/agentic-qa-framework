@@ -164,7 +164,7 @@ Run the packages in order. For each package:
    2. Write the reviewer brief (`FULL` mode in the first round, `FOLLOW_UP` afterwards, with the open findings and the `SKIPPED` findings of the package) and the tester brief (`VERIFY` mode with the package diff). Launch both headless phases in parallel and handle their results as *Headless phases* describes.
    3. Record every finding of the review report in the ledger under the ID the reviewer gave it. LOW findings and findings with a confidence below 40 are recorded but never fixed in the loop.
    4. Apply the reviewer's `FIX CHECK`: a finding reported `OPEN` again goes back to `OPEN`; a `RE-RAISED` finding goes back to `OPEN`, and if the FIX phase skips it again, mark it `DISPUTED`: it stops blocking and goes to the final report for the user to decide.
-   5. If no CRITICAL, HIGH or MEDIUM finding with a confidence of at least 40 is `OPEN` and the test verdict is `PASS`, the package is done: continue with the next one.
+   5. If no CRITICAL, HIGH or MEDIUM finding with a confidence of at least 40 is `OPEN` and the test verdict is `PASS`, the package is done: tick its items in the TODO list of the plan file, if there is one (read only that section), and continue with the next one.
    6. Otherwise run the FIX phase with one brief from the ledger: the blocking open findings in `FIX_FINDINGS` mode and, on `FAIL`, the test report in `FIX_TESTS` mode. Write the changes file of the next round, whose `Findings` section answers every finding with `FIXED`, or with `SKIPPED` and concrete evidence; a skip without evidence is not accepted. Update the finding statuses in the ledger and start the next round.
 
 When a package reaches its round limit, show the user what is still open and ask whether to continue with more rounds, and how many, or to move on and leave the findings for the final report.
@@ -179,18 +179,19 @@ The smoke suite, including its A/B comparison, never runs in this loop: it needs
 
 ## 5. Final report
 
-Report in the conversation:
+Report in the conversation, in the three parts `AGENTS.md` prescribes:
 
-- the changed files, the packages and the number of verification rounds of each
-- the fixed findings by severity
-- every `SKIPPED` and `DISPUTED` finding with the reason
-- the LOW findings and the findings with a confidence below 40
-- the test result, the changed-line coverage and the total coverage against the baseline
-- the total cost of the headless runs, from the ledger
-- the plan file, if there is one, for the user to keep or delete, and the run directory
-- the steps left for the user:
-  - running the smoke suite, including the A/B comparison (*Hermetic smoke suite* in `AGENTS.md`)
-  - refreshing the recorded A/B baselines and every baseline refresh the plan asks for, with the capture command in `AGENTS.md`
-  - CALM validation, lint, license, security and dependency checks and the other pull request checks, with the `preparing-pull-requests` skill
+- **Blocked on me**:
+  - every `DISPUTED` finding with the reason, for the user to decide
+  - the steps left for the user: running the smoke suite, including the A/B comparison (*Hermetic smoke suite* in `AGENTS.md`); refreshing the recorded A/B baselines and every baseline refresh the plan asks for, with the capture command in `AGENTS.md`; CALM validation, lint, license, security and dependency checks and the other pull request checks, with the `preparing-pull-requests` skill
+- **Changed**:
+  - the changed files, the packages and the number of verification rounds of each
+  - the fixed findings by severity
+  - the test result, the changed-line coverage and the total coverage against the baseline
+  - the total cost of the headless runs, from the ledger
+- **Found**:
+  - every `SKIPPED` finding with the reason
+  - the LOW findings and the findings with a confidence below 40
+  - the plan file, if there is one, for the user to keep or delete, and the run directory
 
 Never commit, push or open a pull request.

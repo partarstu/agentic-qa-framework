@@ -12,6 +12,7 @@ import config
 from agents.incident_creation import prompt as incident_prompts
 from agents.requirements_review import prompt as requirements_prompts
 from agents.test_case_classification import prompt as classification_prompts
+from agents.test_case_design import prompt as design_prompts
 from agents.test_case_generation import prompt as generation_prompts
 from agents.test_case_review import prompt as review_prompts
 from common import models
@@ -28,13 +29,25 @@ _PROMPTS = {
     "requirements-review-retrieval": requirements_prompts.RequirementsReviewRetrievalInstruction,
     "requirements-review-merge": requirements_prompts.MergeReviewsPrompt,
     "test-case-classification": classification_prompts.TestCaseClassificationSystemPrompt,
+    "test-case-design": design_prompts.TestCaseDesignSystemPrompt,
     "test-case-generation": generation_prompts.TestCaseGenerationSystemPrompt,
     "ac-extraction": generation_prompts.AcExtractionPrompt,
     "steps-generation": generation_prompts.StepsGenerationPrompt,
     "test-case-creation": generation_prompts.TestCaseCreationPrompt,
+    "test-case-fixer": generation_prompts.TestCaseFixerPrompt,
+    "test-case-generation-designing": lambda: generation_prompts.TestCaseGenerationSystemPrompt(
+        "designing_instructions.md"
+    ),
+    "test-case-generation-standalone": lambda: generation_prompts.TestCaseGenerationSystemPrompt(
+        "standalone_instructions.md"
+    ),
     "test-case-review": review_prompts.TestCaseReviewSystemPrompt,
     "test-case-review-with-attachments": review_prompts.TestCaseReviewWithAttachmentsPrompt,
     "test-case-duplicate-judge": review_prompts.TestCaseDuplicateJudgePrompt,
+    "test-suite-review": review_prompts.TestSuiteReviewPrompt,
+    "severity-rubric": review_prompts.SeverityRubricFragment,
+    "test-case-review-designing": lambda: review_prompts.TestCaseReviewSystemPrompt("designing_instructions.md"),
+    "test-case-review-standalone": lambda: review_prompts.TestCaseReviewSystemPrompt("standalone_instructions.md"),
 }
 
 _ORCHESTRATOR_TEMPLATES = [

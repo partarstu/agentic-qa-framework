@@ -26,7 +26,7 @@ import httpx2
 import uvicorn
 from a2a.client import ClientConfig, create_client
 from a2a.client.card_resolver import parse_agent_card
-from a2a.helpers import get_message_text, new_message, new_text_message
+from a2a.helpers import get_message_text, new_data_part, new_message, new_text_message, new_text_part
 from a2a.types import (
     AgentCard,
     Artifact,
@@ -57,7 +57,6 @@ from common.models import (
     AgentRoutingDecision,
     ConfluenceSyncRequest,
     FileArtifact,
-    GeneratedTestCases,
     IncidentCreationInput,
     IncidentCreationResult,
     JiraSyncRequest,
@@ -70,6 +69,8 @@ from common.models import (
     SyncRequest,
     SyncStatus,
     TestCase,
+    TestCaseDesignResult,
+    TestCaseDesignSession,
     TestCaseType,
     TestExecutionRequest,
     TestExecutionResult,
@@ -807,23 +808,17 @@ async def trigger_test_case_generation_workflow(request: Request, api_key: str =
     """
     try:
         await _verify_jira_webhook_signature(request)
-        logger.info("Received an event from Jira, requesting test case generation from an agent.")
-        user_story_id = await _get_jira_issue_key_from_request(request)
-        generated_test_cases = await _request_test_cases_generation(user_story_id)
-        if not generated_test_cases:
-            _handle_exception("Test case generation agent responded provided no generated test cases in its response.")
-
+        logger.info("Received an event from Jira, requesting the test case design from an agent.")
+        user_story_key = await _get_jira_issue_key_from_request(request)
+        result = await _request_test_case_design(user_story_key)
         logger.info(
-            f"Got {len(generated_test_cases.test_cases)} generated test cases, requesting their classification."
+            "Test case design for %s saved %d test case(s) after %d review iteration(s), stop reason: %s.",
+            user_story_key,
+            len(result.test_case_keys),
+            result.iterations,
+            result.stop_reason,
         )
-        await _request_test_cases_classification(generated_test_cases.test_cases, user_story_id)
-        logger.info("Received response from an agent, test case classification seems to be complete.")
-
-        logger.info("Requesting review of all generated test cases.")
-        await _request_test_cases_review(generated_test_cases.test_cases, user_story_id)
-        logger.info("Received response from an agent, test case review seems to be complete.")
-
-        return {"message": f"Test case generation and classification for Jira user story {user_story_id} completed."}
+        return {"message": f"Test case design for Jira user story {user_story_key} completed."}
     except HTTPException:
         raise
     except Exception as e:
@@ -1373,20 +1368,29 @@ async def _request_incident_creation(
     return result
 
 
-async def _request_test_cases_generation(user_story_id) -> GeneratedTestCases:
-    """Request test case generation for a user story.
+async def _request_test_case_design(user_story_key: str) -> TestCaseDesignResult:
+    """Request the test case design of a user story, seeding the design session with its key.
 
     Raises:
         HTTPException: If an AgentExecutionError is returned by the agent.
     """
-    task_description = f"Generate test cases for Jira user story {user_story_id}"
-    completed_task = await _send_task_to_agent(_build_jira_issue_task_text(user_story_id), task_description)
-    task_description = f"Generation of test cases for the user story {user_story_id}"
+    session_seed = TestCaseDesignSession(story_key=user_story_key)
+    message = new_message(
+        parts=[
+            new_text_part(_build_jira_issue_task_text(user_story_key)),
+            new_data_part(session_seed.model_dump(mode="json", include={"story_key"})),
+        ],
+        role=Role.ROLE_USER,
+    )
+    task_description = f"Design test cases for Jira user story {user_story_key}"
+    completed_task = await _send_task_to_agent_with_message(
+        message, task_description, timeout_seconds=config.OrchestratorConfig.TEST_CASE_DESIGN_TASK_TIMEOUT_SECONDS
+    )
     received_artifacts = _get_artifacts_from_task(completed_task, task_description)
-    result = _get_model_from_artifacts(received_artifacts, task_description, GeneratedTestCases)
+    result = _get_model_from_artifacts(received_artifacts, task_description, TestCaseDesignResult)
 
     if isinstance(result, AgentExecutionError):
-        _handle_exception(f"Test case generation failed for user story {user_story_id}: {result.error_message}")
+        _handle_exception(f"Test case design failed for user story {user_story_key}: {result.error_message}")
 
     return result
 
@@ -1397,20 +1401,6 @@ def _get_artifacts_from_task(task: Task, task_description: str) -> list[Artifact
     if not results:
         _handle_exception(f"Received no execution results from the agent after it executed {task_description}.")
     return results
-
-
-async def _request_test_cases_classification(test_cases: list[TestCase], user_story_id: str) -> list[Artifact]:
-    task_description = f"Classify test cases for Jira user story {user_story_id}"
-    completed_task = await _send_task_to_agent(f"Test cases:\n{test_cases}", task_description)
-    return _get_artifacts_from_task(completed_task, f"Classification of test cases for the user story {user_story_id}")
-
-
-async def _request_test_cases_review(test_cases: list[TestCase], user_story_id: str) -> list[Artifact]:
-    task_description = f"Review test cases for Jira user story {user_story_id}"
-    completed_task = await _send_task_to_agent(
-        f"Test cases:\n{test_cases}\n{_build_jira_issue_task_text(user_story_id)}", task_description
-    )
-    return _get_artifacts_from_task(completed_task, "Review of test cases")
 
 
 def _get_text_content_from_artifacts(
@@ -1615,10 +1605,14 @@ async def _save_agent_usage_from_task(task: Task, internal_task_id: str) -> None
 
 
 async def _send_task_to_agent_with_message(
-    message: Message, task_description: str, selected_agent_id: str | None = None
+    message: Message,
+    task_description: str,
+    selected_agent_id: str | None = None,
+    timeout_seconds: float | None = None,
 ) -> Task | None:
-    """Send a custom message (with file parts) to an agent."""
+    """Send a custom message (with file or data parts) to an agent, waiting for the task at most the given timeout."""
 
+    timeout_seconds = timeout_seconds or config.OrchestratorConfig.TASK_EXECUTION_TIMEOUT
     internal_task_id = str(uuid4())
     agent_id = None
     last_task_id = None
@@ -1657,9 +1651,7 @@ async def _send_task_to_agent_with_message(
         await task_history.add(task_record)
         await agent_registry.set_current_task(agent_id, internal_task_id)
 
-        httpx_client = httpx.AsyncClient(
-            timeout=config.OrchestratorConfig.TASK_EXECUTION_TIMEOUT, headers=_build_agent_auth_headers()
-        )
+        httpx_client = httpx.AsyncClient(timeout=timeout_seconds, headers=_build_agent_auth_headers())
         a2a_client = await create_client(
             agent_card,
             client_config=ClientConfig(httpx_client=httpx_client),
@@ -1669,7 +1661,7 @@ async def _send_task_to_agent_with_message(
         last_status = None
         collected_artifacts: list[Artifact] = []
         log_state = _LogStreamState()
-        while (time_left := _get_time_left_for_task_completion_waiting(start_time)) > 0:
+        while (time_left := _get_time_left_for_task_completion_waiting(start_time, timeout_seconds)) > 0:
             try:
                 chunk = await asyncio.wait_for(response_iterator.__anext__(), timeout=time_left)
             except StopAsyncIteration:
@@ -1965,8 +1957,8 @@ def _validate_task_status(task: Task, task_description: str):
         )
 
 
-def _get_time_left_for_task_completion_waiting(start_time):
-    return config.OrchestratorConfig.TASK_EXECUTION_TIMEOUT - (time.time() - start_time)
+def _get_time_left_for_task_completion_waiting(start_time: float, timeout_seconds: float) -> float:
+    return timeout_seconds - (time.time() - start_time)
 
 
 async def _select_all_suitable_agent_ids(task_description: str) -> list[str]:

@@ -49,6 +49,35 @@ class TestCaseReviewWithAttachmentsPrompt(PromptBase):
         logger.info(
             "Generating system prompt for sub-agent which performs test case review with all attachments included"
         )
+        return self.template.format(severity_rubric=SeverityRubricFragment().get_prompt())
+
+
+class TestSuiteReviewPrompt(PromptBase):
+    """Prompt for the sub-agent which reviews the whole set of test cases for coverage gaps and duplicates."""
+
+    __test__ = False
+
+    def get_script_dir(self) -> Path:
+        return _get_prompts_root()
+
+    def __init__(self, template_file_name: str = "test_suite_review_prompt.md"):
+        super().__init__(template_file_name)
+
+    def get_prompt(self) -> str:
+        logger.info("Generating system prompt for the test suite reviewer sub-agent")
+        return self.template.format(severity_rubric=SeverityRubricFragment().get_prompt())
+
+
+class SeverityRubricFragment(PromptBase):
+    """The findings and severity rules shared by the per-test-case and the whole-set review prompts."""
+
+    def get_script_dir(self) -> Path:
+        return _get_prompts_root()
+
+    def __init__(self, template_file_name: str = "severity_rubric.md"):
+        super().__init__(template_file_name)
+
+    def get_prompt(self) -> str:
         return self.template
 
 

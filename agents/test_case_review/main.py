@@ -2,15 +2,11 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
-import asyncio
-import html
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterable, Iterator, Sequence
 from contextlib import contextmanager
-from contextvars import ContextVar
-from typing import TYPE_CHECKING, override
+from typing import TYPE_CHECKING
 
-from a2a.types import Message
-from pydantic_ai import ModelRetry
+from pydantic_ai import ModelRetry, RunContext
 from pydantic_ai.settings import ThinkingLevel
 from pydantic_ai.tools import Tool
 from pydantic_ai.usage import RunUsage, UsageLimits
@@ -21,23 +17,33 @@ from agents.test_case_review.prompt import (
     TestCaseDuplicateJudgePrompt,
     TestCaseReviewSystemPrompt,
     TestCaseReviewWithAttachmentsPrompt,
+    TestSuiteReviewPrompt,
 )
 from common import utils
-from common.agent_base import AgentBase
+from common.agent_base import AgentBase, is_delegated_run
 from common.custom_llm_wrapper import CustomLlmWrapper
 from common.models import (
     AgentSkillDeclaration,
+    FindingAction,
     OverlappingTestCase,
-    TestCase,
+    ReviewFinding,
+    TestCaseDesignSession,
     TestCaseDuplicateCheck,
     TestCaseDuplicateJudgement,
     TestCaseReviewFeedback,
     TestCaseReviewFeedbacks,
+    TestSuiteReview,
 )
 from common.services.atlassian_mcp import build_atlassian_mcp_server_toolset
 from common.services.atlassian_tools import JIRA_GET_ISSUE
+from common.services.jira_attachments import attachment_parts, fetch_session_attachments
 from common.services.test_case_index import IndexedTestCase, render_test_case
-from common.services.test_management_system_client_provider import get_test_management_client
+from common.services.test_management_tools import (
+    add_review_feedback,
+    hide_while_designing,
+    is_designing,
+    set_test_case_status_to_review_complete,
+)
 
 if TYPE_CHECKING:
     from pydantic_ai.messages import BinaryContent
@@ -46,14 +52,8 @@ logger = utils.get_logger("test_case_review_agent")
 
 # Attachments arrive through the REST downloader and every write goes to the test management system.
 _JIRA_TOOL_ALLOWLIST = (JIRA_GET_ISSUE,)
-
-DUPLICATE_CHECK_HEADING = "Duplicate check"
-
-# The duplicate-check verdicts of the review task running in this context, keyed by test case key.
-# Set per run, so concurrent review tasks served by the same agent instance never see each other's verdicts.
-_duplicate_checks: ContextVar[dict[str, TestCaseDuplicateCheck] | None] = ContextVar(
-    "test_case_duplicate_checks", default=None
-)
+# A single test case's review never sees the other test cases, so these actions are left to the whole-set review.
+_WHOLE_SET_ACTIONS = frozenset({FindingAction.ADD_TEST_CASE, FindingAction.REMOVE_DUPLICATE_STEPS})
 
 
 class TestCaseDuplicateCheckError(RuntimeError):
@@ -66,7 +66,6 @@ class TestCaseReviewAgent(AgentBase):
     __test__ = False
 
     def __init__(self):
-        # Create a sub-agent for reviewing with attachments
         self.review_agent = CustomLlmWrapper.create_agent(
             model_name=config.TestCaseReviewAgentConfig.MODEL_NAME,
             output_type=TestCaseReviewFeedback,
@@ -83,6 +82,18 @@ class TestCaseReviewAgent(AgentBase):
             thinking_level=config.TestCaseReviewAgentConfig.THINKING_LEVEL,
             max_output_tokens=config.TestCaseReviewAgentConfig.MAX_OUTPUT_TOKENS,
         )
+        self.test_suite_reviewer = CustomLlmWrapper.create_agent(
+            model_name=config.TestCaseReviewAgentConfig.MODEL_NAME,
+            output_type=TestSuiteReview,
+            system_prompt=TestSuiteReviewPrompt().get_prompt(),
+            name="test_suite_reviewer",
+            deps_type=TestCaseDesignSession,
+            thinking_level=config.TestCaseReviewAgentConfig.THINKING_LEVEL,
+            max_output_tokens=config.TestCaseReviewAgentConfig.MAX_OUTPUT_TOKENS,
+        )
+        self.test_suite_reviewer.output_validator(_validate_test_suite_review)
+        self.designing_instructions = TestCaseReviewSystemPrompt("designing_instructions.md").get_prompt()
+        self.standalone_instructions = TestCaseReviewSystemPrompt("standalone_instructions.md").get_prompt()
 
         instruction_prompt = TestCaseReviewSystemPrompt()
         super().__init__(
@@ -97,24 +108,26 @@ class TestCaseReviewAgent(AgentBase):
             output_type=TestCaseReviewFeedbacks,
             instructions=instruction_prompt.get_prompt(),
             mcp_toolset_factories=[lambda: build_atlassian_mcp_server_toolset(_JIRA_TOOL_ALLOWLIST)],
+            deps_type=TestCaseDesignSession,
             skill=AgentSkillDeclaration(
                 id=config.TestCaseReviewAgentConfig.SKILL_ID,
                 name=config.TestCaseReviewAgentConfig.SKILL_NAME,
                 description=config.TestCaseReviewAgentConfig.SKILL_DESCRIPTION,
             ),
             tools=[
-                # These two tools both do a full read-modify-write PUT on the same Jira/Zephyr
+                # The feedback and status tools both do a full read-modify-write PUT on the same Jira/Zephyr
                 # test case. Marking them sequential forces pydantic-ai to run the whole turn one
                 # call at a time, so the status update and the comment update can't race and
                 # clobber each other's field (last-writer-wins).
-                Tool(self.add_review_feedback, sequential=True),
-                Tool(self.set_test_case_status_to_review_complete, sequential=True),
-                self._review_test_cases_with_attachments,
+                Tool(add_review_feedback, sequential=True, prepare=hide_while_designing),
+                Tool(set_test_case_status_to_review_complete, sequential=True, prepare=hide_while_designing),
+                Tool(self.index_test_cases, prepare=hide_while_designing),
+                self.review_test_cases,
+                self.review_test_suite,
             ],
             vector_db_collection_name=config.QdrantConfig.TEST_CASES_COLLECTION_NAME,
         )
-        # The verdicts reach the returned feedback deterministically, whatever the model wrote.
-        self.agent.output_validator(_attach_duplicate_checks)
+        self.agent.instructions(self._get_mode_instructions)
 
     def get_thinking_level(self) -> ThinkingLevel:
         return config.TestCaseReviewAgentConfig.THINKING_LEVEL
@@ -122,96 +135,128 @@ class TestCaseReviewAgent(AgentBase):
     def get_max_requests_per_task(self) -> int:
         return config.TestCaseReviewAgentConfig.MAX_REQUESTS_PER_TASK
 
-    @override
-    async def run(self, received_message: Message) -> Message:
-        token = _duplicate_checks.set({})
-        try:
-            return await super().run(received_message)
-        finally:
-            _duplicate_checks.reset(token)
+    def _get_mode_instructions(self, ctx: RunContext[TestCaseDesignSession]) -> str:
+        if ctx.deps is None:
+            raise ValueError("A test case review needs the test case design session as its structured data part.")
+        return self.designing_instructions if is_delegated_run() else self.standalone_instructions
 
-    async def _review_test_cases_with_attachments(
-        self,
-        project_key: str,
-        jira_issue_key: str,
-        jira_issue_content: str,
-        test_cases: list[TestCase],
+    async def review_test_cases(
+        self, ctx: RunContext[TestCaseDesignSession], jira_issue_content: str | None = None
     ) -> TestCaseReviewFeedbacks:
         """
-        Reviews a list of test cases, taking into account the Jira issue content and its attachments,
-        and checks every test case for duplicates among the existing test cases of the project.
+        Reviews the test cases against the Jira issue content and its attachments, and checks every reviewed test case
+        for duplicates among the existing test cases of the project. While designing, only the new and changed test
+        cases are reviewed.
 
         Args:
-            project_key: The key of the Jira project the test cases belong to.
-            jira_issue_key: The key of the Jira issue (e.g. PROJ-123), used to download its attachments.
-            jira_issue_content: The complete content of the Jira issue.
-            test_cases: The list of test cases to review.
+            jira_issue_content: The complete content of the Jira issue; needed only when the test cases are saved
+                ones, never while designing.
 
         Returns:
-            Test case review feedbacks with improvement suggestions and the duplicate check for each test case.
+            The findings and the duplicate check of each reviewed test case.
         """
-
-        from common.services.jira_attachments import fetch_issue_attachments
-
-        if not project_key.strip():
-            raise ValueError("project_key must not be blank for the test case review.")
-        checks = _current_duplicate_checks()
-        records = await self._index_review_batch(project_key, test_cases)
-
-        attachments_content = await fetch_issue_attachments(jira_issue_key)
-        attachment_parts: list[str | BinaryContent] = []
-        for filename, binary_content in (attachments_content or {}).items():
-            attachment_parts.append(f"Attachment: {filename}")
-            attachment_parts.append(binary_content)
-
+        session = ctx.deps
+        if session.story_content is None:
+            if not jira_issue_content:
+                raise ModelRetry("Pass the complete content of the Jira issue: the design holds none yet.")
+            session.story_content = jira_issue_content
+        designing = is_delegated_run()
+        test_case_ids = [
+            test_case_id
+            for test_case_id in session.test_cases
+            if test_case_id in session.changed_test_case_ids or not designing
+        ]
+        story_attachment_parts = attachment_parts(await fetch_session_attachments(session))
         logger.info(
             "Starting review of %s test case(s) referring to the Jira issue content and %s attachments.",
-            len(test_cases),
-            len(attachment_parts) // 2,
+            len(test_case_ids),
+            len(story_attachment_parts) // 2,
         )
 
-        # One sub-agent run per test case keeps the model focused on a single review target, while the
-        # remaining test cases stay in the context so duplicate coverage can still be detected.
-        # The sub-agent runs are separate from the main agent run and therefore outside its budget.
-        # One shared usage object keeps the whole loop inside the per-task token cap.
-        review_usage = RunUsage()
-        review_usage_limits = UsageLimits(total_tokens_limit=config.BudgetConfig.TOTAL_TOKENS_LIMIT_PER_TASK)
-
+        # One sub-agent run per test case keeps the model focused on a single review target; its relation to the other
+        # test cases (coverage, duplicates) is the whole-set review's, so they are left out.
+        usage_limits = self.get_sub_agent_usage_limits()
         feedbacks: list[TestCaseReviewFeedback] = []
-        for index, (test_case, record) in enumerate(zip(test_cases, records, strict=True), start=1):
-            other_test_cases = "\n".join(str(other) for other in test_cases if other is not test_case)
+        for index, test_case_id in enumerate(test_case_ids, start=1):
+            test_case = session.test_cases[test_case_id]
             user_message_parts: list[str | BinaryContent] = [
-                f"Jira Issue content:\n```{jira_issue_content}```",
-                f"Test Case under review:\n```{test_case!s}```",
-                f"Other test cases created for the same Jira issue (context only):\n```{other_test_cases}```",
-                *attachment_parts,
+                f"Jira Issue content:\n```{session.story_content}```",
+                f"Test Case under review (ID {test_case_id}):\n```{test_case!s}```",
+                *story_attachment_parts,
             ]
-            logger.info("Reviewing test case %s/%s", index, len(test_cases))
-            result = await self.review_agent.run(
-                user_message_parts, usage=review_usage, usage_limits=review_usage_limits
-            )
+            logger.info("Reviewing test case %s/%s", index, len(test_case_ids))
+            result = await self.review_agent.run(user_message_parts, usage=ctx.usage, usage_limits=usage_limits)
             if result.output.llm_comments:
-                logger.warning(
-                    "Review of test case '%s' reported: %s", result.output.test_case_id, result.output.llm_comments
-                )
-            duplicate_check = await self._check_duplicates(project_key, record, review_usage, review_usage_limits)
-            checks[record.test_case_key] = duplicate_check
-            result.output.duplicate_check = duplicate_check
-            feedbacks.append(result.output)
+                logger.warning("Review of test case '%s' reported: %s", test_case_id, result.output.llm_comments)
+            record = render_test_case(session.project_key, test_case.model_copy(update={"key": test_case_id}))
+            duplicate_check = await self._check_duplicates(session.project_key, record, ctx.usage, usage_limits)
+            findings = _owned_by(test_case_id, result.output.findings)
+            session.findings[test_case_id] = findings
+            session.duplicate_checks[test_case_id] = duplicate_check
+            feedbacks.append(
+                TestCaseReviewFeedback(test_case_id=test_case_id, findings=findings, duplicate_check=duplicate_check)
+            )
 
+        session.changed_test_case_ids.clear()
         logger.info("Generated review feedbacks for %s test cases", len(feedbacks))
         return TestCaseReviewFeedbacks(review_feedbacks=feedbacks)
 
-    async def _index_review_batch(self, project_key: str, test_cases: list[TestCase]) -> list[IndexedTestCase]:
-        """Indexes the batch under review, so the duplicate search sees test cases created minutes earlier."""
-        keys = [test_case.key or "" for test_case in test_cases]
-        if not all(keys):
-            raise ValueError(f"Every test case under review needs a key for the duplicate check; got {keys}.")
-        records = [render_test_case(project_key, test_case) for test_case in test_cases]
-        with _fail_loudly("indexing", project_key, keys):
+    async def review_test_suite(self, ctx: RunContext[TestCaseDesignSession]) -> TestSuiteReview:
+        """
+        Reviews the whole set of test cases for coverage gaps of the Jira issue and for duplicate coverage, taking the
+        findings and the duplicate checks of the individual reviews into account.
+
+        Returns:
+            The findings about the whole set, each assigned to the one test case whose change resolves it.
+        """
+        session = ctx.deps
+        unreviewed = [
+            test_case_id for test_case_id in session.test_cases if test_case_id not in session.duplicate_checks
+        ]
+        if session.story_content is None or unreviewed or session.changed_test_case_ids:
+            raise ModelRetry("Review the new and changed test cases with the review tool first.")
+        test_case_blocks = "\n\n".join(
+            f"ID {test_case_id}:\n```{test_case!s}```\n"
+            f"Findings of its individual review:\n```{_json_list(session.findings.get(test_case_id, []))}```\n"
+            f"Its duplicate check:\n```{session.duplicate_checks[test_case_id]!s}```"
+            for test_case_id, test_case in session.test_cases.items()
+        )
+        user_message_parts: list[str | BinaryContent] = [
+            f"Jira Issue content:\n```{session.story_content}```",
+            f"Test cases:\n{test_case_blocks}",
+            *attachment_parts(await fetch_session_attachments(session)),
+        ]
+        logger.info("Reviewing the whole set of %d test case(s).", len(session.test_cases))
+        result = await self.test_suite_reviewer.run(
+            user_message_parts, deps=session, usage=ctx.usage, usage_limits=self.get_sub_agent_usage_limits()
+        )
+        session.suite_findings = result.output.findings
+        session.suite_reviewed = True
+        logger.info("The whole-set review reported %d finding(s).", len(result.output.findings))
+        return result.output
+
+    async def index_test_cases(self, ctx: RunContext[TestCaseDesignSession]) -> str:
+        """
+        Indexes the saved test cases, so that later duplicate checks find them.
+
+        Returns:
+            A confirmation message.
+        """
+        session = ctx.deps
+        if session.indexed:
+            raise ModelRetry("The test cases are already indexed; never index them twice.")
+        if is_designing(session):
+            raise ModelRetry("Save the test cases first; drafts are never indexed.")
+        keys = list(session.test_cases)
+        records = [
+            render_test_case(session.project_key, test_case.model_copy(update={"key": key}))
+            for key, test_case in session.test_cases.items()
+        ]
+        with _fail_loudly("indexing", session.project_key, keys):
             await self.vector_db_service.upsert_batch(records)
-        logger.info("Indexed %d test case(s) under review for project %s.", len(records), project_key)
-        return records
+        session.indexed = True
+        logger.info("Indexed %d test case(s) of project %s.", len(records), session.project_key)
+        return f"Successfully indexed the test cases {', '.join(keys)}."
 
     async def _check_duplicates(
         self, project_key: str, record: IndexedTestCase, usage: RunUsage, usage_limits: UsageLimits
@@ -237,81 +282,46 @@ class TestCaseReviewAgent(AgentBase):
             )
         return _validated_check(test_case_key, result.output, candidates)
 
-    @staticmethod
-    async def add_review_feedback(test_case_key: str, feedback: str) -> str:
-        """
-        Adds feedback as a comment to the test case. The duplicate check of the test case is appended to the
-        comment automatically.
 
-        Args:
-            test_case_key: The key or ID of the test case.
-            feedback: Test case review feedback.
-
-        Returns:
-            A confirmation message informing if the feedback was successfully added.
-        """
-        duplicate_check = _current_duplicate_checks().get(test_case_key)
-        if duplicate_check is None:
-            raise ModelRetry(
-                f"No duplicate check exists for the test case '{test_case_key}'. Review the test case with the "
-                "review tool first and pass exactly the key of a reviewed test case."
-            )
-        comment = f"{feedback}\n{render_duplicate_check(duplicate_check)}"
-        client = get_test_management_client()
-        await asyncio.to_thread(client.add_test_case_review_comment, test_case_key, comment)
-        result_info = (
-            f"Successfully added the test case review feedback for the test case with key(ID) '{test_case_key}'"
-        )
-        logger.info(result_info)
-        return result_info
-
-    @staticmethod
-    def set_test_case_status_to_review_complete(project_key: str, test_case_key: str) -> str:
-        """
-        Sets the status of a test case to "Review Complete".
-
-        Args:
-            project_key: The key of the Jira project the test case belongs to.
-            test_case_key: The key or ID of the test case.
-
-        Returns:
-            A confirmation message informing if the status was successfully updated.
-        """
-        client = get_test_management_client()
-        client.change_test_case_status(
-            project_key, test_case_key, config.TestCaseReviewAgentConfig.REVIEW_COMPLETE_STATUS_NAME
-        )
-        result_info = f"Successfully set status of test case '{test_case_key}' to '{config.TestCaseReviewAgentConfig.REVIEW_COMPLETE_STATUS_NAME}'"
-        logger.info(result_info)
-        return result_info
+def _finding_errors(finding: ReviewFinding, known_ids: set[str]) -> list[str]:
+    """What makes a finding unusable: an owner that contradicts its action, or an ID of no known test case."""
+    owner = finding.owner_test_case_id
+    errors: list[str] = []
+    if finding.action is FindingAction.ADD_TEST_CASE and owner is not None:
+        errors.append(f"An '{finding.action}' finding has no owner test case, but '{owner}' was given.")
+    if finding.action is not FindingAction.ADD_TEST_CASE and owner is None:
+        errors.append(f"A '{finding.action}' finding needs exactly one owner test case: '{finding.description}'.")
+    unknown = [
+        test_case_id
+        for test_case_id in (owner, *finding.related_test_case_ids)
+        if test_case_id is not None and test_case_id not in known_ids
+    ]
+    if unknown:
+        errors.append(f"Unknown test case IDs {unknown}; use only these: {sorted(known_ids)}.")
+    return errors
 
 
-def render_duplicate_check(duplicate_check: TestCaseDuplicateCheck) -> str:
-    """Renders the duplicate check as the HTML section appended to the test case's review comment."""
-    heading = f"<h4>{DUPLICATE_CHECK_HEADING}</h4>"
-    if not duplicate_check.overlapping_test_cases:
-        return f"{heading}<p>No duplicate test cases found.</p>"
-    items = "".join(
-        f"<li><b>{html.escape(overlap.test_case_key)}</b>: {html.escape(overlap.overlap_explanation)}</li>"
-        for overlap in duplicate_check.overlapping_test_cases
-    )
-    return f"{heading}<p>This test case overlaps in coverage with:</p><ul>{items}</ul>"
-
-
-def _current_duplicate_checks() -> dict[str, TestCaseDuplicateCheck]:
-    """The verdict store of the running review task."""
-    checks = _duplicate_checks.get()
-    if checks is None:
-        raise RuntimeError("The duplicate-check store is only available inside a review task run.")
-    return checks
-
-
-def _attach_duplicate_checks(output: TestCaseReviewFeedbacks) -> TestCaseReviewFeedbacks:
-    """Copies the verdicts computed in code onto the final output of the main agent."""
-    checks = _duplicate_checks.get() or {}
-    for feedback in output.review_feedbacks:
-        feedback.duplicate_check = checks.get(feedback.test_case_id)
+def _validate_test_suite_review(ctx: RunContext[TestCaseDesignSession], output: TestSuiteReview) -> TestSuiteReview:
+    known_ids = set(ctx.deps.test_cases)
+    errors = [error for finding in output.findings for error in _finding_errors(finding, known_ids)]
+    if errors:
+        raise ModelRetry("\n".join(errors))
     return output
+
+
+def _owned_by(test_case_id: str, findings: Iterable[ReviewFinding]) -> list[ReviewFinding]:
+    """The findings of a single test case's review, all owned by it; coverage and duplicates are the whole-set review's."""
+    owned: list[ReviewFinding] = []
+    for finding in findings:
+        if finding.action in _WHOLE_SET_ACTIONS:
+            logger.warning("Dropping the whole-set finding reported by the review of %s: %s", test_case_id, finding)
+            continue
+        owned.append(finding.model_copy(update={"owner_test_case_id": test_case_id, "related_test_case_ids": []}))
+    return owned
+
+
+def _json_list(findings: list[ReviewFinding]) -> str:
+    return "[" + ", ".join(finding.model_dump_json() for finding in findings) + "]"
 
 
 @contextmanager

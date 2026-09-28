@@ -8,7 +8,9 @@ import logging
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
+from a2a.helpers import new_text_message
 from a2a.types import Task, TaskState
 from a2a.types import TaskStatus as A2ATaskStatus
 
@@ -19,6 +21,7 @@ from orchestrator.main import (
     _get_agent_host,
     _retry_cancellation_task,
     _send_task_to_agent,
+    _send_task_to_agent_with_message,
     cancellation_queue,
 )
 from tests.orchestrator.conftest import agent_card
@@ -128,6 +131,35 @@ async def test_send_task_timeout(mock_registry, caplog):
             if len(c.args) >= 2 and c.args[1] == AgentStatus.BROKEN
         ]
         assert len(broken_calls) > 0, "Expected at least one call with AgentStatus.BROKEN"
+
+
+@pytest.mark.asyncio
+async def test_a_per_call_timeout_replaces_the_default_task_timeout(mock_registry):
+    mock_registry.get_card = AsyncMock(return_value=agent_card())
+
+    with (
+        patch("orchestrator.main.create_client", new_callable=AsyncMock) as mock_create_client,
+        patch("orchestrator.main.config.OrchestratorConfig.TASK_EXECUTION_TIMEOUT", 60.0),
+        patch("orchestrator.main.reserve_agent_waiting_if_needed", new_callable=AsyncMock) as mock_reserve,
+        patch("orchestrator.main.httpx.AsyncClient", wraps=httpx.AsyncClient) as mock_http_client,
+    ):
+        mock_reserve.return_value = ("agent-1", agent_card())
+        mock_a2a_client = MagicMock()
+        mock_create_client.return_value = mock_a2a_client
+
+        async def response_generator():
+            await asyncio.sleep(5)
+            yield MagicMock()
+
+        mock_a2a_client.send_message.return_value = response_generator()
+
+        from fastapi import HTTPException
+
+        with pytest.raises(HTTPException) as exc:
+            await _send_task_to_agent_with_message(new_text_message("input"), "desc", timeout_seconds=0.1)
+
+        assert exc.value.status_code == 408
+        assert mock_http_client.call_args.kwargs["timeout"] == 0.1
 
 
 @pytest.mark.asyncio

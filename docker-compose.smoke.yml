@@ -209,36 +209,25 @@ services:
         condition: service_healthy
     healthcheck: *agent-healthcheck
 
-  test_case_generation:
+  # generates, reviews and fixes the test cases in-process with the generation, review and classification agents.
+  test_case_design:
     build:
       context: .
-      dockerfile: agents/test_case_generation/Dockerfile
+      dockerfile: agents/test_case_design/Dockerfile
     environment:
       <<: *agent-env
-      AGENT_BASE_URL: "http://test_case_generation"
-    depends_on: *mock-dependencies
-    healthcheck: *agent-healthcheck
-
-  test_case_classification:
-    build:
-      context: .
-      dockerfile: agents/test_case_classification/Dockerfile
-    environment:
-      <<: *agent-env
-      AGENT_BASE_URL: "http://test_case_classification"
-    depends_on: *mock-dependencies
-    healthcheck: *agent-healthcheck
-
-  test_case_review:
-    build:
-      context: .
-      dockerfile: agents/test_case_review/Dockerfile
-    environment:
-      <<: *agent-env
-      AGENT_BASE_URL: "http://test_case_review"
-      # the review indexes its batch into the test-case collection and searches it for duplicates.
+      AGENT_BASE_URL: "http://test_case_design"
+      # the review searches the project's test cases for duplicates of the drafts and indexes the saved set.
       QDRANT_URL: "http://qdrant_mock:6333"
       EMBEDDING_SERVICE_URL: "http://qdrant_mock:6333"
+      # the design agent asks its generation delegate to fetch the story with these fields.
+      JIRA_ADDITIONAL_FIELD_IDS: "customfield_10101,customfield_10202"
+      # the rubric override under tests/smoke/overrides/ forces a high finding per test case in every review, so the
+      # loop runs exactly one fix cycle up to this limit, then stops as iteration_limit.
+      TEST_CASE_DESIGN_MAX_ITERATIONS: "2"
+      PROMPT_OVERRIDES_DIR: "/prompt-overrides"
+    volumes:
+      - ./tests/smoke/overrides:/prompt-overrides:ro
     depends_on:
       <<: *mock-dependencies
       qdrant_mock:
@@ -290,7 +279,7 @@ services:
       # the version through the dashboard, the environment label through the created incident.
       ORCHESTRATOR_VERSION: "8.8-smoke"
       TEST_ENVIRONMENT_LABEL: "Smoke Test Environment"
-      REMOTE_EXECUTION_AGENT_HOSTS: "http://requirements_review,http://test_case_generation,http://test_case_classification,http://test_case_review,http://incident_creation,http://execution_agent"
+      REMOTE_EXECUTION_AGENT_HOSTS: "http://requirements_review,http://test_case_design,http://incident_creation,http://execution_agent"
       AGENT_DISCOVERY_PORTS: "8001-8001"
       ORCHESTRATOR_API_KEY: "smoke-api-key"
       DASHBOARD_USERNAME: "smoke"
@@ -299,7 +288,7 @@ services:
       PROMPT_INJECTION_CHECK_ENABLED: "false"
       GOOGLE_API_KEY: "${GOOGLE_API_KEY}"
       MODEL_NAME: "google-gla:gemini-3.8-flash"
-      # proves the additional Jira custom fields instruction reaches the agents:
+      # proves the additional Jira custom fields instruction reaches the requirements review:
       # the Jira MCP mock records that jira_get_issue was asked for these field IDs.
       JIRA_ADDITIONAL_FIELD_IDS: "customfield_10101,customfield_10202"
       # The /execute-tests flow makes the orchestrator a test-management client.
@@ -328,11 +317,7 @@ services:
         condition: service_healthy
       requirements_review:
         condition: service_healthy
-      test_case_generation:
-        condition: service_healthy
-      test_case_classification:
-        condition: service_healthy
-      test_case_review:
+      test_case_design:
         condition: service_healthy
       incident_creation:
         condition: service_healthy

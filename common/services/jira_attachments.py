@@ -26,6 +26,7 @@ from common.attachment_handler import (
     resolve_media_type,
     should_skip_attachment,
 )
+from common.models import TestCaseDesignSession
 from common.services.jira_client import build_jira_client
 
 logger = utils.get_logger("jira_attachments")
@@ -137,3 +138,15 @@ async def fetch_issue_attachments(issue_key: str) -> dict[str, BinaryContent]:
     download.
     """
     return await asyncio.to_thread(download_issue_attachments, issue_key)
+
+
+def attachment_parts(attachments: dict[str, BinaryContent]) -> list[str | BinaryContent]:
+    """Each attachment as a user-message pair: its file name, then its original content."""
+    return [part for filename, content in attachments.items() for part in (f"Attachment: {filename}", content)]
+
+
+async def fetch_session_attachments(session: TestCaseDesignSession) -> dict[str, BinaryContent]:
+    """The attachments of the design session's user story, downloaded once and then reused from the session."""
+    if session.attachments is None:
+        session.attachments = await fetch_issue_attachments(session.story_key)
+    return session.attachments

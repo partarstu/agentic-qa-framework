@@ -8,10 +8,12 @@ from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from a2a.helpers import get_data_parts, get_message_text
 from a2a.types import Artifact, Part, Task, TaskState, TaskStatus
 from fastapi.testclient import TestClient
 
 import config
+from common.models import AgentExecutionError, TestCaseDesignResult
 from common.streaming import SnapshotEvent
 from orchestrator.auth import auth_service
 from orchestrator.main import (
@@ -62,27 +64,42 @@ async def test_review_jira_requirements_no_issue_key():
 
 
 @pytest.mark.asyncio
-async def test_trigger_test_case_generation_workflow(mock_task_completed):
-    # This endpoint calls multiple agents in sequence.
-    # _request_test_cases_generation -> returns GeneratedTestCases
-    # _request_test_cases_classification
-    # _request_test_cases_review
+async def test_trigger_test_case_generation_workflow_runs_one_test_case_design():
+    result = TestCaseDesignResult(test_case_keys=["TEST-T1"], iterations=2, stop_reason="converged")
+    task = MagicMock(spec=Task)
+    task.status = TaskStatus(state=TaskState.TASK_STATE_COMPLETED)
+    task.artifacts = [Artifact(name="art-1", parts=[Part(text=result.model_dump_json())])]
 
-    with (
-        patch("orchestrator.main._request_test_cases_generation", new_callable=AsyncMock) as mock_gen,
-        patch("orchestrator.main._request_test_cases_classification", new_callable=AsyncMock) as mock_class,
-        patch("orchestrator.main._request_test_cases_review", new_callable=AsyncMock) as mock_review,
-    ):
-        mock_gen_obj = MagicMock()
-        mock_gen_obj.test_cases = [MagicMock()]
-        mock_gen.return_value = mock_gen_obj
+    with patch("orchestrator.main._send_task_to_agent_with_message", new_callable=AsyncMock) as mock_send:
+        mock_send.return_value = task
 
         response = client.post("/story-ready-for-test-case-generation", json={"issue_key": "TEST-1"})
 
-        assert response.status_code == 200
-        mock_gen.assert_called_once()
-        mock_class.assert_called_once()
-        mock_review.assert_called_once()
+    assert response.status_code == 200
+    assert response.json() == {"message": "Test case design for Jira user story TEST-1 completed."}
+    mock_send.assert_awaited_once()
+    message, task_description = mock_send.await_args.args
+    assert get_message_text(message).startswith("Jira user story with key TEST-1")
+    assert get_data_parts(message.parts) == [{"story_key": "TEST-1"}]
+    assert task_description == "Design test cases for Jira user story TEST-1"
+    assert (
+        mock_send.await_args.kwargs["timeout_seconds"]
+        == config.OrchestratorConfig.TEST_CASE_DESIGN_TASK_TIMEOUT_SECONDS
+    )
+
+
+@pytest.mark.asyncio
+async def test_trigger_test_case_generation_workflow_fails_when_the_design_fails():
+    task = MagicMock(spec=Task)
+    task.status = TaskStatus(state=TaskState.TASK_STATE_COMPLETED)
+    error = AgentExecutionError(error_message="Agent execution failed with error: model unavailable")
+    task.artifacts = [Artifact(name="art-1", parts=[Part(text=error.model_dump_json())])]
+
+    with patch("orchestrator.main._send_task_to_agent_with_message", new_callable=AsyncMock, return_value=task):
+        response = client.post("/story-ready-for-test-case-generation", json={"issue_key": "TEST-1"})
+
+    assert response.status_code == 500
+    assert "Test case design failed for user story TEST-1" in response.json()["detail"]
 
 
 @pytest.mark.asyncio

@@ -165,7 +165,8 @@ jobs:
     runs-on: ubuntu-latest
     # Real, billed Gemini calls: only on manual runs, until the cost of running it on every pull request is justified.
     if: github.event_name == 'workflow_dispatch'
-    timeout-minutes: 45
+    # The test case design flow runs two reviews and a fix cycle, on top of the image builds.
+    timeout-minutes: 60
     steps:
       - name: Checkout repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0

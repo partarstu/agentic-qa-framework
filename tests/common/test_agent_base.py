@@ -3,25 +3,23 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 
 import logging
-from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx2
 import pytest
-from a2a.helpers import get_message_text
+from a2a.helpers import get_message_text, new_data_part, new_text_part
 from a2a.types import Message
 from a2a.utils.constants import AGENT_CARD_WELL_KNOWN_PATH
 from fastapi.testclient import TestClient
+from pydantic import BaseModel, ConfigDict
+from pydantic_ai import RunContext
 from pydantic_ai.models.test import TestModel
-from pydantic_ai.usage import RunUsage
-
-if TYPE_CHECKING:
-    from pydantic_ai.usage import UsageLimits
+from pydantic_ai.usage import RunUsage, UsageLimits
 
 import config
-from common.agent_base import AgentBase
+from common.agent_base import AgentBase, is_delegated_run
 from common.agent_log_capture import AgentLogCaptureHandler
-from common.models import AgentSkillDeclaration, JsonSerializableModel
+from common.models import AgentRuntimeError, AgentSkillDeclaration, JsonSerializableModel
 from common.streaming import reset_current_log_handler, set_current_log_handler
 from common.token_usage import OperationMeter, operation_meter
 
@@ -108,7 +106,7 @@ async def test_usage_limits_tool_calls_limit_is_doubled(test_agent_instance):
     """tool_calls_limit must equal get_max_requests_per_task() * 2."""
     captured: list[UsageLimits] = []
 
-    async def fake_run(request, usage_limits=None, toolsets=None):
+    async def fake_run(request, usage_limits=None, toolsets=None, **kwargs):
         captured.append(usage_limits)
         mock_result = MagicMock()
         mock_result.output = MockOutput(result="ok")
@@ -128,6 +126,7 @@ async def test_usage_limits_tool_calls_limit_is_doubled(test_agent_instance):
     assert len(captured) == 1
     assert captured[0].tool_calls_limit == test_agent_instance.get_max_requests_per_task() * 2
     assert captured[0].total_tokens_limit == config.BudgetConfig.TOTAL_TOKENS_LIMIT_PER_TASK
+    assert captured[0].request_limit is None, "A request cap would cut short delegated runs sharing the usage"
 
 
 @pytest.mark.asyncio
@@ -228,7 +227,7 @@ async def test_each_run_gets_a_fresh_mcp_toolset_whose_session_the_run_owns():
 
     passed_toolsets: list[list[MagicMock]] = []
 
-    async def fake_run(request, usage_limits=None, toolsets=None):
+    async def fake_run(request, usage_limits=None, toolsets=None, **kwargs):
         passed_toolsets.append(toolsets)
         mock_result = MagicMock()
         mock_result.output = MockOutput(result="ok")
@@ -281,7 +280,7 @@ async def test_mcp_connect_failure_is_reported_as_a_connection_error(test_agent_
     _agent_whose_run_raises(test_agent_instance, failure)
 
     with pytest.raises(ConnectionError, match="MCP connection failed"):
-        await test_agent_instance._get_agent_execution_result([])
+        await test_agent_instance._get_agent_execution_result([], None, UsageLimits())
 
 
 @pytest.mark.asyncio
@@ -290,7 +289,7 @@ async def test_run_failure_without_a_connect_error_propagates_unchanged(test_age
     _agent_whose_run_raises(test_agent_instance, RuntimeError("boom"))
 
     with pytest.raises(RuntimeError, match="boom"):
-        await test_agent_instance._get_agent_execution_result([])
+        await test_agent_instance._get_agent_execution_result([], None, UsageLimits())
 
 
 @pytest.mark.asyncio
@@ -299,7 +298,7 @@ async def test_model_transport_error_is_retried(test_agent_instance):
     run = _agent_whose_run_raises(test_agent_instance, httpx2.ReadError("reset"), result)
 
     with patch("common.agent_base.asyncio.sleep", new=AsyncMock()):
-        assert await test_agent_instance._get_agent_execution_result([]) is result
+        assert await test_agent_instance._get_agent_execution_result([], None, UsageLimits()) is result
     assert run.await_count == 2
 
 
@@ -310,7 +309,7 @@ async def test_model_connect_error_in_an_mcp_agent_is_retried_not_blamed_on_mcp(
     run = _agent_whose_run_raises(test_agent_instance, httpx2.ConnectError("model endpoint unreachable"), result)
 
     with patch("common.agent_base.asyncio.sleep", new=AsyncMock()):
-        assert await test_agent_instance._get_agent_execution_result([]) is result
+        assert await test_agent_instance._get_agent_execution_result([], None, UsageLimits()) is result
     assert run.await_count == 2
 
 
@@ -399,3 +398,173 @@ async def test_agent_run_reaches_its_tools_with_their_arguments() -> None:
 
     assert tool_calls, "The agent run never reached the tool."
     assert all(key and content for key, content in tool_calls), f"A tool argument was empty: {tool_calls}"
+
+
+class _Deps(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    story_key: str
+    seen_by: list[str] = []
+
+
+def _agent_with(name: str, tools=(), deps_type: type[BaseModel] | None = _Deps, agent_class=TestAgent) -> TestAgent:
+    return agent_class(
+        agent_name=name,
+        base_url="http://localhost",
+        protocol="http",
+        port=8000,
+        external_port=8000,
+        model_name="openai:test-model",
+        version="2.5",
+        skill=AgentSkillDeclaration(id=f"{name}-skill", name=name, description="Skill used by unit tests"),
+        output_type=MockOutput,
+        instructions="test instructions",
+        tools=tools,
+        deps_type=deps_type,
+    )
+
+
+def _message(*parts) -> Message:
+    return Message(message_id="m-1", parts=list(parts))
+
+
+@pytest.mark.asyncio
+async def test_structured_data_part_becomes_the_deps_of_the_run() -> None:
+    received: list[_Deps] = []
+
+    async def record_deps(ctx: RunContext[_Deps]) -> str:
+        """Records the deps of the run."""
+        received.append(ctx.deps)
+        return "recorded"
+
+    agent = _agent_with("parent", tools=[record_deps])
+
+    with agent.agent.override(model=TestModel()):
+        await agent.run(_message(new_text_part("Design PROJ-1"), new_data_part({"story_key": "PROJ-1"})))
+
+    assert received and all(deps == _Deps(story_key="PROJ-1") for deps in received)
+
+
+@pytest.mark.asyncio
+async def test_data_part_with_unknown_fields_fails_the_run() -> None:
+    agent = _agent_with("parent")
+
+    with agent.agent.override(model=TestModel()), pytest.raises(AgentRuntimeError, match="extra"):
+        await agent.run(_message(new_text_part("Design PROJ-1"), new_data_part({"story_key": "P-1", "x": 1})))
+
+
+@pytest.mark.asyncio
+async def test_more_than_one_data_part_fails_the_run() -> None:
+    agent = _agent_with("parent")
+    part = new_data_part({"story_key": "PROJ-1"})
+
+    with agent.agent.override(model=TestModel()), pytest.raises(AgentRuntimeError, match="at most one"):
+        await agent.run(_message(new_text_part("Design PROJ-1"), part, part))
+
+
+def test_data_part_is_ignored_by_an_agent_without_deps_type(test_agent_instance) -> None:
+    assert test_agent_instance._get_deps(_message(new_data_part({"story_key": "PROJ-1"}))) is None
+
+
+@pytest.mark.asyncio
+async def test_delegated_run_shares_deps_usage_limits_and_activity_queue_of_the_delegating_task() -> None:
+    child_limits: list[UsageLimits] = []
+
+    async def child_tool(ctx: RunContext[_Deps]) -> str:
+        """Marks the deps as seen by the child."""
+        ctx.deps.seen_by.append("child")
+        return "done"
+
+    child = _agent_with("child", tools=[child_tool])
+    child_run = child.agent.run
+
+    async def spy_run(*args, **kwargs):
+        child_limits.append(kwargs["usage_limits"])
+        return await child_run(*args, **kwargs)
+
+    child.agent.run = spy_run
+    delegated_outputs: list[str] = []
+
+    async def delegate(ctx: RunContext[_Deps]) -> str:
+        """Delegates to the child agent."""
+        delegated_outputs.append(await child.run_delegated("Do it", ctx.deps, ctx.usage))
+        return "delegated"
+
+    parent = _agent_with("parent", tools=[delegate])
+    captured_deps: list[_Deps] = []
+    parent_run = parent.agent.run
+
+    async def parent_spy_run(*args, **kwargs):
+        captured_deps.append(kwargs["deps"])
+        return await parent_run(*args, **kwargs)
+
+    parent.agent.run = parent_spy_run
+
+    with parent.agent.override(model=TestModel()), child.agent.override(model=TestModel()):
+        await parent.run(_message(new_text_part("Design PROJ-1"), new_data_part({"story_key": "PROJ-1"})))
+
+    assert delegated_outputs and all(isinstance(output, str) for output in delegated_outputs)
+    assert "child" in captured_deps[0].seen_by
+    assert child_limits[0] == parent._get_usage_limits()
+    assert child.activity_queue.empty(), "A delegated run must report to the delegating task's queue"
+    assert not parent.activity_queue.empty()
+
+
+@pytest.mark.asyncio
+async def test_delegated_run_outside_a_task_uses_its_own_limits_and_queue() -> None:
+    agent = _agent_with("child")
+    agent.agent = AsyncMock()
+    agent.agent.run = AsyncMock(return_value=MagicMock(output="closing text"))
+    agent.agent.__aenter__.return_value = agent.agent
+    agent.agent.__aexit__.return_value = None
+    deps = _Deps(story_key="PROJ-1")
+    usage = RunUsage()
+
+    assert await agent.run_delegated("Do it", deps, usage) == "closing text"
+
+    kwargs = agent.agent.run.await_args.kwargs
+    assert kwargs["deps"] is deps
+    assert kwargs["usage"] is usage
+    assert kwargs["output_type"] is str
+    assert kwargs["usage_limits"] == agent._get_usage_limits()
+    await agent.report_activity("working")
+    assert agent.activity_queue.qsize() == 1
+
+
+class _BigBudgetAgent(TestAgent):
+    __test__ = False
+
+    def get_total_tokens_limit(self) -> int:
+        return 4_000_000
+
+
+@pytest.mark.asyncio
+async def test_a_run_is_marked_delegated_only_while_it_runs_for_a_delegating_agent() -> None:
+    agent = _agent_with("child")
+    observed: list[bool] = []
+
+    async def run(*args, **kwargs):
+        observed.append(is_delegated_run())
+        return MagicMock(output="done")
+
+    agent.agent = AsyncMock()
+    agent.agent.run = run
+    agent.agent.__aenter__.return_value = agent.agent
+    agent.agent.__aexit__.return_value = None
+
+    await agent.run_delegated("Do it", _Deps(story_key="PROJ-1"), RunUsage())
+
+    assert observed == [True]
+    assert not is_delegated_run()
+
+
+def test_sub_agent_limits_cap_only_the_tokens_of_the_task() -> None:
+    agent = _agent_with("big", agent_class=_BigBudgetAgent)
+
+    limits = agent.get_sub_agent_usage_limits()
+
+    assert (limits.total_tokens_limit, limits.tool_calls_limit, limits.request_limit) == (4_000_000, None, None)
+
+
+def test_total_tokens_limit_defaults_to_the_global_budget_and_can_be_overridden() -> None:
+    assert _agent_with("default").get_total_tokens_limit() == config.BudgetConfig.TOTAL_TOKENS_LIMIT_PER_TASK
+    assert _agent_with("big", agent_class=_BigBudgetAgent)._get_usage_limits().total_tokens_limit == 4_000_000

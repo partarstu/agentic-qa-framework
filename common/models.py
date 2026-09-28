@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 
 import hashlib
+import itertools
 import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -10,8 +11,9 @@ from enum import StrEnum
 from typing import Literal, Optional
 
 from a2a.types import Part
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic.json_schema import SkipJsonSchema
+from pydantic_ai.messages import BinaryContent
 
 
 @dataclass(slots=True)
@@ -378,10 +380,49 @@ class TestCaseDuplicateCheck(JsonSerializableModel):
     overlapping_test_cases: list[OverlappingTestCase] = Field(default_factory=list)
 
 
+class FindingSeverity(StrEnum):
+    """How much a review finding endangers the test case's purpose, ordered from low to critical."""
+
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    CRITICAL = "critical"
+
+    @property
+    def rank(self) -> int:
+        return list(FindingSeverity).index(self)
+
+
+class FindingAction(StrEnum):
+    """What fixing a review finding does to the test cases."""
+
+    MODIFY = "modify"
+    REMOVE_DUPLICATE_STEPS = "remove_duplicate_steps"
+    DELETE_TEST_CASE = "delete_test_case"
+    ADD_TEST_CASE = "add_test_case"
+
+
+class ReviewFinding(JsonSerializableModel):
+    """One concrete problem found by a review, assigned to the single test case whose fix resolves it."""
+
+    owner_test_case_id: str | None = Field(
+        description="The ID of the only test case whose change resolves the finding; null only for 'add_test_case'"
+    )
+    action: FindingAction = Field(description="What fixing the finding does to the owner test case or the test set")
+    severity: FindingSeverity
+    category: str = Field(description="Short category of the problem, e.g. 'missing coverage' or 'ambiguous step'")
+    description: str = Field(description="What exactly is wrong and which concrete consequence it has")
+    suggested_fix: str = Field(description="The concrete change which resolves the finding")
+    ac_ref: str | None = Field(default=None, description="The ID of the affected acceptance criterion, if any")
+    related_test_case_ids: list[str] = Field(
+        default_factory=list, description="IDs of other test cases involved, e.g. the duplicated one"
+    )
+
+
 class TestCaseReviewFeedback(BaseAgentResult):
     __test__ = False
     test_case_id: str = Field(description="The ID or key of the test case which was reviewed")
-    review_feedback: list[str] = Field(description="List of improvements suggested by the test case review")
+    findings: list[ReviewFinding] = Field(description="The findings of the review, empty when there are none")
     # Filled in by code, never by a model, so it is hidden from the output schema the LLM sees.
     duplicate_check: SkipJsonSchema[TestCaseDuplicateCheck | None] = None
 
@@ -389,6 +430,78 @@ class TestCaseReviewFeedback(BaseAgentResult):
 class TestCaseReviewFeedbacks(BaseAgentResult):
     __test__ = False
     review_feedbacks: list[TestCaseReviewFeedback] = Field(description="A list of test case review feedbacks")
+
+
+class TestSuiteReview(BaseAgentResult):
+    __test__ = False
+    findings: list[ReviewFinding] = Field(
+        description="The findings about the test cases as a whole set, empty when there are none"
+    )
+
+
+class DesignStopReason(StrEnum):
+    """Why the generate-review-fix loop of a test case design stopped."""
+
+    CONVERGED = "converged"
+    ITERATION_LIMIT = "iteration_limit"
+
+
+DRAFT_ID_PREFIX = "DRAFT-"
+
+
+class TestCaseDesignSession(JsonSerializableModel):
+    """The state of one test case design, shared in-process by the design agent and the agents it delegates to.
+
+    Test cases are keyed by a temporary `DRAFT-<n>` id until they are saved, then by their test management system key.
+    """
+
+    __test__ = False
+    model_config = ConfigDict(extra="forbid")
+
+    story_key: str = Field(pattern=r"^[A-Z][A-Z0-9_]*-\d+$")
+    story_id: int | None = None
+    story_content: str | None = None
+    attachments: SkipJsonSchema[dict[str, BinaryContent] | None] = None
+    test_cases: dict[str, TestCase] = Field(default_factory=dict)
+    changed_test_case_ids: set[str] = Field(default_factory=set)
+    findings: dict[str, list[ReviewFinding]] = Field(default_factory=dict)
+    suite_findings: list[ReviewFinding] = Field(default_factory=list)
+    suite_reviewed: bool = False
+    duplicate_checks: dict[str, TestCaseDuplicateCheck] = Field(default_factory=dict)
+    iteration: int = 0
+    fixes: int = 0
+    stop_reason: DesignStopReason | None = None
+    next_draft_number: int = 1
+    uploaded: bool = False
+    classified: bool = False
+    feedback_added_ids: set[str] = Field(default_factory=set)
+    review_completed_ids: set[str] = Field(default_factory=set)
+    indexed: bool = False
+
+    @property
+    def project_key(self) -> str:
+        return self.story_key.rsplit("-", 1)[0]
+
+    def add_draft(self, test_case: TestCase) -> str:
+        """Stores a new test case under the next draft id, marks it changed and returns the id."""
+        draft_id = f"{DRAFT_ID_PREFIX}{self.next_draft_number}"
+        self.next_draft_number += 1
+        self.test_cases[draft_id] = test_case
+        self.changed_test_case_ids.add(draft_id)
+        return draft_id
+
+    def blocking_findings(self, min_severity: FindingSeverity) -> list[ReviewFinding]:
+        """The per-test-case and whole-set findings at or above the given severity."""
+        all_findings = [*itertools.chain.from_iterable(self.findings.values()), *self.suite_findings]
+        return [finding for finding in all_findings if finding.severity.rank >= min_severity.rank]
+
+
+class TestCaseDesignResult(BaseAgentResult):
+    __test__ = False
+    # Filled in from the design session by code, never by a model, so they are hidden from the output schema.
+    test_case_keys: SkipJsonSchema[list[str]] = Field(default_factory=list)
+    iterations: SkipJsonSchema[int] = 0
+    stop_reason: SkipJsonSchema[DesignStopReason | None] = None
 
 
 class TestExecutionRequest(JsonSerializableModel):

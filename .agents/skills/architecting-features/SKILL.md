@@ -22,7 +22,7 @@ Copy this checklist and track progress:
 ## 1. Understand the request
 
 - Restate the goal and list your assumptions.
-- If the request allows several interpretations, present them and ask; do not pick one silently.
+- If the request has readings that would lead to materially different work, present them and ask; make routine judgement calls yourself.
 - If a simpler approach meets the need, propose it.
 
 ## 2. Study the existing code
@@ -70,9 +70,9 @@ Add a Mermaid diagram only when the interaction is not obvious from the text, su
 
 ## 6. Write the plan and get approval
 
-Write the plan in the conversation using [resources/implementation_plan_template.md](resources/implementation_plan_template.md), omitting sections that do not apply. Keep it compact: architecture, logic and data workflows, impact and the steps; no explanatory prose, no restated code, no hard wraps. Save it to a file only if the user asks.
+Write the plan to an .MD file in the `plans` folder using [resources/implementation_plan_template.md](resources/implementation_plan_template.md), omitting sections that do not apply. Keep it compact: architecture, logic and data workflows, impact and the steps; no explanatory prose, no restated code, no hard wraps. Keep its TODO list current during implementation.
 
-Then stop and ask for approval, listing the decisions that need the user's input: trade-offs, new dependencies and security-sensitive choices. Do not start implementing before the user approves.
+Then reply with only the file's path and a short summary that names the decisions needing the user's input (trade-offs, new dependencies, security-sensitive choices), and ask for approval. Do not start implementing before the user approves.
 
 ## 7. Hand off
 

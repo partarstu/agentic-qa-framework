@@ -162,56 +162,21 @@ services:
       ATLASSIAN_MCP_SERVER_URL: ATLASSIAN_MCP_SERVER_URL
       QDRANT_API_KEY: QDRANT_API_KEY
 
-  test-case-generation-agent:
-    version: "1.0"
+  # Runs the test case generation, review and classification agents in-process as its delegates.
+  test-case-design-agent:
+    version: "1.0.0"
     env:
-      TEST_CASE_GENERATION_AGENT_VERSION: "{version}"
+      TEST_CASE_DESIGN_AGENT_VERSION: "{version}"
       GOOGLE_CLOUD_LOGGING_ENABLED: "true"
       AGENT_BASE_URL: ""
       EXTERNAL_PORT: "443"
-      EMBEDDING_SERVICE_URL: ""
-      PROMPT_GUARD_SERVICE_URL: ""
-      PROMPT_OVERRIDES_DIR: ""
-    secrets:
-      GOOGLE_API_KEY: GOOGLE_API_KEY
-      JIRA_API_TOKEN: JIRA_API_TOKEN
-      JIRA_USERNAME: JIRA_USERNAME
-      JIRA_URL: JIRA_URL
-      ZEPHYR_API_TOKEN: ZEPHYR_API_TOKEN
-      ZEPHYR_BASE_URL: ZEPHYR_BASE_URL
-      ATLASSIAN_MCP_SERVER_URL: ATLASSIAN_MCP_SERVER_URL
-
-  test-case-classification-agent:
-    version: "1.0"
-    env:
-      TEST_CASE_CLASSIFICATION_AGENT_VERSION: "{version}"
-      GOOGLE_CLOUD_LOGGING_ENABLED: "true"
-      AGENT_BASE_URL: ""
-      EXTERNAL_PORT: "443"
-      EMBEDDING_SERVICE_URL: ""
-      PROMPT_GUARD_SERVICE_URL: ""
-      PROMPT_OVERRIDES_DIR: ""
-    secrets:
-      GOOGLE_API_KEY: GOOGLE_API_KEY
-      JIRA_API_TOKEN: JIRA_API_TOKEN
-      JIRA_USERNAME: JIRA_USERNAME
-      JIRA_URL: JIRA_URL
-      ZEPHYR_API_TOKEN: ZEPHYR_API_TOKEN
-      ZEPHYR_BASE_URL: ZEPHYR_BASE_URL
-      ATLASSIAN_MCP_SERVER_URL: ATLASSIAN_MCP_SERVER_URL
-
-  test-case-review-agent:
-    version: "1.0"
-    env:
-      TEST_CASE_REVIEW_AGENT_VERSION: "{version}"
-      GOOGLE_CLOUD_LOGGING_ENABLED: "true"
-      AGENT_BASE_URL: ""
-      EXTERNAL_PORT: "443"
-      # The duplicate check indexes and searches the test-case collection.
+      # The duplicate check searches the test-case collection, which the design indexes at its end.
       EMBEDDING_SERVICE_URL: ""
       QDRANT_URL: ""
       PROMPT_GUARD_SERVICE_URL: ""
       PROMPT_OVERRIDES_DIR: ""
+      # The design agent itself tells its generation delegate which additional Jira fields to fetch.
+      JIRA_ADDITIONAL_FIELD_IDS: ""
     secrets:
       GOOGLE_API_KEY: GOOGLE_API_KEY
       JIRA_API_TOKEN: JIRA_API_TOKEN
