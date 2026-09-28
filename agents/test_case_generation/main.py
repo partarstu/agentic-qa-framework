@@ -186,7 +186,6 @@ class TestCaseGenerationAgent(AgentBase):
         for test_case_id in deleted:
             del session.test_cases[test_case_id]
             session.findings.pop(test_case_id, None)
-            session.duplicate_checks.pop(test_case_id, None)
             session.changed_test_case_ids.discard(test_case_id)
         findings_by_owner: dict[str, list[ReviewFinding]] = {}
         for finding in blocking:

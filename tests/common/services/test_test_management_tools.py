@@ -235,14 +235,6 @@ async def test_review_complete_status_is_refused_for_a_draft(client):
     client.change_test_case_status.assert_not_called()
 
 
-def test_a_session_with_drafts_is_designing():
-    designing = TestCaseDesignSession(story_key="PROJ-7")
-    designing.add_draft(_test_case("First"))
-
-    assert tools.is_designing(designing)
-    assert not tools.is_designing(_saved_session())
-
-
 async def test_write_tools_are_hidden_only_in_a_delegated_run():
     tool_def = MagicMock()
     ctx = _ctx(_saved_session())

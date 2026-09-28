@@ -102,15 +102,10 @@ async def set_test_case_status_to_review_complete(ctx: RunContext[TestCaseDesign
     return f"Successfully set the status of the test case '{test_case_key}' to '{status_name}'."
 
 
-def is_designing(session: TestCaseDesignSession) -> bool:
-    """Whether the session holds unsaved drafts, i.e. a test case design is still in progress."""
-    return any(test_case_id.startswith(DRAFT_ID_PREFIX) for test_case_id in session.test_cases)
-
-
 async def hide_while_designing(
     ctx: RunContext[TestCaseDesignSession], tool_def: ToolDefinition
 ) -> ToolDefinition | None:
-    """Offers a write tool only outside a delegated run: while designing, the design agent does every write."""
+    """Offers a tool only outside a delegated run: while designing, the design agent calls it after the loop."""
     return None if is_delegated_run() else tool_def
 
 

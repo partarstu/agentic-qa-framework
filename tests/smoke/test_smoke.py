@@ -24,8 +24,8 @@ boundary, read back from its ``/__recorded`` endpoint:
 * Requirements review   -> the usage artifact meters the focused reviews, at most the configured count, and a merge run whenever at least two focused reviews succeeded.
 * Test-case review      -> a non-empty "Review Comments" value reached Zephyr for every generated test case.
 * Test-case review      -> at least one test case reached the "Review Complete" status.
-* Test-case review      -> every review comment carries the duplicate-check section, after the batch was
-                           indexed and searched per test case within its project; the usage
+* Test-case review      -> every review comment carries the duplicate-check section, after each final test
+                           case was searched once within its project, by content; the usage
                            artifact carries per-operation counters.
 * Test execution        -> a failed automated test drove a real Bug issue into the seeded project.
 * Test execution        -> a failed execution for the seeded case was reported to Zephyr with UTC
@@ -487,36 +487,37 @@ def test_review_comment_carries_the_duplicate_check(
     )
 
 
-def test_design_searched_the_project_for_duplicates_of_its_drafts_and_indexed_the_saved_set(
+def _draft_duplicate_searches(recorded: dict) -> list[dict]:
+    """The design's duplicate searches: test-case queries whose dense filter excludes a draft ID."""
+    searches = []
+    for query in recorded.get("hybrid_queries", []):
+        dense_filter = query["prefetches"][0].get("filter") or {}
+        excluded = [c.get("match", {}).get("value") for c in dense_filter.get("must_not", [])]
+        if query.get("collection") == TEST_CASES_COLLECTION_NAME and any(
+            str(value).startswith(DRAFT_ID_PREFIX) for value in excluded
+        ):
+            searches.append({"filter": dense_filter, "excluded": excluded})
+    return searches
+
+
+def test_design_checked_each_final_test_case_once_for_duplicates_in_its_project(
     test_case_flow_response: httpx.Response, http_client: httpx.Client
 ) -> None:
-    """The review searches the project for duplicates of each draft, excluding the draft itself, and the
-    design indexes the saved test cases once the loop has stopped."""
+    """After the review loop the design searches the project once per final test case, by its content, so there are
+    exactly as many draft searches as saved test cases, one per draft, none during the loop."""
     zephyr = wait_for_recorded(http_client, ZEPHYR_RECORDED_URL, lambda d: bool(d.get("test_cases")))
     generated_keys = {tc["key"] for tc in zephyr.get("test_cases", [])}
-
-    def _indexed_keys(recorded: dict) -> set[str]:
-        return {
-            p.get("payload", {}).get("test_case_key")
-            for p in recorded.get("upserted_points", [])
-            if p.get("collection") == TEST_CASES_COLLECTION_NAME
-        }
-
-    data = wait_for_recorded(http_client, QDRANT_RECORDED_URL, lambda d: generated_keys <= _indexed_keys(d))
-    assert generated_keys <= _indexed_keys(data), (
-        f"Saved test case(s) {generated_keys - _indexed_keys(data)} were never indexed. Recorded: {data}"
+    data = wait_for_recorded(
+        http_client, QDRANT_RECORDED_URL, lambda d: len(_draft_duplicate_searches(d)) >= len(generated_keys)
     )
-    queries = [q for q in data.get("hybrid_queries", []) if q.get("collection") == TEST_CASES_COLLECTION_NAME]
-    excluded_ids = set()
-    for query in queries:
-        dense_filter = query["prefetches"][0].get("filter") or {}
-        must = {(c.get("key"), c.get("match", {}).get("value")) for c in dense_filter.get("must", [])}
-        assert ("project_key", SEEDED_PROJECT_KEY) in must, f"A duplicate search is not project-scoped: {query}"
-        excluded_ids |= {c.get("match", {}).get("value") for c in dense_filter.get("must_not", [])}
-    draft_ids = {i for i in excluded_ids if str(i).startswith(DRAFT_ID_PREFIX)}
-    assert len(draft_ids) >= len(generated_keys), (
-        f"Fewer drafts ran a duplicate search excluding themselves than test cases were saved. "
-        f"Saved: {generated_keys}, excluded in searches: {excluded_ids}"
+    searches = _draft_duplicate_searches(data)
+    for search in searches:
+        must = {(c.get("key"), c.get("match", {}).get("value")) for c in search["filter"].get("must", [])}
+        assert ("project_key", SEEDED_PROJECT_KEY) in must, f"A duplicate search is not project-scoped: {search}"
+    searched_drafts = [value for search in searches for value in search["excluded"]]
+    assert len(searched_drafts) == len(set(searched_drafts)) == len(generated_keys), (
+        f"Expected exactly one duplicate search per saved test case. "
+        f"Saved: {generated_keys}, searched drafts: {searched_drafts}"
     )
 
 

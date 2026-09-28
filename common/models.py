@@ -423,8 +423,6 @@ class TestCaseReviewFeedback(BaseAgentResult):
     __test__ = False
     test_case_id: str = Field(description="The ID or key of the test case which was reviewed")
     findings: list[ReviewFinding] = Field(description="The findings of the review, empty when there are none")
-    # Filled in by code, never by a model, so it is hidden from the output schema the LLM sees.
-    duplicate_check: SkipJsonSchema[TestCaseDuplicateCheck | None] = None
 
 
 class TestCaseReviewFeedbacks(BaseAgentResult):
@@ -476,7 +474,6 @@ class TestCaseDesignSession(JsonSerializableModel):
     classified: bool = False
     feedback_added_ids: set[str] = Field(default_factory=set)
     review_completed_ids: set[str] = Field(default_factory=set)
-    indexed: bool = False
 
     @property
     def project_key(self) -> str:

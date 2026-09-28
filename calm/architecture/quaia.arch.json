@@ -889,7 +889,7 @@
     },
     {
       "unique-id": "rel-test-case-design-qdrant",
-      "description": "Test Case Design Agent runs hybrid search over the test-case collection in Qdrant to check the drafts for duplicates, and indexes the final test cases once they are saved.",
+      "description": "Test Case Design Agent runs hybrid search over the test-case collection in Qdrant to check the final test cases for duplicates by their content, before they are saved; it never writes to the collection.",
       "protocol": "HTTPS",
       "relationship-type": {
         "connects": {
@@ -921,7 +921,7 @@
     },
     {
       "unique-id": "rel-test-case-design-embedding",
-      "description": "Test Case Design Agent requests embeddings from the embedding service to search for duplicates of the drafts and to index the final test cases.",
+      "description": "Test Case Design Agent requests embeddings from the embedding service to search for duplicates of the final test cases.",
       "protocol": "HTTPS",
       "relationship-type": {
         "connects": {

@@ -69,7 +69,6 @@ class TestCaseDesignAgent(AgentBase):
                 Tool(self.classify_test_cases, sequential=True, prepare=_hide_until_stopped),
                 Tool(add_review_feedback, sequential=True, prepare=_hide_until_stopped),
                 Tool(set_test_case_status_to_review_complete, sequential=True, prepare=_hide_until_stopped),
-                Tool(self.review_agent.index_test_cases, sequential=True, prepare=_hide_until_stopped),
             ],
         )
         self.agent.instructions(_story_instructions)
@@ -103,10 +102,12 @@ class TestCaseDesignAgent(AgentBase):
 
     async def review_test_cases(self, ctx: RunContext[TestCaseDesignSession]) -> str:
         """
-        Reviews the new and changed test cases and the whole set, and decides whether the design continues.
+        Reviews the new and changed test cases and the whole set, and decides whether the design continues. When the
+        design is finished, checks the final test cases for duplicates among the existing test cases of the project.
 
         Returns:
-            The number of blocking findings and whether the design continues with a fix or is finished.
+            The number of blocking findings, whether the design continues with a fix or is finished, and the duplicates
+            of each final test case once it is finished.
         """
         session = ctx.deps
         if not session.test_cases:
@@ -136,12 +137,14 @@ class TestCaseDesignAgent(AgentBase):
             len(blocking),
             session.stop_reason,
         )
-        outcome = (
-            f"The design is finished ({session.stop_reason.value})."
-            if session.stop_reason
-            else "The design continues: fix the test cases next."
+        header = f"Review iteration {session.iteration}: {len(blocking)} blocking finding(s)."
+        if session.stop_reason is None:
+            return f"{header} The design continues: fix the test cases next. {summary}"
+        duplicates = await self.review_agent.check_duplicates(ctx)
+        return (
+            f"{header} The design is finished ({session.stop_reason.value}); save the test cases next. {summary}\n"
+            f"Duplicates of the final test cases among the existing ones:\n{duplicates}"
         )
-        return f"Review iteration {session.iteration}: {len(blocking)} blocking finding(s). {outcome} {summary}"
 
     async def fix_test_cases(self, ctx: RunContext[TestCaseDesignSession]) -> str:
         """
@@ -218,8 +221,6 @@ def _complete_result(ctx: RunContext[TestCaseDesignSession], output: TestCaseDes
         missing.append(f"add the review feedback of {without_feedback}")
     if without_status := sorted(keys - session.review_completed_ids):
         missing.append(f"set the status of {without_status}")
-    if not session.indexed:
-        missing.append("index the saved test cases")
     if missing and output.llm_comments:
         raise DesignAbortedError(
             f"The design of {session.story_key} was aborted ({output.llm_comments}); steps not done: {'; '.join(missing)}."

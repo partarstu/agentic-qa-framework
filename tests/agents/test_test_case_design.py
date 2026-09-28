@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from a2a.helpers import get_message_text, new_data_part, new_text_part
 from a2a.types import Message
-from pydantic_ai import ModelRetry
+from pydantic_ai import ModelRetry, RunContext
 from pydantic_ai.messages import ModelMessage, ModelResponse, ToolCallPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.usage import RunUsage
@@ -37,7 +37,6 @@ _WRITE_TOOLS = {
     "classify_test_cases",
     "add_review_feedback",
     "set_test_case_status_to_review_complete",
-    "index_test_cases",
 }
 
 
@@ -68,11 +67,15 @@ def _review(*findings: ReviewFinding) -> Callable[[TestCaseDesignSession], None]
     def review(session: TestCaseDesignSession) -> None:
         for test_case_id in session.changed_test_case_ids:
             session.findings[test_case_id] = [f for f in findings if f.owner_test_case_id == test_case_id]
-            session.duplicate_checks[test_case_id] = TestCaseDuplicateCheck()
         session.changed_test_case_ids.clear()
         session.suite_reviewed = True
 
     return review
+
+
+async def _check_duplicates(ctx: RunContext[TestCaseDesignSession]) -> str:
+    ctx.deps.duplicate_checks = {test_case_id: TestCaseDuplicateCheck() for test_case_id in ctx.deps.test_cases}
+    return "DRAFT-1: no duplicates"
 
 
 def _delegate(effect: Callable[[TestCaseDesignSession], None], summary: str = "done") -> MagicMock:
@@ -83,11 +86,17 @@ def _delegate(effect: Callable[[TestCaseDesignSession], None], summary: str = "d
     return MagicMock(run_delegated=AsyncMock(side_effect=run_delegated))
 
 
+def _reviewer(*findings: ReviewFinding) -> MagicMock:
+    reviewer = _delegate(_review(*findings))
+    reviewer.check_duplicates = AsyncMock(side_effect=_check_duplicates)
+    return reviewer
+
+
 @pytest.fixture
 def agent() -> TestCaseDesignAgent:
     design_agent = TestCaseDesignAgent()
     design_agent.generation_agent = _delegate(_generate)
-    design_agent.review_agent = _delegate(_review())
+    design_agent.review_agent = _reviewer()
     design_agent.classification_agent = _delegate(lambda session: None, "labelled")
     return design_agent
 
@@ -102,7 +111,7 @@ def client() -> Iterator[MagicMock]:
 
 @pytest.fixture
 def vector_db() -> Iterator[MagicMock]:
-    service = MagicMock(upsert_batch=AsyncMock())
+    service = MagicMock(hybrid_search=AsyncMock(return_value=[]), upsert_batch=AsyncMock())
     with patch.object(review_main.agent, "vector_db_service", service):
         yield service
 
@@ -133,7 +142,10 @@ def _design_request() -> Message:
     return Message(message_id="m-1", parts=[new_text_part("Design PROJ-1"), new_data_part({"story_key": "PROJ-1"})])
 
 
-async def test_a_converging_design_is_saved_classified_published_and_indexed(agent, client, vector_db):
+async def test_a_converging_design_is_checked_for_duplicates_then_saved_classified_and_published(
+    agent, client, vector_db
+):
+    agent.review_agent.check_duplicates = review_main.agent.check_duplicates
     offered: list[set[str]] = []
     calls = [
         ("generate_test_cases", {}),
@@ -142,7 +154,6 @@ async def test_a_converging_design_is_saved_classified_published_and_indexed(age
         ("classify_test_cases", {}),
         ("add_review_feedback", {"test_case_key": "PROJ-T1"}),
         ("set_test_case_status_to_review_complete", {"test_case_key": "PROJ-T1"}),
-        ("index_test_cases", {}),
     ]
 
     with agent.agent.override(model=_scripted_model(calls, offered)):
@@ -155,9 +166,11 @@ async def test_a_converging_design_is_saved_classified_published_and_indexed(age
     assert offered[2] >= _WRITE_TOOLS
     assert "fix_test_cases" not in offered[2]
     client.create_test_cases.assert_called_once()
-    client.add_test_case_review_comment.assert_called_once()
+    comment = client.add_test_case_review_comment.call_args.args[1]
+    assert "No duplicate test cases found." in comment
     client.change_test_case_status.assert_called_once_with("PROJ", "PROJ-T1", "Review Complete")
-    vector_db.upsert_batch.assert_awaited_once()
+    vector_db.hybrid_search.assert_awaited_once()
+    vector_db.upsert_batch.assert_not_awaited()
     classified = agent.classification_agent.run_delegated.await_args.args[0]
     assert classified.startswith("Test cases:\n")
     assert '"key": "PROJ-T1"' in classified
@@ -215,26 +228,30 @@ async def test_generation_delegates_with_the_story_key_and_the_additional_fields
 
 async def test_review_without_blocking_findings_converges(agent):
     session = _generated()
-    agent.review_agent = _delegate(_review(_finding("DRAFT-1", FindingSeverity.LOW)))
+    agent.review_agent = _reviewer(_finding("DRAFT-1", FindingSeverity.LOW))
 
     result = await agent.review_test_cases(_ctx(session))
 
     assert (session.iteration, session.stop_reason) == (1, DesignStopReason.CONVERGED)
-    assert "0 blocking finding(s). The design is finished (converged)." in result
+    assert "0 blocking finding(s). The design is finished (converged); save the test cases next." in result
+    assert result.endswith("Duplicates of the final test cases among the existing ones:\nDRAFT-1: no duplicates")
+    assert session.duplicate_checks == {"DRAFT-1": TestCaseDuplicateCheck()}
 
 
 async def test_review_with_blocking_findings_continues_until_the_iteration_limit(agent):
     session = _generated()
     agent.max_iterations = 2
-    agent.review_agent = _delegate(_review(_finding("DRAFT-1")))
+    agent.review_agent = _reviewer(_finding("DRAFT-1"))
     agent.generation_agent = _delegate(lambda design: design.changed_test_case_ids.add("DRAFT-1"), "fixed")
 
     first = await agent.review_test_cases(_ctx(session))
+    agent.review_agent.check_duplicates.assert_not_awaited()
     await agent.fix_test_cases(_ctx(session))
     second = await agent.review_test_cases(_ctx(session))
 
     assert "1 blocking finding(s). The design continues: fix the test cases next." in first
-    assert "The design is finished (iteration_limit)." in second
+    assert "The design is finished (iteration_limit); save the test cases next." in second
+    agent.review_agent.check_duplicates.assert_awaited_once()
     assert (session.iteration, session.fixes, session.stop_reason) == (2, 1, DesignStopReason.ITERATION_LIMIT)
     assert (
         agent.generation_agent.run_delegated.await_args.args[0] == "Fix the test cases of the Jira user story PROJ-1."
@@ -275,7 +292,7 @@ async def test_a_review_without_the_whole_set_review_does_not_count_as_an_iterat
     session.suite_reviewed = True
 
     def per_test_case_review_only(design: TestCaseDesignSession) -> None:
-        design.duplicate_checks["DRAFT-1"] = TestCaseDuplicateCheck()
+        design.findings["DRAFT-1"] = []
         design.changed_test_case_ids.clear()
 
     agent.review_agent = _delegate(per_test_case_review_only)
@@ -338,13 +355,13 @@ def test_the_result_is_refused_until_every_step_is_done_and_then_filled_from_the
         design_main._complete_result(ctx, TestCaseDesignResult())
     session.test_cases = {"PROJ-T1": _test_case("First")}
     session.stop_reason, session.iteration = DesignStopReason.ITERATION_LIMIT, 4
-    session.uploaded = session.classified = session.indexed = True
+    session.uploaded = session.classified = True
     session.feedback_added_ids = session.review_completed_ids = {"PROJ-T1"}
     result = design_main._complete_result(ctx, TestCaseDesignResult(llm_comments=None))
 
     assert str(refusal.value) == (
         "The design is not complete yet: finish the review loop; save the test cases; classify the saved test cases; "
-        "add the review feedback of ['DRAFT-1']; set the status of ['DRAFT-1']; index the saved test cases."
+        "add the review feedback of ['DRAFT-1']; set the status of ['DRAFT-1']."
     )
     assert json.loads(result.model_dump_json()) == {
         "llm_comments": None,

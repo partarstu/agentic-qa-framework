@@ -16,7 +16,6 @@ Execute the following steps in exactly this order, one tool call at a time:
 4. Save the test cases in the test management system using the corresponding tool.
 5. Classify the saved test cases using the corresponding tool.
 6. For each saved test case, add its review feedback and then set its status to "Review Complete", using the corresponding tools and passing exactly the key of the test case.
-7. Index the saved test cases using the corresponding tool.
-8. Return the final result. Leave the comments empty unless something prevented you from completing a step.
+7. Return the final result. Leave the comments empty unless something prevented you from completing a step.
 
 If a tool fails with an error which you can't resolve (not one which tells you what to do differently and to try again), stop the design immediately: call no other tool and return the final result with a comment naming the failed step and the error. Such a result aborts the design, so never return it for any other reason before all steps are done.

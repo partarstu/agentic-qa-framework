@@ -41,7 +41,6 @@ from common.services.test_case_index import IndexedTestCase, render_test_case
 from common.services.test_management_tools import (
     add_review_feedback,
     hide_while_designing,
-    is_designing,
     set_test_case_status_to_review_complete,
 )
 
@@ -121,7 +120,7 @@ class TestCaseReviewAgent(AgentBase):
                 # clobber each other's field (last-writer-wins).
                 Tool(add_review_feedback, sequential=True, prepare=hide_while_designing),
                 Tool(set_test_case_status_to_review_complete, sequential=True, prepare=hide_while_designing),
-                Tool(self.index_test_cases, prepare=hide_while_designing),
+                Tool(self.check_duplicates, prepare=hide_while_designing),
                 self.review_test_cases,
                 self.review_test_suite,
             ],
@@ -144,16 +143,15 @@ class TestCaseReviewAgent(AgentBase):
         self, ctx: RunContext[TestCaseDesignSession], jira_issue_content: str | None = None
     ) -> TestCaseReviewFeedbacks:
         """
-        Reviews the test cases against the Jira issue content and its attachments, and checks every reviewed test case
-        for duplicates among the existing test cases of the project. While designing, only the new and changed test
-        cases are reviewed.
+        Reviews the test cases against the Jira issue content and its attachments. While designing, only the new and
+        changed test cases are reviewed.
 
         Args:
             jira_issue_content: The complete content of the Jira issue; needed only when the test cases are saved
                 ones, never while designing.
 
         Returns:
-            The findings and the duplicate check of each reviewed test case.
+            The findings of each reviewed test case.
         """
         session = ctx.deps
         if session.story_content is None:
@@ -188,14 +186,9 @@ class TestCaseReviewAgent(AgentBase):
             result = await self.review_agent.run(user_message_parts, usage=ctx.usage, usage_limits=usage_limits)
             if result.output.llm_comments:
                 logger.warning("Review of test case '%s' reported: %s", test_case_id, result.output.llm_comments)
-            record = render_test_case(session.project_key, test_case.model_copy(update={"key": test_case_id}))
-            duplicate_check = await self._check_duplicates(session.project_key, record, ctx.usage, usage_limits)
             findings = _owned_by(test_case_id, result.output.findings)
             session.findings[test_case_id] = findings
-            session.duplicate_checks[test_case_id] = duplicate_check
-            feedbacks.append(
-                TestCaseReviewFeedback(test_case_id=test_case_id, findings=findings, duplicate_check=duplicate_check)
-            )
+            feedbacks.append(TestCaseReviewFeedback(test_case_id=test_case_id, findings=findings))
 
         session.changed_test_case_ids.clear()
         logger.info("Generated review feedbacks for %s test cases", len(feedbacks))
@@ -203,22 +196,19 @@ class TestCaseReviewAgent(AgentBase):
 
     async def review_test_suite(self, ctx: RunContext[TestCaseDesignSession]) -> TestSuiteReview:
         """
-        Reviews the whole set of test cases for coverage gaps of the Jira issue and for duplicate coverage, taking the
-        findings and the duplicate checks of the individual reviews into account.
+        Reviews the whole set of test cases for coverage gaps of the Jira issue and for duplicate coverage inside the
+        set, taking the findings of the individual reviews into account.
 
         Returns:
             The findings about the whole set, each assigned to the one test case whose change resolves it.
         """
         session = ctx.deps
-        unreviewed = [
-            test_case_id for test_case_id in session.test_cases if test_case_id not in session.duplicate_checks
-        ]
+        unreviewed = [test_case_id for test_case_id in session.test_cases if test_case_id not in session.findings]
         if session.story_content is None or unreviewed or session.changed_test_case_ids:
             raise ModelRetry("Review the new and changed test cases with the review tool first.")
         test_case_blocks = "\n\n".join(
             f"ID {test_case_id}:\n```{test_case!s}```\n"
-            f"Findings of its individual review:\n```{_json_list(session.findings.get(test_case_id, []))}```\n"
-            f"Its duplicate check:\n```{session.duplicate_checks[test_case_id]!s}```"
+            f"Findings of its individual review:\n```{_json_list(session.findings[test_case_id])}```"
             for test_case_id, test_case in session.test_cases.items()
         )
         user_message_parts: list[str | BinaryContent] = [
@@ -235,28 +225,32 @@ class TestCaseReviewAgent(AgentBase):
         logger.info("The whole-set review reported %d finding(s).", len(result.output.findings))
         return result.output
 
-    async def index_test_cases(self, ctx: RunContext[TestCaseDesignSession]) -> str:
+    async def check_duplicates(self, ctx: RunContext[TestCaseDesignSession]) -> str:
         """
-        Indexes the saved test cases, so that later duplicate checks find them.
+        Checks the content of every reviewed test case for duplicates among the existing test cases of the project.
 
         Returns:
-            A confirmation message.
+            The keys of the existing test cases each test case overlaps with.
         """
         session = ctx.deps
-        if session.indexed:
-            raise ModelRetry("The test cases are already indexed; never index them twice.")
-        if is_designing(session):
-            raise ModelRetry("Save the test cases first; drafts are never indexed.")
-        keys = list(session.test_cases)
-        records = [
-            render_test_case(session.project_key, test_case.model_copy(update={"key": key}))
-            for key, test_case in session.test_cases.items()
-        ]
-        with _fail_loudly("indexing", session.project_key, keys):
-            await self.vector_db_service.upsert_batch(records)
-        session.indexed = True
-        logger.info("Indexed %d test case(s) of project %s.", len(records), session.project_key)
-        return f"Successfully indexed the test cases {', '.join(keys)}."
+        if session.duplicate_checks:
+            raise ModelRetry("The test cases are already checked for duplicates; never check them twice.")
+        unreviewed = [test_case_id for test_case_id in session.test_cases if test_case_id not in session.findings]
+        if not session.test_cases or unreviewed or session.changed_test_case_ids:
+            raise ModelRetry("Review the test cases first; only reviewed test cases are checked for duplicates.")
+        usage_limits = self.get_sub_agent_usage_limits()
+        for test_case_id, test_case in session.test_cases.items():
+            record = render_test_case(session.project_key, test_case.model_copy(update={"key": test_case_id}))
+            session.duplicate_checks[test_case_id] = await self._check_duplicates(
+                session.project_key, record, ctx.usage, usage_limits
+            )
+        overlaps = {
+            test_case_id: [overlap.test_case_key for overlap in check.overlapping_test_cases]
+            for test_case_id, check in session.duplicate_checks.items()
+        }
+        return "\n".join(
+            f"{test_case_id}: {', '.join(keys) or 'no duplicates'}" for test_case_id, keys in overlaps.items()
+        )
 
     async def _check_duplicates(
         self, project_key: str, record: IndexedTestCase, usage: RunUsage, usage_limits: UsageLimits

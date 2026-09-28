@@ -243,7 +243,6 @@ async def test_fixing_resolves_the_blocking_findings_of_each_owner_in_one_run(ag
 async def test_fixing_deletes_redundant_test_cases_and_adds_missing_ones(agent):
     session = _session("First", "Second")
     session.findings = {"DRAFT-2": [_finding("DRAFT-2", description="also wrong")]}
-    session.duplicate_checks = {"DRAFT-1": TestCaseDuplicateCheck(), "DRAFT-2": TestCaseDuplicateCheck()}
     session.suite_findings = [
         _finding("DRAFT-2", FindingAction.DELETE_TEST_CASE),
         _finding(None, FindingAction.ADD_TEST_CASE, description="AC-3 is not covered"),
@@ -259,7 +258,6 @@ async def test_fixing_deletes_redundant_test_cases_and_adds_missing_ones(agent):
     assert set(session.test_cases) == {"DRAFT-1", "DRAFT-3"}
     assert session.test_cases["DRAFT-3"].name == "Covers AC-3"
     assert "DRAFT-2" not in session.findings
-    assert set(session.duplicate_checks) == {"DRAFT-1"}
     assert session.changed_test_case_ids == {"DRAFT-3"}
     assert result == "Modified test cases: none; added: DRAFT-3; deleted: DRAFT-2."
 
