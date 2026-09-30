@@ -4,6 +4,7 @@
 
 import logging
 from collections.abc import Iterator
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -15,7 +16,6 @@ from pydantic_ai.usage import RunUsage
 
 from agents.test_case_review import main as review_main
 from agents.test_case_review.main import TestCaseDuplicateCheckError, TestCaseReviewAgent
-from common import agent_base
 from common.models import (
     FindingAction,
     FindingSeverity,
@@ -28,9 +28,6 @@ from common.models import (
     TestCaseReviewFeedback,
     TestSuiteReview,
 )
-from common.services.test_management_tools import hide_while_designing
-
-_STANDALONE_TOOLS = {"add_review_feedback", "set_test_case_status_to_review_complete", "check_duplicates"}
 
 
 @pytest.fixture
@@ -68,14 +65,6 @@ def agent(mock_config: MagicMock) -> TestCaseReviewAgent:
 
 
 @pytest.fixture
-def delegated() -> Iterator[None]:
-    """Runs the test as inside a review the design agent delegated."""
-    token = agent_base._delegated_run.set(True)
-    yield
-    agent_base._delegated_run.reset(token)
-
-
-@pytest.fixture
 def download() -> Iterator[MagicMock]:
     with patch("common.services.jira_attachments.download_issue_attachments", return_value={}) as mock_download:
         yield mock_download
@@ -100,12 +89,6 @@ def _drafts(*names: str, changed: set[str] | None = None) -> TestCaseDesignSessi
         session.add_draft(_test_case(name))
     if changed is not None:
         session.changed_test_case_ids = changed
-    return session
-
-
-def _saved(*keys: str) -> TestCaseDesignSession:
-    session = TestCaseDesignSession(story_key="PROJ-1")
-    session.test_cases = {key: _test_case(f"Name of {key}").model_copy(update={"key": key}) for key in keys}
     return session
 
 
@@ -158,18 +141,6 @@ def test_agent_init(agent):
     assert agent.get_max_requests_per_task() == 8
 
 
-def test_write_tools_and_the_duplicate_check_are_hidden_while_designing(agent):
-    tools = agent.agent._function_toolset.tools
-
-    assert {name for name, tool in tools.items() if tool.prepare is hide_while_designing} == _STANDALONE_TOOLS
-    assert tools["add_review_feedback"].function is review_main.add_review_feedback
-    assert (
-        tools["set_test_case_status_to_review_complete"].function is review_main.set_test_case_status_to_review_complete
-    )
-    assert tools["add_review_feedback"].sequential
-    assert tools["set_test_case_status_to_review_complete"].sequential
-
-
 def _offering_model(offered: list[set[str]], instructions: list[str]) -> FunctionModel:
     def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
         offered.append({tool.name for tool in info.function_tools})
@@ -179,41 +150,19 @@ def _offering_model(offered: list[set[str]], instructions: list[str]) -> Functio
     return FunctionModel(respond)
 
 
-async def test_a_delegated_review_is_offered_no_write_tools_and_the_designing_tasks(agent):
+async def test_a_delegated_review_is_offered_only_the_two_reviews_and_no_jira_session(agent):
     offered: list[set[str]] = []
     instructions: list[str] = []
-    agent.designing_instructions, agent.standalone_instructions = "DESIGNING TASKS", "STANDALONE TASKS"
-    agent.mcp_toolset_factories = []
 
     with agent.agent.override(model=_offering_model(offered, instructions)):
         assert await agent.run_delegated("Review", _drafts("First"), RunUsage()) == "done"
 
-    assert not offered[0] & _STANDALONE_TOOLS
-    assert {"review_test_cases", "review_test_suite"} <= offered[0]
-    assert "DESIGNING TASKS" in instructions[0]
+    assert agent.mcp_toolset_factories == []
+    assert offered[0] == {"review_test_cases", "review_test_suite", "report_activity"}
+    assert "never fetch the Jira issue" in instructions[0]
 
 
-async def test_a_standalone_review_is_offered_the_standalone_tools_and_tasks(agent):
-    offered: list[set[str]] = []
-    instructions: list[str] = []
-    agent.designing_instructions, agent.standalone_instructions = "DESIGNING TASKS", "STANDALONE TASKS"
-
-    with agent.agent.override(model=_offering_model(offered, instructions)):
-        await agent.agent.run("Review", deps=_saved("PROJ-T1"), output_type=str)
-
-    assert offered[0] >= _STANDALONE_TOOLS
-    assert "STANDALONE TASKS" in instructions[0]
-
-
-async def test_a_run_without_a_session_fails_with_a_clear_error(agent):
-    with (
-        agent.agent.override(model=_offering_model([], [])),
-        pytest.raises(ValueError, match="structured data part"),
-    ):
-        await agent.agent.run("Review", output_type=str)
-
-
-async def test_designing_review_covers_only_the_changed_drafts(agent, download, delegated, caplog):
+async def test_designing_review_covers_only_the_changed_drafts(agent, download, caplog):
     session = _drafts("First", "Second", "Third", changed={"DRAFT-2"})
     output = TestCaseReviewFeedback(test_case_id="DRAFT-2", findings=[], llm_comments="An attachment was unreadable")
     agent.review_agent.run = AsyncMock(return_value=MagicMock(output=output))
@@ -233,27 +182,7 @@ async def test_designing_review_covers_only_the_changed_drafts(agent, download, 
     assert session.changed_test_case_ids == set()
 
 
-async def test_saved_test_cases_are_all_reviewed_with_the_passed_story_content(agent, download):
-    session = _saved("PROJ-T1", "PROJ-T2")
-    agent.review_agent.run = _feedback_runs(2)
-
-    await agent.review_test_cases(_ctx(session), jira_issue_content="Fetched story")
-
-    assert agent.review_agent.run.await_count == 2
-    assert session.story_content == "Fetched story"
-    assert set(session.findings) == {"PROJ-T1", "PROJ-T2"}
-
-
-async def test_review_without_any_story_content_asks_for_it(agent, download):
-    agent.review_agent.run = AsyncMock()
-
-    with pytest.raises(ModelRetry, match="content of the Jira issue"):
-        await agent.review_test_cases(_ctx(_saved("PROJ-T1")))
-
-    agent.review_agent.run.assert_not_awaited()
-
-
-async def test_attachments_are_downloaded_once_per_session(agent, download, delegated):
+async def test_attachments_are_downloaded_once_per_session(agent, download):
     session = _drafts("First")
     agent.review_agent.run = _feedback_runs(2)
 
@@ -264,7 +193,7 @@ async def test_attachments_are_downloaded_once_per_session(agent, download, dele
     download.assert_called_once_with("PROJ-1")
 
 
-async def test_sub_agent_runs_share_the_task_usage_within_its_token_budget(agent, mock_config, download, delegated):
+async def test_sub_agent_runs_share_the_task_usage_within_its_token_budget(agent, mock_config, download):
     session = _drafts("First", "Second")
     agent.review_agent.run = _feedback_runs(2)
     agent.vector_db_service.hybrid_search.return_value = [_hit("PROJ-T9")]
@@ -272,7 +201,7 @@ async def test_sub_agent_runs_share_the_task_usage_within_its_token_budget(agent
     ctx = _ctx(session)
 
     await agent.review_test_cases(ctx)
-    await agent.check_duplicates(ctx)
+    await agent.check_duplicates(session, ctx.usage)
 
     calls = agent.review_agent.run.await_args_list + agent.duplicate_judge.run.await_args_list
     assert agent.duplicate_judge.run.await_count == 2
@@ -282,9 +211,7 @@ async def test_sub_agent_runs_share_the_task_usage_within_its_token_budget(agent
         assert call.kwargs["usage_limits"].tool_calls_limit is None
 
 
-async def test_a_single_review_keeps_only_its_own_findings_and_leaves_the_whole_set_ones_out(
-    agent, download, delegated
-):
+async def test_a_single_review_keeps_only_its_own_findings_and_leaves_the_whole_set_ones_out(agent, download):
     session = _drafts("First", "Second", changed={"DRAFT-1"})
     findings = [
         _finding("DRAFT-2", related=["DRAFT-2", "PROJ-T404", "DRAFT-1"]),
@@ -302,7 +229,7 @@ async def test_a_single_review_keeps_only_its_own_findings_and_leaves_the_whole_
     assert all(finding.related_test_case_ids == [] for finding in owned)
 
 
-async def test_a_review_round_runs_no_duplicate_check(agent, download, delegated):
+async def test_a_review_round_runs_no_duplicate_check(agent, download):
     session = _drafts("First")
     agent.review_agent.run = _feedback_runs(1)
 
@@ -313,7 +240,7 @@ async def test_a_review_round_runs_no_duplicate_check(agent, download, delegated
 
 
 async def test_duplicate_check_searches_the_project_by_content_without_indexing(agent):
-    await agent.check_duplicates(_ctx(_reviewed("First")))
+    await agent.check_duplicates(_reviewed("First"), RunUsage())
 
     agent.vector_db_service.upsert_batch.assert_not_awaited()
     call = agent.vector_db_service.hybrid_search.await_args
@@ -328,30 +255,16 @@ async def test_duplicate_check_searches_the_project_by_content_without_indexing(
 async def test_duplicate_check_covers_every_test_case_once(agent):
     session = _reviewed("First", "Second")
 
-    await agent.check_duplicates(_ctx(session))
-    with pytest.raises(ModelRetry, match="already checked"):
-        await agent.check_duplicates(_ctx(session))
+    await agent.check_duplicates(session, RunUsage())
 
     assert agent.vector_db_service.hybrid_search.await_count == 2
     assert set(session.duplicate_checks) == {"DRAFT-1", "DRAFT-2"}
 
 
-@pytest.mark.parametrize(
-    "session",
-    [_drafts("First"), _drafts("First", changed=set())],
-    ids=["changed test case", "unreviewed test case"],
-)
-async def test_duplicate_check_runs_only_after_the_review(agent, session):
-    with pytest.raises(ModelRetry, match="Review the test cases first"):
-        await agent.check_duplicates(_ctx(session))
-
-    agent.vector_db_service.hybrid_search.assert_not_awaited()
-
-
 async def test_no_candidates_means_no_duplicates_without_asking_the_judge(agent):
     session = _reviewed("First")
 
-    summary = await agent.check_duplicates(_ctx(session))
+    summary = await agent.check_duplicates(session, RunUsage())
 
     agent.duplicate_judge.run.assert_not_awaited()
     assert summary == "DRAFT-1: no duplicates"
@@ -368,7 +281,7 @@ async def test_candidates_are_deduplicated_by_key_before_judging(agent):
     ]
     agent.duplicate_judge.run.return_value = _judgement("PROJ-T7", "PROJ-T404")
 
-    summary = await agent.check_duplicates(_ctx(session))
+    summary = await agent.check_duplicates(session, RunUsage())
 
     assert summary == "DRAFT-1: PROJ-T7"
     judge_message = agent.duplicate_judge.run.await_args.args[0]
@@ -394,7 +307,7 @@ async def test_duplicate_check_failure_fails_loudly(agent, caplog, stage):
             TestCaseDuplicateCheckError, match=f"{stage} failed for test case\\(s\\) DRAFT-1 of project PROJ"
         ),
     ):
-        await agent.check_duplicates(_ctx(session))
+        await agent.check_duplicates(session, RunUsage())
 
     assert session.duplicate_checks == {}
 
@@ -444,6 +357,18 @@ def test_suite_review_output_with_unusable_findings_is_rejected(finding, error):
 
     with pytest.raises(ModelRetry, match=error):
         review_main._validate_test_suite_review(ctx, TestSuiteReview(findings=[finding]))
+
+
+def test_the_smoke_rubric_override_differs_from_the_bundled_rubric_only_in_its_forced_finding():
+    repo_root = Path(__file__).resolve().parents[2]
+    rubric = Path("agents/test_case_review/system_prompts/severity_rubric.md")
+    bundled = (repo_root / rubric).read_text(encoding="utf-8").splitlines()
+    override = (repo_root / "tests/smoke/overrides" / rubric).read_text(encoding="utf-8").splitlines()
+
+    assert len(override) == len(bundled), "The smoke override must track every line of the bundled rubric"
+    differing = [line for line, bundled_line in zip(override, bundled, strict=True) if line != bundled_line]
+    assert len(differing) == 1, differing
+    assert "report at least one finding with the severity `high`" in differing[0]
 
 
 def test_suite_review_output_with_usable_findings_passes():

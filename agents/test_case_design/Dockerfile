@@ -13,8 +13,7 @@ COPY agents/test_case_review/ ${WORK_DIR}/agents/test_case_review
 COPY agents/test_case_classification/ ${WORK_DIR}/agents/test_case_classification
 COPY common/ ${WORK_DIR}/common
 # The instruction to fetch the configured additional Jira fields is shared with the orchestrator.
-COPY orchestrator/prompt.py ${WORK_DIR}/orchestrator/prompt.py
-COPY prompts/ ${WORK_DIR}/prompts
+COPY prompts/additional_fields_instruction_template.md ${WORK_DIR}/prompts/additional_fields_instruction_template.md
 COPY config.py ${WORK_DIR}/config.py
 
 CMD gunicorn -w 1 -k uvicorn_worker.UvicornWorker --bind 0.0.0.0:$PORT agents.test_case_design.main:app

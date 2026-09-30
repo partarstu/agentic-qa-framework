@@ -17,7 +17,7 @@ from pydantic_ai.models.test import TestModel
 from pydantic_ai.usage import RunUsage, UsageLimits
 
 import config
-from common.agent_base import AgentBase, is_delegated_run
+from common.agent_base import AgentBase
 from common.agent_log_capture import AgentLogCaptureHandler
 from common.models import AgentRuntimeError, AgentSkillDeclaration, JsonSerializableModel
 from common.streaming import reset_current_log_handler, set_current_log_handler
@@ -126,7 +126,7 @@ async def test_usage_limits_tool_calls_limit_is_doubled(test_agent_instance):
     assert len(captured) == 1
     assert captured[0].tool_calls_limit == test_agent_instance.get_max_requests_per_task() * 2
     assert captured[0].total_tokens_limit == config.BudgetConfig.TOTAL_TOKENS_LIMIT_PER_TASK
-    assert captured[0].request_limit is None, "A request cap would cut short delegated runs sharing the usage"
+    assert captured[0].request_limit == UsageLimits().request_limit
 
 
 @pytest.mark.asyncio
@@ -537,24 +537,15 @@ class _BigBudgetAgent(TestAgent):
         return 4_000_000
 
 
-@pytest.mark.asyncio
-async def test_a_run_is_marked_delegated_only_while_it_runs_for_a_delegating_agent() -> None:
-    agent = _agent_with("child")
-    observed: list[bool] = []
+class _UncappedAgent(TestAgent):
+    __test__ = False
 
-    async def run(*args, **kwargs):
-        observed.append(is_delegated_run())
-        return MagicMock(output="done")
+    def get_request_limit(self) -> int | None:
+        return None
 
-    agent.agent = AsyncMock()
-    agent.agent.run = run
-    agent.agent.__aenter__.return_value = agent.agent
-    agent.agent.__aexit__.return_value = None
 
-    await agent.run_delegated("Do it", _Deps(story_key="PROJ-1"), RunUsage())
-
-    assert observed == [True]
-    assert not is_delegated_run()
+def test_an_agent_can_lift_the_request_cap_of_its_tasks() -> None:
+    assert _agent_with("uncapped", agent_class=_UncappedAgent)._get_usage_limits().request_limit is None
 
 
 def test_sub_agent_limits_cap_only_the_tokens_of_the_task() -> None:

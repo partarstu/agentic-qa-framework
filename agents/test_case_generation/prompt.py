@@ -55,7 +55,7 @@ class TestCaseFixerPrompt(PromptBase):
     def get_script_dir(self) -> Path:
         return _get_prompts_root()
 
-    def __init__(self, template_file_name: str = "test_case_fixer_prompt.md"):
+    def __init__(self, template_file_name: str = "test_case_fixer_prompt.md") -> None:
         super().__init__(template_file_name)
 
     def get_prompt(self) -> str:

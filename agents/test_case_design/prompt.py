@@ -16,7 +16,7 @@ class TestCaseDesignSystemPrompt(PromptBase):
     def get_script_dir(self) -> Path:
         return Path(__file__).resolve().parent / "system_prompts"
 
-    def __init__(self, template_file_name: str = "main_prompt_template.md"):
+    def __init__(self, template_file_name: str = "main_prompt_template.md") -> None:
         super().__init__(template_file_name)
 
     def get_prompt(self) -> str:

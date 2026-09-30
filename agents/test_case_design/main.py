@@ -2,6 +2,11 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from typing import override
+
+from fastapi import FastAPI
 from pydantic_ai import ModelRetry, RunContext
 from pydantic_ai.settings import ThinkingLevel
 from pydantic_ai.tools import Tool, ToolDefinition
@@ -13,19 +18,21 @@ from agents.test_case_generation import main as generation_main
 from agents.test_case_review import main as review_main
 from common import utils
 from common.agent_base import AgentBase
+from common.jira_additional_fields import build_additional_fields_instruction
 from common.models import (
     AgentSkillDeclaration,
     DesignStopReason,
     FindingSeverity,
+    TestCaseDesignRequest,
     TestCaseDesignResult,
     TestCaseDesignSession,
+    TestCaseKeys,
 )
 from common.services.test_management_tools import (
     add_review_feedback,
     set_test_case_status_to_review_complete,
     upload_test_cases,
 )
-from orchestrator.prompt import build_additional_fields_instruction
 
 logger = utils.get_logger("test_case_design_agent")
 
@@ -37,7 +44,7 @@ class DesignAbortedError(Exception):
 class TestCaseDesignAgent(AgentBase):
     __test__ = False
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.generation_agent = generation_main.agent
         self.review_agent = review_main.agent
         self.classification_agent = classification_main.agent
@@ -82,6 +89,25 @@ class TestCaseDesignAgent(AgentBase):
 
     def get_total_tokens_limit(self) -> int:
         return config.TestCaseDesignAgentConfig.TOTAL_TOKENS_LIMIT
+
+    @override
+    def get_request_limit(self) -> int | None:
+        # The delegated runs share the design's cumulative usage, which pydantic-ai's default request cap would cut
+        # short; the tool-call and token budgets bound the design instead.
+        return None
+
+    @override
+    def _build_deps(self, data: object) -> TestCaseDesignSession:
+        """Starts a new design session from the request, the only state a caller may pass."""
+        return TestCaseDesignSession(story_key=TestCaseDesignRequest.model_validate(data).story_key)
+
+    @override
+    @asynccontextmanager
+    async def _lifespan(self, app: FastAPI) -> AsyncIterator[None]:
+        async with super()._lifespan(app):
+            yield
+        # The delegates' servers never start, so no lifespan of theirs closes the review agent's vector DB client.
+        await self.review_agent.vector_db_service.close()
 
     async def generate_test_cases(self, ctx: RunContext[TestCaseDesignSession]) -> str:
         """
@@ -140,7 +166,7 @@ class TestCaseDesignAgent(AgentBase):
         header = f"Review iteration {session.iteration}: {len(blocking)} blocking finding(s)."
         if session.stop_reason is None:
             return f"{header} The design continues: fix the test cases next. {summary}"
-        duplicates = await self.review_agent.check_duplicates(ctx)
+        duplicates = await self.review_agent.check_duplicates(session, ctx.usage)
         return (
             f"{header} The design is finished ({session.stop_reason.value}); save the test cases next. {summary}\n"
             f"Duplicates of the final test cases among the existing ones:\n{duplicates}"
@@ -159,6 +185,8 @@ class TestCaseDesignAgent(AgentBase):
         summary = await self.generation_agent.run_delegated(
             f"Fix the test cases of the Jira user story {session.story_key}.", session, ctx.usage
         )
+        if session.blocking_findings(self.fix_min_severity):
+            raise ModelRetry("The fix left the blocking findings unresolved; fix the test cases again.")
         session.fixes += 1
         return summary
 
@@ -175,7 +203,9 @@ class TestCaseDesignAgent(AgentBase):
         if session.classified:
             raise ModelRetry("The test cases are already classified; never classify them twice.")
         test_cases = "\n".join(str(test_case) for test_case in session.test_cases.values())
-        summary = await self.classification_agent.run_delegated(f"Test cases:\n{test_cases}", session, ctx.usage)
+        summary = await self.classification_agent.run_delegated(
+            f"Test cases:\n{test_cases}", TestCaseKeys(issue_keys=list(session.test_cases)), ctx.usage
+        )
         session.classified = True
         return summary
 
@@ -197,7 +227,7 @@ async def _hide_until_stopped(
 
 def _story_instructions(ctx: RunContext[TestCaseDesignSession]) -> str:
     if ctx.deps is None:
-        raise ValueError("A test case design needs the test case design session as its structured data part.")
+        raise ValueError("A test case design needs the story key as its structured data part.")
     return f"The key of the Jira user story of this design is {ctx.deps.story_key}."
 
 

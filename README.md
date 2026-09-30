@@ -67,7 +67,7 @@ When an event occurs (e.g., a Jira webhook indicating new requirements), the orc
 
 ### Test Case Design
 
-The Test Case Design agent designs the test cases of one user story in a single A2A task. The orchestrator sends it the story key as text and as a structured data part, which the agent validates into a *design session*: the state shared in-process with the agents it delegates to (the story content and attachments, the test cases, the review findings and the progress of the design). It then:
+The Test Case Design agent designs the test cases of one user story in a single A2A task. The orchestrator sends it the story key as text and as a structured data part which holds only `story_key` (any other field fails the task), and the agent starts a new *design session* from it: the state shared in-process with the agents it delegates to (the story content and attachments, the test cases, the review findings and the progress of the design). The Test Case Generation, Review and Classification agents run only in-process inside the design agent; they are no A2A services of their own. It then:
 
 1. **Generates** the test cases through the Test Case Generation agent, which fetches the story (with the configured additional Jira fields) and stores the generated test cases in the session as drafts (`DRAFT-1`, `DRAFT-2`, ...).
 2. **Reviews** them through the Test Case Review agent: every new or changed draft is reviewed on its own, against the story and its attachments only, then the whole set is reviewed for coverage gaps and duplicate coverage. The coverage and duplication findings (`add_test_case`, `remove_duplicate_steps`) come only from the whole-set review. Every finding has a severity (`low`, `medium`, `high`, `critical`), an action (`modify`, `remove_duplicate_steps`, `delete_test_case`, `add_test_case`) and exactly one owner test case, or none for a missing test case.
@@ -298,7 +298,7 @@ JIRA_URL=YOUR_JIRA_INSTANCE_URL # Required for Xray, the RAG sync runtime and th
 JIRA_USERNAME=YOUR_JIRA_USERNAME # Required alongside JIRA_URL. The email address associated with your Jira account.
 JIRA_API_TOKEN=YOUR_JIRA_API_TOKEN # Required alongside JIRA_URL. A Jira API token for authentication.
 ORCHESTRATOR_VERSION=2.0.1 # Default: 2.0.1. Version of the orchestrator, reported for traceability.
-TEST_CASE_DESIGN_TASK_TIMEOUT_SECONDS=3300 # Default: 3300. How long the orchestrator waits for one test case design task; keep it below the orchestrator's request timeout (3500 s on Cloud Run).
+TEST_CASE_DESIGN_TASK_TIMEOUT_SECONDS=3300 # Default: 3300. How long the orchestrator waits for one test case design, the wait for a free Test Case Design agent included; keep it below the orchestrator's request timeout (3500 s on Cloud Run).
 TEST_ENVIRONMENT_LABEL=Standard Test Environment # Default: Standard Test Environment. Label describing the
                                  # environment tests are executed against. Reported on every test execution
                                  # result and emitted as an Allure tag.
@@ -916,7 +916,7 @@ the checks; deselect the comparison with `-m "smoke and not ab"` while iterating
 
 ### Triggering Workflows via Jira Webhooks
 
-The orchestrator listens for webhooks from Jira or CI/CD systems to initiate automated workflows.
+The orchestrator listens for webhooks from Jira or CI/CD systems to initiate automated workflows. Both Jira webhooks below reject an `issue_key` which is not a Jira issue key (`PROJ-123`) with `400` before any agent runs.
 
 * **New Requirements Available (Requirements Review):**
   Send a POST request to `/new-requirements-available` with a JSON payload containing the `issue_key` of the Jira user
@@ -931,7 +931,7 @@ The orchestrator listens for webhooks from Jira or CI/CD systems to initiate aut
 
 * **Story Ready for Test Case Generation:**
   Send a POST request to `/story-ready-for-test-case-generation` with a JSON payload containing the `issue_key` of the
-  Jira user story. This triggers the test case design of the story (see *Test Case Design* above): its test cases are generated, reviewed and fixed in a loop, then saved, classified and published with their review comments. The orchestrator waits up to `TEST_CASE_DESIGN_TASK_TIMEOUT_SECONDS` for the design.
+  Jira user story. This triggers the test case design of the story (see *Test Case Design* above): its test cases are generated, reviewed and fixed in a loop, then saved, classified and published with their review comments. `TEST_CASE_DESIGN_TASK_TIMEOUT_SECONDS` bounds the wait for a free Test Case Design agent and the design together. The agent designs one story at a time, so a story that arrives during another design waits for it and has only the rest of the budget; when too little is left, the call fails (`503` when the wait used it all, `408` when the design runs out of time) and the story has to be sent again.
 
   Example payload:
   ```json
@@ -1118,7 +1118,7 @@ log at startup and the review uses the issue and its attachments only.
 The Test Case Review agent checks every reviewed test case for duplicate coverage among the existing test cases of the
 same project, using the test-case collection (`QDRANT_TEST_CASES_COLLECTION_NAME`):
 
-1. The test case is rendered as the test-case sync renders it and compared by its content only; it is never indexed. A test case design runs the check once, over its final test cases after the review loop and before anything is saved; a standalone review runs it after reviewing the saved test cases.
+1. The test case is rendered as the test-case sync renders it and compared by its content only; it is never indexed. A test case design runs the check once, over its final test cases after the review loop and before anything is saved.
 2. Per test case, a hybrid query searches the same project, excluding the test case itself, with
    `TEST_CASE_DUPLICATE_MIN_SCORE` on the dense branch and at most `TEST_CASE_DUPLICATE_MAX_CANDIDATES` results;
    candidates are de-duplicated by test case key.
@@ -1320,8 +1320,9 @@ schedulers before upgrading:
 16. **The Test Case Review agent needs the vector database and the embedding service** (`QDRANT_URL`,
     `EMBEDDING_SERVICE_URL`, `INTERNAL_SERVICE_API_KEY`) for its duplicate check. Without them every review fails
     instead of reporting "no duplicates".
-17. **The Test Case Design agent replaces the separately deployed Test Case Generation, Classification and Review agents.** Deploy `test-case-design-agent` (image `agents/test_case_design/Dockerfile`, port 8005 locally, substitution `_TEST_CASE_DESIGN_AGENT_BASE_URL`, env vars and secrets of the three agents combined) and remove the three old Cloud Run services and their substitutions. The generation, review and classification agents now expect the test case design session as a structured A2A data part; standalone calls with text only are no longer supported.
+17. **The Test Case Design agent replaces the separately deployed Test Case Generation, Classification and Review agents.** Deploy `test-case-design-agent` (image `agents/test_case_design/Dockerfile`, port 8005 locally, substitution `_TEST_CASE_DESIGN_AGENT_BASE_URL`, env vars and secrets of the three agents combined) and remove the three old Cloud Run services and their substitutions. The generation, review and classification agents run only in-process inside the design agent: they have no Dockerfile, server entry point or standalone mode any more, and the design agent accepts only `{"story_key": "<issue key>"}` as its structured A2A data part.
 18. **Review comments are rendered from structured findings.** `TestCaseReviewFeedback.review_feedback` (a list of strings) is replaced by `findings` (severity, action, owner test case, category, description, suggested fix, acceptance criterion, related test cases), and the review comment of a test case now starts with the design's iterations and stop reason. The duplicate check runs once, over the final test cases after the review loop, and nothing is indexed by a review or a design; run `/update-test-case-db` to make saved test cases duplicate candidates.
+19. **Prompt overrides of the Test Case Generation and Review agents must be rebased on the new bundled templates.** An override whose placeholders differ from its bundled template fails startup (e.g. `agents/test_case_review/system_prompts/review_with_attachments_prompt.md` now needs `{severity_rubric}`), and an old override of either agent's `main_prompt_template.md` would still instruct the upload, review-comment and status steps these agents no longer have. `prompts/additional_fields_instruction_template.md` keeps its path, so its override keeps working.
 
 ### Migrating a vector collection
 

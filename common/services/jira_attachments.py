@@ -11,7 +11,6 @@ supported MIME type, text-equivalent media types).
 """
 
 import asyncio
-import re
 
 import httpx
 from jira.resources import Attachment
@@ -26,13 +25,10 @@ from common.attachment_handler import (
     resolve_media_type,
     should_skip_attachment,
 )
-from common.models import TestCaseDesignSession
+from common.models import JIRA_ISSUE_KEY_PATTERN, TestCaseDesignSession
 from common.services.jira_client import build_jira_client
 
 logger = utils.get_logger("jira_attachments")
-
-# Jira issue keys are a project key, a hyphen and the issue number, e.g. PROJ-123.
-_ISSUE_KEY_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]*-\d+$")
 
 
 def require_valid_issue_key(issue_key: str) -> None:
@@ -42,7 +38,7 @@ def require_valid_issue_key(issue_key: str) -> None:
         ModelRetry: When the key does not have the Jira issue key format. Raised as a retry, not
             as a hard error, so the model can correct the key instead of failing the whole task.
     """
-    if not _ISSUE_KEY_PATTERN.fullmatch(issue_key):
+    if not JIRA_ISSUE_KEY_PATTERN.fullmatch(issue_key):
         raise ModelRetry(
             f"'{issue_key[:50]}' is not a Jira issue key. Pass the key of the issue you are working on, "
             "in the format PROJ-123."

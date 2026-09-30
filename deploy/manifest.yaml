@@ -170,7 +170,7 @@ services:
       GOOGLE_CLOUD_LOGGING_ENABLED: "true"
       AGENT_BASE_URL: ""
       EXTERNAL_PORT: "443"
-      # The duplicate check searches the test-case collection, which the design indexes at its end.
+      # The duplicate check searches the project's saved test cases in the test-case collection.
       EMBEDDING_SERVICE_URL: ""
       QDRANT_URL: ""
       PROMPT_GUARD_SERVICE_URL: ""

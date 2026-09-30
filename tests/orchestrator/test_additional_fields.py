@@ -18,13 +18,13 @@ from a2a.helpers import get_message_text
 from fastapi.testclient import TestClient
 
 import config
+from common.jira_additional_fields import ADDITIONAL_FIELDS_INSTRUCTION_TEMPLATE, build_additional_fields_instruction
 from orchestrator.main import (
     _build_jira_issue_task_text,
     _request_test_case_design,
     _validate_api_key,
     orchestrator_app,
 )
-from orchestrator.prompt import ADDITIONAL_FIELDS_INSTRUCTION_TEMPLATE, build_additional_fields_instruction
 
 # =============================================================================
 # Config parsing

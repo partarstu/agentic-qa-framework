@@ -54,12 +54,6 @@ _ACTIVITY_QUEUE_MAXSIZE = 1000
 # Set for the duration of a task, so agents it delegates to in-process report and budget against that task.
 _task_activity_queue: ContextVar[asyncio.Queue[str] | None] = ContextVar("task_activity_queue", default=None)
 _task_usage_limits: ContextVar[UsageLimits | None] = ContextVar("task_usage_limits", default=None)
-_delegated_run: ContextVar[bool] = ContextVar("delegated_run", default=False)
-
-
-def is_delegated_run() -> bool:
-    """Whether the current agent run was delegated in-process by another agent rather than started as a task."""
-    return _delegated_run.get()
 
 
 def _is_mcp_connect_failure(exc: BaseException) -> bool:
@@ -147,6 +141,9 @@ class AgentBase(ABC):
     def get_total_tokens_limit(self) -> int:
         return config.BudgetConfig.TOTAL_TOKENS_LIMIT_PER_TASK
 
+    def get_request_limit(self) -> int | None:
+        return UsageLimits().request_limit
+
     async def report_activity(self, description: str) -> None:
         """Report your current activity to the dashboard.
 
@@ -191,10 +188,8 @@ class AgentBase(ABC):
         return config.ATLASSIAN_MCP_SERVER_URL if self.mcp_toolset_factories else "none"
 
     def _get_usage_limits(self) -> UsageLimits:
-        # No request cap: delegated runs share one cumulative usage, which pydantic-ai's default of 50 requests would
-        # cut short; the tool-call and token budgets bound the run instead.
         return UsageLimits(
-            request_limit=None,
+            request_limit=self.get_request_limit(),
             tool_calls_limit=compute_activity_budget(self.get_max_requests_per_task()),
             total_tokens_limit=self.get_total_tokens_limit(),
         )
@@ -207,11 +202,7 @@ class AgentBase(ABC):
     async def run_delegated(self, prompt: str, deps: BaseModel, usage: RunUsage) -> str:
         """Runs this agent in-process within the delegating task's usage and limits, returning only its closing text."""
         usage_limits = _task_usage_limits.get() or self._get_usage_limits()
-        delegated_token = _delegated_run.set(True)
-        try:
-            result = await self._get_agent_execution_result([prompt], deps, usage_limits, usage=usage, output_type=str)
-        finally:
-            _delegated_run.reset(delegated_token)
+        result = await self._get_agent_execution_result([prompt], deps, usage_limits, usage=usage, output_type=str)
         return result.output
 
     async def _get_agent_execution_result(
@@ -301,7 +292,10 @@ class AgentBase(ABC):
             return None
         if len(data_parts) > 1:
             raise ValueError(f"Expected at most one structured data part, got {len(data_parts)}.")
-        return self.deps_type.model_validate(data_parts[0])
+        return self._build_deps(data_parts[0])
+
+    def _build_deps(self, data: object) -> BaseModel:
+        return self.deps_type.model_validate(data)
 
     def _capture_token_usage(self, result: AgentRunResult[Any] | None) -> None:
         """Record and log the token usage and estimated cost of a completed run."""

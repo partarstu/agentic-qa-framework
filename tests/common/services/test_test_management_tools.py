@@ -9,7 +9,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 from pydantic_ai import ModelRetry
 
-from common import agent_base
 from common.models import (
     DesignStopReason,
     FindingAction,
@@ -233,18 +232,6 @@ async def test_review_complete_status_is_refused_for_a_draft(client):
         await tools.set_test_case_status_to_review_complete(_ctx(session), "DRAFT-1")
 
     client.change_test_case_status.assert_not_called()
-
-
-async def test_write_tools_are_hidden_only_in_a_delegated_run():
-    tool_def = MagicMock()
-    ctx = _ctx(_saved_session())
-
-    assert await tools.hide_while_designing(ctx, tool_def) is tool_def
-    token = agent_base._delegated_run.set(True)
-    try:
-        assert await tools.hide_while_designing(ctx, tool_def) is None
-    finally:
-        agent_base._delegated_run.reset(token)
 
 
 def test_rendered_check_without_duplicates_says_so():

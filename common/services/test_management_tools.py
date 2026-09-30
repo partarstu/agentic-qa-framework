@@ -8,11 +8,9 @@ import asyncio
 import html
 
 from pydantic_ai import ModelRetry, RunContext
-from pydantic_ai.tools import ToolDefinition
 
 import config
 from common import utils
-from common.agent_base import is_delegated_run
 from common.models import (
     DRAFT_ID_PREFIX,
     ReviewFinding,
@@ -100,13 +98,6 @@ async def set_test_case_status_to_review_complete(ctx: RunContext[TestCaseDesign
     session.review_completed_ids.add(test_case_key)
     logger.info("Set the status of the test case %s to '%s'.", test_case_key, status_name)
     return f"Successfully set the status of the test case '{test_case_key}' to '{status_name}'."
-
-
-async def hide_while_designing(
-    ctx: RunContext[TestCaseDesignSession], tool_def: ToolDefinition
-) -> ToolDefinition | None:
-    """Offers a tool only outside a delegated run: while designing, the design agent calls it after the loop."""
-    return None if is_delegated_run() else tool_def
 
 
 def render_review_comment(session: TestCaseDesignSession, test_case_key: str) -> str:

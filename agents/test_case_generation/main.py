@@ -7,7 +7,6 @@ import asyncio
 from pydantic_ai import ModelRetry, RunContext
 from pydantic_ai.messages import BinaryContent
 from pydantic_ai.settings import ThinkingLevel
-from pydantic_ai.tools import Tool
 from pydantic_ai.usage import RunUsage
 
 import config
@@ -19,7 +18,7 @@ from agents.test_case_generation.prompt import (
     TestCaseGenerationSystemPrompt,
 )
 from common import utils
-from common.agent_base import AgentBase, is_delegated_run
+from common.agent_base import AgentBase
 from common.custom_llm_wrapper import CustomLlmWrapper
 from common.models import (
     AcceptanceCriteriaList,
@@ -35,7 +34,6 @@ from common.models import (
 from common.services.atlassian_mcp import build_atlassian_mcp_server_toolset
 from common.services.atlassian_tools import JIRA_GET_ISSUE
 from common.services.jira_attachments import attachment_parts, fetch_session_attachments
-from common.services.test_management_tools import hide_while_designing, upload_test_cases
 
 logger = utils.get_logger("test_case_generation_agent")
 
@@ -91,8 +89,6 @@ class TestCaseGenerationAgent(AgentBase):
             thinking_level=config.TestCaseGenerationAgentConfig.THINKING_LEVEL,
         )
         self.fix_min_severity = FindingSeverity(config.TestCaseDesignAgentConfig.FIX_MIN_SEVERITY)
-        self.designing_instructions = TestCaseGenerationSystemPrompt("designing_instructions.md").get_prompt()
-        self.standalone_instructions = TestCaseGenerationSystemPrompt("standalone_instructions.md").get_prompt()
 
         # Initialize base agent (as orchestrator placeholder)
         instruction_prompt = TestCaseGenerationSystemPrompt()
@@ -114,22 +110,14 @@ class TestCaseGenerationAgent(AgentBase):
                 name=config.TestCaseGenerationAgentConfig.SKILL_NAME,
                 description=config.TestCaseGenerationAgentConfig.SKILL_DESCRIPTION,
             ),
-            tools=[
-                Tool(upload_test_cases, sequential=True, prepare=hide_while_designing),
-                self._generate_test_cases,
-                self.fix_test_cases,
-            ],
+            tools=[self._generate_test_cases, self.fix_test_cases],
         )
-        self.agent.instructions(self._get_mode_instructions)
 
     def get_thinking_level(self) -> ThinkingLevel:
         return config.TestCaseGenerationAgentConfig.THINKING_LEVEL
 
     def get_max_requests_per_task(self) -> int:
         return config.TestCaseGenerationAgentConfig.MAX_REQUESTS_PER_TASK
-
-    def _get_mode_instructions(self) -> str:
-        return self.designing_instructions if is_delegated_run() else self.standalone_instructions
 
     async def _generate_test_cases(
         self, ctx: RunContext[TestCaseDesignSession], jira_issue_id: int, jira_issue_content: str
@@ -177,68 +165,53 @@ class TestCaseGenerationAgent(AgentBase):
         blocking = session.blocking_findings(self.fix_min_severity)
         if not blocking:
             return "No finding blocks the test cases, so there is nothing to fix."
-
-        deleted = {
-            finding.owner_test_case_id
-            for finding in blocking
-            if finding.action is FindingAction.DELETE_TEST_CASE and finding.owner_test_case_id in session.test_cases
-        }
-        for test_case_id in deleted:
-            del session.test_cases[test_case_id]
-            session.findings.pop(test_case_id, None)
-            session.changed_test_case_ids.discard(test_case_id)
-        findings_by_owner: dict[str, list[ReviewFinding]] = {}
-        for finding in blocking:
-            if finding.action is not FindingAction.ADD_TEST_CASE and finding.owner_test_case_id in session.test_cases:
-                findings_by_owner.setdefault(finding.owner_test_case_id, []).append(finding)
+        deleted = _delete_redundant_test_cases(session, blocking)
+        findings_by_owner = _findings_by_owner(session, blocking)
         missing = [finding for finding in blocking if finding.action is FindingAction.ADD_TEST_CASE]
+        logger.info(
+            "Fixing %d test case(s), adding %d and deleting %d.", len(findings_by_owner), len(missing), len(deleted)
+        )
+        fixed, new_test_cases = await self._run_fixers(session, findings_by_owner, missing, ctx.usage)
 
+        for owner, test_case in fixed.items():
+            session.test_cases[owner] = test_case.model_copy(update={"key": session.test_cases[owner].key})
+            session.changed_test_case_ids.add(owner)
+        added = [session.add_draft(test_case) for test_case in new_test_cases]
+        # The fixes resolved every blocking finding, so a repeated call cannot fix or add the same thing twice.
+        session.drop_blocking_findings(self.fix_min_severity)
+        return (
+            f"Modified test cases: {', '.join(fixed) or 'none'}; added: {', '.join(added) or 'none'}; "
+            f"deleted: {', '.join(sorted(deleted)) or 'none'}."
+        )
+
+    async def _run_fixers(
+        self,
+        session: TestCaseDesignSession,
+        findings_by_owner: dict[str, list[ReviewFinding]],
+        missing: list[ReviewFinding],
+        usage: RunUsage,
+    ) -> tuple[dict[str, TestCase], list[TestCase]]:
+        """Runs one fixer per affected test case and one per missing test case, returning the fixed and the new ones."""
         context_parts = [
             f"Jira Issue content:\n```{session.story_content}```",
             *attachment_parts(await fetch_session_attachments(session)),
         ]
         usage_limits = self.get_sub_agent_usage_limits()
-        logger.info(
-            "Fixing %d test case(s), adding %d and deleting %d.", len(findings_by_owner), len(missing), len(deleted)
-        )
+
+        async def run_fixer(request: list[str]) -> TestCase:
+            result = await self.test_case_fixer_agent.run(
+                [*request, *context_parts], usage=usage, usage_limits=usage_limits
+            )
+            return result.output
+
         # Every fix touches a single test case, so the fixer runs are independent of each other.
         async with asyncio.TaskGroup() as task_group:
             fixes = {
-                owner: task_group.create_task(
-                    self.test_case_fixer_agent.run(
-                        [*_fix_request(session, owner, findings), *context_parts],
-                        usage=ctx.usage,
-                        usage_limits=usage_limits,
-                    )
-                )
+                owner: task_group.create_task(run_fixer(_fix_request(session, owner, findings)))
                 for owner, findings in findings_by_owner.items()
             }
-            additions = [
-                task_group.create_task(
-                    self.test_case_fixer_agent.run(
-                        [*_addition_request(session, finding), *context_parts],
-                        usage=ctx.usage,
-                        usage_limits=usage_limits,
-                    )
-                )
-                for finding in missing
-            ]
-
-        for owner, fix in fixes.items():
-            session.test_cases[owner] = fix.result().output.model_copy(update={"key": session.test_cases[owner].key})
-            session.changed_test_case_ids.add(owner)
-        added = [session.add_draft(addition.result().output) for addition in additions]
-        # Resolved findings leave the session, so a repeated call cannot fix or add the same thing twice.
-        resolved = {id(finding) for finding in blocking}
-        session.findings = {
-            test_case_id: [finding for finding in findings if id(finding) not in resolved]
-            for test_case_id, findings in session.findings.items()
-        }
-        session.suite_findings = [finding for finding in session.suite_findings if id(finding) not in resolved]
-        return (
-            f"Modified test cases: {', '.join(fixes) or 'none'}; added: {', '.join(added) or 'none'}; "
-            f"deleted: {', '.join(sorted(deleted)) or 'none'}."
-        )
+            additions = [task_group.create_task(run_fixer(_addition_request(session, finding))) for finding in missing]
+        return {owner: fix.result() for owner, fix in fixes.items()}, [addition.result() for addition in additions]
 
     async def create_test_cases_from_steps(
         self,
@@ -311,6 +284,29 @@ Test Step Sequences:
         return extracted_acceptance_criteria
 
 
+def _delete_redundant_test_cases(session: TestCaseDesignSession, blocking: list[ReviewFinding]) -> set[str]:
+    """Deletes the test cases which a blocking finding marks for deletion and returns their IDs."""
+    deleted = {
+        finding.owner_test_case_id
+        for finding in blocking
+        if finding.action is FindingAction.DELETE_TEST_CASE and finding.owner_test_case_id in session.test_cases
+    }
+    for test_case_id in deleted:
+        del session.test_cases[test_case_id]
+        session.findings.pop(test_case_id, None)
+        session.changed_test_case_ids.discard(test_case_id)
+    return deleted
+
+
+def _findings_by_owner(session: TestCaseDesignSession, blocking: list[ReviewFinding]) -> dict[str, list[ReviewFinding]]:
+    """The blocking findings which change an existing test case, grouped by that test case."""
+    findings_by_owner: dict[str, list[ReviewFinding]] = {}
+    for finding in blocking:
+        if finding.action is not FindingAction.ADD_TEST_CASE and finding.owner_test_case_id in session.test_cases:
+            findings_by_owner.setdefault(finding.owner_test_case_id, []).append(finding)
+    return findings_by_owner
+
+
 def _other_test_cases(session: TestCaseDesignSession, excluded_id: str | None = None) -> str:
     return "\n".join(
         f"ID {test_case_id}:\n{test_case}"
@@ -335,7 +331,3 @@ def _addition_request(session: TestCaseDesignSession, finding: ReviewFinding) ->
 
 
 agent = TestCaseGenerationAgent()
-app = agent.a2a_server
-
-if __name__ == "__main__":
-    agent.start_as_server()

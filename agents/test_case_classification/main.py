@@ -68,7 +68,3 @@ class TestCaseClassificationAgent(AgentBase):
 
 
 agent = TestCaseClassificationAgent()
-app = agent.a2a_server
-
-if __name__ == "__main__":
-    agent.start_as_server()

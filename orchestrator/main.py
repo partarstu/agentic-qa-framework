@@ -51,7 +51,9 @@ import config
 from common import utils
 from common.a2a_contract import ArtifactName
 from common.custom_llm_wrapper import CustomLlmWrapper
+from common.jira_additional_fields import build_additional_fields_instruction
 from common.models import (
+    JIRA_ISSUE_KEY_PATTERN,
     AgentExecutionError,
     AgentInfo,
     AgentRoutingDecision,
@@ -69,8 +71,8 @@ from common.models import (
     SyncRequest,
     SyncStatus,
     TestCase,
+    TestCaseDesignRequest,
     TestCaseDesignResult,
-    TestCaseDesignSession,
     TestCaseType,
     TestExecutionRequest,
     TestExecutionResult,
@@ -107,7 +109,6 @@ from orchestrator.prompt import (
     MULTI_ROUTING_INSTRUCTION,
     RESULTS_EXTRACTOR_INSTRUCTION,
     ROUTING_INSTRUCTION,
-    build_additional_fields_instruction,
 )
 from orchestrator.rag_sync_trigger import RagSyncTrigger, SyncStartResult, SyncTriggerError
 from orchestrator.streaming_hub import _Subscriber, streaming_hub
@@ -1369,16 +1370,15 @@ async def _request_incident_creation(
 
 
 async def _request_test_case_design(user_story_key: str) -> TestCaseDesignResult:
-    """Request the test case design of a user story, seeding the design session with its key.
+    """Request the test case design of a user story, passing its key as the design request data part.
 
     Raises:
         HTTPException: If an AgentExecutionError is returned by the agent.
     """
-    session_seed = TestCaseDesignSession(story_key=user_story_key)
     message = new_message(
         parts=[
             new_text_part(_build_jira_issue_task_text(user_story_key)),
-            new_data_part(session_seed.model_dump(mode="json", include={"story_key"})),
+            new_data_part(TestCaseDesignRequest(story_key=user_story_key).model_dump(mode="json")),
         ],
         role=Role.ROLE_USER,
     )
@@ -1610,9 +1610,9 @@ async def _send_task_to_agent_with_message(
     selected_agent_id: str | None = None,
     timeout_seconds: float | None = None,
 ) -> Task | None:
-    """Send a custom message (with file or data parts) to an agent, waiting for the task at most the given timeout."""
+    """Send a custom message (with file or data parts) to an agent; a given timeout covers the wait for the agent too."""
 
-    timeout_seconds = timeout_seconds or config.OrchestratorConfig.TASK_EXECUTION_TIMEOUT
+    deadline = None if timeout_seconds is None else time.time() + timeout_seconds
     internal_task_id = str(uuid4())
     agent_id = None
     last_task_id = None
@@ -1620,7 +1620,9 @@ async def _send_task_to_agent_with_message(
     try:
         # Wait for an agent and reserve it atomically
         if selected_agent_id is None:
-            agent_id, agent_card = await reserve_agent_waiting_if_needed(task_description, internal_task_id)
+            agent_id, agent_card = await reserve_agent_waiting_if_needed(
+                task_description, internal_task_id, max_wait_seconds=timeout_seconds
+            )
         else:
             async with agent_selection_lock:
                 agent_card = await agent_registry.get_card(selected_agent_id)
@@ -1633,6 +1635,17 @@ async def _send_task_to_agent_with_message(
                     raise HTTPException(status_code=503, detail="Execution agent is unavailable.")
                 await agent_registry.update_status(selected_agent_id, AgentStatus.BUSY)
                 agent_id = selected_agent_id
+        task_timeout_seconds = (
+            config.OrchestratorConfig.TASK_EXECUTION_TIMEOUT if deadline is None else deadline - time.time()
+        )
+        if task_timeout_seconds <= 0:
+            await agent_registry.update_status(agent_id, AgentStatus.AVAILABLE)
+            _handle_exception(
+                f"No time was left for task '{task_description}' after waiting for an available agent.",
+                503,
+                internal_task_id,
+                agent_id,
+            )
         # The routing call picks the agent, which is not necessarily the one the caller had in
         # mind, so the caller reads back who actually ran the task (see _reserved_agent_id).
         _reserved_agent_id.set(agent_id)
@@ -1651,7 +1664,7 @@ async def _send_task_to_agent_with_message(
         await task_history.add(task_record)
         await agent_registry.set_current_task(agent_id, internal_task_id)
 
-        httpx_client = httpx.AsyncClient(timeout=timeout_seconds, headers=_build_agent_auth_headers())
+        httpx_client = httpx.AsyncClient(timeout=task_timeout_seconds, headers=_build_agent_auth_headers())
         a2a_client = await create_client(
             agent_card,
             client_config=ClientConfig(httpx_client=httpx_client),
@@ -1661,7 +1674,7 @@ async def _send_task_to_agent_with_message(
         last_status = None
         collected_artifacts: list[Artifact] = []
         log_state = _LogStreamState()
-        while (time_left := _get_time_left_for_task_completion_waiting(start_time, timeout_seconds)) > 0:
+        while (time_left := _get_time_left_for_task_completion_waiting(start_time, task_timeout_seconds)) > 0:
             try:
                 chunk = await asyncio.wait_for(response_iterator.__anext__(), timeout=time_left)
             except StopAsyncIteration:
@@ -1815,9 +1828,9 @@ async def _send_task_to_agent(
 
 
 async def reserve_agent_waiting_if_needed(
-    task_description: str, task_id: str | None = None
+    task_description: str, task_id: str | None = None, max_wait_seconds: float | None = None
 ) -> tuple[str, AgentCard] | None:
-    """Wait for an available agent and atomically reserve it.
+    """Wait for an available agent, by default at most the task execution timeout, and atomically reserve it.
 
     Raises:
         HTTPException: If no agents are registered, no suitable agent found,
@@ -1826,7 +1839,7 @@ async def reserve_agent_waiting_if_needed(
     if await agent_registry.is_empty():
         _handle_exception("Orchestrator has currently no registered agents.", 404, task_id=task_id)
 
-    max_wait_time = config.OrchestratorConfig.TASK_EXECUTION_TIMEOUT
+    max_wait_time = config.OrchestratorConfig.TASK_EXECUTION_TIMEOUT if max_wait_seconds is None else max_wait_seconds
     start_time = time.time()
     last_justification = "no routing decision was made"
     decision: AgentRoutingDecision | None = None
@@ -1915,11 +1928,13 @@ async def _verify_jira_webhook_signature(request: Request) -> None:
         _handle_exception("Invalid or missing Jira webhook signature.", 401)
 
 
-async def _get_jira_issue_key_from_request(request):
+async def _get_jira_issue_key_from_request(request: Request) -> str:
     payload = await request.json()
     user_story_id = (payload or {}).get("issue_key", "")
     if not user_story_id:
         _handle_exception("Request has no Jira issue key in the payload.", 400)
+    if not isinstance(user_story_id, str) or not JIRA_ISSUE_KEY_PATTERN.fullmatch(user_story_id):
+        _handle_exception(f"'{str(user_story_id)[:50]}' is not a Jira issue key in the format PROJ-123.", 400)
     return user_story_id
 
 

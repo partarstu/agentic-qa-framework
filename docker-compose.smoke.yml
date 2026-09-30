@@ -217,7 +217,7 @@ services:
     environment:
       <<: *agent-env
       AGENT_BASE_URL: "http://test_case_design"
-      # the review searches the project's test cases for duplicates of the drafts and indexes the saved set.
+      # the design searches the project's saved test cases for duplicates of its final test cases.
       QDRANT_URL: "http://qdrant_mock:6333"
       EMBEDDING_SERVICE_URL: "http://qdrant_mock:6333"
       # the design agent asks its generation delegate to fetch the story with these fields.

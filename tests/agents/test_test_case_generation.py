@@ -26,7 +26,6 @@ from common.models import (
     TestCaseDuplicateCheck,
     TestStepsSequenceList,
 )
-from common.services.test_management_tools import hide_while_designing, upload_test_cases
 
 
 @pytest.fixture
@@ -109,14 +108,6 @@ def test_an_unknown_fix_severity_fails_at_start(mock_config):
         TestCaseGenerationAgent()
 
 
-def test_upload_is_the_shared_tool_hidden_while_designing(agent):
-    upload = agent.agent._function_toolset.tools["upload_test_cases"]
-
-    assert upload.function is upload_test_cases
-    assert upload.prepare is hide_while_designing
-    assert upload.sequential
-
-
 def _offering_model(offered: list[set[str]], instructions: list[str]) -> FunctionModel:
     def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
         offered.append({tool.name for tool in info.function_tools})
@@ -126,30 +117,16 @@ def _offering_model(offered: list[set[str]], instructions: list[str]) -> Functio
     return FunctionModel(respond)
 
 
-async def test_a_delegated_run_gets_the_designing_tasks_and_no_upload(agent):
+async def test_a_delegated_run_is_offered_only_the_generation_and_the_fix_of_the_design(agent):
     offered: list[set[str]] = []
     instructions: list[str] = []
-    agent.designing_instructions, agent.standalone_instructions = "DESIGNING TASKS", "STANDALONE TASKS"
     agent.mcp_toolset_factories = []
 
     with agent.agent.override(model=_offering_model(offered, instructions)):
         assert await agent.run_delegated("Generate", _session(), RunUsage()) == "done"
 
-    assert "upload_test_cases" not in offered[0]
-    assert {"_generate_test_cases", "fix_test_cases"} <= offered[0]
-    assert "DESIGNING TASKS" in instructions[0]
-
-
-async def test_a_standalone_run_gets_the_standalone_tasks_and_the_upload(agent):
-    offered: list[set[str]] = []
-    instructions: list[str] = []
-    agent.designing_instructions, agent.standalone_instructions = "DESIGNING TASKS", "STANDALONE TASKS"
-
-    with agent.agent.override(model=_offering_model(offered, instructions)):
-        await agent.agent.run("Generate", deps=_session(), output_type=str)
-
-    assert "upload_test_cases" in offered[0]
-    assert "STANDALONE TASKS" in instructions[0]
+    assert offered[0] == {"_generate_test_cases", "fix_test_cases", "report_activity"}
+    assert "You work on an ongoing test case design for the Jira issue." in instructions[0]
 
 
 async def test_generation_adds_the_generated_test_cases_to_the_design_as_drafts(agent):

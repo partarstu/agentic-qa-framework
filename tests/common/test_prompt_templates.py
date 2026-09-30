@@ -35,19 +35,11 @@ _PROMPTS = {
     "steps-generation": generation_prompts.StepsGenerationPrompt,
     "test-case-creation": generation_prompts.TestCaseCreationPrompt,
     "test-case-fixer": generation_prompts.TestCaseFixerPrompt,
-    "test-case-generation-designing": lambda: generation_prompts.TestCaseGenerationSystemPrompt(
-        "designing_instructions.md"
-    ),
-    "test-case-generation-standalone": lambda: generation_prompts.TestCaseGenerationSystemPrompt(
-        "standalone_instructions.md"
-    ),
     "test-case-review": review_prompts.TestCaseReviewSystemPrompt,
     "test-case-review-with-attachments": review_prompts.TestCaseReviewWithAttachmentsPrompt,
     "test-case-duplicate-judge": review_prompts.TestCaseDuplicateJudgePrompt,
     "test-suite-review": review_prompts.TestSuiteReviewPrompt,
     "severity-rubric": review_prompts.SeverityRubricFragment,
-    "test-case-review-designing": lambda: review_prompts.TestCaseReviewSystemPrompt("designing_instructions.md"),
-    "test-case-review-standalone": lambda: review_prompts.TestCaseReviewSystemPrompt("standalone_instructions.md"),
 }
 
 _ORCHESTRATOR_TEMPLATES = [

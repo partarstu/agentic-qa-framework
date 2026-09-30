@@ -63,6 +63,21 @@ async def test_review_jira_requirements_no_issue_key():
     assert "no Jira issue key" in response.json()["detail"]
 
 
+@pytest.mark.parametrize("endpoint", ["/new-requirements-available", "/story-ready-for-test-case-generation"])
+@pytest.mark.parametrize("issue_key", ["proj-1", "PROJ", "PROJ-1/../x", "../PROJ-1", 42], ids=str)
+def test_jira_webhooks_reject_a_malformed_issue_key_before_any_agent_runs(endpoint, issue_key):
+    with (
+        patch("orchestrator.main._send_task_to_agent", new_callable=AsyncMock) as mock_send,
+        patch("orchestrator.main._send_task_to_agent_with_message", new_callable=AsyncMock) as mock_send_message,
+    ):
+        response = client.post(endpoint, json={"issue_key": issue_key})
+
+    assert response.status_code == 400
+    assert "is not a Jira issue key in the format PROJ-123" in response.json()["detail"]
+    mock_send.assert_not_awaited()
+    mock_send_message.assert_not_awaited()
+
+
 @pytest.mark.asyncio
 async def test_trigger_test_case_generation_workflow_runs_one_test_case_design():
     result = TestCaseDesignResult(test_case_keys=["TEST-T1"], iterations=2, stop_reason="converged")

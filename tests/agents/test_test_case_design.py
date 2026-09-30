@@ -11,7 +11,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from a2a.helpers import get_message_text, new_data_part, new_text_part
 from a2a.types import Message
-from pydantic_ai import ModelRetry, RunContext
+from fastapi.testclient import TestClient
+from pydantic_ai import ModelRetry
 from pydantic_ai.messages import ModelMessage, ModelResponse, ToolCallPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.usage import RunUsage
@@ -29,6 +30,7 @@ from common.models import (
     TestCaseDesignResult,
     TestCaseDesignSession,
     TestCaseDuplicateCheck,
+    TestCaseKeys,
 )
 from common.services.test_management_base import TestManagementClientBase
 
@@ -73,8 +75,13 @@ def _review(*findings: ReviewFinding) -> Callable[[TestCaseDesignSession], None]
     return review
 
 
-async def _check_duplicates(ctx: RunContext[TestCaseDesignSession]) -> str:
-    ctx.deps.duplicate_checks = {test_case_id: TestCaseDuplicateCheck() for test_case_id in ctx.deps.test_cases}
+def _fix(session: TestCaseDesignSession) -> None:
+    session.drop_blocking_findings(FindingSeverity.LOW)
+    session.changed_test_case_ids.add("DRAFT-1")
+
+
+async def _check_duplicates(session: TestCaseDesignSession, usage: RunUsage) -> str:
+    session.duplicate_checks = {test_case_id: TestCaseDuplicateCheck() for test_case_id in session.test_cases}
     return "DRAFT-1: no duplicates"
 
 
@@ -171,9 +178,10 @@ async def test_a_converging_design_is_checked_for_duplicates_then_saved_classifi
     client.change_test_case_status.assert_called_once_with("PROJ", "PROJ-T1", "Review Complete")
     vector_db.hybrid_search.assert_awaited_once()
     vector_db.upsert_batch.assert_not_awaited()
-    classified = agent.classification_agent.run_delegated.await_args.args[0]
+    classified, classification_deps, _ = agent.classification_agent.run_delegated.await_args.args
     assert classified.startswith("Test cases:\n")
     assert '"key": "PROJ-T1"' in classified
+    assert classification_deps == TestCaseKeys(issue_keys=["PROJ-T1"])
 
 
 async def test_a_failure_before_the_writes_fails_the_design_and_writes_nothing(agent, client):
@@ -201,6 +209,23 @@ async def test_an_early_result_with_a_comment_aborts_the_design_without_further_
     assert "steps not done: finish the review loop; save the test cases" in str(failure.value)
     assert len(offered) == 2, "The abort must end the run without another model request"
     client.create_test_cases.assert_not_called()
+
+
+async def test_a_request_carrying_design_state_fails_before_any_step(agent, client):
+    state = {"story_key": "PROJ-1", "stop_reason": "converged", "uploaded": True}
+    message = Message(message_id="m-1", parts=[new_text_part("Design PROJ-1"), new_data_part(state)])
+
+    with (
+        agent.agent.override(model=_scripted_model([("upload_test_cases", {})], [])),
+        pytest.raises(AgentRuntimeError, match="Extra inputs are not permitted"),
+    ):
+        await agent.run(message)
+
+    client.create_test_cases.assert_not_called()
+
+
+def test_a_design_session_starts_empty_from_the_story_key_of_the_request(agent):
+    assert agent._build_deps({"story_key": "PROJ-1"}) == TestCaseDesignSession(story_key="PROJ-1")
 
 
 async def test_a_design_without_a_session_fails_with_a_clear_error(agent):
@@ -242,7 +267,7 @@ async def test_review_with_blocking_findings_continues_until_the_iteration_limit
     session = _generated()
     agent.max_iterations = 2
     agent.review_agent = _reviewer(_finding("DRAFT-1"))
-    agent.generation_agent = _delegate(lambda design: design.changed_test_case_ids.add("DRAFT-1"), "fixed")
+    agent.generation_agent = _delegate(_fix, "fixed")
 
     first = await agent.review_test_cases(_ctx(session))
     agent.review_agent.check_duplicates.assert_not_awaited()
@@ -301,6 +326,18 @@ async def test_a_review_without_the_whole_set_review_does_not_count_as_an_iterat
         await agent.review_test_cases(_ctx(session))
 
     assert (session.iteration, session.stop_reason) == (0, None)
+
+
+async def test_a_fix_which_left_blocking_findings_does_not_count_and_is_asked_again(agent):
+    session = _generated()
+    session.iteration = 1
+    session.findings = {"DRAFT-1": [_finding("DRAFT-1")]}
+    agent.generation_agent = _delegate(lambda design: None, "I fixed nothing")
+
+    with pytest.raises(ModelRetry, match="left the blocking findings unresolved"):
+        await agent.fix_test_cases(_ctx(session))
+
+    assert session.fixes == 0
 
 
 async def test_fixing_twice_without_a_review_is_refused(agent):
@@ -374,3 +411,13 @@ def test_the_result_is_refused_until_every_step_is_done_and_then_filled_from_the
 def test_the_design_budget_covers_the_delegated_runs(agent):
     assert agent.get_total_tokens_limit() == 4_000_000
     assert agent.get_max_requests_per_task() == 150
+    assert agent._get_usage_limits().request_limit is None
+
+
+def test_shutting_the_design_agent_down_closes_the_review_agent_vector_db_client(agent):
+    agent.review_agent = MagicMock(vector_db_service=MagicMock(close=AsyncMock()))
+
+    with TestClient(agent.a2a_server):
+        agent.review_agent.vector_db_service.close.assert_not_awaited()
+
+    agent.review_agent.vector_db_service.close.assert_awaited_once()

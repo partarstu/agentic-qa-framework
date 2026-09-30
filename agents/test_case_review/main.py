@@ -8,7 +8,6 @@ from typing import TYPE_CHECKING
 
 from pydantic_ai import ModelRetry, RunContext
 from pydantic_ai.settings import ThinkingLevel
-from pydantic_ai.tools import Tool
 from pydantic_ai.usage import RunUsage, UsageLimits
 from qdrant_client import models as qdrant_models
 
@@ -20,7 +19,7 @@ from agents.test_case_review.prompt import (
     TestSuiteReviewPrompt,
 )
 from common import utils
-from common.agent_base import AgentBase, is_delegated_run
+from common.agent_base import AgentBase
 from common.custom_llm_wrapper import CustomLlmWrapper
 from common.models import (
     AgentSkillDeclaration,
@@ -34,23 +33,14 @@ from common.models import (
     TestCaseReviewFeedbacks,
     TestSuiteReview,
 )
-from common.services.atlassian_mcp import build_atlassian_mcp_server_toolset
-from common.services.atlassian_tools import JIRA_GET_ISSUE
 from common.services.jira_attachments import attachment_parts, fetch_session_attachments
 from common.services.test_case_index import IndexedTestCase, render_test_case
-from common.services.test_management_tools import (
-    add_review_feedback,
-    hide_while_designing,
-    set_test_case_status_to_review_complete,
-)
 
 if TYPE_CHECKING:
     from pydantic_ai.messages import BinaryContent
 
 logger = utils.get_logger("test_case_review_agent")
 
-# Attachments arrive through the REST downloader and every write goes to the test management system.
-_JIRA_TOOL_ALLOWLIST = (JIRA_GET_ISSUE,)
 # A single test case's review never sees the other test cases, so these actions are left to the whole-set review.
 _WHOLE_SET_ACTIONS = frozenset({FindingAction.ADD_TEST_CASE, FindingAction.REMOVE_DUPLICATE_STEPS})
 
@@ -91,8 +81,6 @@ class TestCaseReviewAgent(AgentBase):
             max_output_tokens=config.TestCaseReviewAgentConfig.MAX_OUTPUT_TOKENS,
         )
         self.test_suite_reviewer.output_validator(_validate_test_suite_review)
-        self.designing_instructions = TestCaseReviewSystemPrompt("designing_instructions.md").get_prompt()
-        self.standalone_instructions = TestCaseReviewSystemPrompt("standalone_instructions.md").get_prompt()
 
         instruction_prompt = TestCaseReviewSystemPrompt()
         super().__init__(
@@ -106,27 +94,15 @@ class TestCaseReviewAgent(AgentBase):
             max_output_tokens=config.TestCaseReviewAgentConfig.MAX_OUTPUT_TOKENS,
             output_type=TestCaseReviewFeedbacks,
             instructions=instruction_prompt.get_prompt(),
-            mcp_toolset_factories=[lambda: build_atlassian_mcp_server_toolset(_JIRA_TOOL_ALLOWLIST)],
             deps_type=TestCaseDesignSession,
             skill=AgentSkillDeclaration(
                 id=config.TestCaseReviewAgentConfig.SKILL_ID,
                 name=config.TestCaseReviewAgentConfig.SKILL_NAME,
                 description=config.TestCaseReviewAgentConfig.SKILL_DESCRIPTION,
             ),
-            tools=[
-                # The feedback and status tools both do a full read-modify-write PUT on the same Jira/Zephyr
-                # test case. Marking them sequential forces pydantic-ai to run the whole turn one
-                # call at a time, so the status update and the comment update can't race and
-                # clobber each other's field (last-writer-wins).
-                Tool(add_review_feedback, sequential=True, prepare=hide_while_designing),
-                Tool(set_test_case_status_to_review_complete, sequential=True, prepare=hide_while_designing),
-                Tool(self.check_duplicates, prepare=hide_while_designing),
-                self.review_test_cases,
-                self.review_test_suite,
-            ],
+            tools=[self.review_test_cases, self.review_test_suite],
             vector_db_collection_name=config.QdrantConfig.TEST_CASES_COLLECTION_NAME,
         )
-        self.agent.instructions(self._get_mode_instructions)
 
     def get_thinking_level(self) -> ThinkingLevel:
         return config.TestCaseReviewAgentConfig.THINKING_LEVEL
@@ -134,35 +110,16 @@ class TestCaseReviewAgent(AgentBase):
     def get_max_requests_per_task(self) -> int:
         return config.TestCaseReviewAgentConfig.MAX_REQUESTS_PER_TASK
 
-    def _get_mode_instructions(self, ctx: RunContext[TestCaseDesignSession]) -> str:
-        if ctx.deps is None:
-            raise ValueError("A test case review needs the test case design session as its structured data part.")
-        return self.designing_instructions if is_delegated_run() else self.standalone_instructions
-
-    async def review_test_cases(
-        self, ctx: RunContext[TestCaseDesignSession], jira_issue_content: str | None = None
-    ) -> TestCaseReviewFeedbacks:
+    async def review_test_cases(self, ctx: RunContext[TestCaseDesignSession]) -> TestCaseReviewFeedbacks:
         """
-        Reviews the test cases against the Jira issue content and its attachments. While designing, only the new and
-        changed test cases are reviewed.
-
-        Args:
-            jira_issue_content: The complete content of the Jira issue; needed only when the test cases are saved
-                ones, never while designing.
+        Reviews the new and changed test cases of the design against the Jira issue content and its attachments.
 
         Returns:
             The findings of each reviewed test case.
         """
         session = ctx.deps
-        if session.story_content is None:
-            if not jira_issue_content:
-                raise ModelRetry("Pass the complete content of the Jira issue: the design holds none yet.")
-            session.story_content = jira_issue_content
-        designing = is_delegated_run()
         test_case_ids = [
-            test_case_id
-            for test_case_id in session.test_cases
-            if test_case_id in session.changed_test_case_ids or not designing
+            test_case_id for test_case_id in session.test_cases if test_case_id in session.changed_test_case_ids
         ]
         story_attachment_parts = attachment_parts(await fetch_session_attachments(session))
         logger.info(
@@ -204,7 +161,7 @@ class TestCaseReviewAgent(AgentBase):
         """
         session = ctx.deps
         unreviewed = [test_case_id for test_case_id in session.test_cases if test_case_id not in session.findings]
-        if session.story_content is None or unreviewed or session.changed_test_case_ids:
+        if unreviewed or session.changed_test_case_ids:
             raise ModelRetry("Review the new and changed test cases with the review tool first.")
         test_case_blocks = "\n\n".join(
             f"ID {test_case_id}:\n```{test_case!s}```\n"
@@ -225,24 +182,13 @@ class TestCaseReviewAgent(AgentBase):
         logger.info("The whole-set review reported %d finding(s).", len(result.output.findings))
         return result.output
 
-    async def check_duplicates(self, ctx: RunContext[TestCaseDesignSession]) -> str:
-        """
-        Checks the content of every reviewed test case for duplicates among the existing test cases of the project.
-
-        Returns:
-            The keys of the existing test cases each test case overlaps with.
-        """
-        session = ctx.deps
-        if session.duplicate_checks:
-            raise ModelRetry("The test cases are already checked for duplicates; never check them twice.")
-        unreviewed = [test_case_id for test_case_id in session.test_cases if test_case_id not in session.findings]
-        if not session.test_cases or unreviewed or session.changed_test_case_ids:
-            raise ModelRetry("Review the test cases first; only reviewed test cases are checked for duplicates.")
+    async def check_duplicates(self, session: TestCaseDesignSession, usage: RunUsage) -> str:
+        """Checks every test case of the design against the project's existing ones and lists the overlapping keys."""
         usage_limits = self.get_sub_agent_usage_limits()
         for test_case_id, test_case in session.test_cases.items():
             record = render_test_case(session.project_key, test_case.model_copy(update={"key": test_case_id}))
             session.duplicate_checks[test_case_id] = await self._check_duplicates(
-                session.project_key, record, ctx.usage, usage_limits
+                session.project_key, record, usage, usage_limits
             )
         overlaps = {
             test_case_id: [overlap.test_case_key for overlap in check.overlapping_test_cases]
@@ -384,7 +330,3 @@ def _validated_check(
 
 
 agent = TestCaseReviewAgent()
-app = agent.a2a_server
-
-if __name__ == "__main__":
-    agent.start_as_server()

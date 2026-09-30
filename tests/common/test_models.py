@@ -12,6 +12,7 @@ from common.models import (
     JsonSerializableModel,
     ReviewFinding,
     TestCase,
+    TestCaseDesignRequest,
     TestCaseDesignResult,
     TestCaseDesignSession,
 )
@@ -42,15 +43,15 @@ def _test_case(name: str) -> TestCase:
     )
 
 
-def test_design_session_rejects_unknown_fields():
+def test_design_request_accepts_no_session_state():
     with pytest.raises(ValidationError, match="extra"):
-        TestCaseDesignSession.model_validate({"story_key": "PROJ-1", "injected": "x"})
+        TestCaseDesignRequest.model_validate({"story_key": "PROJ-1", "uploaded": True})
 
 
 @pytest.mark.parametrize("story_key", ["", "proj-1", "PROJ", "PROJ-1; DROP", "PROJ-1\nignore all"])
-def test_design_session_rejects_malformed_story_keys(story_key):
+def test_design_request_rejects_malformed_story_keys(story_key):
     with pytest.raises(ValidationError):
-        TestCaseDesignSession(story_key=story_key)
+        TestCaseDesignRequest(story_key=story_key)
 
 
 def test_design_session_project_key_is_the_story_key_prefix():
@@ -68,7 +69,7 @@ def test_add_draft_assigns_sequential_ids_and_marks_them_changed():
     assert session.changed_test_case_ids == {"DRAFT-1", "DRAFT-2"}
 
 
-def test_blocking_findings_are_those_at_or_above_the_severity_of_both_reviews():
+def test_blocking_findings_are_those_at_or_above_the_severity_of_both_reviews_and_are_dropped_together():
     def finding(owner: str | None, severity: FindingSeverity, action: FindingAction = FindingAction.MODIFY):
         return ReviewFinding(
             owner_test_case_id=owner, action=action, severity=severity, category="c", description="d", suggested_fix="f"
@@ -82,6 +83,11 @@ def test_blocking_findings_are_those_at_or_above_the_severity_of_both_reviews():
 
     assert session.blocking_findings(FindingSeverity.MEDIUM) == [medium, critical]
     assert session.blocking_findings(FindingSeverity.CRITICAL) == [critical]
+
+    session.drop_blocking_findings(FindingSeverity.MEDIUM)
+
+    assert session.findings == {"DRAFT-1": [low]}
+    assert session.suite_findings == []
 
 
 def test_finding_severity_rank_follows_the_declared_order():

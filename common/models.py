@@ -4,6 +4,7 @@
 
 import hashlib
 import itertools
+import re
 import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -445,6 +446,17 @@ class DesignStopReason(StrEnum):
 
 
 DRAFT_ID_PREFIX = "DRAFT-"
+# Jira issue keys are a project key, a hyphen and the issue number, e.g. PROJ-123.
+JIRA_ISSUE_KEY_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]*-\d+$")
+
+
+class TestCaseDesignRequest(JsonSerializableModel):
+    """The structured data part of a test case design task; the design session starts from it."""
+
+    __test__ = False
+    model_config = ConfigDict(extra="forbid")
+
+    story_key: str = Field(pattern=JIRA_ISSUE_KEY_PATTERN.pattern)
 
 
 class TestCaseDesignSession(JsonSerializableModel):
@@ -454,9 +466,8 @@ class TestCaseDesignSession(JsonSerializableModel):
     """
 
     __test__ = False
-    model_config = ConfigDict(extra="forbid")
 
-    story_key: str = Field(pattern=r"^[A-Z][A-Z0-9_]*-\d+$")
+    story_key: str
     story_id: int | None = None
     story_content: str | None = None
     attachments: SkipJsonSchema[dict[str, BinaryContent] | None] = None
@@ -491,6 +502,14 @@ class TestCaseDesignSession(JsonSerializableModel):
         """The per-test-case and whole-set findings at or above the given severity."""
         all_findings = [*itertools.chain.from_iterable(self.findings.values()), *self.suite_findings]
         return [finding for finding in all_findings if finding.severity.rank >= min_severity.rank]
+
+    def drop_blocking_findings(self, min_severity: FindingSeverity) -> None:
+        """Removes the per-test-case and whole-set findings at or above the given severity."""
+        self.findings = {
+            test_case_id: [finding for finding in findings if finding.severity.rank < min_severity.rank]
+            for test_case_id, findings in self.findings.items()
+        }
+        self.suite_findings = [finding for finding in self.suite_findings if finding.severity.rank < min_severity.rank]
 
 
 class TestCaseDesignResult(BaseAgentResult):
@@ -558,6 +577,7 @@ class TestExecutionResult(JsonSerializableModel):
 
 
 class TestCaseKeys(JsonSerializableModel):
+    __test__ = False
     issue_keys: list[str]
 
 
