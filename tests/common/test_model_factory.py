@@ -93,7 +93,12 @@ def test_disabled_thinking_switches_qwen_off_through_its_chat_template(thinking_
     ):
         model = build_model("qwen:Qwen/Qwen3.8-27B-FP8", thinking_level)
 
-    assert model.settings == {"extra_body": {"chat_template_kwargs": {"enable_thinking": False}}}
+    assert model.settings == {
+        "temperature": 0.7,
+        "top_p": 0.8,
+        "presence_penalty": 1.5,
+        "extra_body": {"chat_template_kwargs": {"enable_thinking": False}},
+    }
 
 
 @patch("common.model_factory._identity_token_credentials")

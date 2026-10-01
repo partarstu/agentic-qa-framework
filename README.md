@@ -250,7 +250,8 @@ QWEN_API_KEY= # Optional. Static API key for the Qwen endpoint. An endpoint serv
                                  # GOOGLE_APPLICATION_CREDENTIALS, or 'gcloud auth application-default login
                                  # --impersonate-service-account=<invoker service account>'.
 QWEN_THINKING_ENABLED=False # Default: False, meaning thinking is disabled entirely through Qwen's chat template and
-                                 # the requests carry the global temperature and top_p. Set to True to let each agent's
+                                 # the requests carry the model card's non-thinking sampling (temperature 0.7, top_p 0.8,
+                                 # presence_penalty 1.5). Set to True to let each agent's
                                  # configured thinking level grade Qwen's reasoning effort (Qwen accepts low, medium and
                                  # xhigh, so "minimal" is sent as "low" and "high" as "xhigh"), with the model card's
                                  # thinking-mode sampling (temperature 1.0, top_p 0.95).
@@ -297,7 +298,7 @@ JIRA_URL=YOUR_JIRA_INSTANCE_URL # Required for Xray, the RAG sync runtime and th
                                  # MCP server (see "Jira MCP Server Setup" below), which has its own .env file.
 JIRA_USERNAME=YOUR_JIRA_USERNAME # Required alongside JIRA_URL. The email address associated with your Jira account.
 JIRA_API_TOKEN=YOUR_JIRA_API_TOKEN # Required alongside JIRA_URL. A Jira API token for authentication.
-ORCHESTRATOR_VERSION=2.0.1 # Default: 2.0.1. Version of the orchestrator, reported for traceability.
+ORCHESTRATOR_VERSION=2.1.0 # Default: 2.1.0. Version of the orchestrator, reported for traceability.
 TEST_CASE_DESIGN_TASK_TIMEOUT_SECONDS=3300 # Default: 3300. How long the orchestrator waits for one test case design, the wait for a free Test Case Design agent included; keep it below the orchestrator's request timeout (3500 s on Cloud Run).
 TEST_ENVIRONMENT_LABEL=Standard Test Environment # Default: Standard Test Environment. Label describing the
                                  # environment tests are executed against. Reported on every test execution
@@ -363,12 +364,12 @@ TEST_CASE_DESIGN_TOTAL_TOKENS_LIMIT=4000000 # Default: 4000000. Token budget of 
 TEST_CASE_DESIGN_MAX_OUTPUT_TOKENS= # Optional. Maximum output tokens per model response of the Test Case Design agent; defaults to MAX_OUTPUT_TOKENS.
 # Version each agent reports in its A2A agent card (visible in the dashboard) and, for execution agents,
 # on every test execution result. Each agent reads its own variable.
-REQUIREMENTS_REVIEW_AGENT_VERSION=1.2.0 # Default: 1.2.0.
+REQUIREMENTS_REVIEW_AGENT_VERSION=1.3.0 # Default: 1.3.0.
 TEST_CASE_DESIGN_AGENT_VERSION=1.0.0 # Default: 1.0.0.
-TEST_CASE_CLASSIFICATION_AGENT_VERSION=1.2.1 # Default: 1.2.1.
+TEST_CASE_CLASSIFICATION_AGENT_VERSION=1.3.0 # Default: 1.3.0.
 TEST_CASE_GENERATION_AGENT_VERSION=1.2.1 # Default: 1.2.1.
 TEST_CASE_REVIEW_AGENT_VERSION=1.1.2 # Default: 1.1.2.
-INCIDENT_CREATION_AGENT_VERSION=1.1.1 # Default: 1.1.1.
+INCIDENT_CREATION_AGENT_VERSION=1.2.0 # Default: 1.2.0.
 
 # Agent Discovery (for remote agents)
 REMOTE_EXECUTION_AGENT_HOSTS=http://localhost # Default: http://localhost. Comma-separated URLs of remote agent hosts.
@@ -630,13 +631,13 @@ orchestrator, and then start the dev server on top of that build.
 
 ### Model Settings and the pydantic-ai Version
 
-Provider-specific request settings (Claude 5 thinking and effort, Qwen reasoning, the maximum output tokens and the transport-level retries) are resolved in one place, `common/model_factory.py`, on **pydantic-ai 2.46.0**. Every model client (Gemini, Claude and the OpenAI-compatible Qwen endpoint) runs on `httpx2`, with pydantic-ai's `AsyncHTTPX2TenacityTransport` as the retry transport, and the Atlassian MCP server is reached through pydantic-ai's `MCPToolset`.
+Provider-specific request settings (Claude 5 thinking and effort, Qwen reasoning and sampling, the maximum output tokens and the transport-level retries) are resolved in one place, `common/model_factory.py`, on **pydantic-ai 2.46.0**. No global temperature or top_p is sent: Gemini and Claude run on their provider defaults, and Qwen on its model card's sampling for the active mode. Every model client (Gemini, Claude and the OpenAI-compatible Qwen endpoint) runs on `httpx2`, with pydantic-ai's `AsyncHTTPX2TenacityTransport` as the retry transport, and the Atlassian MCP server is reached through pydantic-ai's `MCPToolset`.
 
 The agents keep the pydantic-ai 1.x run semantics: `end_strategy="early"` (tools requested alongside the final output are skipped rather than run) and a single retry per MCP tool call. A custom `MODEL_NAME` left to pydantic-ai follows its 2.x prefixes: `openai:` now targets the Responses API (`openai-chat:` for Chat Completions), and `google-vertex:` is `google-cloud:`; the `google-gla:`, `anthropic:` and `qwen:` names are built by the model factory and are unaffected.
 
 #### Qwen3.8-27B: thinking stays off
 
-Run `qwen:Qwen/Qwen3.8-27B-FP8` with thinking off, which is the default (`QWEN_THINKING_ENABLED=False`): the chat template's `enable_thinking` is set to `false` and the requests carry the global temperature (0.0) and top_p (1.0). This is the configuration the model was evaluated in with the hermetic smoke suite and its A/B comparison against the Gemini baseline, over eight runs in three configurations:
+Run `qwen:Qwen/Qwen3.8-27B-FP8` with thinking off, which is the default (`QWEN_THINKING_ENABLED=False`): the chat template's `enable_thinking` is set to `false` and the requests carry the model card's non-thinking sampling (temperature 0.7, top_p 0.8, presence_penalty 1.5, with top_k 20 from the checkpoint's generation config). The model was evaluated, still with the earlier global temperature (0.0) and top_p (1.0), with the hermetic smoke suite and its A/B comparison against the Gemini baseline, over eight runs in three configurations:
 
 | Configuration | Runs | Outcome |
 | --- | --- | --- |

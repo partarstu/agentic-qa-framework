@@ -155,10 +155,6 @@ ALLURE_REPORT_DIR = "allure-report"
 OPEN_TELEMETRY_URL = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT")
 MAX_OUTPUT_TOKENS = _optional_positive_int("MAX_OUTPUT_TOKENS")
 
-# Common model config
-TOP_P = 1.0
-TEMPERATURE = 0.0
-
 # Model used by the orchestrator and every agent. Either a pydantic-ai model string
 # (e.g. "google-gla:gemini-3.5-flash") or "qwen:<model>" for the self-hosted Qwen endpoint below.
 DEFAULT_MODEL_NAME = os.environ.get("MODEL_NAME", "google-gla:gemini-3.5-flash")
@@ -217,7 +213,7 @@ PROMPT_GUARD_SERVICE_URL = os.environ.get("PROMPT_GUARD_SERVICE_URL")
 # Orchestrator
 class OrchestratorConfig:
     THINKING_LEVEL: ThinkingLevel = "low"
-    VERSION = os.environ.get("ORCHESTRATOR_VERSION", "2.0.1")
+    VERSION = os.environ.get("ORCHESTRATOR_VERSION", "2.1.0")
     # Label describing the environment the execution agents run their test cases against; reported
     # alongside every test execution result.
     TEST_ENVIRONMENT_LABEL = os.environ.get("TEST_ENVIRONMENT_LABEL", "Standard Test Environment")
@@ -267,7 +263,7 @@ class DashboardPersistenceConfig:
 # Requirements Review Agent
 class RequirementsReviewAgentConfig:
     THINKING_LEVEL: ThinkingLevel = "medium"
-    VERSION = os.environ.get("REQUIREMENTS_REVIEW_AGENT_VERSION", "1.2.0")
+    VERSION = os.environ.get("REQUIREMENTS_REVIEW_AGENT_VERSION", "1.3.0")
     OWN_NAME = "Jira Requirements Reviewer"
     SKILL_ID = "jira-requirements-review"
     SKILL_NAME = "Jira Requirements Review"
@@ -284,7 +280,7 @@ class RequirementsReviewAgentConfig:
 # Test Case Classification Agent
 class TestCaseClassificationAgentConfig:
     THINKING_LEVEL: ThinkingLevel = "medium"
-    VERSION = os.environ.get("TEST_CASE_CLASSIFICATION_AGENT_VERSION", "1.2.1")
+    VERSION = os.environ.get("TEST_CASE_CLASSIFICATION_AGENT_VERSION", "1.3.0")
     OWN_NAME = "Test Case Classification Agent"
     SKILL_ID = "test-case-classification"
     SKILL_NAME = "Test Case Classification"
@@ -339,7 +335,7 @@ class TestCaseReviewAgentConfig:
 # Incident Creation Agent
 class IncidentCreationAgentConfig:
     THINKING_LEVEL: ThinkingLevel = "medium"
-    VERSION = os.environ.get("INCIDENT_CREATION_AGENT_VERSION", "1.1.1")
+    VERSION = os.environ.get("INCIDENT_CREATION_AGENT_VERSION", "1.2.0")
     OWN_NAME = "Incident Creation Agent"
     SKILL_ID = "incident-creation"
     SKILL_NAME = "Incident Creation"

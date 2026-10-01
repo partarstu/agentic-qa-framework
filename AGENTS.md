@@ -17,6 +17,7 @@ QuAIA orchestrator and its A2A agents (requirements review, test case design - w
 ### When to keep going and when to stop
 
 * Once the user has confirmed the plan, work until the *Definition of done* is met. When a step doesn't need the user's input, keep going and put status notes in the same message as your next action. Don't end a turn with a summary that announces the next step without taking it, an offer to continue, or a list of decisions that don't block the work.
+* An approved plan is implemented completely and at once: every phase and step of it, in one run. Never batch it, split it into several runs or stop after a part of it to ask whether to go on. Only the user narrows the scope, by explicitly naming the phases to implement; before every implementation, ask with one single-select question offering *Implement everything* and *Implement specific phases* (the user types the phases), and implement exactly what the answer selects.
 * Stop and ask the user only when you can't continue without them, when two readings of the request would lead to materially different work, when the architecture needs their approval (*Architecture first* below), or before anything destructive or outward-facing: deleting files you didn't create, force-pushing, creating or changing cloud resources, or changing anything outside this repository. Commit or push only when the user asks.
 
 ### Coding guidelines and rules
