@@ -10,12 +10,12 @@ import pytest
 from common.models import (
     DesignedTestCase,
     DesignStopReason,
-    FindingAction,
-    FindingSeverity,
     OverlappingTestCase,
-    ReviewFinding,
     TestCaseDesignSession,
     TestCaseDuplicateCheck,
+    TestCaseReviewFinding,
+    TestCaseReviewFindingAction,
+    TestCaseReviewFindingSeverity,
 )
 from common.services import test_management_tools as tools
 from common.services.test_management_base import TestManagementClientBase
@@ -49,12 +49,12 @@ def _test_case(name: str, key: str | None = None) -> DesignedTestCase:
 
 def _finding(
     owner: str | None,
-    severity: FindingSeverity = FindingSeverity.MEDIUM,
+    severity: TestCaseReviewFindingSeverity = TestCaseReviewFindingSeverity.MEDIUM,
     category: str = "clarity",
     related: list[str] | None = None,
-    action: FindingAction = FindingAction.MODIFY,
-) -> ReviewFinding:
-    return ReviewFinding(
+    action: TestCaseReviewFindingAction = TestCaseReviewFindingAction.MODIFY,
+) -> TestCaseReviewFinding:
+    return TestCaseReviewFinding(
         owner_test_case_id=owner,
         action=action,
         severity=severity,
@@ -66,25 +66,32 @@ def _finding(
 
 
 def _saved_session() -> TestCaseDesignSession:
-    session = TestCaseDesignSession(story_key="PROJ-7", story_id=70, iteration=2, uploaded=True)
+    session = TestCaseDesignSession(
+        story_key="PROJ-7", story_id=70, iteration=2, saved_test_case_keys={"PROJ-T1", "PROJ-T2"}
+    )
     session.test_cases = {"PROJ-T1": _test_case("First", "PROJ-T1"), "PROJ-T2": _test_case("Second", "PROJ-T2")}
     session.duplicate_checks = {"PROJ-T1": TestCaseDuplicateCheck(), "PROJ-T2": TestCaseDuplicateCheck()}
     return session
 
 
-async def test_upload_saves_the_drafts_in_order_and_replaces_their_ids_everywhere(client):
+async def test_upload_saves_each_draft_in_order_and_replaces_its_id_everywhere(client):
     session = TestCaseDesignSession(story_key="PROJ-7", story_id=70)
     first, second = session.add_draft(_test_case("First")), session.add_draft(_test_case("Second"))
     session.findings = {first: [_finding(first, related=[second])]}
-    session.suite_findings = [_finding(second, related=[first]), _finding(None, action=FindingAction.ADD_TEST_CASE)]
+    session.suite_findings = [
+        _finding(second, related=[first]),
+        _finding(None, action=TestCaseReviewFindingAction.ADD_TEST_CASE),
+    ]
     session.duplicate_checks = {first: TestCaseDuplicateCheck(), second: TestCaseDuplicateCheck()}
-    client.create_test_cases.return_value = ["PROJ-T1", "PROJ-T2"]
+    client.create_test_cases.side_effect = [["PROJ-T1"], ["PROJ-T2"]]
 
     await tools.upload_test_cases(session)
 
-    saved, project_key, story_id = client.create_test_cases.call_args.args
-    assert [test_case.name for test_case in saved] == ["First", "Second"]
-    assert (project_key, story_id) == ("PROJ", 70)
+    calls = [call.args for call in client.create_test_cases.call_args_list]
+    assert [([test_case.name for test_case in saved], *rest) for saved, *rest in calls] == [
+        (["First"], "PROJ", 70),
+        (["Second"], "PROJ", 70),
+    ]
     assert {key: test_case.key for key, test_case in session.test_cases.items()} == {
         "PROJ-T1": "PROJ-T1",
         "PROJ-T2": "PROJ-T2",
@@ -94,7 +101,7 @@ async def test_upload_saves_the_drafts_in_order_and_replaces_their_ids_everywher
     assert session.suite_findings[0].related_test_case_ids == ["PROJ-T1"]
     assert set(session.duplicate_checks) == {"PROJ-T1", "PROJ-T2"}
     assert session.changed_test_case_ids == {"PROJ-T1", "PROJ-T2"}
-    assert session.uploaded
+    assert session.saved_test_case_keys == {"PROJ-T1", "PROJ-T2"}
 
 
 async def test_upload_without_the_story_id_fails(client):
@@ -107,27 +114,49 @@ async def test_upload_without_the_story_id_fails(client):
     client.create_test_cases.assert_not_called()
 
 
-async def test_upload_fails_when_not_every_test_case_was_saved(client):
+async def test_a_failed_upload_keeps_the_saved_test_cases_and_a_repeated_one_saves_only_the_rest(client):
     session = TestCaseDesignSession(story_key="PROJ-7", story_id=70)
     session.add_draft(_test_case("First"))
     session.add_draft(_test_case("Second"))
-    client.create_test_cases.return_value = ["PROJ-T1"]
+    session.add_draft(_test_case("Third"))
+    client.create_test_cases.side_effect = [["PROJ-T1"], RuntimeError("Zephyr is down"), ["PROJ-T2"], ["PROJ-T3"]]
 
-    with pytest.raises(RuntimeError, match="Saved only 1 of 2"):
+    with pytest.raises(RuntimeError, match="Zephyr is down"):
+        await tools.upload_test_cases(session)
+    assert list(session.test_cases) == ["PROJ-T1", "DRAFT-2", "DRAFT-3"]
+    assert session.saved_test_case_keys == {"PROJ-T1"}
+    await tools.upload_test_cases(session)
+
+    saved_names = [call.args[0][0].name for call in client.create_test_cases.call_args_list]
+    assert saved_names == ["First", "Second", "Second", "Third"]
+    assert list(session.test_cases) == ["PROJ-T1", "PROJ-T2", "PROJ-T3"]
+
+
+async def test_upload_fails_when_a_test_case_is_not_saved_under_exactly_one_key(client):
+    session = TestCaseDesignSession(story_key="PROJ-7", story_id=70)
+    session.add_draft(_test_case("First"))
+    client.create_test_cases.return_value = []
+
+    with pytest.raises(RuntimeError, match=r"Saving the test case DRAFT-1 of PROJ-7 returned the keys \[\]"):
         await tools.upload_test_cases(session)
 
-    assert not session.uploaded
-    assert set(session.test_cases) == {"DRAFT-1", "DRAFT-2"}
+    assert session.saved_test_case_keys == set()
+    assert set(session.test_cases) == {"DRAFT-1"}
 
 
 async def test_review_feedback_comment_holds_header_findings_by_severity_and_duplicate_check(client):
     session = _saved_session()
     session.stop_reason = DesignStopReason.ITERATION_LIMIT
     session.findings = {
-        "PROJ-T1": [_finding("PROJ-T1", FindingSeverity.LOW, "wording"), _finding("PROJ-T1", FindingSeverity.HIGH)],
-        "PROJ-T2": [_finding("PROJ-T2", FindingSeverity.CRITICAL, "other test case")],
+        "PROJ-T1": [
+            _finding("PROJ-T1", TestCaseReviewFindingSeverity.LOW, "wording"),
+            _finding("PROJ-T1", TestCaseReviewFindingSeverity.HIGH),
+        ],
+        "PROJ-T2": [_finding("PROJ-T2", TestCaseReviewFindingSeverity.CRITICAL, "other test case")],
     }
-    session.suite_findings = [_finding("PROJ-T1", FindingSeverity.CRITICAL, "coverage gap", related=["PROJ-T2"])]
+    session.suite_findings = [
+        _finding("PROJ-T1", TestCaseReviewFindingSeverity.CRITICAL, "coverage gap", related=["PROJ-T2"])
+    ]
 
     await tools.add_review_feedback(session, "PROJ-T1")
 
@@ -169,7 +198,12 @@ def test_review_comment_without_findings_or_stop_reason_says_so():
 
 def test_every_review_comment_shows_the_test_set_findings_owned_by_no_test_case():
     session = _saved_session()
-    gap = _finding(None, FindingSeverity.HIGH, "missing coverage of AC-3", action=FindingAction.ADD_TEST_CASE)
+    gap = _finding(
+        None,
+        TestCaseReviewFindingSeverity.HIGH,
+        "missing coverage of AC-3",
+        action=TestCaseReviewFindingAction.ADD_TEST_CASE,
+    )
     session.suite_findings = [gap]
 
     comments = [render_review_comment(session, key) for key in ("PROJ-T1", "PROJ-T2")]
@@ -183,6 +217,31 @@ async def test_review_complete_status_is_set_in_the_project_of_the_story(client)
     await tools.set_test_case_status_to_review_complete(_saved_session(), "PROJ-T2")
 
     client.change_test_case_status.assert_called_once_with("PROJ", "PROJ-T2", "Review Complete")
+
+
+async def test_the_review_feedback_and_the_status_are_written_once_per_test_case(client):
+    session = _saved_session()
+
+    for _ in range(2):
+        await tools.add_review_feedback(session, "PROJ-T1")
+        await tools.set_test_case_status_to_review_complete(session, "PROJ-T1")
+
+    client.add_test_case_review_comment.assert_called_once()
+    client.change_test_case_status.assert_called_once()
+    assert session.commented_test_case_keys == session.review_complete_test_case_keys == {"PROJ-T1"}
+
+
+async def test_a_failed_write_is_not_recorded_as_done(client):
+    session = _saved_session()
+    client.add_test_case_review_comment.side_effect = RuntimeError("down")
+    client.change_test_case_status.side_effect = RuntimeError("down")
+
+    with pytest.raises(RuntimeError):
+        await tools.add_review_feedback(session, "PROJ-T1")
+    with pytest.raises(RuntimeError):
+        await tools.set_test_case_status_to_review_complete(session, "PROJ-T1")
+
+    assert session.commented_test_case_keys == session.review_complete_test_case_keys == set()
 
 
 def test_rendered_check_without_duplicates_says_so():

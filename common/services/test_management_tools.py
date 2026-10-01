@@ -11,9 +11,9 @@ import config
 from common import utils
 from common.models import (
     OverlappingTestCase,
-    ReviewFinding,
     TestCaseDesignSession,
     TestCaseDuplicateCheck,
+    TestCaseReviewFinding,
 )
 from common.services.test_management_system_client_provider import get_test_management_client
 
@@ -24,37 +24,43 @@ REVIEW_COMMENT_HEADING = "Test case review"
 
 
 async def upload_test_cases(session: TestCaseDesignSession) -> None:
-    """Saves every test case of the design in the test management system, linked to the user story, under its key."""
+    """Saves each not yet saved test case of the design, linked to the user story, and re-keys it right away."""
     if session.story_id is None or not session.test_cases:
         raise RuntimeError(f"There are no generated test cases of the user story {session.story_key} to save.")
-    draft_ids = list(session.test_cases)
     client = get_test_management_client()
-    keys = await asyncio.to_thread(
-        client.create_test_cases,
-        [session.test_cases[draft_id] for draft_id in draft_ids],
-        session.project_key,
-        session.story_id,
-    )
-    if len(keys) != len(draft_ids):
-        raise RuntimeError(f"Saved only {len(keys)} of {len(draft_ids)} test cases of {session.story_key}: {keys}.")
-    _rekey(session, dict(zip(draft_ids, keys, strict=True)))
-    session.uploaded = True
-    logger.info("Saved %d test case(s) of %s: %s", len(keys), session.story_key, keys)
+    # One test case per request, so a failure leaves every earlier one re-keyed and a repeated upload saves none twice.
+    for draft_id in [
+        test_case_id for test_case_id in session.test_cases if test_case_id not in session.saved_test_case_keys
+    ]:
+        keys = await asyncio.to_thread(
+            client.create_test_cases, [session.test_cases[draft_id]], session.project_key, session.story_id
+        )
+        if len(keys) != 1:
+            raise RuntimeError(f"Saving the test case {draft_id} of {session.story_key} returned the keys {keys}.")
+        _rekey(session, {draft_id: keys[0]})
+        session.saved_test_case_keys.add(keys[0])
+        logger.info("Saved the test case %s of %s as %s.", draft_id, session.story_key, keys[0])
 
 
 async def add_review_feedback(session: TestCaseDesignSession, test_case_key: str) -> None:
-    """Adds the final review of a saved test case to it as a comment, rendered from its review findings."""
+    """Adds the final review of a saved test case to it as a comment, once, rendered from its review findings."""
+    if test_case_key in session.commented_test_case_keys:
+        return
     client = get_test_management_client()
     await asyncio.to_thread(
         client.add_test_case_review_comment, test_case_key, render_review_comment(session, test_case_key)
     )
+    session.commented_test_case_keys.add(test_case_key)
     logger.info("Added the review feedback to the test case %s.", test_case_key)
 
 
 async def set_test_case_status_to_review_complete(session: TestCaseDesignSession, test_case_key: str) -> None:
+    if test_case_key in session.review_complete_test_case_keys:
+        return
     status_name = config.TestCaseReviewAgentConfig.REVIEW_COMPLETE_STATUS_NAME
     client = get_test_management_client()
     await asyncio.to_thread(client.change_test_case_status, session.project_key, test_case_key, status_name)
+    session.review_complete_test_case_keys.add(test_case_key)
     logger.info("Set the status of the test case %s to '%s'.", test_case_key, status_name)
 
 
@@ -93,7 +99,7 @@ def _render_overlaps(overlaps: list[OverlappingTestCase]) -> str:
     )
 
 
-def _latest_findings(session: TestCaseDesignSession, test_case_key: str) -> list[ReviewFinding]:
+def _latest_findings(session: TestCaseDesignSession, test_case_key: str) -> list[TestCaseReviewFinding]:
     """The test case's own findings plus the whole-set findings it owns, as the last review left them."""
     owned_suite_findings = [
         finding for finding in session.suite_findings if finding.owner_test_case_id == test_case_key
@@ -101,7 +107,7 @@ def _latest_findings(session: TestCaseDesignSession, test_case_key: str) -> list
     return [*session.findings.get(test_case_key, []), *owned_suite_findings]
 
 
-def _render_findings(findings: list[ReviewFinding]) -> str:
+def _render_findings(findings: list[TestCaseReviewFinding]) -> str:
     """The findings as an HTML list, most severe first, or an empty string when there are none."""
     if not findings:
         return ""
@@ -109,7 +115,7 @@ def _render_findings(findings: list[ReviewFinding]) -> str:
     return f"<ul>{''.join(_render_finding(finding) for finding in ordered)}</ul>"
 
 
-def _render_finding(finding: ReviewFinding) -> str:
+def _render_finding(finding: TestCaseReviewFinding) -> str:
     ac_ref = f" ({html.escape(finding.ac_ref)})" if finding.ac_ref else ""
     related = (
         f"<br>Related test cases: {html.escape(', '.join(finding.related_test_case_ids))}"
@@ -125,7 +131,7 @@ def _render_finding(finding: ReviewFinding) -> str:
 def _rekey(session: TestCaseDesignSession, new_ids: dict[str, str]) -> None:
     """Replaces the draft IDs by the saved keys everywhere in the session."""
 
-    def rekey_finding(finding: ReviewFinding) -> ReviewFinding:
+    def rekey_finding(finding: TestCaseReviewFinding) -> TestCaseReviewFinding:
         owner = finding.owner_test_case_id
         return finding.model_copy(
             update={
@@ -137,8 +143,10 @@ def _rekey(session: TestCaseDesignSession, new_ids: dict[str, str]) -> None:
         )
 
     session.test_cases = {
-        new_ids[draft_id]: test_case.model_copy(update={"key": new_ids[draft_id]})
-        for draft_id, test_case in session.test_cases.items()
+        new_ids.get(test_case_id, test_case_id): test_case.model_copy(
+            update={"key": new_ids.get(test_case_id, test_case.key)}
+        )
+        for test_case_id, test_case in session.test_cases.items()
     }
     session.findings = {
         new_ids.get(test_case_id, test_case_id): [rekey_finding(finding) for finding in findings]

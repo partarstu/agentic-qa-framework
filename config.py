@@ -156,8 +156,8 @@ OPEN_TELEMETRY_URL = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT")
 MAX_OUTPUT_TOKENS = _optional_positive_int("MAX_OUTPUT_TOKENS")
 
 # Model used by the orchestrator and every agent. Either a pydantic-ai model string
-# (e.g. "google-gla:gemini-3.5-flash") or "qwen:<model>" for the self-hosted Qwen endpoint below.
-DEFAULT_MODEL_NAME = os.environ.get("MODEL_NAME", "google-gla:gemini-3.5-flash")
+# (e.g. "google-gla:gemini-3.8-flash") or "qwen:<model>" for the self-hosted Qwen endpoint below.
+DEFAULT_MODEL_NAME = os.environ.get("MODEL_NAME", "google-gla:gemini-3.8-flash")
 
 # Provider API keys, read by the provider SDKs when their model family is configured.
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
@@ -213,7 +213,7 @@ PROMPT_GUARD_SERVICE_URL = os.environ.get("PROMPT_GUARD_SERVICE_URL")
 # Orchestrator
 class OrchestratorConfig:
     THINKING_LEVEL: ThinkingLevel = "low"
-    VERSION = os.environ.get("ORCHESTRATOR_VERSION", "2.1.1")
+    VERSION = os.environ.get("ORCHESTRATOR_VERSION", "2.1.0")
     # Label describing the environment the execution agents run their test cases against; reported
     # alongside every test execution result.
     TEST_ENVIRONMENT_LABEL = os.environ.get("TEST_ENVIRONMENT_LABEL", "Standard Test Environment")
@@ -303,7 +303,7 @@ class TestCaseGenerationAgentConfig:
 # Test Case Design Agent
 class TestCaseDesignAgentConfig:
     THINKING_LEVEL: ThinkingLevel = "low"
-    VERSION = os.environ.get("TEST_CASE_DESIGN_AGENT_VERSION", "1.1.0")
+    VERSION = os.environ.get("TEST_CASE_DESIGN_AGENT_VERSION", "1.0.0")
     OWN_NAME = "Test Case Design Agent"
     SKILL_ID = "test-case-design"
     SKILL_NAME = "Test Case Design"

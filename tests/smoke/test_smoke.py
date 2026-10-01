@@ -16,7 +16,7 @@ boundary, read back from its ``/__recorded`` endpoint:
                            (shorter than the issue) query text.
 * Requirements review   -> with JIRA_ADDITIONAL_FIELD_IDS configured, the agent requests those custom
                            field IDs (together with the standard content fields) when fetching the story.
-* Test-case design      -> the design fetched the story once via the Jira MCP, without comments, with the standard and configured fields.
+* Test-case design      -> the design's model fetched the story once via the Jira MCP, without comments, with the standard and configured fields.
 * Test-case generation  -> real test cases (name + steps) reached Zephyr.
 * Test-case generation  -> the created test cases were linked to the seeded story's numeric id.
 * Test-case classification -> labels reached Zephyr.
@@ -59,7 +59,7 @@ import httpx
 import pytest
 
 import config
-from common.models import DRAFT_ID_PREFIX, DesignStopReason, FindingSeverity
+from common.models import DRAFT_ID_PREFIX, DesignStopReason, TestCaseReviewFindingSeverity
 from common.services.test_management_tools import DUPLICATE_CHECK_HEADING, REVIEW_COMMENT_HEADING
 from tests.smoke.conftest import (
     CONFLUENCE_RECORDED_URL,
@@ -182,7 +182,7 @@ def test_agents_requested_the_configured_additional_fields(
 def test_design_fetched_the_story_once_without_comments(
     test_case_flow_response: httpx.Response, http_client: httpx.Client
 ) -> None:
-    """The design fetches the story once, in code, without comments and with the standard and configured fields."""
+    """The design's model fetches the story once, without comments and with the standard and configured fields."""
 
     def _design_fetches(recorded: dict) -> list[dict]:
         return [
@@ -194,9 +194,12 @@ def test_design_fetched_the_story_once_without_comments(
     data = wait_for_recorded(http_client, JIRA_MCP_RECORDED_URL, lambda d: bool(_design_fetches(d)))
     fetches = _design_fetches(data)
     assert len(fetches) == 1, f"Expected exactly one story fetch without comments. Recorded: {data.get('get_issue')}"
-    fields = fetches[0]["fields"].split(",")
-    expected_fields = {"summary", "description", "issuetype", "labels", "customfield_10101", "customfield_10202"}
-    assert expected_fields <= set(fields), f"The design's story fetch lacks fields. Recorded: {fetches[0]}"
+    fields = {field.strip() for field in fetches[0]["fields"].split(",")}
+    # The model picks the fields itself, so only the content fields and the configured ones are required.
+    expected_fields = {"summary", "description", "customfield_10101", "customfield_10202"}
+    assert "*all" in fields or expected_fields <= fields, (
+        f"The design's story fetch lacks fields. Recorded: {fetches[0]}"
+    )
 
 
 def test_agent_downloaded_the_story_attachment_over_rest(
@@ -426,7 +429,9 @@ def test_classification_added_labels(test_case_flow_response: httpx.Response, ht
 def _is_final_review_comment(comment: str) -> bool:
     """A final review comment carries the header with the stop reason and severity-tagged findings or none."""
     has_stop_reason = any(f"stop reason: {reason.value}" in comment for reason in DesignStopReason)
-    has_findings = "No findings." in comment or any(f"[{s.value.upper()}]" in comment for s in FindingSeverity)
+    has_findings = "No findings." in comment or any(
+        f"[{s.value.upper()}]" in comment for s in TestCaseReviewFindingSeverity
+    )
     return f"<h4>{REVIEW_COMMENT_HEADING}</h4>" in comment and has_stop_reason and has_findings
 
 
@@ -453,7 +458,7 @@ def test_design_ran_the_whole_loop_up_to_the_iteration_limit(
     """With the smoke rubric override forcing a high finding per test case, the design never converges: every final
     comment reports the iteration limit of docker-compose.smoke.yml (2) as reached and still carries a high finding."""
     expected_header = f"Review iterations: 2, stop reason: {DesignStopReason.ITERATION_LIMIT.value}"
-    high_tag = f"[{FindingSeverity.HIGH.value.upper()}]"
+    high_tag = f"[{TestCaseReviewFindingSeverity.HIGH.value.upper()}]"
     data = wait_for_recorded(
         http_client,
         ZEPHYR_RECORDED_URL,

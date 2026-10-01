@@ -21,15 +21,15 @@ from common.models import (
     AcceptanceCriteriaItem,
     DeletedTestCase,
     DesignedTestCase,
-    FindingAction,
-    FindingSeverity,
     OverlappingTestCase,
     PreviousReview,
-    ReviewFinding,
     TestCaseDesignSession,
     TestCaseDuplicateCheck,
     TestCaseDuplicateJudgement,
     TestCaseReviewFeedback,
+    TestCaseReviewFinding,
+    TestCaseReviewFindingAction,
+    TestCaseReviewFindingSeverity,
     TestSuiteReview,
 )
 
@@ -96,14 +96,14 @@ def _reviewed(*names: str) -> TestCaseDesignSession:
 
 def _finding(
     owner: str | None,
-    action: FindingAction = FindingAction.MODIFY,
+    action: TestCaseReviewFindingAction = TestCaseReviewFindingAction.MODIFY,
     related: list[str] | None = None,
     ac_ref: str | None = None,
-) -> ReviewFinding:
-    return ReviewFinding(
+) -> TestCaseReviewFinding:
+    return TestCaseReviewFinding(
         owner_test_case_id=owner,
         action=action,
-        severity=FindingSeverity.HIGH,
+        severity=TestCaseReviewFindingSeverity.HIGH,
         category="coverage",
         description="A problem",
         suggested_fix="A fix",
@@ -112,11 +112,9 @@ def _finding(
     )
 
 
-def _feedback_runs(count: int, findings: list[ReviewFinding] | None = None) -> AsyncMock:
+def _feedback_runs(count: int, findings: list[TestCaseReviewFinding] | None = None) -> AsyncMock:
     return AsyncMock(
-        side_effect=[
-            MagicMock(output=TestCaseReviewFeedback(test_case_id="any", findings=findings or [])) for _ in range(count)
-        ]
+        side_effect=[MagicMock(output=TestCaseReviewFeedback(findings=findings or [])) for _ in range(count)]
     )
 
 
@@ -135,7 +133,7 @@ async def test_review_covers_only_the_changed_drafts_as_compact_text_after_the_s
     reviewer, download, caplog
 ):
     session = _drafts("First", "Second", "Third", changed={"DRAFT-2"})
-    output = TestCaseReviewFeedback(test_case_id="DRAFT-2", findings=[], llm_comments="An attachment was unreadable")
+    output = TestCaseReviewFeedback(findings=[], llm_comments="An attachment was unreadable")
     reviewer.review_agent.run = AsyncMock(return_value=MagicMock(output=output))
 
     with caplog.at_level(logging.WARNING, logger="test_case_review_agent"):
@@ -187,7 +185,7 @@ async def test_the_first_review_runs_alone_and_the_others_concurrently(reviewer,
                 others_started.set()
             await asyncio.wait_for(others_started.wait(), timeout=1)
         events.append(f"end {test_case_id}")
-        return MagicMock(output=TestCaseReviewFeedback(test_case_id=test_case_id, findings=[]))
+        return MagicMock(output=TestCaseReviewFeedback(findings=[]))
 
     reviewer.review_agent.run = review
 
@@ -230,36 +228,33 @@ async def test_a_single_review_keeps_only_its_own_modifications(reviewer, downlo
     session = _drafts("First", "Second", changed={"DRAFT-1"})
     findings = [
         _finding("DRAFT-2", related=["DRAFT-2", "PROJ-T404", "DRAFT-1"]),
-        _finding("DRAFT-1", FindingAction.DELETE_TEST_CASE),
-        _finding(None, FindingAction.ADD_TEST_CASE),
-        _finding("DRAFT-1", FindingAction.REMOVE_DUPLICATE_STEPS, related=["DRAFT-2"]),
+        _finding("DRAFT-1", TestCaseReviewFindingAction.DELETE_TEST_CASE),
+        _finding(None, TestCaseReviewFindingAction.ADD_TEST_CASE),
+        _finding("DRAFT-1", TestCaseReviewFindingAction.REMOVE_DUPLICATE_STEPS, related=["DRAFT-2"]),
     ]
     reviewer.review_agent.run = _feedback_runs(1, findings)
 
     await reviewer.review_changed(session, RunUsage(), _USAGE_LIMITS)
 
     owned = session.findings["DRAFT-1"]
-    assert [finding.action for finding in owned] == [FindingAction.MODIFY]
+    assert [finding.action for finding in owned] == [TestCaseReviewFindingAction.MODIFY]
     assert owned[0].owner_test_case_id == "DRAFT-1"
     assert owned[0].related_test_case_ids == []
 
 
 def test_a_single_review_naming_an_unknown_criterion_is_rejected():
     ctx = SimpleNamespace(deps=_drafts("First"))
-    known = TestCaseReviewFeedback(test_case_id="DRAFT-1", findings=[_finding("DRAFT-1", ac_ref="AC-2"), _finding("X")])
+    known = TestCaseReviewFeedback(findings=[_finding("DRAFT-1", ac_ref="AC-2"), _finding("X")])
 
     assert review_main._validate_test_case_review(ctx, known) is known
     with pytest.raises(ModelRetry, match=r"Unknown acceptance criteria IDs \['AC-9'\] in `ac_ref`; use only"):
         review_main._validate_test_case_review(
-            ctx, TestCaseReviewFeedback(test_case_id="DRAFT-1", findings=[_finding("DRAFT-1", ac_ref="AC-9")])
+            ctx, TestCaseReviewFeedback(findings=[_finding("DRAFT-1", ac_ref="AC-9")])
         )
 
 
 async def test_the_reviewer_is_asked_again_when_a_finding_names_an_unknown_criterion(reviewer):
-    answers = [
-        TestCaseReviewFeedback(test_case_id="DRAFT-1", findings=[_finding("DRAFT-1", ac_ref=ac_ref)])
-        for ac_ref in ("AC-9", "AC-2")
-    ]
+    answers = [TestCaseReviewFeedback(findings=[_finding("DRAFT-1", ac_ref=ac_ref)]) for ac_ref in ("AC-9", "AC-2")]
 
     def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
         return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, answers.pop(0).model_dump())])
@@ -353,10 +348,8 @@ async def test_duplicate_check_failure_fails_loudly(reviewer, caplog, stage):
 
     with (
         caplog.at_level(logging.ERROR, logger="test_case_review_agent"),
-        pytest.RaisesGroup(
-            pytest.RaisesExc(
-                TestCaseDuplicateCheckError, match=f"{stage} failed for test case\\(s\\) DRAFT-1 of project PROJ"
-            )
+        pytest.raises(
+            TestCaseDuplicateCheckError, match=f"{stage} failed for test case\\(s\\) DRAFT-1 of project PROJ"
         ),
     ):
         await reviewer.check_duplicates(session, RunUsage(), _USAGE_LIMITS)
@@ -364,20 +357,27 @@ async def test_duplicate_check_failure_fails_loudly(reviewer, caplog, stage):
     assert session.duplicate_checks == {}
 
 
-async def test_a_failed_duplicate_check_leaves_no_verdict_of_the_other_test_cases(reviewer):
+async def test_a_repeated_duplicate_check_runs_only_the_checks_which_failed(reviewer):
     session = _reviewed("First", "Second")
+    searched: list[str] = []
+    second_down = True
 
     async def search(text: str, **kwargs) -> list:
-        if "Second" in text:
+        searched.append(text.split("\n")[0])
+        if "Second" in text and second_down:
             raise ConnectionError("down")
         return []
 
     reviewer.vector_db_service.hybrid_search = search
 
-    with pytest.RaisesGroup(pytest.RaisesExc(TestCaseDuplicateCheckError, match="DRAFT-2")):
+    with pytest.raises(TestCaseDuplicateCheckError, match=r"failed for 1 of 2 test case\(s\).*DRAFT-2"):
         await reviewer.check_duplicates(session, RunUsage(), _USAGE_LIMITS)
+    assert session.duplicate_checks == {"DRAFT-1": TestCaseDuplicateCheck()}, "The successful check is kept"
+    second_down = False
+    await reviewer.check_duplicates(session, RunUsage(), _USAGE_LIMITS)
 
-    assert session.duplicate_checks == {}
+    assert searched == ["Name: First", "Name: Second", "Name: Second"]
+    assert set(session.duplicate_checks) == {"DRAFT-1", "DRAFT-2"}
 
 
 async def test_the_duplicate_checks_of_the_test_cases_run_concurrently(reviewer):
@@ -403,7 +403,7 @@ async def test_the_duplicate_checks_of_the_test_cases_run_concurrently(reviewer)
 async def test_suite_review_sees_every_test_case_with_its_findings_after_the_story_context(reviewer, download):
     session = _reviewed("First", "Second")
     session.findings["DRAFT-1"] = [_finding("DRAFT-1")]
-    gap = _finding(None, FindingAction.ADD_TEST_CASE)
+    gap = _finding(None, TestCaseReviewFindingAction.ADD_TEST_CASE)
     reviewer.test_suite_reviewer.run = AsyncMock(return_value=MagicMock(output=TestSuiteReview(findings=[gap])))
     usage = RunUsage()
 
@@ -436,22 +436,22 @@ async def test_suite_review_sees_each_deleted_test_case_with_the_finding_which_d
     deleted_by = session.deleted_test_cases["DRAFT-9"].deleted_by.model_dump_json()
     assert message[3] == (
         "Deleted test cases:\nID DRAFT-9:\n"
-        "```Name: Old\nObjective: Summary of Old\nPreconditions: \nAcceptance criteria: AC-1```\n"
+        "```Name: Old\n\nObjective: Summary of Old\n\nPreconditions: \n\nAcceptance criteria: AC-1```\n"
         f"Finding which deleted it:\n```{deleted_by}```"
     )
 
 
 def _with_deleted(*names: str) -> TestCaseDesignSession:
     session = _drafts(*names)
-    deleted_by = _finding("DRAFT-9", FindingAction.DELETE_TEST_CASE, related=["DRAFT-1"])
+    deleted_by = _finding("DRAFT-9", TestCaseReviewFindingAction.DELETE_TEST_CASE, related=["DRAFT-1"])
     session.deleted_test_cases = {
         "DRAFT-9": DeletedTestCase(test_case=_test_case("Old"), findings=[], deleted_by=deleted_by)
     }
     return session
 
 
-_DELETE = FindingAction.DELETE_TEST_CASE
-_REMOVE_STEPS = FindingAction.REMOVE_DUPLICATE_STEPS
+_DELETE = TestCaseReviewFindingAction.DELETE_TEST_CASE
+_REMOVE_STEPS = TestCaseReviewFindingAction.REMOVE_DUPLICATE_STEPS
 
 
 @pytest.mark.parametrize(
@@ -460,7 +460,7 @@ _REMOVE_STEPS = FindingAction.REMOVE_DUPLICATE_STEPS
         ([_finding("DRAFT-8")], r"Unknown test case IDs \['DRAFT-8'\]"),
         ([_finding("DRAFT-9")], r"Unknown test case IDs \['DRAFT-9'\]"),
         ([_finding("DRAFT-1", related=["PROJ-T5"])], r"Unknown test case IDs \['PROJ-T5'\]"),
-        ([_finding("DRAFT-1", FindingAction.ADD_TEST_CASE)], "has no owner test case"),
+        ([_finding("DRAFT-1", TestCaseReviewFindingAction.ADD_TEST_CASE)], "has no owner test case"),
         ([_finding(None, _DELETE)], "needs exactly one owner test case"),
         (
             [_finding("DRAFT-1", _DELETE, related=["DRAFT-2"]), _finding("DRAFT-2", _DELETE)],
@@ -525,31 +525,31 @@ def test_suite_review_output_with_a_merge_and_a_restore_passes():
         findings=[
             _finding("DRAFT-1", _DELETE, related=["DRAFT-2"]),
             _finding("DRAFT-2", related=["DRAFT-1"], ac_ref="AC-1"),
-            _finding(None, FindingAction.ADD_TEST_CASE, related=["DRAFT-9"], ac_ref="AC-2"),
+            _finding(None, TestCaseReviewFindingAction.ADD_TEST_CASE, related=["DRAFT-9"], ac_ref="AC-2"),
         ]
     )
 
     assert review_main._validate_test_suite_review(ctx, output) is output
 
 
-def test_the_smoke_rubric_override_differs_from_the_bundled_rubric_only_in_its_forced_finding():
+def test_the_smoke_classifier_override_differs_from_the_bundled_classifier_only_in_its_forced_finding():
     repo_root = Path(__file__).resolve().parents[2]
-    rubric = Path("agents/test_case_review/system_prompts/severity_rubric.md")
-    bundled = (repo_root / rubric).read_text(encoding="utf-8").splitlines()
-    override = (repo_root / "tests/smoke/overrides" / rubric).read_text(encoding="utf-8").splitlines()
+    classifier = Path("agents/test_case_review/system_prompts/severity_classifier.md")
+    bundled = (repo_root / classifier).read_text(encoding="utf-8").splitlines()
+    override = (repo_root / "tests/smoke/overrides" / classifier).read_text(encoding="utf-8").splitlines()
 
-    assert len(override) == len(bundled), "The smoke override must track every line of the bundled rubric"
+    assert len(override) == len(bundled), "The smoke override must track every line of the bundled classifier"
     differing = [line for line, bundled_line in zip(override, bundled, strict=True) if line != bundled_line]
     assert len(differing) == 1, differing
-    assert "report at least one finding with the severity `high`" in differing[0]
+    assert "report at least one finding of high severity" in differing[0]
 
 
 def test_suite_review_output_with_usable_findings_passes():
     ctx = SimpleNamespace(deps=_drafts("First", "Second"))
     output = TestSuiteReview(
         findings=[
-            _finding("DRAFT-1", FindingAction.REMOVE_DUPLICATE_STEPS, related=["DRAFT-2"]),
-            _finding(None, FindingAction.ADD_TEST_CASE),
+            _finding("DRAFT-1", TestCaseReviewFindingAction.REMOVE_DUPLICATE_STEPS, related=["DRAFT-2"]),
+            _finding(None, TestCaseReviewFindingAction.ADD_TEST_CASE),
         ]
     )
 

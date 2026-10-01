@@ -220,9 +220,9 @@ services:
       # the design searches the project's saved test cases for duplicates of its final test cases.
       QDRANT_URL: "http://qdrant_mock:6333"
       EMBEDDING_SERVICE_URL: "http://qdrant_mock:6333"
-      # the design agent asks its generation delegate to fetch the story with these fields.
+      # the design agent's model fetches the story with these fields.
       JIRA_ADDITIONAL_FIELD_IDS: "customfield_10101,customfield_10202"
-      # the rubric override under tests/smoke/overrides/ forces a high finding per test case in every review, so the
+      # the severity classifier override under tests/smoke/overrides/ forces a high finding per test case in every review, so the
       # loop runs exactly one fix cycle up to this limit, then stops as iteration_limit.
       TEST_CASE_DESIGN_MAX_ITERATIONS: "2"
       PROMPT_OVERRIDES_DIR: "/prompt-overrides"

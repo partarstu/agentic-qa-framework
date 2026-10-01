@@ -10,17 +10,17 @@ from common.models import (
     DeletedTestCase,
     DesignedTestCase,
     DesignStopReason,
-    FindingAction,
-    FindingSeverity,
     JiraUserStory,
     JsonSerializableModel,
     OverlappingTestCase,
     PreviousReview,
-    ReviewFinding,
     TestCase,
     TestCaseDesignRequest,
     TestCaseDesignResult,
     TestCaseDesignSession,
+    TestCaseReviewFinding,
+    TestCaseReviewFindingAction,
+    TestCaseReviewFindingSeverity,
 )
 
 
@@ -76,30 +76,41 @@ def test_add_draft_assigns_sequential_ids_and_marks_them_changed():
 
 
 def test_blocking_findings_are_those_at_or_above_the_severity_of_both_reviews_and_are_dropped_together():
-    def finding(owner: str | None, severity: FindingSeverity, action: FindingAction = FindingAction.MODIFY):
-        return ReviewFinding(
+    def finding(
+        owner: str | None,
+        severity: TestCaseReviewFindingSeverity,
+        action: TestCaseReviewFindingAction = TestCaseReviewFindingAction.MODIFY,
+    ):
+        return TestCaseReviewFinding(
             owner_test_case_id=owner, action=action, severity=severity, category="c", description="d", suggested_fix="f"
         )
 
     session = TestCaseDesignSession(story_key="PROJ-1")
-    medium, low = finding("DRAFT-1", FindingSeverity.MEDIUM), finding("DRAFT-1", FindingSeverity.LOW)
-    critical = finding(None, FindingSeverity.CRITICAL, FindingAction.ADD_TEST_CASE)
+    medium, low = (
+        finding("DRAFT-1", TestCaseReviewFindingSeverity.MEDIUM),
+        finding("DRAFT-1", TestCaseReviewFindingSeverity.LOW),
+    )
+    critical = finding(None, TestCaseReviewFindingSeverity.CRITICAL, TestCaseReviewFindingAction.ADD_TEST_CASE)
     session.findings = {"DRAFT-1": [medium, low]}
     session.suite_findings = [critical]
 
-    assert session.blocking_findings(FindingSeverity.MEDIUM) == [medium, critical]
-    assert session.blocking_findings(FindingSeverity.CRITICAL) == [critical]
+    assert session.blocking_findings(TestCaseReviewFindingSeverity.MEDIUM) == [medium, critical]
+    assert session.blocking_findings(TestCaseReviewFindingSeverity.CRITICAL) == [critical]
 
-    session.drop_blocking_findings(FindingSeverity.MEDIUM)
+    session.drop_blocking_findings(TestCaseReviewFindingSeverity.MEDIUM)
 
     assert session.findings == {"DRAFT-1": [low]}
     assert session.suite_findings == []
 
 
 def test_finding_severity_rank_follows_the_declared_order():
-    ranks = [severity.rank for severity in FindingSeverity]
+    ranks = [severity.rank for severity in TestCaseReviewFindingSeverity]
     assert ranks == sorted(ranks)
-    assert FindingSeverity.CRITICAL.rank > FindingSeverity.MEDIUM.rank > FindingSeverity.LOW.rank
+    assert (
+        TestCaseReviewFindingSeverity.CRITICAL.rank
+        > TestCaseReviewFindingSeverity.MEDIUM.rank
+        > TestCaseReviewFindingSeverity.LOW.rank
+    )
 
 
 def test_design_result_hides_the_session_filled_fields_from_the_model():
@@ -126,10 +137,10 @@ def test_a_new_design_session_has_no_acceptance_criteria_deletions_or_previous_r
 
 
 def test_a_design_session_keeps_deleted_test_cases_and_previous_reviews_across_serialization():
-    finding = ReviewFinding(
+    finding = TestCaseReviewFinding(
         owner_test_case_id="DRAFT-2",
-        action=FindingAction.DELETE_TEST_CASE,
-        severity=FindingSeverity.MEDIUM,
+        action=TestCaseReviewFindingAction.DELETE_TEST_CASE,
+        severity=TestCaseReviewFindingSeverity.MEDIUM,
         category="duplicate",
         description="d",
         suggested_fix="f",

@@ -5,7 +5,12 @@
 import uuid
 
 from common.models import DesignedTestCase, TestCase, TestStep
-from common.services.test_case_index import render_designed_test_case_text, render_test_case, render_test_case_text
+from common.services.test_case_index import (
+    render_designed_test_case_block,
+    render_designed_test_case_text,
+    render_test_case,
+    render_test_case_text,
+)
 
 
 def _test_case(key: str) -> TestCase:
@@ -68,4 +73,23 @@ def test_a_designed_test_case_is_the_compact_text_followed_by_its_acceptance_cri
 
     text = render_designed_test_case_text(test_case)
 
-    assert text == f"{render_test_case_text(test_case)}\nAcceptance criteria: AC-1, AC-3"
+    assert text == f"{render_test_case_text(test_case)}\n\nAcceptance criteria: AC-1, AC-3"
+
+
+def test_the_sections_of_a_test_case_are_separated_by_a_blank_line():
+    text = render_test_case_text(_test_case("PROJ-T1"))
+
+    assert text.split("\n\n") == [
+        "Name: Login",
+        "Objective: Log in with valid credentials",
+        "Preconditions: A registered user",
+        "- Action: Submit the form; Data: user: a; Expected: The dashboard opens",
+    ]
+
+
+def test_a_designed_test_case_block_is_its_fenced_text_under_the_heading():
+    test_case = DesignedTestCase(**_test_case("PROJ-T1").model_dump(), ac_ids=["AC-1"])
+
+    block = render_designed_test_case_block("ID DRAFT-1", test_case)
+
+    assert block == f"ID DRAFT-1:\n```{render_designed_test_case_text(test_case)}```"

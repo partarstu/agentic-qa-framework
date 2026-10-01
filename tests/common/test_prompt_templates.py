@@ -37,7 +37,7 @@ _PROMPTS = {
     "test-case-review-with-attachments": review_prompts.TestCaseReviewWithAttachmentsPrompt,
     "test-case-duplicate-judge": review_prompts.TestCaseDuplicateJudgePrompt,
     "test-suite-review": review_prompts.TestSuiteReviewPrompt,
-    "severity-rubric": review_prompts.SeverityRubricFragment,
+    "severity-classifier": review_prompts.SeverityClassifierFragment,
     "test-step-quality-criteria": review_prompts.TestStepQualityCriteriaFragment,
 }
 

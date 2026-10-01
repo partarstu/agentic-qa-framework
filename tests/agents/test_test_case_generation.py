@@ -20,14 +20,15 @@ from common.models import (
     AcceptanceCriteriaList,
     DeletedTestCase,
     DesignedTestCase,
-    FindingAction,
-    FindingSeverity,
     GeneratedTestCases,
     PreviousReview,
-    ReviewFinding,
     TestCaseDesignSession,
+    TestCaseReviewFinding,
+    TestCaseReviewFindingAction,
+    TestCaseReviewFindingSeverity,
     TestStepsSequenceList,
 )
+from common.utils import json_list
 
 _USAGE_LIMITS = UsageLimits(request_limit=None, total_tokens_limit=1_000)
 _CRITERIA = [AcceptanceCriteriaItem(id=f"AC-{n}", text=f"Criterion {n}", additional_info="") for n in (1, 2)]
@@ -68,12 +69,12 @@ def _session(*names: str) -> TestCaseDesignSession:
 
 def _finding(
     owner: str | None,
-    action: FindingAction = FindingAction.MODIFY,
-    severity: FindingSeverity = FindingSeverity.HIGH,
+    action: TestCaseReviewFindingAction = TestCaseReviewFindingAction.MODIFY,
+    severity: TestCaseReviewFindingSeverity = TestCaseReviewFindingSeverity.HIGH,
     description: str = "A problem",
     related: list[str] | None = None,
-) -> ReviewFinding:
-    return ReviewFinding(
+) -> TestCaseReviewFinding:
+    return TestCaseReviewFinding(
         owner_test_case_id=owner,
         action=action,
         severity=severity,
@@ -84,13 +85,20 @@ def _finding(
     )
 
 
-_ADD = FindingAction.ADD_TEST_CASE
-_DELETE = FindingAction.DELETE_TEST_CASE
-_REMOVE_STEPS = FindingAction.REMOVE_DUPLICATE_STEPS
+_ADD = TestCaseReviewFindingAction.ADD_TEST_CASE
+_DELETE = TestCaseReviewFindingAction.DELETE_TEST_CASE
+_REMOVE_STEPS = TestCaseReviewFindingAction.REMOVE_DUPLICATE_STEPS
 
 
 def _fixer_returning(*test_cases: DesignedTestCase) -> AsyncMock:
     return AsyncMock(side_effect=[MagicMock(output=test_case) for test_case in test_cases])
+
+
+def _generation_returning(generator: TestCaseGenerator, *test_cases: DesignedTestCase) -> None:
+    generator.steps_generator_agent.run = AsyncMock(return_value=MagicMock(output=TestStepsSequenceList(items=[])))
+    generator.test_case_creator_agent.run = AsyncMock(
+        return_value=MagicMock(output=GeneratedTestCases(test_cases=list(test_cases)))
+    )
 
 
 def test_an_unknown_fix_severity_fails_at_start(mock_config):
@@ -110,8 +118,12 @@ async def test_generation_stores_the_criteria_and_adds_the_test_cases_as_drafts(
     usage = RunUsage()
 
     with patch("common.services.jira_attachments.download_issue_attachments", return_value={"policy.md": policy}):
-        await generator.generate(session, usage, _USAGE_LIMITS)
+        summary = await generator.generate(session, usage, _USAGE_LIMITS)
 
+    assert summary == (
+        "Extracted 2 acceptance criteria; generated test cases: DRAFT-1 (AC-1), DRAFT-2 (AC-2); "
+        "acceptance criteria without a test case: none."
+    )
     assert session.acceptance_criteria == _CRITERIA
     assert {key: test_case.name for key, test_case in session.test_cases.items()} == {
         "DRAFT-1": "First",
@@ -135,6 +147,21 @@ async def test_generation_stores_the_criteria_and_adds_the_test_cases_as_drafts(
     ):
         assert run.await_args.kwargs["usage"] is usage
         assert run.await_args.kwargs["usage_limits"] is _USAGE_LIMITS
+
+
+async def test_the_generation_summary_names_the_criteria_left_without_a_test_case(generator):
+    generator.ac_extractor_agent.run = AsyncMock(return_value=MagicMock(output=AcceptanceCriteriaList(items=_CRITERIA)))
+    generator.steps_generator_agent.run = AsyncMock(return_value=MagicMock(output=TestStepsSequenceList(items=[])))
+    generated = GeneratedTestCases(test_cases=[_test_case("First")])
+    generator.test_case_creator_agent.run = AsyncMock(return_value=MagicMock(output=generated))
+    session = TestCaseDesignSession(story_key="PROJ-1", story_content="Story content", attachments={})
+
+    summary = await generator.generate(session, RunUsage(), _USAGE_LIMITS)
+
+    assert summary == (
+        "Extracted 2 acceptance criteria; generated test cases: DRAFT-1 (AC-1); "
+        "acceptance criteria without a test case: AC-2."
+    )
 
 
 def test_test_cases_tracing_to_unknown_criteria_are_rejected():
@@ -163,7 +190,7 @@ async def test_the_fixer_is_asked_again_when_its_test_case_traces_to_an_unknown_
 
 async def test_nothing_is_fixed_without_a_finding_at_or_above_the_threshold(generator):
     session = _session("First")
-    session.findings = {"DRAFT-1": [_finding("DRAFT-1", severity=FindingSeverity.LOW)]}
+    session.findings = {"DRAFT-1": [_finding("DRAFT-1", severity=TestCaseReviewFindingSeverity.LOW)]}
     generator.test_case_fixer_agent.run = AsyncMock()
 
     result = await generator.fix(session, RunUsage(), _USAGE_LIMITS)
@@ -177,11 +204,11 @@ async def test_a_fixer_gets_only_the_related_test_cases_and_its_previous_review_
     session = _session("First", "Second", "Third")
     individual = [
         _finding("DRAFT-1", description="missing expected result"),
-        _finding("DRAFT-1", severity=FindingSeverity.LOW, description="imprecise name"),
+        _finding("DRAFT-1", severity=TestCaseReviewFindingSeverity.LOW, description="imprecise name"),
     ]
     session.findings = {"DRAFT-1": individual}
     session.suite_findings = [
-        _finding("DRAFT-1", _REMOVE_STEPS, FindingSeverity.MEDIUM, "repeats DRAFT-2", related=["DRAFT-2"])
+        _finding("DRAFT-1", _REMOVE_STEPS, TestCaseReviewFindingSeverity.MEDIUM, "repeats DRAFT-2", related=["DRAFT-2"])
     ]
     before = session.test_cases["DRAFT-1"]
     generator.test_case_fixer_agent.run = _fixer_returning(_test_case("First fixed", key="stale"))
@@ -197,10 +224,10 @@ async def test_a_fixer_gets_only_the_related_test_cases_and_its_previous_review_
     assert "repeats DRAFT-2" in message[3]
     assert "imprecise name" not in message[3]
     assert message[4] == (
-        "Related test cases of the findings (context only):\n```ID DRAFT-2:\n"
-        "Name: Second\nObjective: Summary of Second\nPreconditions: \nAcceptance criteria: AC-1```"
+        "Related test cases of the findings (context only):\n\nID DRAFT-2:\n"
+        "```Name: Second\n\nObjective: Summary of Second\n\nPreconditions: \n\nAcceptance criteria: AC-1```"
     )
-    assert fixer_run.kwargs["deps"] is session
+    assert fixer_run.kwargs["deps"].acceptance_criteria == _CRITERIA
     assert fixer_run.kwargs["usage"] is usage
     assert fixer_run.kwargs["usage_limits"] is _USAGE_LIMITS
     assert session.test_cases["DRAFT-1"].name == "First fixed"
@@ -235,7 +262,7 @@ async def test_a_deleted_test_case_is_kept_and_given_to_the_fixer_which_merges_i
 
     message = generator.test_case_fixer_agent.run.await_args.args[0]
     assert message[4].startswith(
-        "Related test cases of the findings (context only):\n```ID DRAFT-2 (deleted):\nName: Second\n"
+        "Related test cases of the findings (context only):\n\nID DRAFT-2 (deleted):\n```Name: Second\n"
     )
     assert set(session.test_cases) == {"DRAFT-1"}
     assert session.deleted_test_cases == {
@@ -269,7 +296,7 @@ async def test_a_gap_never_undoes_a_deletion_of_the_same_review(generator):
         _finding("DRAFT-2", _DELETE),
         _finding(None, _ADD, description="AC-3 is not covered", related=["DRAFT-2"]),
     ]
-    generator.test_case_fixer_agent.run = _fixer_returning(_test_case("Covers AC-3"))
+    _generation_returning(generator, _test_case("Covers AC-3"))
 
     result = await generator.fix(session, RunUsage(), _USAGE_LIMITS)
 
@@ -278,49 +305,80 @@ async def test_a_gap_never_undoes_a_deletion_of_the_same_review(generator):
     assert result == "Modified test cases: none; added: DRAFT-3; deleted: DRAFT-2; restored: none."
 
 
-async def test_each_adder_gets_all_test_cases_and_its_sibling_gaps(generator):
+async def test_missing_test_cases_are_generated_together_by_the_generation_steps_not_by_the_fixer(generator):
     session = _session("First", "Second")
-    session.suite_findings = [
+    gaps = [
         _finding(None, _ADD, description="AC-3 is not covered"),
         _finding(None, _ADD, description="AC-4 is not covered"),
     ]
-    generator.test_case_fixer_agent.run = _fixer_returning(_test_case("Covers AC-3"), _test_case("Covers AC-4"))
+    session.suite_findings = list(gaps)
+    generator.test_case_fixer_agent.run = AsyncMock()
+    _generation_returning(generator, _test_case("Covers AC-3"), _test_case("Covers AC-4"))
+    usage = RunUsage()
 
-    result = await generator.fix(session, RunUsage(), _USAGE_LIMITS)
+    result = await generator.fix(session, usage, _USAGE_LIMITS)
 
-    first, second = (call.args[0] for call in generator.test_case_fixer_agent.run.await_args_list)
-    assert "AC-3 is not covered" in first[2] and "AC-4 is not covered" in second[2]
-    for message in (first, second):
-        assert "ID DRAFT-1:\nName: First\n" in message[3] and "ID DRAFT-2:\nName: Second\n" in message[3]
-        assert '"labels"' not in message[3], "Context test cases are compact text, not JSON"
-    assert first[4].startswith("Other missing test cases, each created separately (never cover them):\n")
-    assert "AC-4 is not covered" in first[4] and "AC-3 is not covered" not in first[4]
-    assert "AC-3 is not covered" in second[4] and "AC-4 is not covered" not in second[4]
+    generator.test_case_fixer_agent.run.assert_not_awaited()
+    steps_message = generator.steps_generator_agent.run.await_args.args[0]
+    assert steps_message[:2] == ["Jira Issue content:\n```Story content```", _CRITERIA_PART]
+    assert steps_message[2] == f"Findings which describe missing test cases:\n```{json_list(gaps)}```"
+    assert steps_message[3] == (
+        "Existing test cases (context only):\n\n"
+        "ID DRAFT-1:\n```Name: First\n\nObjective: Summary of First\n\nPreconditions: \n\nAcceptance criteria: AC-1```"
+        "\n\nID DRAFT-2:\n```Name: Second\n\nObjective: Summary of Second\n\nPreconditions: \n\nAcceptance criteria: AC-1```"
+    )
+    creation = generator.test_case_creator_agent.run.await_args
+    assert creation.args[0][:-1] == steps_message
+    assert creation.args[0][-1].startswith("Test Step Sequences:\n")
+    assert creation.kwargs["deps"].acceptance_criteria == _CRITERIA
+    assert creation.kwargs["usage"] is usage
     assert result == "Modified test cases: none; added: DRAFT-3, DRAFT-4; deleted: none; restored: none."
 
 
-async def test_a_single_gap_has_no_sibling_part(generator):
-    session = _session("First")
-    session.suite_findings = [_finding(None, _ADD, description="AC-3 is not covered")]
-    generator.test_case_fixer_agent.run = _fixer_returning(_test_case("Covers AC-3"))
+async def test_a_failed_fix_leaves_the_session_unchanged_so_a_repeated_fix_restores_without_a_new_test_case(generator):
+    session = _session("First", "Second")
+    session.deleted_test_cases = {
+        "DRAFT-9": DeletedTestCase(test_case=_test_case("Old"), findings=[], deleted_by=_finding("DRAFT-9", _DELETE))
+    }
+    session.findings = {"DRAFT-1": [_finding("DRAFT-1")]}
+    session.suite_findings = [
+        _finding("DRAFT-2", _DELETE),
+        _finding(None, _ADD, description="AC-2 lost its coverage", related=["DRAFT-9"]),
+    ]
+    before = session.model_copy(deep=True)
+    generator.test_case_fixer_agent.run = AsyncMock(
+        side_effect=[RuntimeError("provider down"), MagicMock(output=_test_case("First fixed"))]
+    )
+    generator.steps_generator_agent.run = AsyncMock()
 
-    await generator.fix(session, RunUsage(), _USAGE_LIMITS)
+    with pytest.raises(ExceptionGroup) as raised:
+        await generator.fix(session, RunUsage(), _USAGE_LIMITS)
 
-    assert len(generator.test_case_fixer_agent.run.await_args.args[0]) == 4
+    assert raised.group_contains(RuntimeError, match="provider down")
+    assert session == before
+    result = await generator.fix(session, RunUsage(), _USAGE_LIMITS)
+    generator.steps_generator_agent.run.assert_not_awaited()
+    assert set(session.test_cases) == {"DRAFT-1", "DRAFT-9"}
+    assert set(session.deleted_test_cases) == {"DRAFT-2"}
+    assert result == "Modified test cases: DRAFT-1; added: none; deleted: DRAFT-2; restored: DRAFT-9."
 
 
 async def test_a_repeated_fix_finds_nothing_left_to_fix(generator):
     session = _session("First")
-    low = _finding("DRAFT-1", severity=FindingSeverity.LOW, description="imprecise name")
+    low = _finding("DRAFT-1", severity=TestCaseReviewFindingSeverity.LOW, description="imprecise name")
     session.findings = {"DRAFT-1": [_finding("DRAFT-1"), low]}
-    session.suite_findings = [_finding(None, FindingAction.ADD_TEST_CASE, description="AC-3 is not covered")]
-    generator.test_case_fixer_agent.run = _fixer_returning(_test_case("First fixed"), _test_case("Covers AC-3"))
+    session.suite_findings = [
+        _finding(None, TestCaseReviewFindingAction.ADD_TEST_CASE, description="AC-3 is not covered")
+    ]
+    generator.test_case_fixer_agent.run = _fixer_returning(_test_case("First fixed"))
+    _generation_returning(generator, _test_case("Covers AC-3"))
 
     await generator.fix(session, RunUsage(), _USAGE_LIMITS)
     repeated = await generator.fix(session, RunUsage(), _USAGE_LIMITS)
 
     assert "nothing to fix" in repeated
-    assert generator.test_case_fixer_agent.run.await_count == 2
+    assert generator.test_case_fixer_agent.run.await_count == 1
+    assert generator.test_case_creator_agent.run.await_count == 1
     assert set(session.test_cases) == {"DRAFT-1", "DRAFT-2"}
     assert session.findings == {"DRAFT-1": [low]}
     assert session.suite_findings == []

@@ -5,6 +5,7 @@ QuAIA orchestrator and its A2A agents (requirements review, test case design - w
 ## Git Repo
 
 * The main branch for this project is called "main".
+* Never push anything to the remote repository (any `git push`, including force-pushes, tags and pushes run by a skill or script) without the user's explicit consent to that specific push in the current conversation. A request to commit, an approved plan, auto mode or consent given for an earlier push is not consent; when in doubt, ask and wait.
 
 ## General development guidelines and rules
 
@@ -18,7 +19,14 @@ QuAIA orchestrator and its A2A agents (requirements review, test case design - w
 
 * Once the user has confirmed the plan, work until the *Definition of done* is met. When a step doesn't need the user's input, keep going and put status notes in the same message as your next action. Don't end a turn with a summary that announces the next step without taking it, an offer to continue, or a list of decisions that don't block the work.
 * An approved plan is implemented completely and at once: every phase and step of it, in one run. Never batch it, split it into several runs or stop after a part of it to ask whether to go on. Only the user narrows the scope, by explicitly naming the phases to implement; before every implementation, ask with one single-select question offering *Implement everything* and *Implement specific phases* (the user types the phases), and implement exactly what the answer selects.
-* Stop and ask the user only when you can't continue without them, when two readings of the request would lead to materially different work, when the architecture needs their approval (*Architecture first* below), or before anything destructive or outward-facing: deleting files you didn't create, force-pushing, creating or changing cloud resources, or changing anything outside this repository. Commit or push only when the user asks.
+* Stop and ask the user only when you can't continue without them, when two readings of the request would lead to materially different work, when the architecture needs their approval (*Architecture first* below), before spawning a subagent (*Subagents* below), or before anything destructive or outward-facing: deleting files you didn't create, pushing, creating or changing cloud resources, or changing anything outside this repository. Commit only when the user asks, and push only with their explicit consent (*Git Repo* above).
+
+### Subagents
+
+* Never start a subagent without the user's explicit consent to that specific spawn, unless the subagents are started as a part of 
+  applying the custom skill for this project. If the user doesn't consent, do the work yourself.
+* When asking, propose for subagents a model and effort, as well as forking or a new fresh context; always offer "no subagents". Spawn exactly what is approved; any extra spawn or resume needs a new approval. If anything can't be set per subagent, say so.
+* Default to low usage: cheapest sufficient model and relevant for the task effort, a self-contained prompt with the files and facts already known, a short capped result, a fork if it needs most of the conversation. Never redo the work of the main agent.
 
 ### Coding guidelines and rules
 

@@ -5,7 +5,7 @@ description: Creates a new A2A agent service in the QuAIA framework - architectu
 
 # Creating a New Agent
 
-An agent is an A2A service under `agents/<agent_name>/` built on `common.agent_base.AgentBase`. There are no code templates: every step names the existing file to mirror. `agents/test_case_classification/main.py` is the smallest agent class (config, prompt, one custom tool), though it runs only in-process inside the Test Case Design agent, so `agents/incident_creation/` shows the deployed parts (module-level `app`, Dockerfile); `agents/test_case_generation/main.py` shows a sub-agent with its own MCP session per run; `agents/requirements_review/main.py` shows retrieval (RAG) over the vector database. All code follows `PYTHON_GUIDELINES.md` and the *Comments and docstrings* rule of `AGENTS.md`.
+An agent is an A2A service under `agents/<agent_name>/` built on `common.agent_base.AgentBase`. There are no code templates: every step names the existing file to mirror. `agents/test_case_classification/main.py` is the smallest agent class (config, prompt, one custom tool), though it runs only in-process inside the Test Case Design agent, so `agents/incident_creation/` shows the deployed parts (module-level `app`, Dockerfile); `agents/test_case_design/main.py` shows an agent whose MCP tool stores its result in the run's dependencies; `agents/requirements_review/main.py` shows retrieval (RAG) over the vector database. All code follows `PYTHON_GUIDELINES.md` and the *Comments and docstrings* rule of `AGENTS.md`.
 
 Copy this checklist and track progress:
 

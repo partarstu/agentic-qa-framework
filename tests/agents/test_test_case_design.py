@@ -2,6 +2,7 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
+import asyncio
 import json
 from collections.abc import Callable, Iterator
 from types import SimpleNamespace
@@ -15,29 +16,31 @@ from fastapi.testclient import TestClient
 from pydantic_ai import ModelRetry
 from pydantic_ai.messages import ModelMessage, ModelResponse, ToolCallPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
+from pydantic_ai.toolsets import FunctionToolset
 from pydantic_ai.usage import RunUsage, UsageLimits
 
 import config
 from agents.test_case_design import main as design_main
 from agents.test_case_design.main import TestCaseDesignAgent
-from agents.test_case_review.main import TestCaseReviewer
+from agents.test_case_review.main import TestCaseDuplicateCheckError, TestCaseReviewer
 from common.models import (
     AgentRuntimeError,
     DeletedTestCase,
     DesignedTestCase,
     DesignStopReason,
-    FindingAction,
-    FindingSeverity,
-    ReviewFinding,
     TestCaseDesignResult,
     TestCaseDesignSession,
     TestCaseDuplicateCheck,
     TestCaseKeys,
+    TestCaseReviewFinding,
+    TestCaseReviewFindingAction,
+    TestCaseReviewFindingSeverity,
 )
 from common.services import test_management_tools as tools
 from common.services.test_management_base import TestManagementClientBase
 
-_DESIGN_TOOLS = {"generate_test_cases", "review_test_cases", "fix_test_cases", "publish_test_cases"}
+_DESIGN_TOOLS = {"jira_get_issue", "generate_test_cases", "review_test_cases", "fix_test_cases", "publish_test_cases"}
+_FETCH = ("jira_get_issue", {"issue_key": "PROJ-1", "comment_limit": 0})
 
 
 def _test_case(name: str) -> DesignedTestCase:
@@ -47,10 +50,12 @@ def _test_case(name: str) -> DesignedTestCase:
     )  # fmt: skip
 
 
-def _finding(owner: str, severity: FindingSeverity = FindingSeverity.HIGH) -> ReviewFinding:
-    return ReviewFinding(
+def _finding(
+    owner: str, severity: TestCaseReviewFindingSeverity = TestCaseReviewFindingSeverity.HIGH
+) -> TestCaseReviewFinding:
+    return TestCaseReviewFinding(
         owner_test_case_id=owner,
-        action=FindingAction.MODIFY,
+        action=TestCaseReviewFindingAction.MODIFY,
         severity=severity,
         category="clarity",
         description="A problem",
@@ -63,7 +68,7 @@ def _generate(session: TestCaseDesignSession) -> None:
 
 
 def _fix(session: TestCaseDesignSession) -> None:
-    session.drop_blocking_findings(FindingSeverity.LOW)
+    session.drop_blocking_findings(TestCaseReviewFindingSeverity.LOW)
     session.changed_test_case_ids.add("DRAFT-1")
 
 
@@ -79,7 +84,7 @@ def _delegate(effect: Callable[[TestCaseDesignSession], None], summary: str = "d
     return MagicMock(run_delegated=AsyncMock(side_effect=run_delegated))
 
 
-def _reviewer(*findings: ReviewFinding) -> MagicMock:
+def _reviewer(*findings: TestCaseReviewFinding) -> MagicMock:
     async def review_changed(session: TestCaseDesignSession, usage: RunUsage, usage_limits: UsageLimits) -> None:
         for test_case_id in session.changed_test_case_ids:
             session.findings[test_case_id] = [f for f in findings if f.owner_test_case_id == test_case_id]
@@ -93,8 +98,9 @@ def _reviewer(*findings: ReviewFinding) -> MagicMock:
 
 
 def _generator(fix: Callable[[TestCaseDesignSession], None] = _fix) -> MagicMock:
-    async def generate(session: TestCaseDesignSession, usage: RunUsage, usage_limits: UsageLimits) -> None:
+    async def generate(session: TestCaseDesignSession, usage: RunUsage, usage_limits: UsageLimits) -> str:
         _generate(session)
+        return "Generated DRAFT-1 (AC-1)."
 
     async def run_fix(session: TestCaseDesignSession, usage: RunUsage, usage_limits: UsageLimits) -> str:
         fix(session)
@@ -121,10 +127,18 @@ def client() -> Iterator[MagicMock]:
 
 
 @pytest.fixture
-def jira() -> Iterator[MagicMock]:
-    server = MagicMock(direct_call_tool=AsyncMock(return_value={"id": "10", "key": "PROJ-1", "fields": {}}))
-    with patch.object(design_main, "build_atlassian_mcp_server", return_value=server):
-        yield server
+def jira() -> Iterator[list[dict[str, Any]]]:
+    fetches: list[dict[str, Any]] = []
+
+    def jira_get_issue(issue_key: str, fields: str = "", comment_limit: int = 10) -> dict[str, Any]:
+        fetches.append({"issue_key": issue_key, "fields": fields, "comment_limit": comment_limit})
+        return {"id": "10", "key": issue_key, "fields": {}}
+
+    with patch.object(
+        design_main, "build_atlassian_mcp_server_toolset", return_value=FunctionToolset([jira_get_issue])
+    ) as build_toolset:
+        yield fetches
+    build_toolset.assert_called_with(("jira_get_issue",))
 
 
 @pytest.fixture
@@ -137,7 +151,7 @@ def _ctx(session: TestCaseDesignSession) -> SimpleNamespace:
 
 
 def _generated() -> TestCaseDesignSession:
-    session = TestCaseDesignSession(story_key="PROJ-1")
+    session = TestCaseDesignSession(story_key="PROJ-1", story_content="{}")
     _generate(session)
     return session
 
@@ -158,14 +172,14 @@ def _design_request() -> Message:
     return Message(message_id="m-1", parts=[new_text_part("Design PROJ-1"), new_data_part({"story_key": "PROJ-1"})])
 
 
-async def test_a_converging_design_is_checked_for_duplicates_then_saved_classified_and_published(
+async def test_a_converging_design_fetches_the_story_then_is_checked_for_duplicates_saved_classified_and_published(
     agent, client, jira, vector_db
 ):
     duplicate_checker = TestCaseReviewer()
     duplicate_checker.vector_db_service = vector_db
     agent.reviewer.check_duplicates = duplicate_checker.check_duplicates
     offered: list[set[str]] = []
-    calls = [("generate_test_cases", {}), ("review_test_cases", {}), ("publish_test_cases", {})]
+    calls = [_FETCH, ("generate_test_cases", {}), ("review_test_cases", {}), ("publish_test_cases", {})]
 
     with agent.agent.override(model=_scripted_model(calls, offered)):
         response = await agent.run(_design_request())
@@ -173,8 +187,9 @@ async def test_a_converging_design_is_checked_for_duplicates_then_saved_classifi
     result = TestCaseDesignResult.model_validate_json(get_message_text(response))
     assert result.test_case_keys == ["PROJ-T1"]
     assert (result.iterations, result.stop_reason) == (1, DesignStopReason.CONVERGED)
-    assert offered[0] - {"report_activity"} == {"generate_test_cases", "review_test_cases"}
-    assert offered[2] - {"report_activity"} == _DESIGN_TOOLS - {"fix_test_cases"}
+    assert jira == [{"issue_key": "PROJ-1", "fields": "", "comment_limit": 0}]
+    assert offered[0] - {"report_activity"} == {"jira_get_issue", "generate_test_cases", "review_test_cases"}
+    assert offered[3] - {"report_activity"} == _DESIGN_TOOLS - {"fix_test_cases"}
     client.create_test_cases.assert_called_once()
     assert client.create_test_cases.call_args.args[1:] == ("PROJ", 10)
     comment = client.add_test_case_review_comment.call_args.args[1]
@@ -183,8 +198,8 @@ async def test_a_converging_design_is_checked_for_duplicates_then_saved_classifi
     vector_db.hybrid_search.assert_awaited_once()
     vector_db.upsert_batch.assert_not_awaited()
     classified, classification_deps, _ = agent.classification_agent.run_delegated.await_args.args
-    assert classified.startswith("Test cases:\n")
-    assert '"key": "PROJ-T1"' in classified
+    assert classified.startswith("Test cases:\n```[{") and classified.endswith("}]```")
+    assert '"key":"PROJ-T1"' in classified
     assert classification_deps == TestCaseKeys(issue_keys=["PROJ-T1"])
 
 
@@ -192,7 +207,7 @@ async def test_a_failure_before_the_writes_fails_the_design_and_writes_nothing(a
     agent.generator.generate.side_effect = RuntimeError("model unavailable")
 
     with (
-        agent.agent.override(model=_scripted_model([("generate_test_cases", {})], [])),
+        agent.agent.override(model=_scripted_model([_FETCH, ("generate_test_cases", {})], [])),
         pytest.raises(AgentRuntimeError, match="model unavailable"),
     ):
         await agent.run(_design_request())
@@ -216,7 +231,7 @@ async def test_an_early_result_with_a_comment_aborts_the_design_without_further_
 
 
 async def test_a_request_carrying_design_state_fails_before_any_step(agent, client):
-    state = {"story_key": "PROJ-1", "stop_reason": "converged", "uploaded": True}
+    state = {"story_key": "PROJ-1", "stop_reason": "converged", "saved_test_case_keys": ["PROJ-T1"]}
     message = Message(message_id="m-1", parts=[new_text_part("Design PROJ-1"), new_data_part(state)])
 
     with (
@@ -232,7 +247,7 @@ def test_a_design_session_starts_empty_from_the_story_key_of_the_request(agent):
     assert agent._build_deps({"story_key": "PROJ-1"}) == TestCaseDesignSession(story_key="PROJ-1")
 
 
-async def test_a_design_without_a_session_fails_with_a_clear_error(agent):
+async def test_a_design_without_a_session_fails_with_a_clear_error(agent, jira):
     message = Message(message_id="m-1", parts=[new_text_part("Design PROJ-1")])
 
     with (
@@ -250,39 +265,77 @@ async def test_a_design_without_a_session_fails_with_a_clear_error(agent):
     ],
     ids=["parsed by the client", "returned as text"],
 )
-async def test_generation_fetches_the_story_with_the_additional_fields_and_without_comments(
-    agent, jira, monkeypatch, issue, content
-):
-    monkeypatch.setattr(config, "JIRA_ADDITIONAL_FIELD_IDS", ("customfield_1",))
-    jira.direct_call_tool.return_value = issue
+async def test_the_fetched_story_is_stored_in_the_session_and_kept_out_of_the_model_context(issue, content):
+    wrapped = MagicMock(call_tool=AsyncMock(return_value=issue))
+    session = TestCaseDesignSession(story_key="PROJ-1")
+    ctx = _ctx(session)
+    args = {"issue_key": "PROJ-1", "comment_limit": 0}
+
+    result = await design_main._StoryFetchingToolset(wrapped).call_tool("jira_get_issue", args, ctx, MagicMock())
+
+    assert result == "Fetched the user story PROJ-1."
+    assert (session.story_id, session.story_content) == (10, content)
+    wrapped.call_tool.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    ("issue_key", "story_content", "message"),
+    [("PROJ-2", None, "Fetch only the user story PROJ-1"), ("PROJ-1", "{}", "already fetched")],
+    ids=["another issue", "fetched twice"],
+)
+async def test_a_fetch_of_another_issue_or_a_second_fetch_is_refused(issue_key, story_content, message):
+    wrapped = MagicMock(call_tool=AsyncMock())
+    session = TestCaseDesignSession(story_key="PROJ-1", story_content=story_content)
+
+    with pytest.raises(ModelRetry, match=message):
+        await design_main._StoryFetchingToolset(wrapped).call_tool(
+            "jira_get_issue", {"issue_key": issue_key}, _ctx(session), MagicMock()
+        )
+
+    wrapped.call_tool.assert_not_awaited()
+    assert session.story_content == story_content
+
+
+async def test_generation_needs_the_fetched_story_and_returns_its_summary(agent):
     session = TestCaseDesignSession(story_key="PROJ-1")
     ctx = _ctx(session)
 
-    assert await agent.generate_test_cases(ctx) == "Generated 1 test case(s)."
+    with pytest.raises(ModelRetry, match="Fetch the user story PROJ-1 first"):
+        await agent.generate_test_cases(ctx)
+    session.story_content = "{}"
+    assert await agent.generate_test_cases(ctx) == "Generated DRAFT-1 (AC-1)."
     with pytest.raises(ModelRetry, match="already generated"):
         await agent.generate_test_cases(ctx)
 
-    jira.direct_call_tool.assert_awaited_once_with(
-        "jira_get_issue",
-        {"issue_key": "PROJ-1", "fields": "summary,description,issuetype,labels,customfield_1", "comment_limit": 0},
-    )
-    assert (session.story_id, session.story_content) == (10, content)
     agent.generator.generate.assert_awaited_once_with(session, ctx.usage, agent.get_sub_agent_usage_limits())
 
 
-async def test_review_without_blocking_findings_converges(agent):
+def test_the_instructions_name_the_story_and_the_configured_additional_fields(monkeypatch):
+    ctx = SimpleNamespace(deps=TestCaseDesignSession(story_key="PROJ-1"))
+    monkeypatch.setattr(config, "JIRA_ADDITIONAL_FIELD_IDS", ())
+    without_fields = design_main._story_instructions(ctx)
+    monkeypatch.setattr(config, "JIRA_ADDITIONAL_FIELD_IDS", ("customfield_1",))
+    with_fields = design_main._story_instructions(ctx)
+
+    assert without_fields == "The key of the Jira user story of this design is PROJ-1."
+    assert with_fields.startswith(f"{without_fields}\n\n")
+    assert "customfield_1" in with_fields
+
+
+async def test_review_without_blocking_findings_converges_without_a_duplicate_check(agent):
     session = _generated()
-    agent.reviewer = _reviewer(_finding("DRAFT-1", FindingSeverity.LOW))
+    agent.reviewer = _reviewer(_finding("DRAFT-1", TestCaseReviewFindingSeverity.LOW))
     ctx = _ctx(session)
 
     result = await agent.review_test_cases(ctx)
 
     assert (session.iteration, session.stop_reason) == (1, DesignStopReason.CONVERGED)
-    assert result == "Finished (converged); publish next.", "Findings and duplicates never go back to the model"
-    assert session.duplicate_checks == {"DRAFT-1": TestCaseDuplicateCheck()}
+    assert result == "Finished (converged); publish next.", "Findings never go back to the model"
+    assert session.duplicate_checks == {}
     limits = agent.get_sub_agent_usage_limits()
-    for step in (agent.reviewer.review_changed, agent.reviewer.review_set, agent.reviewer.check_duplicates):
+    for step in (agent.reviewer.review_changed, agent.reviewer.review_set):
         step.assert_awaited_once_with(session, ctx.usage, limits)
+    agent.reviewer.check_duplicates.assert_not_awaited()
 
 
 async def test_review_with_blocking_findings_continues_until_the_iteration_limit(agent):
@@ -292,7 +345,6 @@ async def test_review_with_blocking_findings_continues_until_the_iteration_limit
     fix_ctx = _ctx(session)
 
     first = await agent.review_test_cases(_ctx(session))
-    agent.reviewer.check_duplicates.assert_not_awaited()
     assert await agent.fix_test_cases(fix_ctx) == "fixed"
     second = await agent.review_test_cases(_ctx(session))
 
@@ -300,7 +352,6 @@ async def test_review_with_blocking_findings_continues_until_the_iteration_limit
     assert second == "Finished (iteration_limit); publish next.", (
         "The iteration limit takes precedence over no progress"
     )
-    agent.reviewer.check_duplicates.assert_awaited_once()
     assert (session.iteration, session.fixes, session.stop_reason) == (2, 1, DesignStopReason.ITERATION_LIMIT)
     agent.generator.fix.assert_awaited_once_with(session, fix_ctx.usage, agent.get_sub_agent_usage_limits())
 
@@ -338,15 +389,13 @@ async def test_the_loop_stops_without_progress_when_the_blocking_findings_do_not
     assert session.previous_blocking_count == blocking_counts[-1]
 
 
-async def test_after_the_final_review_deleted_test_cases_named_by_open_gaps_are_restored_before_the_duplicate_check(
-    agent,
-):
+async def test_after_the_final_review_deleted_test_cases_named_by_open_gaps_are_restored(agent):
     session = _generated()
     agent.max_iterations = 1
     kept = DeletedTestCase(test_case=_test_case("Old"), findings=[_finding("DRAFT-9")], deleted_by=_finding("DRAFT-9"))
     session.deleted_test_cases = {"DRAFT-9": kept}
     gap = _finding(None).model_copy(
-        update={"action": FindingAction.ADD_TEST_CASE, "related_test_case_ids": ["DRAFT-9"]}
+        update={"action": TestCaseReviewFindingAction.ADD_TEST_CASE, "related_test_case_ids": ["DRAFT-9"]}
     )
     other_gap = gap.model_copy(update={"related_test_case_ids": []})
 
@@ -354,8 +403,6 @@ async def test_after_the_final_review_deleted_test_cases_named_by_open_gaps_are_
         design.suite_findings = [gap, other_gap]
 
     agent.reviewer.review_set.side_effect = review_set
-    checked: list[set[str]] = []
-    agent.reviewer.check_duplicates.side_effect = lambda design, *_: checked.append(set(design.test_cases))
 
     result = await agent.review_test_cases(_ctx(session))
 
@@ -364,7 +411,6 @@ async def test_after_the_final_review_deleted_test_cases_named_by_open_gaps_are_
     assert session.findings["DRAFT-9"] == kept.findings
     assert session.deleted_test_cases == {}
     assert session.suite_findings == [other_gap]
-    assert checked == [{"DRAFT-1", "DRAFT-9"}]
 
 
 @pytest.mark.parametrize(
@@ -406,33 +452,109 @@ def _stopped() -> TestCaseDesignSession:
 
 def _recording(client: MagicMock, agent: TestCaseDesignAgent) -> list[str]:
     calls: list[str] = []
-    client.create_test_cases.side_effect = lambda test_cases, *_: calls.append("upload") or ["PROJ-T1", "PROJ-T2"]
+    keys = iter(["PROJ-T1", "PROJ-T2"])
+    client.create_test_cases.side_effect = lambda test_cases, *_: (
+        calls.append(f"upload {test_cases[0].name}") or [next(keys)]
+    )
     client.add_test_case_review_comment.side_effect = lambda key, _: calls.append(f"feedback {key}")
     client.change_test_case_status.side_effect = lambda _, key, __: calls.append(f"status {key}")
+
+    async def check_duplicates(session: TestCaseDesignSession, usage: RunUsage, usage_limits: UsageLimits) -> None:
+        calls.append(f"duplicate check {sorted(set(session.test_cases) - set(session.duplicate_checks))}")
+        await _check_duplicates(session, usage, usage_limits)
 
     async def classify(prompt: str, deps: TestCaseKeys, usage: RunUsage) -> str:
         calls.append(f"classify {deps.issue_keys}")
         return "labelled"
 
+    agent.reviewer.check_duplicates.side_effect = check_duplicates
     agent.classification_agent.run_delegated.side_effect = classify
     return calls
 
 
-async def test_publishing_saves_classifies_then_comments_and_sets_the_status_of_each_test_case(agent, client):
+async def test_publishing_checks_duplicates_saves_classifies_then_comments_and_sets_the_status_of_each_test_case(
+    agent, client
+):
     session = _stopped()
+    session.duplicate_checks = {}
     calls = _recording(client, agent)
 
     assert await agent.publish_test_cases(_ctx(session)) == "Published 2 test case(s)."
 
     assert calls == [
-        "upload",
+        "duplicate check ['DRAFT-1', 'DRAFT-2']",
+        "upload First",
+        "upload Second",
         "classify ['PROJ-T1', 'PROJ-T2']",
         "feedback PROJ-T1",
         "status PROJ-T1",
         "feedback PROJ-T2",
         "status PROJ-T2",
     ]
-    assert (session.uploaded, session.classified, session.published) == (True, True, True)
+    assert set(session.duplicate_checks) == session.saved_test_case_keys == {"PROJ-T1", "PROJ-T2"}
+    assert (session.classified, session.published) == (True, True)
+
+
+async def test_a_failed_duplicate_check_asks_to_publish_again_and_writes_nothing(agent, client):
+    session = _stopped()
+    agent.reviewer.check_duplicates.side_effect = TestCaseDuplicateCheckError("The duplicate check failed")
+
+    with pytest.raises(ModelRetry, match=r"The duplicate check failed\. Publish the test cases again"):
+        await agent.publish_test_cases(_ctx(session))
+
+    client.create_test_cases.assert_not_called()
+    assert not session.published
+
+
+async def test_a_publish_interrupted_by_a_failed_write_resumes_after_the_last_completed_write(agent, client):
+    session = _stopped()
+    calls = _recording(client, agent)
+    client.change_test_case_status.side_effect = RuntimeError("Zephyr is down")
+
+    with pytest.raises(ModelRetry, match=r"Publishing failed: Zephyr is down\. Publish the test cases again to resume"):
+        await agent.publish_test_cases(_ctx(session))
+    assert not session.published
+    calls.clear()
+    client.change_test_case_status.side_effect = lambda _, key, __: calls.append(f"status {key}")
+    await agent.publish_test_cases(_ctx(session))
+
+    assert calls == ["duplicate check []", "status PROJ-T1", "feedback PROJ-T2", "status PROJ-T2"]
+    assert [call.args[0] for call in client.add_test_case_review_comment.call_args_list] == ["PROJ-T1", "PROJ-T2"]
+    assert session.published
+
+
+async def test_a_publish_interrupted_by_a_failed_upload_resumes_without_saving_a_test_case_twice(agent, client):
+    session = _stopped()
+    calls = _recording(client, agent)
+    keys = iter([["PROJ-T1"], RuntimeError("Zephyr is down"), ["PROJ-T2"]])
+
+    def create(test_cases: list[DesignedTestCase], *_: object) -> list[str]:
+        calls.append(f"upload {test_cases[0].name}")
+        outcome = next(keys)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    client.create_test_cases.side_effect = create
+
+    with pytest.raises(ModelRetry, match="Publishing failed: Zephyr is down"):
+        await agent.publish_test_cases(_ctx(session))
+    await agent.publish_test_cases(_ctx(session))
+
+    assert [call for call in calls if call.startswith("upload")] == ["upload First", "upload Second", "upload Second"]
+    assert session.saved_test_case_keys == {"PROJ-T1", "PROJ-T2"}
+    assert session.published
+
+
+async def test_a_failed_classification_is_not_turned_into_a_retry_of_the_publish(agent, client):
+    session = _stopped()
+    _recording(client, agent)
+    agent.classification_agent.run_delegated.side_effect = RuntimeError("provider down")
+
+    with pytest.raises(RuntimeError, match="provider down"):
+        await agent.publish_test_cases(_ctx(session))
+
+    client.add_test_case_review_comment.assert_not_called()
 
 
 async def test_a_rerun_publish_resumes_without_a_second_upload_or_classification(agent, client):
@@ -444,7 +566,7 @@ async def test_a_rerun_publish_resumes_without_a_second_upload_or_classification
 
     await agent.publish_test_cases(_ctx(session))
 
-    assert calls == ["feedback PROJ-T1", "status PROJ-T1", "feedback PROJ-T2", "status PROJ-T2"]
+    assert calls == ["duplicate check []", "feedback PROJ-T1", "status PROJ-T1", "feedback PROJ-T2", "status PROJ-T2"]
 
 
 async def test_publishing_twice_is_refused_without_writing(agent, client):
@@ -459,6 +581,7 @@ async def test_publishing_twice_is_refused_without_writing(agent, client):
 
 async def test_publish_runs_alone_so_a_second_call_of_the_same_response_cannot_upload_again(agent, client, jira):
     responses = [
+        [ToolCallPart(*_FETCH)],
         [ToolCallPart("generate_test_cases", {})],
         [ToolCallPart("review_test_cases", {})],
         [ToolCallPart("publish_test_cases", {}), ToolCallPart("publish_test_cases", {})],
@@ -477,6 +600,41 @@ async def test_publish_runs_alone_so_a_second_call_of_the_same_response_cannot_u
 
     assert publish_sequential and all(publish_sequential)
     client.create_test_cases.assert_called_once()
+
+
+async def test_the_design_tools_run_alone_so_a_second_review_of_the_same_response_finds_it_done(agent, client, jira):
+    async def review_set(session: TestCaseDesignSession, usage: RunUsage, usage_limits: UsageLimits) -> None:
+        # Suspends like a real model call, where two overlapping reviews would interleave.
+        await asyncio.sleep(0)
+
+    agent.reviewer = _reviewer(_finding("DRAFT-1"))
+    agent.reviewer.review_set.side_effect = review_set
+    responses = [
+        [ToolCallPart(*_FETCH)],
+        [ToolCallPart("generate_test_cases", {})],
+        [ToolCallPart("review_test_cases", {}), ToolCallPart("review_test_cases", {})],
+        [ToolCallPart("fix_test_cases", {})],
+        [ToolCallPart("review_test_cases", {})],
+        [ToolCallPart("publish_test_cases", {})],
+    ]
+    sequential: dict[str, bool] = {}
+
+    def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        sequential.update({tool.name: tool.sequential for tool in info.function_tools})
+        step = sum(isinstance(message, ModelResponse) for message in messages)
+        if step < len(responses):
+            return ModelResponse(parts=responses[step])
+        return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, {})])
+
+    with agent.agent.override(model=FunctionModel(respond)):
+        response = await agent.run(_design_request())
+
+    result = TestCaseDesignResult.model_validate_json(get_message_text(response))
+    assert (result.iterations, result.stop_reason) == (2, DesignStopReason.NO_PROGRESS)
+    agent.generator.fix.assert_awaited_once()
+    assert {name: sequential[name] for name in _DESIGN_TOOLS - {"jira_get_issue"}} == dict.fromkeys(
+        _DESIGN_TOOLS - {"jira_get_issue"}, True
+    )
 
 
 @pytest.mark.parametrize(

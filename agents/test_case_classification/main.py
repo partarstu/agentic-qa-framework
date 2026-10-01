@@ -2,6 +2,7 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
+from pydantic_ai import ModelRetry, RunContext
 from pydantic_ai.settings import ThinkingLevel
 
 import config
@@ -51,7 +52,7 @@ class TestCaseClassificationAgent(AgentBase):
         return config.TestCaseClassificationAgentConfig.MAX_REQUESTS_PER_TASK
 
     @staticmethod
-    def add_labels_to_test_case(test_case_key: str, labels: list[str]) -> str:
+    def add_labels_to_test_case(ctx: RunContext[TestCaseKeys], test_case_key: str, labels: list[str]) -> str:
         """
         Adds labels to a test case.
 
@@ -62,6 +63,11 @@ class TestCaseClassificationAgent(AgentBase):
         Returns:
             A confirmation message informing if the labels were successfully added.
         """
+        # The test cases reach the model as text derived from the user story, so a key it names is untrusted.
+        if test_case_key not in ctx.deps.issue_keys:
+            raise ModelRetry(
+                f"'{test_case_key[:50]}' is not one of the test cases to classify: {', '.join(ctx.deps.issue_keys)}."
+            )
         client = get_test_management_client()
         client.add_labels_to_test_case(test_case_key, labels)
         return f"Successfully added labels {', '.join(labels)} to the test case with key(ID) '{test_case_key}'"

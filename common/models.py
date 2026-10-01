@@ -316,7 +316,9 @@ class TestCase(JsonSerializableModel):
 class DesignedTestCase(TestCase):
     """A test case of a design, traced to the acceptance criteria it verifies."""
 
-    ac_ids: list[str] = Field(description="The IDs of the acceptance criteria which this test case verifies")
+    ac_ids: list[str] = Field(
+        description="The IDs of the given acceptance criteria which this test case verifies, exactly as given"
+    )
 
 
 class ListedTestCase(JsonSerializableModel):
@@ -391,9 +393,10 @@ class TestCaseDuplicateCheck(JsonSerializableModel):
     overlapping_test_cases: list[OverlappingTestCase] = Field(default_factory=list)
 
 
-class FindingSeverity(StrEnum):
+class TestCaseReviewFindingSeverity(StrEnum):
     """How much a review finding endangers the test case's purpose, ordered from low to critical."""
 
+    __test__ = False
     LOW = "low"
     MEDIUM = "medium"
     HIGH = "high"
@@ -401,44 +404,58 @@ class FindingSeverity(StrEnum):
 
     @property
     def rank(self) -> int:
-        return list(FindingSeverity).index(self)
+        return list(TestCaseReviewFindingSeverity).index(self)
 
 
-class FindingAction(StrEnum):
+class TestCaseReviewFindingAction(StrEnum):
     """What fixing a review finding does to the test cases."""
 
+    __test__ = False
     MODIFY = "modify"
     REMOVE_DUPLICATE_STEPS = "remove_duplicate_steps"
     DELETE_TEST_CASE = "delete_test_case"
     ADD_TEST_CASE = "add_test_case"
 
 
-class ReviewFinding(JsonSerializableModel):
+class TestCaseReviewFinding(JsonSerializableModel):
     """One concrete problem found by a review, assigned to the single test case whose fix resolves it."""
 
+    __test__ = False
     owner_test_case_id: str | None = Field(
-        description="The ID of the only test case whose change resolves the finding; null only for 'add_test_case'"
+        description="The ID of the only test case whose change resolves the finding, exactly as given; null only for "
+        "a finding which adds a new test case"
     )
-    action: FindingAction = Field(description="What fixing the finding does to the owner test case or the test set")
-    severity: FindingSeverity
+    action: TestCaseReviewFindingAction = Field(
+        description="What fixing the finding does: 'modify' changes the owner test case; 'remove_duplicate_steps' "
+        "removes the steps of the owner test case which repeat what a related test case already verifies; "
+        "'delete_test_case' deletes the owner test case, because the related test cases fully cover it or it verifies "
+        "nothing required by the Jira issue; 'add_test_case' creates a new test case for a coverage gap and has no "
+        "owner test case"
+    )
+    severity: TestCaseReviewFindingSeverity
     category: str = Field(description="Short category of the problem, e.g. 'missing coverage' or 'ambiguous step'")
     description: str = Field(description="What exactly is wrong and which concrete consequence it has")
     suggested_fix: str = Field(description="The concrete change which resolves the finding")
-    ac_ref: str | None = Field(default=None, description="The ID of the affected acceptance criterion, if any")
+    ac_ref: str | None = Field(
+        default=None,
+        description="The ID of the affected acceptance criterion, exactly as given, or null when the finding concerns "
+        "none",
+    )
     related_test_case_ids: list[str] = Field(
-        default_factory=list, description="IDs of other test cases involved, e.g. the duplicated one"
+        default_factory=list,
+        description="The IDs of the other test cases involved, exactly as given, e.g. the duplicated one, the deleted "
+        "one which a modified test case takes over, or the deleted one which a new test case restores",
     )
 
 
 class TestCaseReviewFeedback(BaseAgentResult):
     __test__ = False
-    test_case_id: str = Field(description="The ID or key of the test case which was reviewed")
-    findings: list[ReviewFinding] = Field(description="The findings of the review, empty when there are none")
+    findings: list[TestCaseReviewFinding] = Field(description="The findings of the review, empty when there are none")
 
 
 class TestSuiteReview(BaseAgentResult):
     __test__ = False
-    findings: list[ReviewFinding] = Field(
+    findings: list[TestCaseReviewFinding] = Field(
         description="The findings about the test cases as a whole set, empty when there are none"
     )
 
@@ -455,15 +472,15 @@ class DeletedTestCase(JsonSerializableModel):
     """A test case which a fix deleted, kept so that it can be restored if its deletion leaves a coverage gap."""
 
     test_case: DesignedTestCase
-    findings: list[ReviewFinding]
-    deleted_by: ReviewFinding
+    findings: list[TestCaseReviewFinding]
+    deleted_by: TestCaseReviewFinding
 
 
 class PreviousReview(JsonSerializableModel):
     """A test case as it was reviewed before its last fix, with the findings of that review."""
 
     test_case: DesignedTestCase
-    findings: list[ReviewFinding]
+    findings: list[TestCaseReviewFinding]
 
 
 DRAFT_ID_PREFIX = "DRAFT-"
@@ -495,8 +512,8 @@ class TestCaseDesignSession(JsonSerializableModel):
     acceptance_criteria: list[AcceptanceCriteriaItem] = Field(default_factory=list)
     test_cases: dict[str, DesignedTestCase] = Field(default_factory=dict)
     changed_test_case_ids: set[str] = Field(default_factory=set)
-    findings: dict[str, list[ReviewFinding]] = Field(default_factory=dict)
-    suite_findings: list[ReviewFinding] = Field(default_factory=list)
+    findings: dict[str, list[TestCaseReviewFinding]] = Field(default_factory=dict)
+    suite_findings: list[TestCaseReviewFinding] = Field(default_factory=list)
     deleted_test_cases: dict[str, DeletedTestCase] = Field(default_factory=dict)
     previous_reviews: dict[str, PreviousReview] = Field(default_factory=dict)
     duplicate_checks: dict[str, TestCaseDuplicateCheck] = Field(default_factory=dict)
@@ -505,7 +522,9 @@ class TestCaseDesignSession(JsonSerializableModel):
     previous_blocking_count: int | None = None
     stop_reason: DesignStopReason | None = None
     next_draft_number: int = 1
-    uploaded: bool = False
+    saved_test_case_keys: set[str] = Field(default_factory=set)
+    commented_test_case_keys: set[str] = Field(default_factory=set)
+    review_complete_test_case_keys: set[str] = Field(default_factory=set)
     classified: bool = False
     published: bool = False
 
@@ -521,7 +540,7 @@ class TestCaseDesignSession(JsonSerializableModel):
         self.changed_test_case_ids.add(draft_id)
         return draft_id
 
-    def restore_named_by(self, gaps: list[ReviewFinding]) -> list[str]:
+    def restore_named_by(self, gaps: list[TestCaseReviewFinding]) -> list[str]:
         """Puts the deleted test cases the gaps name back as changed, with their findings, and returns their IDs."""
         restored: list[str] = []
         for gap in gaps:
@@ -533,12 +552,12 @@ class TestCaseDesignSession(JsonSerializableModel):
                     restored.append(test_case_id)
         return restored
 
-    def blocking_findings(self, min_severity: FindingSeverity) -> list[ReviewFinding]:
+    def blocking_findings(self, min_severity: TestCaseReviewFindingSeverity) -> list[TestCaseReviewFinding]:
         """The per-test-case and whole-set findings at or above the given severity."""
         all_findings = [*itertools.chain.from_iterable(self.findings.values()), *self.suite_findings]
         return [finding for finding in all_findings if finding.severity.rank >= min_severity.rank]
 
-    def drop_blocking_findings(self, min_severity: FindingSeverity) -> None:
+    def drop_blocking_findings(self, min_severity: TestCaseReviewFindingSeverity) -> None:
         """Removes the per-test-case and whole-set findings at or above the given severity."""
         self.findings = {
             test_case_id: [finding for finding in findings if finding.severity.rank < min_severity.rank]

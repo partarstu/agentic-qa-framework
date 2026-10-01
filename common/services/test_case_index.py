@@ -32,7 +32,7 @@ def render_test_case_text(test_case: TestCase) -> str:
         f"- Action: {step.action}; Data: {', '.join(step.test_data)}; Expected: {step.expected_results}"
         for step in test_case.steps
     )
-    return "\n".join(
+    return "\n\n".join(
         part
         for part in (
             f"Name: {test_case.name}",
@@ -46,7 +46,12 @@ def render_test_case_text(test_case: TestCase) -> str:
 
 def render_designed_test_case_text(test_case: DesignedTestCase) -> str:
     """The compact text of a test case of a design, with the IDs of the acceptance criteria it verifies."""
-    return f"{render_test_case_text(test_case)}\nAcceptance criteria: {', '.join(test_case.ac_ids)}"
+    return f"{render_test_case_text(test_case)}\n\nAcceptance criteria: {', '.join(test_case.ac_ids)}"
+
+
+def render_designed_test_case_block(heading: str, test_case: DesignedTestCase) -> str:
+    """The compact text of a test case of a design as a fenced block under the given heading."""
+    return f"{heading}:\n```{render_designed_test_case_text(test_case)}```"
 
 
 def render_test_case(project_key: str, test_case: TestCase) -> IndexedTestCase:

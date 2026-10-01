@@ -12,6 +12,7 @@ from pydantic_ai.usage import RunUsage, UsageLimits
 from qdrant_client import models as qdrant_models
 
 import config
+from agents.test_case_design.story_context import story_context_parts
 from agents.test_case_review.prompt import (
     TestCaseDuplicateJudgePrompt,
     TestCaseReviewWithAttachmentsPrompt,
@@ -20,29 +21,33 @@ from agents.test_case_review.prompt import (
 from common import utils
 from common.custom_llm_wrapper import CustomLlmWrapper
 from common.models import (
-    FindingAction,
+    DesignedTestCase,
     OverlappingTestCase,
-    ReviewFinding,
     TestCaseDesignSession,
     TestCaseDuplicateCheck,
     TestCaseDuplicateJudgement,
     TestCaseReviewFeedback,
+    TestCaseReviewFinding,
+    TestCaseReviewFindingAction,
     TestSuiteReview,
 )
-from common.services.jira_attachments import story_context_parts
-from common.services.test_case_index import IndexedTestCase, render_designed_test_case_text, render_test_case
+from common.services.test_case_index import IndexedTestCase, render_designed_test_case_block, render_test_case
 from common.services.vector_db_service import VectorDbService
 
 logger = utils.get_logger("test_case_review_agent")
 
 # A single test case's review never sees the other test cases, so it may only modify its own test case.
 _WHOLE_SET_ACTIONS = frozenset(
-    {FindingAction.ADD_TEST_CASE, FindingAction.REMOVE_DUPLICATE_STEPS, FindingAction.DELETE_TEST_CASE}
+    {
+        TestCaseReviewFindingAction.ADD_TEST_CASE,
+        TestCaseReviewFindingAction.REMOVE_DUPLICATE_STEPS,
+        TestCaseReviewFindingAction.DELETE_TEST_CASE,
+    }
 )
 
 
 class TestCaseDuplicateCheckError(RuntimeError):
-    """Raised when the duplicate check cannot run; it aborts the review instead of reporting no duplicates."""
+    """Raised when the duplicate check cannot run, so that no test case is published as free of duplicates unchecked."""
 
     __test__ = False
 
@@ -117,14 +122,14 @@ class TestCaseReviewer:
     async def review_set(self, session: TestCaseDesignSession, usage: RunUsage, usage_limits: UsageLimits) -> None:
         """Reviews the whole set of test cases for coverage gaps and duplicate coverage, given their own findings."""
         test_case_blocks = "\n\n".join(
-            f"ID {test_case_id}:\n```{render_designed_test_case_text(test_case)}```\n"
+            f"{render_designed_test_case_block(f'ID {test_case_id}', test_case)}\n"
             f"Findings of its individual review:\n```{utils.json_list(session.findings[test_case_id])}```"
             for test_case_id, test_case in session.test_cases.items()
         )
         message = [*await story_context_parts(session), f"Test cases:\n{test_case_blocks}"]
         if session.deleted_test_cases:
             deleted_blocks = "\n\n".join(
-                f"ID {test_case_id}:\n```{render_designed_test_case_text(deleted.test_case)}```\n"
+                f"{render_designed_test_case_block(f'ID {test_case_id}', deleted.test_case)}\n"
                 f"Finding which deleted it:\n```{deleted.deleted_by.model_dump_json()}```"
                 for test_case_id, deleted in session.deleted_test_cases.items()
             )
@@ -142,21 +147,32 @@ class TestCaseReviewer:
     async def check_duplicates(
         self, session: TestCaseDesignSession, usage: RunUsage, usage_limits: UsageLimits
     ) -> None:
-        """Checks every test case of the design against the project's existing ones."""
-        async with asyncio.TaskGroup() as task_group:
-            checks = {
-                test_case_id: task_group.create_task(
-                    self._check_duplicates(
-                        session.project_key,
-                        render_test_case(session.project_key, test_case.model_copy(update={"key": test_case_id})),
-                        usage,
-                        usage_limits,
-                    )
-                )
-                for test_case_id, test_case in session.test_cases.items()
-            }
-        # Stored only once every check succeeded, so a failed check leaves no partial verdicts behind.
-        session.duplicate_checks.update({test_case_id: check.result() for test_case_id, check in checks.items()})
+        """Checks the test cases of the design without a duplicate check yet against the project's existing ones.
+
+        Raises:
+            TestCaseDuplicateCheckError: If any check failed; every check which succeeded is kept, so a repeated call
+                runs only the failed ones.
+        """
+
+        async def check(test_case_id: str, test_case: DesignedTestCase) -> None:
+            record = render_test_case(session.project_key, test_case.model_copy(update={"key": test_case_id}))
+            session.duplicate_checks[test_case_id] = await self._check_duplicates(
+                session.project_key, record, usage, usage_limits
+            )
+
+        unchecked = {
+            test_case_id: test_case
+            for test_case_id, test_case in session.test_cases.items()
+            if test_case_id not in session.duplicate_checks
+        }
+        # One failed check must not cancel the others, whose verdicts a repeated call then reuses.
+        outcomes = await asyncio.gather(
+            *(check(test_case_id, test_case) for test_case_id, test_case in unchecked.items()), return_exceptions=True
+        )
+        if failures := [outcome for outcome in outcomes if isinstance(outcome, Exception)]:
+            raise TestCaseDuplicateCheckError(
+                f"The duplicate check failed for {len(failures)} of {len(unchecked)} test case(s): {failures[0]}"
+            ) from failures[0]
 
     async def _check_duplicates(
         self, project_key: str, record: IndexedTestCase, usage: RunUsage, usage_limits: UsageLimits
@@ -186,11 +202,11 @@ class TestCaseReviewer:
 def _review_request(session: TestCaseDesignSession, test_case_id: str) -> list[str]:
     """The test case under review and, for a fixed one, its previous version with the findings of that review."""
     request = [
-        f"Test case under review (ID {test_case_id}):\n```{render_designed_test_case_text(session.test_cases[test_case_id])}```"
+        render_designed_test_case_block(f"Test case under review (ID {test_case_id})", session.test_cases[test_case_id])
     ]
     if previous := session.previous_reviews.get(test_case_id):
         request += [
-            f"Previous version of the test case under review:\n```{render_designed_test_case_text(previous.test_case)}```",
+            render_designed_test_case_block("Previous version of the test case under review", previous.test_case),
             f"Findings of the review of the previous version:\n```{utils.json_list(previous.findings)}```",
         ]
     return request
@@ -204,20 +220,20 @@ def _validate_test_case_review(
     return output
 
 
-def _ac_ref_errors(findings: list[ReviewFinding], session: TestCaseDesignSession) -> list[str]:
+def _ac_ref_errors(findings: list[TestCaseReviewFinding], session: TestCaseDesignSession) -> list[str]:
     known_ids = {criterion.id for criterion in session.acceptance_criteria}
     if unknown := sorted({finding.ac_ref for finding in findings if finding.ac_ref is not None} - known_ids):
         return [f"Unknown acceptance criteria IDs {unknown} in `ac_ref`; use only {sorted(known_ids)}."]
     return []
 
 
-def _finding_errors(finding: ReviewFinding, session: TestCaseDesignSession) -> list[str]:
+def _finding_errors(finding: TestCaseReviewFinding, session: TestCaseDesignSession) -> list[str]:
     """What makes a finding unusable: an owner that contradicts its action, or an ID of no usable test case."""
     owner = finding.owner_test_case_id
     errors: list[str] = []
-    if finding.action is FindingAction.ADD_TEST_CASE and owner is not None:
+    if finding.action is TestCaseReviewFindingAction.ADD_TEST_CASE and owner is not None:
         errors.append(f"An '{finding.action}' finding has no owner test case, but '{owner}' was given.")
-    if finding.action is not FindingAction.ADD_TEST_CASE and owner is None:
+    if finding.action is not TestCaseReviewFindingAction.ADD_TEST_CASE and owner is None:
         errors.append(f"A '{finding.action}' finding needs exactly one owner test case: '{finding.description}'.")
     unknown = [
         test_case_id
@@ -231,27 +247,31 @@ def _finding_errors(finding: ReviewFinding, session: TestCaseDesignSession) -> l
     restored = [
         test_case_id for test_case_id in finding.related_test_case_ids if test_case_id in session.deleted_test_cases
     ]
-    if restored and finding.action is not FindingAction.ADD_TEST_CASE:
+    if restored and finding.action is not TestCaseReviewFindingAction.ADD_TEST_CASE:
         errors.append(
-            f"The deleted test cases {restored} may be named only by an '{FindingAction.ADD_TEST_CASE}' finding "
+            f"The deleted test cases {restored} may be named only by an '{TestCaseReviewFindingAction.ADD_TEST_CASE}' finding "
             f"which restores them, not by the '{finding.action}' finding of '{owner}'."
         )
     return errors
 
 
-def _set_errors(findings: list[ReviewFinding], session: TestCaseDesignSession) -> list[str]:
+def _set_errors(findings: list[TestCaseReviewFinding], session: TestCaseDesignSession) -> list[str]:
     """What makes the findings unusable together: deletions and step removals which would lose coverage."""
     # An ownerless finding is already reported by `_finding_errors`; it takes no part in these checks.
     owned = [finding for finding in findings if finding.owner_test_case_id is not None]
-    deleted = {finding.owner_test_case_id for finding in owned if finding.action is FindingAction.DELETE_TEST_CASE}
+    deleted = {
+        finding.owner_test_case_id
+        for finding in owned
+        if finding.action is TestCaseReviewFindingAction.DELETE_TEST_CASE
+    }
     errors: list[str] = []
     for finding in owned:
         owner = finding.owner_test_case_id
-        if finding.action is FindingAction.DELETE_TEST_CASE and (
+        if finding.action is TestCaseReviewFindingAction.DELETE_TEST_CASE and (
             covering := deleted & set(finding.related_test_case_ids)
         ):
             errors.append(f"'{owner}' is deleted as covered by {sorted(covering)}, which are deleted too; keep one.")
-        if finding.action is FindingAction.REMOVE_DUPLICATE_STEPS and (
+        if finding.action is TestCaseReviewFindingAction.REMOVE_DUPLICATE_STEPS and (
             gone := deleted & {owner, *finding.related_test_case_ids}
         ):
             errors.append(f"The '{finding.action}' finding of '{owner}' points at {sorted(gone)}, which is deleted.")
@@ -262,11 +282,14 @@ def _set_errors(findings: list[ReviewFinding], session: TestCaseDesignSession) -
     return errors
 
 
-def _step_removals(findings: list[ReviewFinding]) -> set[tuple[str, str]]:
+def _step_removals(findings: list[TestCaseReviewFinding]) -> set[tuple[str, str]]:
     """The (owner, related) test case pairs of the `remove_duplicate_steps` findings."""
     pairs: set[tuple[str, str]] = set()
     for finding in findings:
-        if finding.action is FindingAction.REMOVE_DUPLICATE_STEPS and finding.owner_test_case_id is not None:
+        if (
+            finding.action is TestCaseReviewFindingAction.REMOVE_DUPLICATE_STEPS
+            and finding.owner_test_case_id is not None
+        ):
             pairs.update((finding.owner_test_case_id, related_id) for related_id in finding.related_test_case_ids)
     return pairs
 
@@ -285,9 +308,9 @@ def _validate_test_suite_review(ctx: RunContext[TestCaseDesignSession], output: 
     return output
 
 
-def _owned_by(test_case_id: str, findings: Iterable[ReviewFinding]) -> list[ReviewFinding]:
+def _owned_by(test_case_id: str, findings: Iterable[TestCaseReviewFinding]) -> list[TestCaseReviewFinding]:
     """The findings of a single test case's review, all owned by it; coverage and duplicates are the whole-set review's."""
-    owned: list[ReviewFinding] = []
+    owned: list[TestCaseReviewFinding] = []
     for finding in findings:
         if finding.action in _WHOLE_SET_ACTIONS:
             logger.warning("Dropping the whole-set finding reported by the review of %s: %s", test_case_id, finding)

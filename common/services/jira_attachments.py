@@ -25,7 +25,7 @@ from common.attachment_handler import (
     resolve_media_type,
     should_skip_attachment,
 )
-from common.models import JIRA_ISSUE_KEY_PATTERN, AcceptanceCriteriaList, TestCaseDesignSession
+from common.models import JIRA_ISSUE_KEY_PATTERN
 from common.services.jira_client import build_jira_client
 
 logger = utils.get_logger("jira_attachments")
@@ -41,7 +41,7 @@ def require_valid_issue_key(issue_key: str) -> None:
     if not JIRA_ISSUE_KEY_PATTERN.fullmatch(issue_key):
         raise ModelRetry(
             f"'{issue_key[:50]}' is not a Jira issue key. Pass the key of the issue you are working on, "
-            "in the format PROJ-123."
+            "in the format like 'PROJ-123'."
         )
 
 
@@ -138,22 +138,8 @@ async def fetch_issue_attachments(issue_key: str) -> dict[str, BinaryContent]:
 
 def attachment_parts(attachments: dict[str, BinaryContent]) -> list[str | BinaryContent]:
     """Each attachment as a user-message pair: its file name, then its original content."""
-    return [part for filename, content in attachments.items() for part in (f"Attachment: {filename}", content)]
-
-
-async def fetch_session_attachments(session: TestCaseDesignSession) -> dict[str, BinaryContent]:
-    """The attachments of the design session's user story, downloaded once and then reused from the session."""
-    if session.attachments is None:
-        session.attachments = await fetch_issue_attachments(session.story_key)
-    return session.attachments
-
-
-async def story_context_parts(session: TestCaseDesignSession) -> list[str | BinaryContent]:
-    """Build the story context every repeated sub-agent call of a design starts its message with."""
-    # Identical in every call and placed first, so the provider can serve it from its prompt-prefix cache.
-    criteria = AcceptanceCriteriaList(items=session.acceptance_criteria).model_dump_json()
-    return [
-        f"Jira Issue content:\n```{session.story_content}```",
-        f"Acceptance criteria:\n```{criteria}```",
-        *attachment_parts(await fetch_session_attachments(session)),
-    ]
+    parts: list[str | BinaryContent] = []
+    for filename, content in attachments.items():
+        parts.append(f"Attachment: {filename}")
+        parts.append(content)
+    return parts

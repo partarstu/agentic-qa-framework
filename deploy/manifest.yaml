@@ -175,7 +175,7 @@ services:
       QDRANT_URL: ""
       PROMPT_GUARD_SERVICE_URL: ""
       PROMPT_OVERRIDES_DIR: ""
-      # The design agent itself tells its generation delegate which additional Jira fields to fetch.
+      # The design agent's model fetches the user story with these additional Jira fields.
       JIRA_ADDITIONAL_FIELD_IDS: ""
     secrets:
       GOOGLE_API_KEY: GOOGLE_API_KEY

@@ -3,11 +3,14 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 
 import sys
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
+from pydantic_ai import ModelRetry
 
 from agents.test_case_classification.main import TestCaseClassificationAgent
+from common.models import TestCaseKeys
 from common.services.test_management_base import TestManagementClientBase
 
 
@@ -52,7 +55,19 @@ def test_add_labels_to_test_case(mock_get_client, agent):
     mock_client = MagicMock(spec=TestManagementClientBase)
     mock_get_client.return_value = mock_client
 
-    result = agent.add_labels_to_test_case("TEST-1", ["L1", "L2"])
+    ctx = SimpleNamespace(deps=TestCaseKeys(issue_keys=["TEST-1"]))
+
+    result = agent.add_labels_to_test_case(ctx, "TEST-1", ["L1", "L2"])
 
     mock_client.add_labels_to_test_case.assert_called_once_with("TEST-1", ["L1", "L2"])
     assert "Successfully added labels" in result
+
+
+@patch("agents.test_case_classification.main.get_test_management_client")
+def test_labels_are_refused_for_a_test_case_outside_the_classified_ones(mock_get_client, agent):
+    ctx = SimpleNamespace(deps=TestCaseKeys(issue_keys=["TEST-1", "TEST-2"]))
+
+    with pytest.raises(ModelRetry, match="'OTHER-9' is not one of the test cases to classify: TEST-1, TEST-2"):
+        agent.add_labels_to_test_case(ctx, "OTHER-9", ["ui"])
+
+    mock_get_client.assert_not_called()
