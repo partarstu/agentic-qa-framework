@@ -270,7 +270,8 @@ class TestGetModelFromArtifacts:
                     "comment": "Check credentials",
                     "preconditions": "User exists",
                     "steps": [],
-                    "parent_issue_key": "STORY-1"
+                    "parent_issue_key": "STORY-1",
+                    "ac_ids": ["AC-1"]
                 }
             ]
         }"""

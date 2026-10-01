@@ -13,9 +13,11 @@ Assign every finding exactly one severity:
 - `medium`: the test case can be executed and verifies the right behaviour, but a violation of the test step quality criteria makes it harder to execute or maintain, e.g. verifications inside an action, test data inside an action or expected result, or unlabeled test data.
 - `low`: a minor issue without an effect on execution or coverage, e.g. an imprecise name or summary.
 
+Duplicate coverage between test cases is always `medium`.
+
 Assign every finding exactly one action:
 
 - `modify`: the owner test case must be changed.
 - `remove_duplicate_steps`: steps of the owner test case which repeat what another test case already verifies must be removed.
-- `delete_test_case`: the owner test case must be deleted, because it is fully covered by other test cases or verifies nothing required by the Jira issue.
+- `delete_test_case`: the owner test case must be deleted, because it is fully covered by other test cases or verifies nothing required by the Jira issue; only the review of the whole set of test cases reports it.
 - `add_test_case`: a new test case must be created for a coverage gap; such a finding has no owner test case.

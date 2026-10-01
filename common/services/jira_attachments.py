@@ -25,7 +25,7 @@ from common.attachment_handler import (
     resolve_media_type,
     should_skip_attachment,
 )
-from common.models import JIRA_ISSUE_KEY_PATTERN, TestCaseDesignSession
+from common.models import JIRA_ISSUE_KEY_PATTERN, AcceptanceCriteriaList, TestCaseDesignSession
 from common.services.jira_client import build_jira_client
 
 logger = utils.get_logger("jira_attachments")
@@ -146,3 +146,14 @@ async def fetch_session_attachments(session: TestCaseDesignSession) -> dict[str,
     if session.attachments is None:
         session.attachments = await fetch_issue_attachments(session.story_key)
     return session.attachments
+
+
+async def story_context_parts(session: TestCaseDesignSession) -> list[str | BinaryContent]:
+    """Build the story context every repeated sub-agent call of a design starts its message with."""
+    # Identical in every call and placed first, so the provider can serve it from its prompt-prefix cache.
+    criteria = AcceptanceCriteriaList(items=session.acceptance_criteria).model_dump_json()
+    return [
+        f"Jira Issue content:\n```{session.story_content}```",
+        f"Acceptance criteria:\n```{criteria}```",
+        *attachment_parts(await fetch_session_attachments(session)),
+    ]

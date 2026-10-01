@@ -6,10 +6,16 @@ import pytest
 from pydantic import ValidationError
 
 from common.models import (
+    AcceptanceCriteriaItem,
+    DeletedTestCase,
+    DesignedTestCase,
+    DesignStopReason,
     FindingAction,
     FindingSeverity,
     JiraUserStory,
     JsonSerializableModel,
+    OverlappingTestCase,
+    PreviousReview,
     ReviewFinding,
     TestCase,
     TestCaseDesignRequest,
@@ -61,8 +67,8 @@ def test_design_session_project_key_is_the_story_key_prefix():
 def test_add_draft_assigns_sequential_ids_and_marks_them_changed():
     session = TestCaseDesignSession(story_key="PROJ-1")
 
-    first = session.add_draft(_test_case("a"))
-    second = session.add_draft(_test_case("b"))
+    first = session.add_draft(_designed_test_case("a", ["AC-1"]))
+    second = session.add_draft(_designed_test_case("b", ["AC-1"]))
 
     assert (first, second) == ("DRAFT-1", "DRAFT-2")
     assert session.test_cases[second].name == "b"
@@ -99,3 +105,56 @@ def test_finding_severity_rank_follows_the_declared_order():
 def test_design_result_hides_the_session_filled_fields_from_the_model():
     properties = TestCaseDesignResult.model_json_schema()["properties"]
     assert set(properties) == {"llm_comments"}
+
+
+def _designed_test_case(name: str, ac_ids: list[str]) -> DesignedTestCase:
+    return DesignedTestCase(**_test_case(name).model_dump(), ac_ids=ac_ids)
+
+
+def test_a_designed_test_case_must_name_the_acceptance_criteria_it_verifies():
+    with pytest.raises(ValidationError, match="ac_ids"):
+        DesignedTestCase(**_test_case("a").model_dump())
+
+
+def test_a_new_design_session_has_no_acceptance_criteria_deletions_or_previous_reviews():
+    session = TestCaseDesignSession(story_key="PROJ-1")
+
+    assert session.acceptance_criteria == []
+    assert session.deleted_test_cases == {}
+    assert session.previous_reviews == {}
+    assert session.previous_blocking_count is None
+
+
+def test_a_design_session_keeps_deleted_test_cases_and_previous_reviews_across_serialization():
+    finding = ReviewFinding(
+        owner_test_case_id="DRAFT-2",
+        action=FindingAction.DELETE_TEST_CASE,
+        severity=FindingSeverity.MEDIUM,
+        category="duplicate",
+        description="d",
+        suggested_fix="f",
+        related_test_case_ids=["DRAFT-1"],
+    )
+    session = TestCaseDesignSession(
+        story_key="PROJ-1",
+        acceptance_criteria=[AcceptanceCriteriaItem(id="AC-1", text="t", additional_info="")],
+        deleted_test_cases={
+            "DRAFT-2": DeletedTestCase(test_case=_designed_test_case("b", ["AC-1"]), findings=[], deleted_by=finding)
+        },
+        previous_reviews={"DRAFT-1": PreviousReview(test_case=_designed_test_case("a", ["AC-1"]), findings=[finding])},
+    )
+
+    restored = TestCaseDesignSession.model_validate_json(session.model_dump_json())
+
+    assert restored.deleted_test_cases["DRAFT-2"].deleted_by == finding
+    assert restored.deleted_test_cases["DRAFT-2"].test_case.ac_ids == ["AC-1"]
+    assert restored.previous_reviews["DRAFT-1"].test_case.name == "a"
+    assert restored.acceptance_criteria[0].id == "AC-1"
+
+
+def test_the_duplicate_judge_must_say_whether_a_candidate_fully_covers_the_reviewed_test_case():
+    assert "fully_covers" in OverlappingTestCase.model_json_schema()["required"]
+
+
+def test_a_design_can_stop_for_lack_of_progress():
+    assert DesignStopReason("no_progress") is DesignStopReason.NO_PROGRESS

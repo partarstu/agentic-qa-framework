@@ -65,6 +65,15 @@ def _is_mcp_connect_failure(exc: BaseException) -> bool:
     return isinstance(exc, RuntimeError) and isinstance(exc.__cause__, httpx2.ConnectError)
 
 
+def _is_retryable_provider_error(exc: BaseException) -> bool:
+    """Whether a failure is a transient LLM provider error, also when concurrent sub-agent runs group it."""
+    if isinstance(exc, ExceptionGroup):
+        return all(_is_retryable_provider_error(member) for member in exc.exceptions)
+    return isinstance(exc, httpx2.TransportError) or (
+        isinstance(exc, ModelHTTPError) and exc.status_code in config.RetryConfig.RETRYABLE_STATUS_CODES
+    )
+
+
 class AgentBase(ABC):
     def __init__(
         self,
@@ -237,11 +246,8 @@ class AgentBase(ABC):
                             f"{config.ATLASSIAN_MCP_SERVER_URL}. Ensure the MCP server is running and accessible."
                         ) from e
                     raise
-            except (ModelHTTPError, httpx2.TransportError) as e:
-                is_retryable = isinstance(e, httpx2.TransportError) or (
-                    isinstance(e, ModelHTTPError) and e.status_code in config.RetryConfig.RETRYABLE_STATUS_CODES
-                )
-                if is_retryable and attempt < config.RetryConfig.MAX_RETRIES - 1:
+            except Exception as e:
+                if _is_retryable_provider_error(e) and attempt < config.RetryConfig.MAX_RETRIES - 1:
                     delay = config.RetryConfig.RETRY_BASE_DELAY_SECONDS * (2**attempt)
                     logger.warning(
                         f"LLM provider request failed: {e} "

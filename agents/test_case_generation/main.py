@@ -2,12 +2,11 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
-import asyncio
+from functools import partial
 
 from pydantic_ai import ModelRetry, RunContext
 from pydantic_ai.messages import BinaryContent
-from pydantic_ai.settings import ThinkingLevel
-from pydantic_ai.usage import RunUsage
+from pydantic_ai.usage import RunUsage, UsageLimits
 
 import config
 from agents.test_case_generation.prompt import (
@@ -15,42 +14,36 @@ from agents.test_case_generation.prompt import (
     StepsGenerationPrompt,
     TestCaseCreationPrompt,
     TestCaseFixerPrompt,
-    TestCaseGenerationSystemPrompt,
 )
 from common import utils
-from common.agent_base import AgentBase
 from common.custom_llm_wrapper import CustomLlmWrapper
 from common.models import (
     AcceptanceCriteriaList,
-    AgentSkillDeclaration,
+    DeletedTestCase,
+    DesignedTestCase,
     FindingAction,
     FindingSeverity,
     GeneratedTestCases,
+    PreviousReview,
     ReviewFinding,
-    TestCase,
     TestCaseDesignSession,
     TestStepsSequenceList,
 )
-from common.services.atlassian_mcp import build_atlassian_mcp_server_toolset
-from common.services.atlassian_tools import JIRA_GET_ISSUE
-from common.services.jira_attachments import attachment_parts, fetch_session_attachments
+from common.services.jira_attachments import attachment_parts, fetch_session_attachments, story_context_parts
+from common.services.test_case_index import render_designed_test_case_text
 
 logger = utils.get_logger("test_case_generation_agent")
 
-# Attachments arrive through the REST downloader and uploads go to the test management system.
-_JIRA_TOOL_ALLOWLIST = (JIRA_GET_ISSUE,)
 
+class TestCaseGenerator:
+    """Generates the test cases of a design and fixes them according to the findings of their review."""
 
-class TestCaseGenerationAgent(AgentBase):
     __test__ = False
 
-    def __init__(self):
-        # Initialize sub-agent prompts
+    def __init__(self) -> None:
         self.ac_extraction_prompt = AcExtractionPrompt()
         self.steps_generation_prompt = StepsGenerationPrompt()
         self.test_case_creation_prompt = TestCaseCreationPrompt()
-
-        # Initialize sub-agents
         model_name = config.TestCaseGenerationAgentConfig.MODEL_NAME
 
         self.ac_extractor_agent = CustomLlmWrapper.create_agent(
@@ -76,112 +69,70 @@ class TestCaseGenerationAgent(AgentBase):
             output_type=GeneratedTestCases,
             system_prompt=self.test_case_creation_prompt.get_prompt(),
             name="test_case_creator",
+            deps_type=TestCaseDesignSession,
             max_output_tokens=config.TestCaseGenerationAgentConfig.MAX_OUTPUT_TOKENS,
             thinking_level=config.TestCaseGenerationAgentConfig.THINKING_LEVEL,
         )
+        self.test_case_creator_agent.output_validator(_require_known_ac_ids)
 
         self.test_case_fixer_agent = CustomLlmWrapper.create_agent(
             model_name=model_name,
-            output_type=TestCase,
+            output_type=DesignedTestCase,
             system_prompt=TestCaseFixerPrompt().get_prompt(),
             name="test_case_fixer",
+            deps_type=TestCaseDesignSession,
             max_output_tokens=config.TestCaseGenerationAgentConfig.MAX_OUTPUT_TOKENS,
             thinking_level=config.TestCaseGenerationAgentConfig.THINKING_LEVEL,
         )
+        self.test_case_fixer_agent.output_validator(_require_known_ac_ids)
         self.fix_min_severity = FindingSeverity(config.TestCaseDesignAgentConfig.FIX_MIN_SEVERITY)
 
-        # Initialize base agent (as orchestrator placeholder)
-        instruction_prompt = TestCaseGenerationSystemPrompt()
-        super().__init__(
-            agent_name=config.TestCaseGenerationAgentConfig.OWN_NAME,
-            base_url=config.AGENT_BASE_URL,
-            port=config.TestCaseGenerationAgentConfig.PORT,
-            external_port=config.TestCaseGenerationAgentConfig.EXTERNAL_PORT,
-            protocol=config.TestCaseGenerationAgentConfig.PROTOCOL,
-            model_name=config.TestCaseGenerationAgentConfig.MODEL_NAME,
-            version=config.TestCaseGenerationAgentConfig.VERSION,
-            max_output_tokens=config.TestCaseGenerationAgentConfig.MAX_OUTPUT_TOKENS,
-            output_type=GeneratedTestCases,
-            instructions=instruction_prompt.get_prompt(),
-            mcp_toolset_factories=[lambda: build_atlassian_mcp_server_toolset(_JIRA_TOOL_ALLOWLIST)],
-            deps_type=TestCaseDesignSession,
-            skill=AgentSkillDeclaration(
-                id=config.TestCaseGenerationAgentConfig.SKILL_ID,
-                name=config.TestCaseGenerationAgentConfig.SKILL_NAME,
-                description=config.TestCaseGenerationAgentConfig.SKILL_DESCRIPTION,
-            ),
-            tools=[self._generate_test_cases, self.fix_test_cases],
+    async def generate(self, session: TestCaseDesignSession, usage: RunUsage, usage_limits: UsageLimits) -> None:
+        """Generates the test cases of the fetched story and stores them in the design as drafts."""
+        attachments = await fetch_session_attachments(session)
+        extracted = await self.extract_acceptance_criteria(attachments, session.story_content, usage, usage_limits)
+        session.acceptance_criteria = extracted.items
+        context_parts = await story_context_parts(session)
+        test_steps_sequences = await self.generate_test_steps(context_parts, usage, usage_limits)
+        generated = await self.create_test_cases_from_steps(
+            session, context_parts, test_steps_sequences, usage, usage_limits
         )
+        for test_case in generated.test_cases:
+            session.add_draft(test_case)
 
-    def get_thinking_level(self) -> ThinkingLevel:
-        return config.TestCaseGenerationAgentConfig.THINKING_LEVEL
-
-    def get_max_requests_per_task(self) -> int:
-        return config.TestCaseGenerationAgentConfig.MAX_REQUESTS_PER_TASK
-
-    async def _generate_test_cases(
-        self, ctx: RunContext[TestCaseDesignSession], jira_issue_id: int, jira_issue_content: str
-    ) -> GeneratedTestCases:
-        """
-        Generates the test cases of the Jira issue based on its content and attachments, and adds them to the design.
-
-        Args:
-            jira_issue_id: The numeric ID of the Jira issue (not its key), e.g. 10020.
-            jira_issue_content: The whole content of the Jira issue.
-
-        Returns:
-            The generated test cases, each with its draft ID as key.
-        """
-        session = ctx.deps
-        if session.test_cases:
-            raise ModelRetry("The test cases are already generated; never generate them twice.")
-        session.story_id = jira_issue_id
-        session.story_content = jira_issue_content
-        attachments_content = await fetch_session_attachments(session)
-        extracted_acceptance_criteria = await self.extract_acceptance_criteria(
-            attachments_content, jira_issue_content, ctx.usage
-        )
-        test_steps_sequences = await self.generate_test_steps(
-            extracted_acceptance_criteria, attachments_content, ctx.usage
-        )
-        generated_test_cases = await self.create_test_cases_from_steps(
-            extracted_acceptance_criteria, jira_issue_content, test_steps_sequences, ctx.usage
-        )
-        draft_ids = [session.add_draft(test_case) for test_case in generated_test_cases.test_cases]
-        return GeneratedTestCases(
-            test_cases=[session.test_cases[draft_id].model_copy(update={"key": draft_id}) for draft_id in draft_ids],
-            llm_comments=generated_test_cases.llm_comments,
-        )
-
-    async def fix_test_cases(self, ctx: RunContext[TestCaseDesignSession]) -> str:
-        """
-        Fixes the test cases of the design according to the blocking findings of their last review: modifies the
-        affected test cases, deletes the redundant ones and adds the missing ones.
-
-        Returns:
-            A summary of the modified, added and deleted test cases.
-        """
-        session = ctx.deps
+    async def fix(self, session: TestCaseDesignSession, usage: RunUsage, usage_limits: UsageLimits) -> str:
+        """Modifies, deletes, restores and adds test cases of the design according to the blocking findings."""
         blocking = session.blocking_findings(self.fix_min_severity)
         if not blocking:
             return "No finding blocks the test cases, so there is nothing to fix."
-        deleted = _delete_redundant_test_cases(session, blocking)
+        gaps = [finding for finding in blocking if finding.action is FindingAction.ADD_TEST_CASE]
+        # Restored before this fix deletes anything, so a gap never undoes a deletion of the same review.
+        restored = session.restore_named_by(gaps)
+        deleted = _delete_test_cases(session, blocking)
+        missing = [gap for gap in gaps if not set(gap.related_test_case_ids) & set(restored)]
         findings_by_owner = _findings_by_owner(session, blocking)
-        missing = [finding for finding in blocking if finding.action is FindingAction.ADD_TEST_CASE]
         logger.info(
-            "Fixing %d test case(s), adding %d and deleting %d.", len(findings_by_owner), len(missing), len(deleted)
+            "Fixing %d test case(s), adding %d, deleting %d and restoring %d.",
+            len(findings_by_owner),
+            len(missing),
+            len(deleted),
+            len(restored),
         )
-        fixed, new_test_cases = await self._run_fixers(session, findings_by_owner, missing, ctx.usage)
+        fixed, new_test_cases = await self._run_fixers(session, findings_by_owner, missing, usage, usage_limits)
 
         for owner, test_case in fixed.items():
-            session.test_cases[owner] = test_case.model_copy(update={"key": session.test_cases[owner].key})
+            previous = session.test_cases[owner]
+            session.previous_reviews[owner] = PreviousReview(
+                test_case=previous, findings=session.findings.get(owner, [])
+            )
+            session.test_cases[owner] = test_case.model_copy(update={"key": previous.key})
             session.changed_test_case_ids.add(owner)
         added = [session.add_draft(test_case) for test_case in new_test_cases]
         # The fixes resolved every blocking finding, so a repeated call cannot fix or add the same thing twice.
         session.drop_blocking_findings(self.fix_min_severity)
         return (
             f"Modified test cases: {', '.join(fixed) or 'none'}; added: {', '.join(added) or 'none'}; "
-            f"deleted: {', '.join(sorted(deleted)) or 'none'}."
+            f"deleted: {', '.join(sorted(deleted)) or 'none'}; restored: {', '.join(restored) or 'none'}."
         )
 
     async def _run_fixers(
@@ -190,72 +141,51 @@ class TestCaseGenerationAgent(AgentBase):
         findings_by_owner: dict[str, list[ReviewFinding]],
         missing: list[ReviewFinding],
         usage: RunUsage,
-    ) -> tuple[dict[str, TestCase], list[TestCase]]:
+        usage_limits: UsageLimits,
+    ) -> tuple[dict[str, DesignedTestCase], list[DesignedTestCase]]:
         """Runs one fixer per affected test case and one per missing test case, returning the fixed and the new ones."""
-        context_parts = [
-            f"Jira Issue content:\n```{session.story_content}```",
-            *attachment_parts(await fetch_session_attachments(session)),
-        ]
-        usage_limits = self.get_sub_agent_usage_limits()
+        context_parts = await story_context_parts(session)
 
-        async def run_fixer(request: list[str]) -> TestCase:
+        async def run_fixer(request: list[str]) -> DesignedTestCase:
             result = await self.test_case_fixer_agent.run(
-                [*request, *context_parts], usage=usage, usage_limits=usage_limits
+                [*context_parts, *request], deps=session, usage=usage, usage_limits=usage_limits
             )
             return result.output
 
+        requests = [_fix_request(session, owner, findings) for owner, findings in findings_by_owner.items()]
+        requests += [
+            _addition_request(session, gap, [other for other in missing if other is not gap]) for gap in missing
+        ]
         # Every fix touches a single test case, so the fixer runs are independent of each other.
-        async with asyncio.TaskGroup() as task_group:
-            fixes = {
-                owner: task_group.create_task(run_fixer(_fix_request(session, owner, findings)))
-                for owner, findings in findings_by_owner.items()
-            }
-            additions = [task_group.create_task(run_fixer(_addition_request(session, finding))) for finding in missing]
-        return {owner: fix.result() for owner, fix in fixes.items()}, [addition.result() for addition in additions]
+        results = await utils.run_first_then_concurrently([partial(run_fixer, request) for request in requests])
+        fixes, additions = results[: len(findings_by_owner)], results[len(findings_by_owner) :]
+        return dict(zip(findings_by_owner, fixes, strict=True)), additions
 
     async def create_test_cases_from_steps(
         self,
-        extracted_acceptance_criteria: AcceptanceCriteriaList,
-        jira_issue_content: str,
+        session: TestCaseDesignSession,
+        context_parts: list[str | BinaryContent],
         test_steps_sequences: TestStepsSequenceList,
         usage: RunUsage,
+        usage_limits: UsageLimits,
     ) -> GeneratedTestCases:
         logger.info("Generating Test Cases for all step sequences")
-        user_message = f"""
-Jira Issue content:
-{jira_issue_content}
-
-
-Acceptance Criteria Items:
-{extracted_acceptance_criteria.model_dump_json()}
-
-
-Test Step Sequences:
-{test_steps_sequences.model_dump_json()}
-"""
         result = await self.test_case_creator_agent.run(
-            user_message, usage=usage, usage_limits=self.get_sub_agent_usage_limits()
+            [*context_parts, f"Test Step Sequences:\n{test_steps_sequences.model_dump_json()}"],
+            deps=session,
+            usage=usage,
+            usage_limits=usage_limits,
         )
         generated_test_cases: GeneratedTestCases = result.output
         logger.info(f"Generated {len(generated_test_cases.test_cases)} test cases.")
         return generated_test_cases
 
     async def generate_test_steps(
-        self,
-        extracted_acceptance_criteria: AcceptanceCriteriaList,
-        attachments_content: dict[str, BinaryContent],
-        usage: RunUsage,
+        self, context_parts: list[str | BinaryContent], usage: RunUsage, usage_limits: UsageLimits
     ) -> TestStepsSequenceList:
-        """The steps are built from the criteria and the original attachments: a criterion carries what the
-        issue text adds to it, while the attachments are handed over as they are, not as a summary."""
-        logger.info("Generating Steps for all ACs with %d attachments", len(attachments_content))
-        user_message_parts: list[str | BinaryContent] = [
-            f"Acceptance Criteria Items:\n{extracted_acceptance_criteria.model_dump_json()}",
-            *attachment_parts(attachments_content),
-        ]
-        result = await self.steps_generator_agent.run(
-            user_message_parts, usage=usage, usage_limits=self.get_sub_agent_usage_limits()
-        )
+        """Builds the steps from the story context, whose attachments reach the model as they are, not as a summary."""
+        logger.info("Generating Steps for all ACs")
+        result = await self.steps_generator_agent.run(context_parts, usage=usage, usage_limits=usage_limits)
         test_steps_sequences: TestStepsSequenceList = result.output
         logger.info(
             f"Generated {len(test_steps_sequences.items)} test step sequences with total "
@@ -264,37 +194,47 @@ Test Step Sequences:
         return test_steps_sequences
 
     async def extract_acceptance_criteria(
-        self, attachments_content: dict[str, BinaryContent], jira_issue_content: str, usage: RunUsage
+        self,
+        attachments_content: dict[str, BinaryContent],
+        jira_issue_content: str | None,
+        usage: RunUsage,
+        usage_limits: UsageLimits,
     ) -> AcceptanceCriteriaList:
         user_message_parts: list[str | BinaryContent] = [
             f"Jira Issue content:\n{jira_issue_content}",
             *attachment_parts(attachments_content),
         ]
         logger.info("Starting AC extraction with %d attachments", len(attachments_content))
-        # Own, short-lived Jira MCP session for this sub-agent run, as for the main agent.
-        async with build_atlassian_mcp_server_toolset(_JIRA_TOOL_ALLOWLIST) as jira_toolset:
-            result = await self.ac_extractor_agent.run(
-                user_message_parts,
-                toolsets=[jira_toolset],
-                usage=usage,
-                usage_limits=self.get_sub_agent_usage_limits(),
-            )
+        result = await self.ac_extractor_agent.run(user_message_parts, usage=usage, usage_limits=usage_limits)
         extracted_acceptance_criteria: AcceptanceCriteriaList = result.output
         logger.info(f"Extracted {len(extracted_acceptance_criteria.items)} ACs")
         return extracted_acceptance_criteria
 
 
-def _delete_redundant_test_cases(session: TestCaseDesignSession, blocking: list[ReviewFinding]) -> set[str]:
-    """Deletes the test cases which a blocking finding marks for deletion and returns their IDs."""
-    deleted = {
-        finding.owner_test_case_id
-        for finding in blocking
-        if finding.action is FindingAction.DELETE_TEST_CASE and finding.owner_test_case_id in session.test_cases
-    }
-    for test_case_id in deleted:
-        del session.test_cases[test_case_id]
-        session.findings.pop(test_case_id, None)
-        session.changed_test_case_ids.discard(test_case_id)
+def _require_known_ac_ids[T: (GeneratedTestCases, DesignedTestCase)](
+    ctx: RunContext[TestCaseDesignSession], output: T
+) -> T:
+    """Asks the model again when a test case traces to an acceptance criterion the story does not have."""
+    test_cases = output.test_cases if isinstance(output, GeneratedTestCases) else [output]
+    known = {criterion.id for criterion in ctx.deps.acceptance_criteria}
+    if unknown := sorted({ac_id for test_case in test_cases for ac_id in test_case.ac_ids} - known):
+        raise ModelRetry(f"Unknown acceptance criteria IDs {unknown}; use only {sorted(known)}.")
+    return output
+
+
+def _delete_test_cases(session: TestCaseDesignSession, blocking: list[ReviewFinding]) -> list[str]:
+    """Deletes the test cases which a blocking finding marks for deletion, keeping each for a restore."""
+    deleted: list[str] = []
+    for finding in blocking:
+        test_case_id = finding.owner_test_case_id
+        if finding.action is FindingAction.DELETE_TEST_CASE and test_case_id in session.test_cases:
+            session.deleted_test_cases[test_case_id] = DeletedTestCase(
+                test_case=session.test_cases.pop(test_case_id),
+                findings=session.findings.pop(test_case_id, []),
+                deleted_by=finding,
+            )
+            session.changed_test_case_ids.discard(test_case_id)
+            deleted.append(test_case_id)
     return deleted
 
 
@@ -307,27 +247,40 @@ def _findings_by_owner(session: TestCaseDesignSession, blocking: list[ReviewFind
     return findings_by_owner
 
 
-def _other_test_cases(session: TestCaseDesignSession, excluded_id: str | None = None) -> str:
-    return "\n".join(
-        f"ID {test_case_id}:\n{test_case}"
-        for test_case_id, test_case in session.test_cases.items()
-        if test_case_id != excluded_id
-    )
+def _related_test_cases(session: TestCaseDesignSession, test_case_id: str, findings: list[ReviewFinding]) -> str:
+    """The test cases which the findings name as related; a deleted one is marked, so that a merge can absorb it."""
+    related_ids = dict.fromkeys(related_id for finding in findings for related_id in finding.related_test_case_ids)
+    blocks: list[str] = []
+    for related_id in related_ids:
+        if related_id in session.test_cases and related_id != test_case_id:
+            blocks.append(f"ID {related_id}:\n{render_designed_test_case_text(session.test_cases[related_id])}")
+        elif related_id in session.deleted_test_cases:
+            deleted = session.deleted_test_cases[related_id].test_case
+            blocks.append(f"ID {related_id} (deleted):\n{render_designed_test_case_text(deleted)}")
+    return "\n".join(blocks)
 
 
 def _fix_request(session: TestCaseDesignSession, test_case_id: str, findings: list[ReviewFinding]) -> list[str]:
-    return [
+    request = [
         f"Test case to fix (ID {test_case_id}):\n```{session.test_cases[test_case_id]!s}```",
-        "Findings to resolve:\n```[" + ", ".join(finding.model_dump_json() for finding in findings) + "]```",
-        f"Other test cases of the design (context only):\n```{_other_test_cases(session, test_case_id)}```",
+        f"Findings to resolve:\n```{utils.json_list(findings)}```",
     ]
+    if related := _related_test_cases(session, test_case_id, findings):
+        request.append(f"Related test cases of the findings (context only):\n```{related}```")
+    return request
 
 
-def _addition_request(session: TestCaseDesignSession, finding: ReviewFinding) -> list[str]:
-    return [
-        f"Finding which describes a missing test case:\n```{finding.model_dump_json()}```",
-        f"Test cases of the design (context only):\n```{_other_test_cases(session)}```",
+def _addition_request(session: TestCaseDesignSession, gap: ReviewFinding, siblings: list[ReviewFinding]) -> list[str]:
+    test_cases = "\n".join(
+        f"ID {test_case_id}:\n{render_designed_test_case_text(test_case)}"
+        for test_case_id, test_case in session.test_cases.items()
+    )
+    request = [
+        f"Finding which describes a missing test case:\n```{gap.model_dump_json()}```",
+        f"Test cases of the design (context only):\n```{test_cases}```",
     ]
-
-
-agent = TestCaseGenerationAgent()
+    if siblings:
+        request.append(
+            f"Other missing test cases, each created separately (never cover them):\n```{utils.json_list(siblings)}```"
+        )
+    return request

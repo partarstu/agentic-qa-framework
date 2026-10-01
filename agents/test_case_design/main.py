@@ -2,32 +2,37 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
+import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import override
 
 from fastapi import FastAPI
+from pydantic import BaseModel
 from pydantic_ai import ModelRetry, RunContext
 from pydantic_ai.settings import ThinkingLevel
 from pydantic_ai.tools import Tool, ToolDefinition
+from pydantic_ai.usage import RunUsage
 
 import config
 from agents.test_case_classification import main as classification_main
 from agents.test_case_design.prompt import TestCaseDesignSystemPrompt
-from agents.test_case_generation import main as generation_main
-from agents.test_case_review import main as review_main
+from agents.test_case_generation.main import TestCaseGenerator
+from agents.test_case_review.main import TestCaseReviewer
 from common import utils
 from common.agent_base import AgentBase
-from common.jira_additional_fields import build_additional_fields_instruction
 from common.models import (
     AgentSkillDeclaration,
     DesignStopReason,
+    FindingAction,
     FindingSeverity,
     TestCaseDesignRequest,
     TestCaseDesignResult,
     TestCaseDesignSession,
     TestCaseKeys,
 )
+from common.services.atlassian_mcp import build_atlassian_mcp_server
+from common.services.atlassian_tools import JIRA_GET_ISSUE
 from common.services.test_management_tools import (
     add_review_feedback,
     set_test_case_status_to_review_complete,
@@ -35,6 +40,12 @@ from common.services.test_management_tools import (
 )
 
 logger = utils.get_logger("test_case_design_agent")
+
+_STORY_FIELDS = ("summary", "description", "issuetype", "labels")
+
+
+class _JiraIssue(BaseModel):
+    id: int
 
 
 class DesignAbortedError(Exception):
@@ -45,8 +56,8 @@ class TestCaseDesignAgent(AgentBase):
     __test__ = False
 
     def __init__(self) -> None:
-        self.generation_agent = generation_main.agent
-        self.review_agent = review_main.agent
+        self.generator = TestCaseGenerator()
+        self.reviewer = TestCaseReviewer()
         self.classification_agent = classification_main.agent
         self.max_iterations = config.TestCaseDesignAgentConfig.MAX_ITERATIONS
         self.fix_min_severity = FindingSeverity(config.TestCaseDesignAgentConfig.FIX_MIN_SEVERITY)
@@ -71,11 +82,7 @@ class TestCaseDesignAgent(AgentBase):
                 self.generate_test_cases,
                 self.review_test_cases,
                 Tool(self.fix_test_cases, prepare=_hide_outside_fix_loop),
-                # The writes run one call at a time: two of them do a read-modify-write PUT on the same test case.
-                Tool(upload_test_cases, sequential=True, prepare=_hide_until_stopped),
-                Tool(self.classify_test_cases, sequential=True, prepare=_hide_until_stopped),
-                Tool(add_review_feedback, sequential=True, prepare=_hide_until_stopped),
-                Tool(set_test_case_status_to_review_complete, sequential=True, prepare=_hide_until_stopped),
+                Tool(self.publish_test_cases, prepare=_hide_until_stopped),
             ],
         )
         self.agent.instructions(_story_instructions)
@@ -106,71 +113,73 @@ class TestCaseDesignAgent(AgentBase):
     async def _lifespan(self, app: FastAPI) -> AsyncIterator[None]:
         async with super()._lifespan(app):
             yield
-        # The delegates' servers never start, so no lifespan of theirs closes the review agent's vector DB client.
-        await self.review_agent.vector_db_service.close()
+        # The reviewer runs in-process without a server, so no lifespan of its own closes its vector DB client.
+        await self.reviewer.close()
 
     async def generate_test_cases(self, ctx: RunContext[TestCaseDesignSession]) -> str:
         """
         Generates the test cases of the user story as drafts of the design.
 
         Returns:
-            A summary of the generation.
+            The number of generated test cases.
         """
         session = ctx.deps
         if session.test_cases:
             raise ModelRetry("The test cases are already generated; review them next.")
-        prompt = f"Generate the test cases of the Jira user story {session.story_key}."
-        if additional_fields_instruction := build_additional_fields_instruction():
-            prompt = f"{prompt}\n\n{additional_fields_instruction}"
-        summary = await self.generation_agent.run_delegated(prompt, session, ctx.usage)
+        await _fetch_story(session)
+        await self.generator.generate(session, ctx.usage, self.get_sub_agent_usage_limits())
         logger.info("Generated %d test case(s) of %s.", len(session.test_cases), session.story_key)
-        return summary
+        return f"Generated {len(session.test_cases)} test case(s)."
 
     async def review_test_cases(self, ctx: RunContext[TestCaseDesignSession]) -> str:
         """
-        Reviews the new and changed test cases and the whole set, and decides whether the design continues. When the
-        design is finished, checks the final test cases for duplicates among the existing test cases of the project.
+        Reviews the new and changed test cases and the whole set, and decides whether the design continues.
 
         Returns:
-            The number of blocking findings, whether the design continues with a fix or is finished, and the duplicates
-            of each final test case once it is finished.
+            The number of blocking findings and the next step, or that the design is finished and why.
         """
         session = ctx.deps
         if not session.test_cases:
             raise ModelRetry("There are no test cases to review; generate them first.")
         if session.stop_reason is not None:
-            raise ModelRetry("The design is finished; save the test cases next.")
+            raise ModelRetry("The design is finished; publish the test cases next.")
         if session.iteration > session.fixes:
             raise ModelRetry("The test cases are already reviewed; fix them next.")
-        session.suite_reviewed = False
-        summary = await self.review_agent.run_delegated(
-            f"Review the test cases of the Jira user story {session.story_key}.", session, ctx.usage
-        )
-        if session.changed_test_case_ids:
-            raise ModelRetry(f"The review left test cases unreviewed: {sorted(session.changed_test_case_ids)}.")
-        if not session.suite_reviewed:
-            raise ModelRetry("The review skipped the whole set of test cases; review the test cases again.")
+        usage_limits = self.get_sub_agent_usage_limits()
+        await self.reviewer.review_changed(session, ctx.usage, usage_limits)
+        await self.reviewer.review_set(session, ctx.usage, usage_limits)
         session.iteration += 1
-        blocking = session.blocking_findings(self.fix_min_severity)
-        if not blocking:
-            session.stop_reason = DesignStopReason.CONVERGED
-        elif session.iteration >= self.max_iterations:
-            session.stop_reason = DesignStopReason.ITERATION_LIMIT
+        blocking_count = len(session.blocking_findings(self.fix_min_severity))
+        session.stop_reason = self._stop_reason(session, blocking_count)
+        session.previous_blocking_count = blocking_count
         logger.info(
             "Review iteration %d of %s: %d blocking finding(s), stop reason: %s.",
             session.iteration,
             session.story_key,
-            len(blocking),
+            blocking_count,
             session.stop_reason,
         )
-        header = f"Review iteration {session.iteration}: {len(blocking)} blocking finding(s)."
         if session.stop_reason is None:
-            return f"{header} The design continues: fix the test cases next. {summary}"
-        duplicates = await self.review_agent.check_duplicates(session, ctx.usage)
-        return (
-            f"{header} The design is finished ({session.stop_reason.value}); save the test cases next. {summary}\n"
-            f"Duplicates of the final test cases among the existing ones:\n{duplicates}"
-        )
+            return f"Review iteration {session.iteration}: {blocking_count} blocking finding(s); fix next."
+        gaps = [finding for finding in session.suite_findings if finding.action is FindingAction.ADD_TEST_CASE]
+        if restored := session.restore_named_by(gaps):
+            # A restored test case covers its gap, so the gap is no open finding of the published test set.
+            session.suite_findings = [
+                finding for finding in session.suite_findings if not set(finding.related_test_case_ids) & set(restored)
+            ]
+            logger.info("Restored %s of %s after the final review.", restored, session.story_key)
+        await self.reviewer.check_duplicates(session, ctx.usage, usage_limits)
+        return f"Finished ({session.stop_reason.value}); publish next."
+
+    def _stop_reason(self, session: TestCaseDesignSession, blocking_count: int) -> DesignStopReason | None:
+        """Why the review loop stops after this review, by precedence, or None when it continues."""
+        if blocking_count == 0:
+            return DesignStopReason.CONVERGED
+        if session.iteration >= self.max_iterations:
+            return DesignStopReason.ITERATION_LIMIT
+        if session.previous_blocking_count is not None and blocking_count >= session.previous_blocking_count:
+            return DesignStopReason.NO_PROGRESS
+        return None
 
     async def fix_test_cases(self, ctx: RunContext[TestCaseDesignSession]) -> str:
         """
@@ -182,32 +191,55 @@ class TestCaseDesignAgent(AgentBase):
         session = ctx.deps
         if session.fixes >= session.iteration:
             raise ModelRetry("The test cases are already fixed; review them next.")
-        summary = await self.generation_agent.run_delegated(
-            f"Fix the test cases of the Jira user story {session.story_key}.", session, ctx.usage
-        )
-        if session.blocking_findings(self.fix_min_severity):
-            raise ModelRetry("The fix left the blocking findings unresolved; fix the test cases again.")
+        summary = await self.generator.fix(session, ctx.usage, self.get_sub_agent_usage_limits())
         session.fixes += 1
         return summary
 
-    async def classify_test_cases(self, ctx: RunContext[TestCaseDesignSession]) -> str:
+    async def publish_test_cases(self, ctx: RunContext[TestCaseDesignSession]) -> str:
         """
-        Classifies the saved test cases and labels them accordingly.
+        Saves the final test cases in the test management system, classifies them, and publishes the review of each
+        test case with its status.
 
         Returns:
-            A summary of the classification.
+            The number of published test cases.
         """
         session = ctx.deps
+        if session.published:
+            raise ModelRetry("The test cases are already published; return the final result next.")
+        # A provider error in the classification reruns the design, which resumes here without a second upload.
         if not session.uploaded:
-            raise ModelRetry("Save the test cases first; only saved test cases are classified.")
-        if session.classified:
-            raise ModelRetry("The test cases are already classified; never classify them twice.")
+            await upload_test_cases(session)
+        if not session.classified:
+            await self._classify(session, ctx.usage)
+        # One call at a time: the comment and the status do a read-modify-write PUT on the same test case.
+        for test_case_key in session.test_cases:
+            await add_review_feedback(session, test_case_key)
+            await set_test_case_status_to_review_complete(session, test_case_key)
+        session.published = True
+        return f"Published {len(session.test_cases)} test case(s)."
+
+    async def _classify(self, session: TestCaseDesignSession, usage: RunUsage) -> None:
         test_cases = "\n".join(str(test_case) for test_case in session.test_cases.values())
-        summary = await self.classification_agent.run_delegated(
-            f"Test cases:\n{test_cases}", TestCaseKeys(issue_keys=list(session.test_cases)), ctx.usage
+        await self.classification_agent.run_delegated(
+            f"Test cases:\n{test_cases}", TestCaseKeys(issue_keys=list(session.test_cases)), usage
         )
         session.classified = True
-        return summary
+
+
+async def _fetch_story(session: TestCaseDesignSession) -> None:
+    """Stores the ID and the content of the story, with the configured additional fields and without comments."""
+    issue = await build_atlassian_mcp_server().direct_call_tool(
+        JIRA_GET_ISSUE,
+        {
+            "issue_key": session.story_key,
+            "fields": ",".join((*_STORY_FIELDS, *config.JIRA_ADDITIONAL_FIELD_IDS)),
+            "comment_limit": 0,
+        },
+    )
+    # The MCP client parses a JSON text result into a dict, but returns it unparsed when it is wrapped as a string.
+    content = issue if isinstance(issue, str) else json.dumps(issue)
+    session.story_id = _JiraIssue.model_validate_json(content).id
+    session.story_content = content
 
 
 async def _hide_outside_fix_loop(
@@ -221,7 +253,7 @@ async def _hide_outside_fix_loop(
 async def _hide_until_stopped(
     ctx: RunContext[TestCaseDesignSession], tool_def: ToolDefinition
 ) -> ToolDefinition | None:
-    """Offers a write tool only after the review loop, so a failure before it writes nothing."""
+    """Offers the publish only after the review loop, so a failure before it writes nothing."""
     return None if ctx.deps is None or ctx.deps.stop_reason is None else tool_def
 
 
@@ -239,18 +271,11 @@ def _complete_result(ctx: RunContext[TestCaseDesignSession], output: TestCaseDes
         ModelRetry: If the result is returned before the design is complete without a comment.
     """
     session = ctx.deps
-    keys = set(session.test_cases)
     missing: list[str] = []
     if session.stop_reason is None:
         missing.append("finish the review loop")
-    if not session.uploaded:
-        missing.append("save the test cases")
-    if not session.classified:
-        missing.append("classify the saved test cases")
-    if without_feedback := sorted(keys - session.feedback_added_ids):
-        missing.append(f"add the review feedback of {without_feedback}")
-    if without_status := sorted(keys - session.review_completed_ids):
-        missing.append(f"set the status of {without_status}")
+    if not session.published:
+        missing.append("publish the test cases")
     if missing and output.llm_comments:
         raise DesignAbortedError(
             f"The design of {session.story_key} was aborted ({output.llm_comments}); steps not done: {'; '.join(missing)}."

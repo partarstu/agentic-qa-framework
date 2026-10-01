@@ -300,22 +300,13 @@ class TestCaseClassificationAgentConfig:
 # Test Case Generation Agent
 class TestCaseGenerationAgentConfig:
     THINKING_LEVEL: ThinkingLevel = "medium"
-    VERSION = os.environ.get("TEST_CASE_GENERATION_AGENT_VERSION", "1.2.1")
-    OWN_NAME = "Test Case Generation Agent"
-    SKILL_ID = "test-case-generation"
-    SKILL_NAME = "Test Case Generation"
-    SKILL_DESCRIPTION = "Generation of test cases based on Jira user stories and their acceptance criteria"
-    PORT = int(os.environ.get("PORT", "8002"))
-    EXTERNAL_PORT = int(os.environ.get("EXTERNAL_PORT", PORT))
-    PROTOCOL = "http"
     MODEL_NAME = DEFAULT_MODEL_NAME
     MAX_OUTPUT_TOKENS = _optional_positive_int("TEST_CASE_GENERATION_MAX_OUTPUT_TOKENS") or MAX_OUTPUT_TOKENS
-    MAX_REQUESTS_PER_TASK = 30
 
 
 # Test Case Design Agent
 class TestCaseDesignAgentConfig:
-    THINKING_LEVEL: ThinkingLevel = "medium"
+    THINKING_LEVEL: ThinkingLevel = "low"
     VERSION = os.environ.get("TEST_CASE_DESIGN_AGENT_VERSION", "1.0.0")
     OWN_NAME = "Test Case Design Agent"
     SKILL_ID = "test-case-design"
@@ -340,18 +331,9 @@ class TestCaseDesignAgentConfig:
 # Test Case Review Agent
 class TestCaseReviewAgentConfig:
     THINKING_LEVEL: ThinkingLevel = "medium"
-    VERSION = os.environ.get("TEST_CASE_REVIEW_AGENT_VERSION", "1.1.2")
     REVIEW_COMPLETE_STATUS_NAME = "Review Complete"
-    OWN_NAME = "Test Case Review Agent"
-    SKILL_ID = "test-case-review"
-    SKILL_NAME = "Test Case Review"
-    SKILL_DESCRIPTION = "Review of generated test cases for coherence, redundancy, and effectiveness"
-    PORT = int(os.environ.get("PORT", "8004"))
-    EXTERNAL_PORT = int(os.environ.get("EXTERNAL_PORT", PORT))
-    PROTOCOL = "http"
     MODEL_NAME = DEFAULT_MODEL_NAME
     MAX_OUTPUT_TOKENS = _optional_positive_int("TEST_CASE_REVIEW_MAX_OUTPUT_TOKENS") or MAX_OUTPUT_TOKENS
-    MAX_REQUESTS_PER_TASK = 30
 
 
 # Incident Creation Agent

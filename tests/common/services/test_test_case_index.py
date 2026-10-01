@@ -4,8 +4,8 @@
 
 import uuid
 
-from common.models import TestCase, TestStep
-from common.services.test_case_index import render_test_case
+from common.models import DesignedTestCase, TestCase, TestStep
+from common.services.test_case_index import render_designed_test_case_text, render_test_case, render_test_case_text
 
 
 def _test_case(key: str) -> TestCase:
@@ -50,3 +50,22 @@ def test_rendered_text_covers_name_objective_preconditions_and_steps():
     assert "Objective: Log in with valid credentials" in text
     assert "Preconditions: A registered user" in text
     assert "Action: Submit the form; Data: user: a; Expected: The dashboard opens" in text
+
+
+def test_compact_text_is_the_indexed_text_without_any_key_label_or_comment():
+    test_case = _test_case("PROJ-T1").model_copy(update={"labels": ["ui"], "comment": "generated"})
+
+    text = render_test_case_text(test_case)
+
+    assert text == render_test_case("PROJ", test_case).text
+    assert "PROJ-T1" not in text
+    assert "ui" not in text
+    assert "generated" not in text
+
+
+def test_a_designed_test_case_is_the_compact_text_followed_by_its_acceptance_criteria():
+    test_case = DesignedTestCase(**_test_case("PROJ-T1").model_dump(), ac_ids=["AC-1", "AC-3"])
+
+    text = render_designed_test_case_text(test_case)
+
+    assert text == f"{render_test_case_text(test_case)}\nAcceptance criteria: AC-1, AC-3"

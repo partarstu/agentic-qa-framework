@@ -2,17 +2,15 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
-"""Test management system write tools that act on the test cases of a test case design session."""
+"""Test management system writes that publish the test cases of a test case design session."""
 
 import asyncio
 import html
 
-from pydantic_ai import ModelRetry, RunContext
-
 import config
 from common import utils
 from common.models import (
-    DRAFT_ID_PREFIX,
+    OverlappingTestCase,
     ReviewFinding,
     TestCaseDesignSession,
     TestCaseDuplicateCheck,
@@ -25,15 +23,8 @@ DUPLICATE_CHECK_HEADING = "Duplicate check"
 REVIEW_COMMENT_HEADING = "Test case review"
 
 
-async def upload_test_cases(ctx: RunContext[TestCaseDesignSession]) -> str:
-    """Saves every test case of the design session in the test management system, linked to the user story.
-
-    Returns:
-        A confirmation message with the keys of the saved test cases, which replace their draft IDs.
-    """
-    session = ctx.deps
-    if session.uploaded:
-        raise ModelRetry("The test cases are already saved; never save them twice.")
+async def upload_test_cases(session: TestCaseDesignSession) -> None:
+    """Saves every test case of the design in the test management system, linked to the user story, under its key."""
     if session.story_id is None or not session.test_cases:
         raise RuntimeError(f"There are no generated test cases of the user story {session.story_key} to save.")
     draft_ids = list(session.test_cases)
@@ -49,55 +40,22 @@ async def upload_test_cases(ctx: RunContext[TestCaseDesignSession]) -> str:
     _rekey(session, dict(zip(draft_ids, keys, strict=True)))
     session.uploaded = True
     logger.info("Saved %d test case(s) of %s: %s", len(keys), session.story_key, keys)
-    return f"Successfully saved the test cases with the following keys: {', '.join(keys)}"
 
 
-async def add_review_feedback(ctx: RunContext[TestCaseDesignSession], test_case_key: str) -> str:
-    """Adds the final review of a saved test case to it as a comment, rendered from its review findings.
-
-    Args:
-        test_case_key: The key of the saved test case.
-
-    Returns:
-        A confirmation message.
-    """
-    session = ctx.deps
-    _require_saved(session, test_case_key)
-    if test_case_key in session.feedback_added_ids:
-        raise ModelRetry(f"The review feedback of '{test_case_key}' is already added; never add it twice.")
-    if test_case_key not in session.duplicate_checks:
-        raise ModelRetry(
-            f"No duplicate check exists for the test case '{test_case_key}'. Pass exactly the key of a reviewed "
-            "test case."
-        )
+async def add_review_feedback(session: TestCaseDesignSession, test_case_key: str) -> None:
+    """Adds the final review of a saved test case to it as a comment, rendered from its review findings."""
     client = get_test_management_client()
     await asyncio.to_thread(
         client.add_test_case_review_comment, test_case_key, render_review_comment(session, test_case_key)
     )
-    session.feedback_added_ids.add(test_case_key)
     logger.info("Added the review feedback to the test case %s.", test_case_key)
-    return f"Successfully added the review feedback to the test case '{test_case_key}'."
 
 
-async def set_test_case_status_to_review_complete(ctx: RunContext[TestCaseDesignSession], test_case_key: str) -> str:
-    """Sets the status of a saved test case to "Review Complete".
-
-    Args:
-        test_case_key: The key of the saved test case.
-
-    Returns:
-        A confirmation message.
-    """
-    session = ctx.deps
-    _require_saved(session, test_case_key)
-    if test_case_key in session.review_completed_ids:
-        raise ModelRetry(f"The status of '{test_case_key}' is already set; never set it twice.")
+async def set_test_case_status_to_review_complete(session: TestCaseDesignSession, test_case_key: str) -> None:
     status_name = config.TestCaseReviewAgentConfig.REVIEW_COMPLETE_STATUS_NAME
     client = get_test_management_client()
     await asyncio.to_thread(client.change_test_case_status, session.project_key, test_case_key, status_name)
-    session.review_completed_ids.add(test_case_key)
     logger.info("Set the status of the test case %s to '%s'.", test_case_key, status_name)
-    return f"Successfully set the status of the test case '{test_case_key}' to '{status_name}'."
 
 
 def render_review_comment(session: TestCaseDesignSession, test_case_key: str) -> str:
@@ -118,11 +76,21 @@ def render_duplicate_check(duplicate_check: TestCaseDuplicateCheck) -> str:
     heading = f"<h4>{DUPLICATE_CHECK_HEADING}</h4>"
     if not duplicate_check.overlapping_test_cases:
         return f"{heading}<p>No duplicate test cases found.</p>"
-    items = "".join(
-        f"<li><b>{html.escape(overlap.test_case_key)}</b>: {html.escape(overlap.overlap_explanation)}</li>"
-        for overlap in duplicate_check.overlapping_test_cases
+    overlaps = duplicate_check.overlapping_test_cases
+    sections = (
+        ("Fully covered by:", [overlap for overlap in overlaps if overlap.fully_covers]),
+        ("Partially overlapping with:", [overlap for overlap in overlaps if not overlap.fully_covers]),
     )
-    return f"{heading}<p>This test case overlaps in coverage with:</p><ul>{items}</ul>"
+    return heading + "".join(
+        f"<p>{title}</p><ul>{_render_overlaps(section)}</ul>" for title, section in sections if section
+    )
+
+
+def _render_overlaps(overlaps: list[OverlappingTestCase]) -> str:
+    return "".join(
+        f"<li><b>{html.escape(overlap.test_case_key)}</b>: {html.escape(overlap.overlap_explanation)}</li>"
+        for overlap in overlaps
+    )
 
 
 def _latest_findings(session: TestCaseDesignSession, test_case_key: str) -> list[ReviewFinding]:
@@ -152,15 +120,6 @@ def _render_finding(finding: ReviewFinding) -> str:
         f"<li><b>[{finding.severity.value.upper()}] {html.escape(finding.category)}</b>{ac_ref}: "
         f"{html.escape(finding.description)}<br>Suggested fix: {html.escape(finding.suggested_fix)}{related}</li>"
     )
-
-
-def _require_saved(session: TestCaseDesignSession, test_case_key: str) -> None:
-    if test_case_key.startswith(DRAFT_ID_PREFIX):
-        raise ModelRetry(f"'{test_case_key}' is a draft; save the test cases first and pass the saved key.")
-    if test_case_key not in session.test_cases:
-        raise ModelRetry(
-            f"'{test_case_key}' is no test case of this design; use one of: {', '.join(session.test_cases)}."
-        )
 
 
 def _rekey(session: TestCaseDesignSession, new_ids: dict[str, str]) -> None:

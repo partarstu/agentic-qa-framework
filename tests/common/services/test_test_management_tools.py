@@ -3,19 +3,17 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 
 from collections.abc import Iterator
-from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
-from pydantic_ai import ModelRetry
 
 from common.models import (
+    DesignedTestCase,
     DesignStopReason,
     FindingAction,
     FindingSeverity,
     OverlappingTestCase,
     ReviewFinding,
-    TestCase,
     TestCaseDesignSession,
     TestCaseDuplicateCheck,
 )
@@ -35,9 +33,17 @@ def client() -> Iterator[MagicMock]:
         yield mock_client
 
 
-def _test_case(name: str, key: str | None = None) -> TestCase:
-    return TestCase(
-        key=key, labels=[], name=name, summary="s", comment="", preconditions=None, steps=[], parent_issue_key="P-1"
+def _test_case(name: str, key: str | None = None) -> DesignedTestCase:
+    return DesignedTestCase(
+        key=key,
+        labels=[],
+        name=name,
+        summary="s",
+        comment="",
+        preconditions=None,
+        steps=[],
+        parent_issue_key="P-1",
+        ac_ids=["AC-1"],
     )
 
 
@@ -59,10 +65,6 @@ def _finding(
     )
 
 
-def _ctx(session: TestCaseDesignSession) -> SimpleNamespace:
-    return SimpleNamespace(deps=session)
-
-
 def _saved_session() -> TestCaseDesignSession:
     session = TestCaseDesignSession(story_key="PROJ-7", story_id=70, iteration=2, uploaded=True)
     session.test_cases = {"PROJ-T1": _test_case("First", "PROJ-T1"), "PROJ-T2": _test_case("Second", "PROJ-T2")}
@@ -78,7 +80,7 @@ async def test_upload_saves_the_drafts_in_order_and_replaces_their_ids_everywher
     session.duplicate_checks = {first: TestCaseDuplicateCheck(), second: TestCaseDuplicateCheck()}
     client.create_test_cases.return_value = ["PROJ-T1", "PROJ-T2"]
 
-    result = await tools.upload_test_cases(_ctx(session))
+    await tools.upload_test_cases(session)
 
     saved, project_key, story_id = client.create_test_cases.call_args.args
     assert [test_case.name for test_case in saved] == ["First", "Second"]
@@ -93,16 +95,6 @@ async def test_upload_saves_the_drafts_in_order_and_replaces_their_ids_everywher
     assert set(session.duplicate_checks) == {"PROJ-T1", "PROJ-T2"}
     assert session.changed_test_case_ids == {"PROJ-T1", "PROJ-T2"}
     assert session.uploaded
-    assert "PROJ-T1, PROJ-T2" in result
-
-
-async def test_upload_twice_is_refused_without_writing(client):
-    session = _saved_session()
-
-    with pytest.raises(ModelRetry, match="already saved"):
-        await tools.upload_test_cases(_ctx(session))
-
-    client.create_test_cases.assert_not_called()
 
 
 async def test_upload_without_the_story_id_fails(client):
@@ -110,7 +102,7 @@ async def test_upload_without_the_story_id_fails(client):
     session.add_draft(_test_case("First"))
 
     with pytest.raises(RuntimeError, match="no generated test cases"):
-        await tools.upload_test_cases(_ctx(session))
+        await tools.upload_test_cases(session)
 
     client.create_test_cases.assert_not_called()
 
@@ -122,7 +114,7 @@ async def test_upload_fails_when_not_every_test_case_was_saved(client):
     client.create_test_cases.return_value = ["PROJ-T1"]
 
     with pytest.raises(RuntimeError, match="Saved only 1 of 2"):
-        await tools.upload_test_cases(_ctx(session))
+        await tools.upload_test_cases(session)
 
     assert not session.uploaded
     assert set(session.test_cases) == {"DRAFT-1", "DRAFT-2"}
@@ -137,7 +129,7 @@ async def test_review_feedback_comment_holds_header_findings_by_severity_and_dup
     }
     session.suite_findings = [_finding("PROJ-T1", FindingSeverity.CRITICAL, "coverage gap", related=["PROJ-T2"])]
 
-    await tools.add_review_feedback(_ctx(session), "PROJ-T1")
+    await tools.add_review_feedback(session, "PROJ-T1")
 
     key, comment = client.add_test_case_review_comment.call_args.args
     assert key == "PROJ-T1"
@@ -147,7 +139,6 @@ async def test_review_feedback_comment_holds_header_findings_by_severity_and_dup
     assert "other test case" not in comment
     assert comment.endswith(render_duplicate_check(TestCaseDuplicateCheck()))
     assert "\n" not in comment
-    assert session.feedback_added_ids == {"PROJ-T1"}
 
 
 def test_review_comment_escapes_the_model_written_text():
@@ -188,50 +179,10 @@ def test_every_review_comment_shows_the_test_set_findings_owned_by_no_test_case(
         assert comment.endswith(render_duplicate_check(TestCaseDuplicateCheck()))
 
 
-async def test_review_feedback_is_added_only_once(client):
-    session = _saved_session()
-    session.feedback_added_ids = {"PROJ-T1"}
-
-    with pytest.raises(ModelRetry, match="already added"):
-        await tools.add_review_feedback(_ctx(session), "PROJ-T1")
-
-    client.add_test_case_review_comment.assert_not_called()
-
-
-@pytest.mark.parametrize(
-    ("test_case_key", "message"),
-    [("DRAFT-1", "is a draft"), ("PROJ-T9", "no test case of this design"), ("PROJ-T3", "No duplicate check")],
-)
-async def test_review_feedback_is_refused_for_a_test_case_it_cannot_describe(client, test_case_key, message):
-    session = _saved_session()
-    session.test_cases["PROJ-T3"] = _test_case("Unreviewed", "PROJ-T3")
-
-    with pytest.raises(ModelRetry, match=message):
-        await tools.add_review_feedback(_ctx(session), test_case_key)
-
-    client.add_test_case_review_comment.assert_not_called()
-
-
-async def test_review_complete_status_is_set_once_per_saved_test_case(client):
-    session = _saved_session()
-
-    result = await tools.set_test_case_status_to_review_complete(_ctx(session), "PROJ-T2")
-    with pytest.raises(ModelRetry, match="already set"):
-        await tools.set_test_case_status_to_review_complete(_ctx(session), "PROJ-T2")
+async def test_review_complete_status_is_set_in_the_project_of_the_story(client):
+    await tools.set_test_case_status_to_review_complete(_saved_session(), "PROJ-T2")
 
     client.change_test_case_status.assert_called_once_with("PROJ", "PROJ-T2", "Review Complete")
-    assert session.review_completed_ids == {"PROJ-T2"}
-    assert "Review Complete" in result
-
-
-async def test_review_complete_status_is_refused_for_a_draft(client):
-    session = TestCaseDesignSession(story_key="PROJ-7")
-    session.add_draft(_test_case("First"))
-
-    with pytest.raises(ModelRetry, match="is a draft"):
-        await tools.set_test_case_status_to_review_complete(_ctx(session), "DRAFT-1")
-
-    client.change_test_case_status.assert_not_called()
 
 
 def test_rendered_check_without_duplicates_says_so():
@@ -240,16 +191,33 @@ def test_rendered_check_without_duplicates_says_so():
     assert rendered == f"<h4>{DUPLICATE_CHECK_HEADING}</h4><p>No duplicate test cases found.</p>"
 
 
-def test_rendered_check_lists_every_overlap_escaped():
+def test_rendered_check_lists_full_and_partial_overlaps_separately_and_escaped():
     check = TestCaseDuplicateCheck(
         overlapping_test_cases=[
-            OverlappingTestCase(test_case_key="TC-7", overlap_explanation="Both check <script>login</script>"),
-            OverlappingTestCase(test_case_key="TC-8", overlap_explanation="Same logout"),
+            OverlappingTestCase(
+                test_case_key="TC-7", overlap_explanation="Both check <script>login</script>", fully_covers=False
+            ),
+            OverlappingTestCase(test_case_key="TC-8", overlap_explanation="Same logout", fully_covers=True),
+            OverlappingTestCase(test_case_key="TC-9", overlap_explanation="Same reset", fully_covers=False),
         ]
     )
 
     rendered = render_duplicate_check(check)
 
-    assert rendered.startswith(f"<h4>{DUPLICATE_CHECK_HEADING}</h4><p>This test case overlaps in coverage with:</p>")
-    assert "<li><b>TC-7</b>: Both check &lt;script&gt;login&lt;/script&gt;</li>" in rendered
-    assert "<li><b>TC-8</b>: Same logout</li>" in rendered
+    assert rendered == (
+        f"<h4>{DUPLICATE_CHECK_HEADING}</h4>"
+        "<p>Fully covered by:</p><ul><li><b>TC-8</b>: Same logout</li></ul>"
+        "<p>Partially overlapping with:</p><ul>"
+        "<li><b>TC-7</b>: Both check &lt;script&gt;login&lt;/script&gt;</li><li><b>TC-9</b>: Same reset</li></ul>"
+    )
+
+
+@pytest.mark.parametrize(
+    ("fully_covers", "title"), [(True, "Fully covered by:"), (False, "Partially overlapping with:")]
+)
+def test_rendered_check_shows_only_the_sub_section_which_has_overlaps(fully_covers, title):
+    overlap = OverlappingTestCase(test_case_key="TC-7", overlap_explanation="Same login", fully_covers=fully_covers)
+
+    rendered = render_duplicate_check(TestCaseDuplicateCheck(overlapping_test_cases=[overlap]))
+
+    assert rendered == f"<h4>{DUPLICATE_CHECK_HEADING}</h4><p>{title}</p><ul><li><b>TC-7</b>: Same login</li></ul>"

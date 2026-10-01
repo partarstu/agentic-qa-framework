@@ -13,6 +13,7 @@ from a2a.utils.constants import AGENT_CARD_WELL_KNOWN_PATH
 from fastapi.testclient import TestClient
 from pydantic import BaseModel, ConfigDict
 from pydantic_ai import RunContext
+from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.models.test import TestModel
 from pydantic_ai.usage import RunUsage, UsageLimits
 
@@ -300,6 +301,28 @@ async def test_model_transport_error_is_retried(test_agent_instance):
     with patch("common.agent_base.asyncio.sleep", new=AsyncMock()):
         assert await test_agent_instance._get_agent_execution_result([], None, UsageLimits()) is result
     assert run.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_retryable_provider_errors_of_concurrent_sub_agent_runs_are_retried(test_agent_instance):
+    result = MagicMock()
+    failure = ExceptionGroup("reviews", [httpx2.ReadError("reset"), ModelHTTPError(500, "gemini")])
+    run = _agent_whose_run_raises(test_agent_instance, failure, result)
+
+    with patch("common.agent_base.asyncio.sleep", new=AsyncMock()):
+        assert await test_agent_instance._get_agent_execution_result([], None, UsageLimits()) is result
+    assert run.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_a_group_with_a_non_retryable_error_propagates_without_a_retry(test_agent_instance):
+    failure = ExceptionGroup("reviews", [httpx2.ReadError("reset"), ModelHTTPError(400, "gemini")])
+    run = _agent_whose_run_raises(test_agent_instance, failure, MagicMock())
+
+    with pytest.raises(ExceptionGroup) as raised:
+        await test_agent_instance._get_agent_execution_result([], None, UsageLimits())
+    assert raised.value is failure
+    assert run.await_count == 1
 
 
 @pytest.mark.asyncio
