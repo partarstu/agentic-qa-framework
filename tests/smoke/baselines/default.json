@@ -1,6 +1,6 @@
 {
   "label": "google-gla:gemini-3.8-flash",
-  "captured_at": "2026-09-28T11:59:29+00:00",
+  "captured_at": "2026-10-01T20:51:58+00:00",
   "story": {
     "key": "SMOKE-1",
     "id": "10001",
@@ -31,88 +31,103 @@
     "reset-request.json": "{\"email\": \"user@example.com\", \"locale\": \"en-GB\"}"
   },
   "review_comments": [
-    "**Review Feedback from Testing Team**\n\n1. Define link renewal workflow and behavior: Acceptance Criterion 2 specifies a 'Request a new link' button on the expired link page, but does not define the user action, workflow steps, or expected result when clicked (e.g., whether it automatically dispatches a new email to the associated address or redirects the user to the 'Forgot password' form).\n\n2. Specify rate limiting behavior for requests and renewals: Incorporate the rate limiting rule from 'reset-policy.md' (\"At most 3 reset requests per account per hour\") into both the initial request workflow and the link renewal flow, specifying the expected UI response, error message, or system behavior when the threshold is exceeded.\n\n3. Define handling of unregistered and invalid emails: Specify the expected system behavior and UI response when an unregistered, invalid, or inactive email address is submitted, including rules for preventing user enumeration.\n\n4. Clarify expiration boundary conditions: Acceptance Criterion 2 states the link expires \"more than 60 minutes after it was sent\"; clarify the exact boundary condition to eliminate ambiguity regarding whether the link is considered valid or expired at exactly 60 minutes.\n\n5. Specify email dispatch parameters: Define concrete email parameters required for verification and testing, including the sender address, subject line, body copy/template, and reset URL structure.\n\n6. Define form submission feedback: Specify the explicit UI confirmation, notification, or status message displayed on the 'Forgot password' form upon submitting a request.\n\n7. Clarify localization handling: Explain how the `locale` parameter defined in 'reset-request.json' affects the email dispatch and the selection of localized email templates.\n\n8. Explicitly reference attachments: Reference the attachments 'reset-policy.md' and 'reset-request.json' directly within the issue description and acceptance criteria to ensure traceability."
+    "**Review Feedback from Testing Team**\n\n1. Define rate-limiting requirements and error handling for initial and renewed requests:\n   - `reset-policy.md` specifies a limit of \"At most 3 reset requests per account per hour\", but the issue does not specify this rate limit. Explicitly define how rate-limiting is enforced for both initial password reset requests and link renewals via the \"Request a new link\" button, and define the expected system behavior and user-facing error message when the threshold is reached.\n\n2. Specify input variations, edge cases, and UI feedback for the reset request:\n   - The criteria currently only cover submitting a valid registered email address. Add explicit requirements for:\n     - Unregistered email addresses (e.g., returning a generic confirmation message to prevent user enumeration attacks versus returning an explicit error).\n     - Invalid email address formats and corresponding validation error messages.\n     - The immediate feedback/confirmation message displayed on the UI upon submitting the reset request.\n\n3. Define the workflow and expected results for link renewal:\n   - Acceptance Criteria 2 mentions a \"Request a new link\" button on the expired link page, but does not define the interaction workflow, inputs, or expected behavior (e.g., whether clicking it automatically triggers a new email to the previously associated address, redirects to the \"Forgot password\" page, or requires the user to re-enter their email address).\n\n4. Clarify handling of multiple active reset requests and token invalidation:\n   - Specify whether requesting a new reset link immediately invalidates previously issued, unexpired reset links/tokens before their 60-minute window closes, or if multiple active links can coexist.\n\n5. Define email content, link generation, and token specifications:\n   - The acceptance criteria do not define the email specifications (sender address, subject line, body template) or link generation details (token format, cryptographic/security properties, and target URL structure).\n\n6. Define request payload and localization behavior:\n   - `reset-request.json` includes a `locale` property (`en-GB`), but the acceptance criteria do not specify how this locale should be processed or how language selection applies when generating and dispatching the password reset email.\n\n7. Explicitly reference attachments in the issue requirements:\n   - Neither `reset-policy.md` nor `reset-request.json` is referenced in the issue description or acceptance criteria. Explicitly link or reference both attachments to ensure traceable requirements."
   ],
   "test_cases": [
     {
       "key": "SMOKE-T1",
-      "name": "Verify password reset email is sent for registered user",
-      "objective": "Submit a registered email address on the 'Forgot password' form, verify the confirmation message and delivered email in en-GB, and confirm the reset link is valid and single-use.",
-      "precondition": "The user has a registered account with email 'user@example.com' and the 'Forgot password' page is open.",
+      "name": "Password reset via single-use link valid for 60 minutes",
+      "objective": "Verify that submitting a registered email address sends a single-use password-reset link valid for 60 minutes, the password can be reset, and the link cannot be reused.",
+      "precondition": "A user account with the email 'user@example.com' is registered in the system, and access to the corresponding email inbox is available.",
       "labels": [
-        "ui",
-        "automated"
+        "automated",
+        "ui"
       ],
-      "review_comments": "<h4>Test case review</h4><p>Review iterations: 2, stop reason: iteration_limit.</p><ul><li><b>[HIGH] imprecise expected result</b> (AC-1): Step 4 has the weakest expected result in the test case: stating that &#x27;An error message is displayed indicating that the reset link has already been used or is invalid, confirming the link is single-use and cannot be reused&#x27; is underspecified. It leaves the exact expected UI error state, message text, and redirection behavior undefined, which can lead testers to evaluate the test outcome inconsistently. Additionally, the action uses tentative wording (&#x27;Attempt to open&#x27;).<br>Suggested fix: Refine step 4 by changing the action to &#x27;Open the same password-reset link from step 1 in the web browser.&#x27; and making the expected result precise by specifying the exact error message text, page state, and available user actions (such as a &#x27;Request a new link&#x27; button).</li><li><b>[HIGH] imprecise expected result</b> (AC-1): Step 3 expected result is underspecified by stating only that &#x27;A confirmation message is displayed indicating that the password has been reset successfully.&#x27; It omits the exact confirmation message text and fails to define the subsequent navigation state (such as redirection to the login page or presenting a &#x27;Log in&#x27; button), leaving testers to evaluate the post-reset outcome inconsistently.<br>Suggested fix: Specify the exact confirmation message text (e.g. &#x27;Your password has been successfully reset.&#x27;) and define the post-submission UI state (e.g. redirection to the login page with a login form displayed).</li><li><b>[MEDIUM] test data in expected results</b> (AC-1): Step 1 expected results directly duplicate test data values (&#x27;en-GB&#x27; and &#x27;user@example.com&#x27;) instead of referencing them, violating the rule that test data must appear only in the test data field.<br>Suggested fix: Update Step 1 expected results to refer to the test data rather than duplicating it (e.g. replace &#x27;user@example.com&#x27; with &#x27;the specified email address&#x27; and &#x27;en-GB&#x27; with &#x27;the specified locale&#x27;).</li><li><b>[MEDIUM] duplicate step</b> (AC-1): Step 2 partially duplicates existing test case SMOKE-T101, which already verifies that opening the received password-reset link navigates to and displays the password reset form.<br>Suggested fix: Remove the standalone verification in Step 2 that duplicates SMOKE-T101, combining navigation to the reset form directly into Step 3 where the new password is submitted.</li></ul><h4>Duplicate check</h4><p>This test case overlaps in coverage with:</p><ul><li><b>SMOKE-T101</b>: Both test cases verify that opening the password-reset link received in the email navigates to and displays the password reset form.</li></ul>",
+      "review_comments": "<h4>Test case review</h4><p>Review iterations: 2, stop reason: iteration_limit.</p><ul><li><b>[HIGH] unactioned expected result</b> (AC-1): In Step 4, the expected result asserts that the user can successfully log in with the new password and that authentication with the previous password fails, but the step&#x27;s action only covers submitting the new password form. Expected results must be directly caused by the action of that step; asserting login outcomes without performing the corresponding login actions leads to inconsistent execution by testers who lack instructions on how and where to verify authentication.<br>Suggested fix: Retain only the reset confirmation message check in Step 4&#x27;s expected result, and add subsequent actions/steps to navigate to the login screen, attempt login with the previous password to verify authentication failure, and log in with the new password to verify successful authentication.</li></ul><h4>Duplicate check</h4><p>No duplicate test cases found.</p>",
       "steps": [
         {
-          "description": "Enter the registered email address into the 'Forgot password' form with the specified locale and submit the form.",
-          "expected_result": "The on-screen confirmation message 'If your email is registered, you will receive password reset instructions shortly.' is displayed in the 'en-GB' locale. An email from sender 'noreply@example.com' with the subject 'Reset your password' formatted in 'en-GB' is delivered to 'user@example.com', containing a password-reset link and explicit text stating that the link is valid for 60 minutes.",
-          "test_data": "email: user@example.com<br>locale: en-GB"
-        },
-        {
-          "description": "Open the password-reset link received in the email in a web browser.",
-          "expected_result": "The password reset page is displayed with fields to enter a new password, confirming the reset link is valid.",
+          "description": "Navigate to the 'Forgot password' page.",
+          "expected_result": "The 'Forgot password' page is displayed with an email address input field and a form submission control.",
           "test_data": ""
         },
         {
-          "description": "Enter a new password into the password reset form and submit the form.",
-          "expected_result": "A confirmation message is displayed indicating that the password has been reset successfully.",
-          "test_data": "new password: NewPassword123!"
+          "description": "Enter the registered email address into the email address field and submit the form.",
+          "expected_result": "A confirmation notification is displayed, and an email containing a password-reset link is sent to the provided email address.",
+          "test_data": "email address: user@example.com"
         },
         {
-          "description": "Attempt to open the same password-reset link in the web browser again.",
-          "expected_result": "An error message is displayed indicating that the reset link has already been used or is invalid, confirming the link is single-use and cannot be reused.",
+          "description": "Open the password-reset link from the received email within the specified elapsed time.",
+          "expected_result": "The password reset page is displayed with input fields for entering and confirming a new password.",
+          "test_data": "link validity duration: 60 minutes<br>elapsed time: 59 minutes"
+        },
+        {
+          "description": "Enter the new password and confirmation password into the respective fields and submit the form.",
+          "expected_result": "A confirmation message indicating that the password has been reset successfully is displayed, the user can successfully log in using the provided new password, and authentication with the previous password fails.",
+          "test_data": "confirm new password: NewPassword123!<br>new password: NewPassword123!"
+        },
+        {
+          "description": "Open the previously used password-reset link again.",
+          "expected_result": "The password reset page is not displayed, and an error message indicating that the reset link has already been used is shown.",
           "test_data": ""
         }
       ]
     },
     {
       "key": "SMOKE-T2",
-      "name": "Verify expired password reset link behavior",
-      "objective": "Open a password-reset link more than 60 minutes after generation and verify the expiration message and 'Request a new link' button are displayed.",
-      "precondition": "A password-reset link sent 61 minutes ago to 'user@example.com' is available.",
+      "name": "Expired password reset link handling after 60 minutes",
+      "objective": "Verify that opening a password-reset link more than 60 minutes after it was sent displays an expiration message and that clicking 'Request a new link' redirects to the 'Forgot password' form.",
+      "precondition": "A password-reset email has been generated and sent to the user, and more than 60 minutes have elapsed since the link was issued.",
       "labels": [
-        "ui",
-        "automated"
+        "automated",
+        "ui"
       ],
-      "review_comments": "<h4>Test case review</h4><p>Review iterations: 2, stop reason: iteration_limit.</p><ul><li><b>[HIGH] missing step</b> (2): Step 1 expected results state that the &#x27;Request a new link&#x27; button &#x27;links to the Forgot password page&#x27;, but Step 1 only opens the reset link in a browser without clicking the button. Verifying that the button navigates to the &#x27;Forgot password&#x27; page requires an interaction, leaving the expected result unverifiable from the current action alone and causing testers to execute or skip this verification inconsistently.<br>Suggested fix: Update Step 1 expected results to verify that the expiration message, no password input fields, and the &#x27;Request a new link&#x27; button are displayed. Add Step 2 with action &#x27;Click the &#x27;Request a new link&#x27; button.&#x27; and expected result &#x27;The &#x27;Forgot password&#x27; page is displayed.&#x27;</li><li><b>[HIGH] imprecise test data</b> (AC-2): Step 1 test data specifies a static mock URL with a placeholder token (&#x27;https://example.com/reset-password?token=expired-token-61m&#x27;) rather than defining valid test data that exercises the actual 60-minute token expiration logic. In a real test environment, an arbitrary token string will fail on token validation/malformation rather than verifying AC-2 expiration behavior.<br>Suggested fix: Update the test data to specify a genuinely generated reset token whose timestamp is 61 minutes in the past (e.g. created via API or system time offset) to properly exercise link expiration logic.</li></ul><h4>Duplicate check</h4><p>No duplicate test cases found.</p>",
+      "review_comments": "<h4>Test case review</h4><p>Review iterations: 2, stop reason: iteration_limit.</p><ul><li><b>[HIGH] imprecise expected result</b> (AC-2): In step 2, the expected result states that &#x27;the URL path reflects the forgot password page&#x27;, which is vague and lacks an explicit URL path (e.g. &#x27;/forgot-password&#x27;). This ambiguity allows testers to verify redirection inconsistently or overlook routing defects.<br>Suggested fix: Update the expected result of step 2 to specify the concrete expected URL path (e.g. &#x27;/forgot-password&#x27;) rather than using the generic phrase &#x27;the URL path reflects the forgot password page&#x27;.</li></ul><h4>Duplicate check</h4><p>No duplicate test cases found.</p>",
       "steps": [
         {
-          "description": "Open the reset link in a web browser.",
-          "expected_result": "The message 'This reset link has expired' is displayed, no password input fields are shown, and the 'Request a new link' button is displayed, enabled, and links to the 'Forgot password' page.",
-          "test_data": "reset link: https://example.com/reset-password?token=expired-token-61m"
+          "description": "Open the received password-reset link after the specified elapsed time.",
+          "expected_result": "The page displays the message 'This reset link has expired' and a 'Request a new link' button.",
+          "test_data": "elapsed time: 61 minutes<br>link validity duration: 60 minutes"
+        },
+        {
+          "description": "Click the specified button.",
+          "expected_result": "The user is redirected to the 'Forgot password' form: the URL path reflects the forgot password page, and the page displays the 'Forgot password' heading, email input field, and submit button.",
+          "test_data": "button: Request a new link"
         }
       ]
     },
     {
       "key": "SMOKE-T3",
-      "name": "Verify rate limiting for password reset requests",
-      "objective": "Submit 3 password-reset requests for a registered account within one hour and verify each succeeds, then attempt a 4th request within the same window and verify it is rate-limited.",
-      "precondition": "The user has a registered account with email 'user@example.com' with no reset requests made in the past 60 minutes, and the 'Forgot password' page is open.",
+      "name": "Password reset request rate limit of 3 requests per account per hour",
+      "objective": "Verify that a registered user can submit up to 3 password reset requests per account within an hour, and that attempting a 4th request within the same one-hour window is throttled or rejected with a rate limit message and no email sent.",
+      "precondition": "A user account with the email 'user@example.com' is registered in the system, and access to the corresponding email inbox is available.",
       "labels": [
         "security",
         "automated"
       ],
-      "review_comments": "<h4>Test case review</h4><p>Review iterations: 2, stop reason: iteration_limit.</p><ul><li><b>[HIGH] imprecise expected result</b>: In Step 2, the expected result states &#x27;The request is blocked or throttled with an appropriate rate-limit error message displayed, and no password-reset email is sent.&#x27; Describing the outcome with ambiguous alternatives (&#x27;blocked or throttled&#x27;) and an unspecified (&#x27;appropriate&#x27;) error message leaves the verification criteria open to interpretation. Testers cannot consistently verify whether the application handled rate-limiting correctly or missed a defect in user messaging.<br>Suggested fix: Specify the precise rate-limiting UI outcome and exact error message text (e.g. &#x27;A rate-limit warning message stating \\&quot;You have reached the maximum number of reset attempts allowed per hour. Please try again later.\\&quot; is displayed, and no password-reset email is sent.&#x27;).</li><li><b>[HIGH] imprecise expected result</b>: Step 1 expected results state that &#x27;confirmation messages are displayed, and a password-reset email is sent for each request&#x27; without specifying the exact confirmation message text or validating that each delivered email contains a distinct, unique reset link and the required 60-minute expiration notice from reset-policy.md. Testers could overlook defects if duplicate reset links or incorrect messages are generated.<br>Suggested fix: Specify the exact confirmation message text displayed after each submission and explicitly verify that three separate emails are received, each containing a distinct reset link with explicit 60-minute validity text.</li><li><b>[MEDIUM] test data in action</b>: The actions in Step 1 and Step 2 hardcode test data values (&#x27;3 consecutive times within a one-hour window&#x27; and &#x27;4th password-reset request within the same one-hour window&#x27;) rather than referencing the values defined in the test data field.<br>Suggested fix: Rephrase the actions to reference the test data fields (e.g. Step 1: &#x27;Enter the registered email address and submit the &#x27;Forgot password&#x27; form for the specified number of requests within the specified timeframe.&#x27;, Step 2: &#x27;Enter the registered email address and submit the form for the next request attempt within the same timeframe.&#x27;).</li></ul><h4>Duplicate check</h4><p>No duplicate test cases found.</p>",
+      "review_comments": "<h4>Test case review</h4><p>Review iterations: 2, stop reason: iteration_limit.</p><ul><li><b>[HIGH] ambiguous step</b> (AC-1): Step 3 is the weakest step of the test case: its action states &#x27;Submit another password reset request for the registered email address within the specified time window&#x27;, but it omits the necessary interactions to reach and submit the form again (navigating back to the &#x27;Forgot password&#x27; page and entering the email address) after Step 2 ended on a confirmation notification. In addition, the action refers to &#x27;the specified time window&#x27;, but Step 3&#x27;s test data omits any time constraint parameter relative to the first request. Consequently, testers may execute the step inconsistently or fail to execute the 4th attempt within the 1-hour rate limit window.<br>Suggested fix: Update Step 3 action to: &#x27;Navigate to the &#x27;Forgot password&#x27; page, enter the registered email address into the input field, and submit the 4th password reset request within the specified time window from the first request.&#x27; and add &#x27;time window: within 60 minutes of the first request&#x27; to Step 3 test data.</li><li><b>[HIGH] missing precondition</b> (AC-1): The test case preconditions verify a rate limit of at most 3 requests per account per hour, but do not state that the account has not requested any password resets within the past 60 minutes. If prior reset requests occurred for &#x27;user@example.com&#x27; in the hour before testing, Step 2 will trigger rate limiting prematurely, causing false test failures and inconsistent execution.<br>Suggested fix: Add a precondition stating: &#x27;The registered user account has no password reset requests recorded within the last 60 minutes (rate limit counter is reset).&#x27;</li></ul><h4>Duplicate check</h4><p>No duplicate test cases found.</p>",
       "steps": [
         {
-          "description": "Enter the registered email address and submit the 'Forgot password' form 3 consecutive times within a one-hour window.",
-          "expected_result": "Each of the 3 requests is processed successfully, confirmation messages are displayed, and a password-reset email is sent for each request.",
-          "test_data": "email: user@example.com<br>number of requests: 3<br>timeframe: within 60 minutes"
+          "description": "Navigate to the 'Forgot password' page.",
+          "expected_result": "The 'Forgot password' page is displayed with an email address input field and a form submission control.",
+          "test_data": ""
         },
         {
-          "description": "Enter the same registered email address and submit a 4th password-reset request within the same one-hour window.",
-          "expected_result": "The request is blocked or throttled with an appropriate rate-limit error message displayed, and no password-reset email is sent.",
-          "test_data": "email: user@example.com<br>request attempt: 4"
+          "description": "Enter the registered email address into the input field and submit the password reset request for the specified number of times within the specified time window.",
+          "expected_result": "Each submitted request is processed successfully with a confirmation notification displayed, and a password-reset email is dispatched to the specified email address for each submission.",
+          "test_data": "email address: user@example.com<br>number of requests: 3<br>time window: 1 hour"
+        },
+        {
+          "description": "Submit another password reset request for the registered email address within the specified time window.",
+          "expected_result": "The request is rejected with a rate limit error message, and no password-reset email is dispatched to the specified email address.",
+          "test_data": "email address: user@example.com<br>request attempt: 4th"
         }
       ]
     }
   ],
   "bugs": [
     {
-      "summary": "[Password Reset] - POST /api/password-reset returns HTTP 500 Internal Server Error",
-      "description": "Description:\nDuring execution of test case 'Password reset email is sent for a registered address' (SMOKE-T100), sending a password reset request to /api/password-reset failed with HTTP 500 Internal Server Error instead of the expected HTTP 200. No reset email was queued.\n\nError:\nAssertionError: expected response status 200 but received 500\n\nEnvironment Details:\n- Agent: Smoke API Test Executor (version 9.9-smoke)\n- Environment: Smoke Test Environment\n\nSteps to Reproduce:\n1. Ensure a user account exists for the test email address (registered@example.com).\n2. Send POST /api/password-reset with the registered email address (email=registered@example.com).\n\nExpected Result:\nHTTP 200 and a password-reset email is queued.\n\nActual Result:\nHTTP 500 Internal Server Error; no email was queued."
+      "summary": "[Password Reset] - POST /api/password-reset returns HTTP 500 instead of HTTP 200",
+      "description": "## Description\nAn error occurred during the execution of step: \"Send POST /api/password-reset with a registered email address\". The request failed with an AssertionError: expected response status 200 but received 500. HTTP 500 Internal Server Error was returned and no password-reset email was queued.\n\nError Message:\n`AssertionError: expected response status 200 but received 500`\n\n## Environment Details\n- Agent: Smoke API Test Executor (version 9.9-smoke)\n- Environment: Smoke Test Environment\n\n## Steps to Reproduce\n1. Ensure a user account exists for the test email address (email=registered@example.com).\n2. Send POST /api/password-reset with registered email address (email=registered@example.com).\n\n## Expected Result\nHTTP 200 and a password-reset email is queued.\n\n## Actual Result\nHTTP 500 Internal Server Error; no email was queued."
     }
   ],
   "execution": {

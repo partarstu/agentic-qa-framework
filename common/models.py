@@ -522,10 +522,7 @@ class TestCaseDesignSession(JsonSerializableModel):
         return draft_id
 
     def restore_named_by(self, gaps: list[ReviewFinding]) -> list[str]:
-        """Puts the deleted test cases which the coverage gaps name back, with their findings, and returns their IDs.
-
-        A restored test case is marked changed, so that a review that follows gives it a full review.
-        """
+        """Puts the deleted test cases the gaps name back as changed, with their findings, and returns their IDs."""
         restored: list[str] = []
         for gap in gaps:
             for test_case_id in gap.related_test_case_ids:

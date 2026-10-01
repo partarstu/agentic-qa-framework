@@ -16,6 +16,7 @@ boundary, read back from its ``/__recorded`` endpoint:
                            (shorter than the issue) query text.
 * Requirements review   -> with JIRA_ADDITIONAL_FIELD_IDS configured, the agent requests those custom
                            field IDs (together with the standard content fields) when fetching the story.
+* Test-case design      -> the design fetched the story once via the Jira MCP, without comments, with the standard and configured fields.
 * Test-case generation  -> real test cases (name + steps) reached Zephyr.
 * Test-case generation  -> the created test cases were linked to the seeded story's numeric id.
 * Test-case classification -> labels reached Zephyr.
@@ -151,8 +152,8 @@ def test_agents_requested_the_configured_additional_fields(
     test_case_flow_response: httpx.Response,
     http_client: httpx.Client,
 ) -> None:
-    """With JIRA_ADDITIONAL_FIELD_IDS configured, the requirements review and the design agent's generation
-    delegate must both ask for those field IDs when fetching the story."""
+    """With JIRA_ADDITIONAL_FIELD_IDS configured, the requirements review and the design agent must both ask for those
+    field IDs when fetching the story."""
     configured_field_ids = ("customfield_10101", "customfield_10202")
 
     def _requested(call: dict) -> bool:
@@ -176,6 +177,26 @@ def test_agents_requested_the_configured_additional_fields(
             f"The fields parameter {fields!r} lists only the custom field IDs, so the agent would lose "
             f"the standard issue content. Recorded: {call}"
         )
+
+
+def test_design_fetched_the_story_once_without_comments(
+    test_case_flow_response: httpx.Response, http_client: httpx.Client
+) -> None:
+    """The design fetches the story once, in code, without comments and with the standard and configured fields."""
+
+    def _design_fetches(recorded: dict) -> list[dict]:
+        return [
+            call
+            for call in recorded.get("get_issue", [])
+            if call.get("issue_key") == SEEDED_ISSUE_KEY and call.get("comment_limit") == 0
+        ]
+
+    data = wait_for_recorded(http_client, JIRA_MCP_RECORDED_URL, lambda d: bool(_design_fetches(d)))
+    fetches = _design_fetches(data)
+    assert len(fetches) == 1, f"Expected exactly one story fetch without comments. Recorded: {data.get('get_issue')}"
+    fields = fetches[0]["fields"].split(",")
+    expected_fields = {"summary", "description", "issuetype", "labels", "customfield_10101", "customfield_10202"}
+    assert expected_fields <= set(fields), f"The design's story fetch lacks fields. Recorded: {fetches[0]}"
 
 
 def test_agent_downloaded_the_story_attachment_over_rest(
@@ -309,8 +330,8 @@ def test_requirements_review_usage_carries_focused_review_and_merge_operations(
 def test_usage_artifact_carries_per_operation_counters(
     test_case_flow_response: httpx.Response, http_client: httpx.Client, auth_headers: dict[str, str]
 ) -> None:
-    """The design task's usage artifact breaks the tokens down per operation (the agents and the sub-agents of
-    its generation and review delegates) with the cached/uncached split, and its totals include every operation."""
+    """The design task's usage artifact breaks the tokens down per operation (`main` for the design and classification
+    LLMs, plus the generation and review sub-agents) with the cached/uncached split, and its totals include them all."""
     tasks = _completed_tasks_of(http_client, auth_headers, config.TestCaseDesignAgentConfig.OWN_NAME)
     assert tasks, "No completed test case design task is listed on the dashboard."
     token_usage = tasks[0].get("token_usage") or {}
@@ -485,6 +506,13 @@ def test_review_comment_carries_the_duplicate_check(
     assert data.get("test_cases") and not missing, (
         f"Review comment(s) of {missing} carry no '{DUPLICATE_CHECK_HEADING}' section. Recorded: {data}"
     )
+    outcomes = ("No duplicate test cases found.", "Fully covered by:", "Partially overlapping with:")
+    for tc in data["test_cases"]:
+        section = tc["review_comments"].split(DUPLICATE_CHECK_HEADING, 1)[1]
+        assert any(outcome in section for outcome in outcomes), (
+            f"The duplicate-check section of {tc['key']} states neither no duplicates nor a full or partial overlap: "
+            f"{section}"
+        )
 
 
 def _draft_duplicate_searches(recorded: dict) -> list[dict]:

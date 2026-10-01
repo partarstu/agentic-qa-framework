@@ -67,9 +67,8 @@ def _fix(session: TestCaseDesignSession) -> None:
     session.changed_test_case_ids.add("DRAFT-1")
 
 
-async def _check_duplicates(session: TestCaseDesignSession, usage: RunUsage, usage_limits: UsageLimits) -> str:
+async def _check_duplicates(session: TestCaseDesignSession, usage: RunUsage, usage_limits: UsageLimits) -> None:
     session.duplicate_checks = {test_case_id: TestCaseDuplicateCheck() for test_case_id in session.test_cases}
-    return "DRAFT-1: no duplicates"
 
 
 def _delegate(effect: Callable[[TestCaseDesignSession], None], summary: str = "done") -> MagicMock:
@@ -456,6 +455,28 @@ async def test_publishing_twice_is_refused_without_writing(agent, client):
         await agent.publish_test_cases(_ctx(session))
 
     client.create_test_cases.assert_not_called()
+
+
+async def test_publish_runs_alone_so_a_second_call_of_the_same_response_cannot_upload_again(agent, client, jira):
+    responses = [
+        [ToolCallPart("generate_test_cases", {})],
+        [ToolCallPart("review_test_cases", {})],
+        [ToolCallPart("publish_test_cases", {}), ToolCallPart("publish_test_cases", {})],
+    ]
+    publish_sequential: list[bool] = []
+
+    def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        publish_sequential.extend(tool.sequential for tool in info.function_tools if tool.name == "publish_test_cases")
+        step = sum(isinstance(message, ModelResponse) for message in messages)
+        if step < len(responses):
+            return ModelResponse(parts=responses[step])
+        return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, {})])
+
+    with agent.agent.override(model=FunctionModel(respond)):
+        await agent.run(_design_request())
+
+    assert publish_sequential and all(publish_sequential)
+    client.create_test_cases.assert_called_once()
 
 
 @pytest.mark.parametrize(

@@ -82,7 +82,7 @@ class TestCaseDesignAgent(AgentBase):
                 self.generate_test_cases,
                 self.review_test_cases,
                 Tool(self.fix_test_cases, prepare=_hide_outside_fix_loop),
-                Tool(self.publish_test_cases, prepare=_hide_until_stopped),
+                Tool(self.publish_test_cases, sequential=True, prepare=_hide_until_stopped),
             ],
         )
         self.agent.instructions(_story_instructions)

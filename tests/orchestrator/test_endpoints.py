@@ -94,7 +94,7 @@ async def test_trigger_test_case_generation_workflow_runs_one_test_case_design()
     assert response.json() == {"message": "Test case design for Jira user story TEST-1 completed."}
     mock_send.assert_awaited_once()
     message, task_description = mock_send.await_args.args
-    assert get_message_text(message).startswith("Jira user story with key TEST-1")
+    assert get_message_text(message) == "Design test cases for Jira user story TEST-1"
     assert get_data_parts(message.parts) == [{"story_key": "TEST-1"}]
     assert task_description == "Design test cases for Jira user story TEST-1"
     assert (

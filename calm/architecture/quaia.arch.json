@@ -82,7 +82,7 @@
       "unique-id": "test-case-design-agent",
       "node-type": "service",
       "name": "Test Case Design Agent",
-      "description": "Designs the test cases of a user story: generates them, reviews and fixes them in a loop until no finding at or above the configured severity remains or the iteration limit is reached, then saves the final set, classifies it, and posts the review comments and review status. Runs the test case generation, review and classification agents in-process as sub-agents sharing one design session.",
+      "description": "Designs the test cases of a user story through four tools its LLM calls in order: generate (the story is fetched in code from the Atlassian MCP server), review, fix, publish. The review-fix loop stops when no finding at or above the configured severity remains, when the iteration limit is reached or when a review shows no progress; publishing saves the final set, classifies it, and posts the review comments and review status. Runs test case generation, review and classification in-process as sub-agents sharing one design session.",
       "controls": {
         "prompt-injection-guard": {
           "description": "Untrusted text is screened for prompt-injection before reaching the LLM (enabled by default).",

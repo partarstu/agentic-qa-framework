@@ -139,8 +139,10 @@ class TestCaseReviewer:
         session.suite_findings = result.output.findings
         logger.info("The whole-set review reported %d finding(s).", len(result.output.findings))
 
-    async def check_duplicates(self, session: TestCaseDesignSession, usage: RunUsage, usage_limits: UsageLimits) -> str:
-        """Checks every test case of the design against the project's existing ones and lists the overlapping keys."""
+    async def check_duplicates(
+        self, session: TestCaseDesignSession, usage: RunUsage, usage_limits: UsageLimits
+    ) -> None:
+        """Checks every test case of the design against the project's existing ones."""
         async with asyncio.TaskGroup() as task_group:
             checks = {
                 test_case_id: task_group.create_task(
@@ -155,13 +157,6 @@ class TestCaseReviewer:
             }
         # Stored only once every check succeeded, so a failed check leaves no partial verdicts behind.
         session.duplicate_checks.update({test_case_id: check.result() for test_case_id, check in checks.items()})
-        overlaps = {
-            test_case_id: [overlap.test_case_key for overlap in check.overlapping_test_cases]
-            for test_case_id, check in session.duplicate_checks.items()
-        }
-        return "\n".join(
-            f"{test_case_id}: {', '.join(keys) or 'no duplicates'}" for test_case_id, keys in overlaps.items()
-        )
 
     async def _check_duplicates(
         self, project_key: str, record: IndexedTestCase, usage: RunUsage, usage_limits: UsageLimits

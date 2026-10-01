@@ -213,7 +213,7 @@ PROMPT_GUARD_SERVICE_URL = os.environ.get("PROMPT_GUARD_SERVICE_URL")
 # Orchestrator
 class OrchestratorConfig:
     THINKING_LEVEL: ThinkingLevel = "low"
-    VERSION = os.environ.get("ORCHESTRATOR_VERSION", "2.1.0")
+    VERSION = os.environ.get("ORCHESTRATOR_VERSION", "2.1.1")
     # Label describing the environment the execution agents run their test cases against; reported
     # alongside every test execution result.
     TEST_ENVIRONMENT_LABEL = os.environ.get("TEST_ENVIRONMENT_LABEL", "Standard Test Environment")
@@ -303,7 +303,7 @@ class TestCaseGenerationAgentConfig:
 # Test Case Design Agent
 class TestCaseDesignAgentConfig:
     THINKING_LEVEL: ThinkingLevel = "low"
-    VERSION = os.environ.get("TEST_CASE_DESIGN_AGENT_VERSION", "1.0.0")
+    VERSION = os.environ.get("TEST_CASE_DESIGN_AGENT_VERSION", "1.1.0")
     OWN_NAME = "Test Case Design Agent"
     SKILL_ID = "test-case-design"
     SKILL_NAME = "Test Case Design"

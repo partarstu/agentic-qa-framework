@@ -124,7 +124,7 @@ async def test_the_requirements_review_flow_sends_the_additional_fields_instruct
     assert build_additional_fields_instruction() in mock_send.await_args.args[0]
 
 
-async def test_the_test_case_design_flow_sends_the_additional_fields_instruction(monkeypatch):
+async def test_the_test_case_design_flow_sends_no_additional_fields_instruction(monkeypatch):
     monkeypatch.setattr(config, "JIRA_ADDITIONAL_FIELD_IDS", ("customfield_10001",))
     with patch("orchestrator.main._send_task_to_agent_with_message", new_callable=AsyncMock) as mock_send:
         mock_send.side_effect = _FlowStopped
@@ -132,4 +132,4 @@ async def test_the_test_case_design_flow_sends_the_additional_fields_instruction
             await _request_test_case_design("PROJ-42")
 
     mock_send.assert_awaited_once()
-    assert build_additional_fields_instruction() in get_message_text(mock_send.await_args.args[0])
+    assert get_message_text(mock_send.await_args.args[0]) == "Design test cases for Jira user story PROJ-42"

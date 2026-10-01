@@ -563,11 +563,7 @@ def _get_agent_host(card: AgentCard | None) -> str:
 
 
 def _build_jira_issue_task_text(issue_key: str) -> str:
-    """Builds the task text for every task that hands a Jira issue to an agent.
-
-    When JIRA_ADDITIONAL_FIELD_IDS is configured, an instruction is appended that tells the agent to
-    fetch those custom fields together with the issue and to treat their values as issue content.
-    """
+    """Builds the requirements review task text, with the instruction to fetch the configured additional fields."""
     task_text = f"Jira user story with key {issue_key}"
     additional_fields_instruction = build_additional_fields_instruction()
     if additional_fields_instruction:
@@ -1375,14 +1371,15 @@ async def _request_test_case_design(user_story_key: str) -> TestCaseDesignResult
     Raises:
         HTTPException: If an AgentExecutionError is returned by the agent.
     """
+    task_description = f"Design test cases for Jira user story {user_story_key}"
+    # The design fetches the configured additional fields in code, so its LLM gets no instruction to fetch them.
     message = new_message(
         parts=[
-            new_text_part(_build_jira_issue_task_text(user_story_key)),
+            new_text_part(task_description),
             new_data_part(TestCaseDesignRequest(story_key=user_story_key).model_dump(mode="json")),
         ],
         role=Role.ROLE_USER,
     )
-    task_description = f"Design test cases for Jira user story {user_story_key}"
     completed_task = await _send_task_to_agent_with_message(
         message, task_description, timeout_seconds=config.OrchestratorConfig.TEST_CASE_DESIGN_TASK_TIMEOUT_SECONDS
     )

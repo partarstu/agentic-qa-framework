@@ -314,10 +314,9 @@ async def test_duplicate_check_covers_every_test_case_once(reviewer):
 async def test_no_candidates_means_no_duplicates_without_asking_the_judge(reviewer):
     session = _reviewed("First")
 
-    summary = await reviewer.check_duplicates(session, RunUsage(), _USAGE_LIMITS)
+    await reviewer.check_duplicates(session, RunUsage(), _USAGE_LIMITS)
 
     reviewer.duplicate_judge.run.assert_not_awaited()
-    assert summary == "DRAFT-1: no duplicates"
     assert session.duplicate_checks == {"DRAFT-1": TestCaseDuplicateCheck()}
 
 
@@ -331,9 +330,8 @@ async def test_candidates_are_deduplicated_by_key_before_judging(reviewer):
     ]
     reviewer.duplicate_judge.run.return_value = _judgement("PROJ-T7", "PROJ-T404")
 
-    summary = await reviewer.check_duplicates(session, RunUsage(), _USAGE_LIMITS)
+    await reviewer.check_duplicates(session, RunUsage(), _USAGE_LIMITS)
 
-    assert summary == "DRAFT-1: PROJ-T7"
     judge_message = reviewer.duplicate_judge.run.await_args.args[0]
     assert judge_message.count("Candidate PROJ-T7") == 1
     assert "Candidate PROJ-T8" in judge_message
@@ -396,10 +394,9 @@ async def test_the_duplicate_checks_of_the_test_cases_run_concurrently(reviewer)
 
     reviewer.vector_db_service.hybrid_search = search
 
-    summary = await reviewer.check_duplicates(session, RunUsage(), _USAGE_LIMITS)
+    await reviewer.check_duplicates(session, RunUsage(), _USAGE_LIMITS)
 
     assert len(started) == 2
-    assert summary == "DRAFT-1: no duplicates\nDRAFT-2: no duplicates"
     assert set(session.duplicate_checks) == {"DRAFT-1", "DRAFT-2"}
 
 
