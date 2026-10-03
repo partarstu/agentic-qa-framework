@@ -80,7 +80,7 @@ MIT License  -  <https://opensource.org/licenses/MIT>
 
   * Pydantic AI
     pydantic-ai-slim, pydantic-ai-harness
-    https://github.com/pydantic/pydantic-ai
+    https://github.com/pydantic/pydantic-ai, https://github.com/pydantic/pydantic-ai-harness
 
   * FastAPI
     fastapi
