@@ -28,7 +28,7 @@ dependencies = [
     "python-dateutil==2.9.0.post0",
     "requests==2.34.2",
     "qdrant-client==1.19.1",
-    "PyJWT==2.14.0",
+    "PyJWT==2.15.1",
     "jira==3.10.5",
     "sse-starlette==3.4.11",
     "google-cloud-run==0.16.1",
@@ -77,6 +77,8 @@ dev = [
 [tool.uv]
 # This is a deployable application, not a distributable package.
 package = false
+# jira pulls oauthlib in through requests-oauthlib, which still allows the 3.x releases with GHSA-hj66-6f7g-4r5v and GHSA-xpv3-w29h-x7cv.
+constraint-dependencies = ["oauthlib==4.0.0"]
 
 # The ML services run on CPU only; the default Linux torch wheel pulls ~2.4 GB of unused CUDA libraries.
 [tool.uv.sources]
