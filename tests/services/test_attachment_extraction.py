@@ -4,6 +4,7 @@
 
 """Unit tests for attachment extraction, OCR, conversion, and limits."""
 
+import ctypes
 import io
 import subprocess
 import sys
@@ -22,7 +23,6 @@ from rag_sync.attachment_extraction import (  # noqa: E402
     ExtractionError,
     UnsupportedFormatError,
     _normalize_extracted_text,
-    _page_text_with_ocr,
     extract_attachment,
     extract_attachment_async,
     skip_reason,
@@ -30,16 +30,30 @@ from rag_sync.attachment_extraction import (  # noqa: E402
 from rag_sync.office_conversion import OfficeConversionError  # noqa: E402
 
 
-def _pdf_bytes(*texts: str) -> bytes:
-    import pymupdf
+def _pdf_bytes(*texts: str, embedded_image_copies: int = 0) -> bytes:
+    import pypdfium2
+    import pypdfium2.raw as pdfium_c
+    from PIL import Image
 
-    document = pymupdf.open()
+    document = pypdfium2.PdfDocument.new()
     for text in texts:
-        page = document.new_page()
-        page.insert_text((72, 72), text)
-    content = document.tobytes()
-    document.close()
-    return content
+        page = document.new_page(612, 792)
+        for line_number, line in enumerate(text.splitlines()):
+            text_object = pdfium_c.FPDFPageObj_NewTextObj(document.raw, b"Helvetica", 12)
+            # PDFium takes NUL-terminated UTF-16LE text.
+            encoded_line = ctypes.create_string_buffer(f"{line}\x00".encode("utf-16-le"))
+            pdfium_c.FPDFText_SetText(text_object, ctypes.cast(encoded_line, pdfium_c.FPDF_WIDESTRING))
+            pdfium_c.FPDFPageObj_Transform(text_object, 1, 0, 0, 1, 72, 720 - 14 * line_number)
+            pdfium_c.FPDFPage_InsertObject(page.raw, text_object)
+        for copy_number in range(embedded_image_copies):
+            image_object = pypdfium2.PdfImage.new(document)
+            image_object.set_bitmap(pypdfium2.PdfBitmap.from_pil(Image.new("RGB", (80, 40), "white")))
+            image_object.set_matrix(pypdfium2.PdfMatrix().scale(80, 40).translate(72, 400 - 60 * copy_number))
+            page.insert_obj(image_object)
+        page.gen_content()
+    buffer = io.BytesIO()
+    document.save(buffer)
+    return buffer.getvalue()
 
 
 def _image_bytes(size: tuple[int, int] = (80, 40), image_format: str = "PNG") -> bytes:
@@ -125,6 +139,48 @@ class TestAttachmentExtraction:
 
         assert document.total_page_count == 2
         assert len(document.pages) == 1
+
+    def test_pdf_word_hyphenated_across_lines_is_joined(self):
+        document = extract_attachment("guide.pdf", _pdf_bytes("Reset links expire after a hyphen-\nated delay."))
+
+        assert document.pages[0].text == "Reset links expire after a hyphenated delay."
+
+    def test_pdf_page_over_the_pixel_cap_keeps_text_without_image(self):
+        with patch("config.DocumentRagConfig.MAX_IMAGE_DIMENSION", 100):
+            document = extract_attachment("guide.pdf", _pdf_bytes("Native text is kept without an image."))
+
+        assert document.pages[0].text == "Native text is kept without an image."
+        assert document.pages[0].image is None
+
+    def test_unreadable_pdf_raises_extraction_error(self):
+        with pytest.raises(ExtractionError, match="could not be opened"):
+            extract_attachment("broken.pdf", b"not a pdf")
+
+    def test_image_only_pdf_page_is_ocrd_from_its_rendering(self):
+        with patch("rag_sync.ocr.extract_text", return_value="scanned text") as extract_text:
+            document = extract_attachment("scan.pdf", _pdf_bytes(""))
+
+        assert document.pages[0].text == "scanned text"
+        extract_text.assert_called_once_with(document.pages[0].image)
+
+    def test_repeated_embedded_image_is_ocrd_once_and_appended_to_native_text(self):
+        native = "This native text is comfortably above the OCR threshold."
+        with patch("rag_sync.ocr.extract_text", return_value="embedded") as extract_text:
+            document = extract_attachment("guide.pdf", _pdf_bytes(native, embedded_image_copies=2))
+
+        assert document.pages[0].text == f"{native}\n\n[embedded image text]\nembedded"
+        extract_text.assert_called_once()
+
+    def test_embedded_image_over_the_bomb_limit_is_not_ocrd(self):
+        native = "This native text is comfortably above the OCR threshold."
+        with (
+            patch("rag_sync.ocr.extract_text") as extract_text,
+            patch("PIL.Image.MAX_IMAGE_PIXELS", 100),
+        ):
+            document = extract_attachment("guide.pdf", _pdf_bytes(native, embedded_image_copies=1))
+
+        assert document.pages[0].text == native
+        extract_text.assert_not_called()
 
     def test_raster_image_is_resized_normalized_and_ocrd(self):
         with (
@@ -251,19 +307,6 @@ class TestAttachmentExtraction:
         text = " multi   space \n42\nhyphen-\nated\n\n\nend "
         assert _normalize_extracted_text(text, strip_page_numbers=True) == "multi space\nhyphenated\n\nend"
         assert _normalize_extracted_text(text) == "multi space\n42\nhyphenated\n\nend"
-
-    def test_ocr_rules_use_full_page_for_image_only_and_embedded_images_for_text_pages(self):
-        page = MagicMock()
-        page.get_images.return_value = [(7,), (7,)]
-        page.parent.extract_image.return_value = {"image": _image_bytes()}
-        with patch("rag_sync.ocr.extract_text", side_effect=["full page", "embedded"]) as extract_text:
-            assert _page_text_with_ocr(page, "", b"page") == "full page"
-            native = "This native text is comfortably above the OCR threshold."
-            combined = _page_text_with_ocr(page, native, b"page")
-
-        assert combined == f"{native}\n\n[embedded image text]\nembedded"
-        assert extract_text.call_count == 2
-        page.parent.extract_image.assert_called_once_with(7)
 
 
 class TestOfficeConversion:

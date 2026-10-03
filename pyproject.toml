@@ -13,6 +13,8 @@ license = "AGPL-3.0-only"
 # Shared runtime dependencies for the orchestrator and all agents.
 dependencies = [
     "pydantic-ai-slim[anthropic,google,mcp,openai]==2.46.0",
+    # 0.36.0 is the last release accepting pydantic-ai-slim>=2.44.0; later ones pin pydantic-ai-slim exactly.
+    "pydantic-ai-harness==0.36.0",
     "a2a-sdk==1.1.5",
     "allure-python-commons==2.16.1",
     "python-dotenv==1.2.3",
@@ -53,7 +55,7 @@ prompt-guard-service = [
 # The RAG sync runtime's attachment ingestion (services/rag_sync): PDF text and
 # page rendering, image normalization, OCR, native office readers.
 rag-sync = [
-    "pymupdf==1.28.2",
+    "pypdfium2==5.13.0",
     "pillow==12.3.0",
     "rapidocr==3.9.2",
     "onnxruntime==1.30.0",

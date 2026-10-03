@@ -171,6 +171,8 @@ QWEN_API_KEY = os.environ.get("QWEN_API_KEY", "")
 # Master switch for Qwen's thinking. When on, each agent's THINKING_LEVEL grades it; when off, thinking is
 # disabled through Qwen's chat template, which is the only way to switch it off entirely.
 QWEN_THINKING_ENABLED = os.environ.get("QWEN_THINKING_ENABLED", "False").lower() in ("true", "1", "t")
+# The served --max-model-len; unset, context compaction assumes its conservative 200K fallback window.
+QWEN_CONTEXT_WINDOW = _optional_positive_int("QWEN_CONTEXT_WINDOW")
 
 
 class BudgetConfig:
@@ -263,7 +265,7 @@ class DashboardPersistenceConfig:
 # Requirements Review Agent
 class RequirementsReviewAgentConfig:
     THINKING_LEVEL: ThinkingLevel = "medium"
-    VERSION = os.environ.get("REQUIREMENTS_REVIEW_AGENT_VERSION", "1.3.0")
+    VERSION = os.environ.get("REQUIREMENTS_REVIEW_AGENT_VERSION", "1.4.0")
     OWN_NAME = "Jira Requirements Reviewer"
     SKILL_ID = "jira-requirements-review"
     SKILL_NAME = "Jira Requirements Review"
@@ -280,7 +282,7 @@ class RequirementsReviewAgentConfig:
 # Test Case Classification Agent
 class TestCaseClassificationAgentConfig:
     THINKING_LEVEL: ThinkingLevel = "medium"
-    VERSION = os.environ.get("TEST_CASE_CLASSIFICATION_AGENT_VERSION", "1.3.0")
+    VERSION = os.environ.get("TEST_CASE_CLASSIFICATION_AGENT_VERSION", "1.4.0")
     OWN_NAME = "Test Case Classification Agent"
     SKILL_ID = "test-case-classification"
     SKILL_NAME = "Test Case Classification"
@@ -303,7 +305,7 @@ class TestCaseGenerationAgentConfig:
 # Test Case Design Agent
 class TestCaseDesignAgentConfig:
     THINKING_LEVEL: ThinkingLevel = "low"
-    VERSION = os.environ.get("TEST_CASE_DESIGN_AGENT_VERSION", "1.0.0")
+    VERSION = os.environ.get("TEST_CASE_DESIGN_AGENT_VERSION", "1.1.0")
     OWN_NAME = "Test Case Design Agent"
     SKILL_ID = "test-case-design"
     SKILL_NAME = "Test Case Design"
@@ -335,7 +337,7 @@ class TestCaseReviewAgentConfig:
 # Incident Creation Agent
 class IncidentCreationAgentConfig:
     THINKING_LEVEL: ThinkingLevel = "medium"
-    VERSION = os.environ.get("INCIDENT_CREATION_AGENT_VERSION", "1.2.0")
+    VERSION = os.environ.get("INCIDENT_CREATION_AGENT_VERSION", "1.3.0")
     OWN_NAME = "Incident Creation Agent"
     SKILL_ID = "incident-creation"
     SKILL_NAME = "Incident Creation"

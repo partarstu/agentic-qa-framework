@@ -72,6 +72,7 @@ class CustomLlmWrapper(WrapperModel):
         thinking_level: ThinkingLevel | None = None,
         tools: Sequence = (),
         toolsets: Sequence = (),
+        capabilities: Sequence = (),
         deps_type: type | None = None,
         retries: int = 3,
         output_retries: int = 3,
@@ -92,6 +93,7 @@ class CustomLlmWrapper(WrapperModel):
             name=name,
             tools=list(tools),
             toolsets=list(toolsets),
+            capabilities=list(capabilities),
             deps_type=deps_type,
             retries={"tools": retries, "output": output_retries},
             # pydantic-ai 2 defaults to "graceful", which also runs the tools requested alongside the final output.

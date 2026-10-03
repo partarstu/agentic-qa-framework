@@ -27,6 +27,7 @@ from pydantic_ai.settings import ThinkingLevel
 from pydantic_ai.tools import AgentDepsT, ToolFuncEither
 from pydantic_ai.toolsets import AbstractToolset
 from pydantic_ai.usage import RunUsage, UsageLimits
+from pydantic_ai_harness.compaction import ClearToolResults, SlidingWindowCompaction, TieredCompaction
 
 import config
 from common import utils
@@ -51,9 +52,27 @@ logger = utils.get_logger("agent_base")
 # consumer (e.g. standalone runs, where no executor drains the queue).
 _ACTIVITY_QUEUE_MAXSIZE = 1000
 
+# The 10% headroom above the compaction target covers the output cap and the next tool result.
+_COMPACTION_TARGET_FRACTION = 0.9
+# report_activity pairs interleave with the real tool calls, so a few more pairs than the working set stay intact.
+_COMPACTION_KEEP_TOOL_PAIRS = 6
+_COMPACTION_KEEP_MESSAGES = 20
+
 # Set for the duration of a task, so agents it delegates to in-process report and budget against that task.
 _task_activity_queue: ContextVar[asyncio.Queue[str] | None] = ContextVar("task_activity_queue", default=None)
 _task_usage_limits: ContextVar[UsageLimits | None] = ContextVar("task_usage_limits", default=None)
+
+
+def _context_compaction() -> TieredCompaction:
+    """Zero-LLM compaction: clear old tool results first, then drop the oldest turns only if still over target."""
+    # The harness requires a trigger on each tier, but TieredCompaction drives the tiers itself and bypasses it.
+    return TieredCompaction(
+        target_fraction=_COMPACTION_TARGET_FRACTION,
+        tiers=[
+            ClearToolResults(max_messages=1, keep_pairs=_COMPACTION_KEEP_TOOL_PAIRS),
+            SlidingWindowCompaction(max_messages=1, keep_messages=_COMPACTION_KEEP_MESSAGES),
+        ],
+    )
 
 
 def _is_mcp_connect_failure(exc: BaseException) -> bool:
@@ -185,6 +204,7 @@ class AgentBase(ABC):
             name=self.agent_name,
             thinking_level=self.get_thinking_level(),
             tools=self.tools,
+            capabilities=[_context_compaction()],
             deps_type=self.deps_type,
             retries=config.RetryConfig.MAX_RETRIES,
             output_retries=config.RetryConfig.MAX_RETRIES,
