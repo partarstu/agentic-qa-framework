@@ -12,6 +12,7 @@ import config
 from agents.incident_creation import prompt as incident_prompts
 from agents.requirements_review import prompt as requirements_prompts
 from agents.test_case_classification import prompt as classification_prompts
+from agents.test_case_design import prompt as design_prompts
 from agents.test_case_generation import prompt as generation_prompts
 from agents.test_case_review import prompt as review_prompts
 from common import models
@@ -28,13 +29,16 @@ _PROMPTS = {
     "requirements-review-retrieval": requirements_prompts.RequirementsReviewRetrievalInstruction,
     "requirements-review-merge": requirements_prompts.MergeReviewsPrompt,
     "test-case-classification": classification_prompts.TestCaseClassificationSystemPrompt,
-    "test-case-generation": generation_prompts.TestCaseGenerationSystemPrompt,
+    "test-case-design": design_prompts.TestCaseDesignSystemPrompt,
     "ac-extraction": generation_prompts.AcExtractionPrompt,
     "steps-generation": generation_prompts.StepsGenerationPrompt,
     "test-case-creation": generation_prompts.TestCaseCreationPrompt,
-    "test-case-review": review_prompts.TestCaseReviewSystemPrompt,
+    "test-case-fixer": generation_prompts.TestCaseFixerPrompt,
     "test-case-review-with-attachments": review_prompts.TestCaseReviewWithAttachmentsPrompt,
     "test-case-duplicate-judge": review_prompts.TestCaseDuplicateJudgePrompt,
+    "test-suite-review": review_prompts.TestSuiteReviewPrompt,
+    "severity-classifier": review_prompts.SeverityClassifierFragment,
+    "test-step-quality-criteria": review_prompts.TestStepQualityCriteriaFragment,
 }
 
 _ORCHESTRATOR_TEMPLATES = [
@@ -70,6 +74,29 @@ def test_requirements_review_prompt_renders_the_configured_focus_area_count(monk
     prompt = requirements_prompts.RequirementsReviewSystemPrompt().get_prompt()
 
     assert "identify up to 7 of the most important review focus areas" in prompt
+
+
+@pytest.mark.parametrize(
+    "prompt_class",
+    [
+        generation_prompts.StepsGenerationPrompt,
+        generation_prompts.TestCaseFixerPrompt,
+        review_prompts.TestCaseReviewWithAttachmentsPrompt,
+    ],
+    ids=["steps-generation", "test-case-fixer", "test-case-review-with-attachments"],
+)
+def test_test_step_rules_come_from_the_one_shared_fragment(prompt_class):
+    prompt = prompt_class().get_prompt()
+
+    assert review_prompts.TestStepQualityCriteriaFragment().get_prompt() in prompt
+    assert prompt.count("# Test Step Quality Criteria") == 1
+
+
+def test_the_test_case_review_prompt_asks_only_about_what_a_draft_has():
+    prompt = review_prompts.TestCaseReviewWithAttachmentsPrompt().get_prompt()
+
+    assert "labels" not in prompt
+    assert "description," not in prompt
 
 
 def test_classification_prompt_lists_every_test_type_with_its_label():

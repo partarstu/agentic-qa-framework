@@ -107,7 +107,7 @@ Then rewrite your state file named in the brief (overwrite it, do not append), a
 ## Commands and environment
 - <the exact commands that worked, and every quirk met: sync problems, slow tests, flaky tests, paths>
 ## Verdicts
-- P<n> round <r>: PASS | FAIL - <one line: tests, coverage, what failed>
+- round <r>: PASS | FAIL - <one line: tests, coverage, what failed>
 ```
 
 End with one line: `TEST DONE: <VERDICT>, <passed> passed, <failed> failed, report <path>`.

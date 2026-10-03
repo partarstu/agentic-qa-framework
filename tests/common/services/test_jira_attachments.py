@@ -8,8 +8,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from pydantic_ai.exceptions import ModelRetry
+from pydantic_ai.messages import BinaryContent
 
-from common.services.jira_attachments import download_issue_attachments
+from common.services.jira_attachments import attachment_parts, download_issue_attachments
 from common.services.jira_client import build_jira_client
 
 
@@ -239,7 +240,7 @@ def test_issue_without_attachments_yields_empty_dict(mock_client, mock_get):
 )
 @patch("common.services.jira_attachments.build_jira_client")
 def test_invalid_issue_key_raises_model_retry_before_reaching_jira(mock_client, issue_key: str) -> None:
-    with pytest.raises(ModelRetry, match="not a Jira issue key"):
+    with pytest.raises(ModelRetry, match=r"not a Jira issue key\..*in the format like 'PROJ-123'\."):
         download_issue_attachments(issue_key)
 
     mock_client.assert_not_called()
@@ -255,3 +256,14 @@ def test_valid_issue_key_reaches_jira(mock_client, mock_config) -> None:
 
     assert download_issue_attachments("PROJ-123") == {}
     mock_client.return_value.issue.assert_called_once_with("PROJ-123", fields="attachment")
+
+
+def test_attachment_parts_pair_every_file_name_with_its_content() -> None:
+    first, second = BinaryContent(data=b"1", media_type="text/plain"), BinaryContent(data=b"2", media_type="image/png")
+
+    assert attachment_parts({"a.txt": first, "b.png": second}) == [
+        "Attachment: a.txt",
+        first,
+        "Attachment: b.png",
+        second,
+    ]

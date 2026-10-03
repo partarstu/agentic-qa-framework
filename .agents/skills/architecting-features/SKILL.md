@@ -1,6 +1,6 @@
 ---
 name: architecting-features
-description: Designs new features or changes to existing behaviour in the QuAIA framework and produces a compact implementation plan for user approval, covering code reuse, research of the libraries involved, the architecture-first CALM update, smoke-suite impact and verification steps. Use before implementing a new agent, workflow, integration or other non-trivial change, or when the user asks for a design or architectural advice.
+description: Designs new features or changes to existing behaviour in the QuAIA framework and produces a compact implementation plan for user approval, covering code reuse, research of the libraries involved, the architecture-first CALM check on a temporary copy, smoke-suite impact and verification steps. Use before implementing a new agent, workflow, integration or other non-trivial change, or when the user asks for a design or architectural advice.
 ---
 
 # Architecting Features
@@ -22,7 +22,7 @@ Copy this checklist and track progress:
 ## 1. Understand the request
 
 - Restate the goal and list your assumptions.
-- If the request allows several interpretations, present them and ask; do not pick one silently.
+- If the request has readings that would lead to materially different work, present them and ask; make routine judgement calls yourself.
 - If a simpler approach meets the need, propose it.
 
 ## 2. Study the existing code
@@ -38,20 +38,22 @@ Search the web for the official documentation of every library, protocol or exte
 
 Decide whether the change alters the architecture: a service, agent, actor or external system is added, removed or renamed; an integration edge appears or disappears; a security control (authentication, prompt-injection protection, credential scope, job invocation) is added, removed or changed. In-process changes (a helper, a prompt, a setting, a new endpoint over existing edges) do not.
 
-If it does, the architecture comes first and the implementation waits, as *Architecture first* in `AGENTS.md` requires:
+If it does, the architecture is checked and approved before anything is implemented, as *Architecture first* in `AGENTS.md` requires, and the check creates no artifact in the repository:
 
-1. Update `calm/architecture/quaia.arch.json`, and `calm/patterns/quaia.pattern.json` when the element must be enforced, mirroring the existing nodes, relationships and controls (`calm/README.md` lists the controls and their requirement schemas).
-2. Validate from `calm/`; a clean run prints `No issues found.`:
+1. Copy the whole `calm/` directory to a temporary directory outside the repository (the scratchpad directory when there is one); validation needs its URL mapping and control schemas too.
+2. In the copy, draft the change in `architecture/quaia.arch.json`, and in `patterns/quaia.pattern.json` when the element must be enforced, mirroring the existing nodes, relationships and controls (`calm/README.md` lists the controls and their requirement schemas).
+3. Validate from the copy; a clean run prints `No issues found.`:
    ```bash
    npx -y @finos/calm-cli@1.46.0 validate -p patterns/quaia.pattern.json -a architecture/quaia.arch.json -u url-mapping.json --strict -f pretty
    ```
-3. When the change is more than a single edge, render the documentation outside the repository and show the user the Mermaid diagram in `docs/index.md` and the pages of the changed nodes and relationships:
+4. When the change is more than a single edge, render the copy to another temporary directory and show the user the Mermaid diagram in `docs/index.md` and the pages of the changed nodes and relationships:
    ```bash
-   npx -y @finos/calm-cli@1.46.0 docify -a architecture/quaia.arch.json -o <directory outside the repository>
+   npx -y @finos/calm-cli@1.46.0 docify -a architecture/quaia.arch.json -o <another directory outside the repository>
    ```
-4. Present the architecture change to the user: what changed in the model and why, the validation result and the rendered diagram. Get their explicit approval; when the plan is written in step 6, its *Architecture* section records that approval with the date.
+5. Present the drafted architecture to the user: what changes in the model and why, the validation result and the rendered diagram. Get their explicit approval; when the plan is written in step 6, its *Architecture* section lists the drafted elements and records that approval with the date.
+6. Delete the temporary copy and the rendered documentation.
 
-Nothing is implemented before the architecture is validated and approved. The updated CALM files stay in the working tree as part of the change.
+Nothing under `calm/` changes before the implementation starts. The plan's TODO list carries a step that applies the approved elements to `calm/` together with the code that realises them and validates the result.
 
 ## 5. Design
 
@@ -70,9 +72,9 @@ Add a Mermaid diagram only when the interaction is not obvious from the text, su
 
 ## 6. Write the plan and get approval
 
-Write the plan in the conversation using [resources/implementation_plan_template.md](resources/implementation_plan_template.md), omitting sections that do not apply. Keep it compact: architecture, logic and data workflows, impact and the steps; no explanatory prose, no restated code, no hard wraps. Save it to a file only if the user asks.
+Write the plan to an .MD file in the `plans` folder using [resources/implementation_plan_template.md](resources/implementation_plan_template.md), omitting sections that do not apply. Keep it compact: architecture, logic and data workflows, impact and the steps; no explanatory prose, no restated code, no hard wraps. Keep its TODO list current during implementation.
 
-Then stop and ask for approval, listing the decisions that need the user's input: trade-offs, new dependencies and security-sensitive choices. Do not start implementing before the user approves.
+Then reply with only the file's path and a short summary that names the decisions needing the user's input (trade-offs, new dependencies, security-sensitive choices), and ask for approval. Do not start implementing before the user approves.
 
 ## 7. Hand off
 

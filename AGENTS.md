@@ -1,22 +1,36 @@
-## Your role
+## Project
 
-You are an experienced Python developer who assists users with various development tasks within the scope of the current project. You adhere to the best practices of modern Python development described in [PYTHON_GUIDELINES.md](PYTHON_GUIDELINES.md), and have great expertise in working with agentic systems. Use skills from ".agents" folder.
+QuAIA orchestrator and its A2A agents (requirements review, test case design - which runs the test case generation, review and classification agents in-process - and incident creation), written in Python with pydantic-ai, FastAPI and the A2A SDK and managed with `uv`; the UI and API test-execution agents live in the separate `test-execution-agents` repository. Project skills are in `.agents/skills/` (Claude Code reads them through a `.claude/skills` symlink to that folder). Local development is on Windows 11; CI runs on ubuntu-latest.
 
 ## Git Repo
 
 * The main branch for this project is called "main".
+* Never push anything to the remote repository (any `git push`, including force-pushes, tags and pushes run by a skill or script) without the user's explicit consent to that specific push in the current conversation. A request to commit, an approved plan, auto mode or consent given for an earlier push is not consent; when in doubt, ask and wait.
 
 ## General development guidelines and rules
 
-Always use relevant skills from ".agents" folder while executing your tasks.
+### Planning and progress
+
+* Before implementing a task, present its general plan in a very short and concise form: what will be implemented and how, as numbered steps with their checks (`1. [step] → verify: [check]`), not every individual change. Wait for the user's confirmation, then carry out the plan without asking the user to confirm individual changes.
+* When asked by the user or instruction to create a plan (implementation plan, TO-DO list or similar), write it straight to an .MD file in the "plans" folder of this project and reply with only its path and a short summary. Never print the plan in the conversation.
+* When a change touches several modules, keep its TO-DO list in an .MD file in the "plans" folder, tick items as you finish them and add what you discover. After a context compaction, re-read that file instead of relying on the conversation.
+
+### When to keep going and when to stop
+
+* Once the user has confirmed the plan, work until the *Definition of done* is met. When a step doesn't need the user's input, keep going and put status notes in the same message as your next action. Don't end a turn with a summary that announces the next step without taking it, an offer to continue, or a list of decisions that don't block the work.
+* An approved plan is implemented completely and at once: every phase and step of it, in one run. Never batch it, split it into several runs or stop after a part of it to ask whether to go on. Only the user narrows the scope, by explicitly naming the phases to implement; before every implementation, ask with one single-select question offering *Implement everything* and *Implement specific phases* (the user types the phases), and implement exactly what the answer selects.
+* Stop and ask the user only when you can't continue without them, when two readings of the request would lead to materially different work, when the architecture needs their approval (*Architecture first* below), before spawning a subagent (*Subagents* below), or before anything destructive or outward-facing: deleting files you didn't create, pushing, creating or changing cloud resources, or changing anything outside this repository. Commit only when the user asks, and push only with their explicit consent (*Git Repo* above).
+
+### Subagents
+
+* Never start a subagent without the user's explicit consent to that specific spawn, unless the subagents are started as a part of 
+  applying the custom skill for this project. If the user doesn't consent, do the work yourself.
+* When asking, propose for subagents a model and effort, as well as forking or a new fresh context; always offer "no subagents". Spawn exactly what is approved; any extra spawn or resume needs a new approval. If anything can't be set per subagent, say so.
+* Default to low usage: cheapest sufficient model and relevant for the task effort, a self-contained prompt with the files and facts already known, a short capped result, a fork if it needs most of the conversation. Never redo the work of the main agent.
 
 ### Coding guidelines and rules
 
-* Before implementing:
-    - State your assumptions explicitly. If uncertain, ask.
-    - If multiple interpretations exist, present them - don't pick silently.
-    - If a simpler approach exists, say so. Push back when warranted.
-    - If something is unclear, stop. Name what's confusing. Ask.
+* Before implementing, state your assumptions. If the request has readings that would lead to materially different work, present them and ask; make routine judgement calls yourself. If a simpler approach exists, say so and push back when warranted.
 * Keep your implementation simple and short:
     - No features beyond what was asked.
     - No abstractions for single-use code.
@@ -27,7 +41,7 @@ Always use relevant skills from ".agents" folder while executing your tasks.
     - Don't "improve" adjacent code, comments, or formatting.
     - Don't refactor things that aren't broken.
     - Match existing style, even if you'd do it differently.
-    - If you notice unrelated dead code, mention it - don't delete it.
+    - If you notice unrelated dead code, mention it - don't delete it. Code you write or change leaves nothing redundant behind.
 * Before changing code, read every file the change touches and trace the real flow end to end. A small diff in the wrong place is a second bug, not a small change.
 * Fix bugs at the root: before editing a function, find every caller. One fix in the shared code beats a guard in each caller, and a fix that covers only the reported path leaves the other callers broken.
 * Between two equally small solutions, take the one that is correct on edge cases. Less code never means the flimsier algorithm.
@@ -38,24 +52,11 @@ Always use relevant skills from ".agents" folder while executing your tasks.
     - "Add validation" → "Write tests for invalid inputs, then make them pass"
     - "Fix the bug" → "Write a test that reproduces it, then make it pass"
     - "Refactor X" → "Ensure tests pass before and after".
-      For multi-step tasks, state a brief plan:
-  ```
-  1. [Step] → verify: [check]
-  2. [Step] → verify: [check]
-  3. [Step] → verify: [check]
-  ```
-* The code which you create must be easily readable and clear to understand.
-* Never keep redundant code.
-* If anything about provided to you request or requests is not clear to you or if you need clarifications - always ask user to clarify!
-* While implementing any change, always try to create as minimum code as possible, but enough to fully implement what was requested from you.
-* Before implementing any logic, always use Google search in order to find the most adequate and most efficient solution.
-* Every time you work with OS-specific commands, check the OS version and type in order to know which commands are correct.
+* Search the web before relying on memory for anything version-sensitive: a library, API or tool you're about to use or upgrade, its flags, an error you don't recognise. Read the most relevant result pages in full with the `curl` command (`curl.exe` in PowerShell), because the built-in fetch tool returns a summary written by a small model that can drop details crucial to the task, while `curl` returns the page in its original form and leaves the judgement to you. Mark anything you couldn't confirm and say where you looked.
 * Never reformat the code which you haven't modified!
 * Never hard-wrap Markdown or any other text file you create or edit: a paragraph, a list item or a table row is one line, however long it gets. The files are read in an editor with soft wraps, so hard wraps only add noise. This applies to every generated file, including plans, skills, prompts and documentation.
-* Before implementing anything, always let the user know what you plan to do, in a very short and concise form, and ask the user to confirm it.
-* When asked by the user or instruction to create a plan (implementation plan, TO-DO list or similar), write it straight to an .MD file in the "plans" folder of this project and reply with only its path and a short summary. Never print the plan in the conversation.
+* You're working with a project which is always used in PyCharm.
 * Never duplicate existing functionality. If you've noticed any existing logic or functionality which you need for your implementation, always reuse it. If reusing it directly can't be done, always extract it so that it's accessible (inheritance or composition) and then reuse it.
-* Never commit changes you've made into git unless explicitly asked by the user.
 * Always clean up everything you created temporarily during a task before reporting it as done, without being asked: tear down any stack you started (e.g. `docker compose -f docker-compose.smoke.yml down -v`), remove containers, networks and volumes, and delete scratch scripts, outputs, probe baselines and any other file that isn't part of the deliverable. Never leave such things running or lying around "in case they're needed later".
 * Never trust user-supplied data. Always validate and sanitize inputs to prevent injection attacks (e.g., SQL injection, XSS).
 * Store secrets like API keys and passwords in environment variables or a secrets management tool, never hardcoded in the source code.
@@ -68,7 +69,7 @@ The code must be self-explanatory: names, types and structure carry the meaning,
 * A module, class, function or method whose name and signature already say what it does gets no docstring at all.
 * An inline comment states a non-obvious *why*: a constraint, a workaround, a decision. It never restates *what* the code does and never records history (no plan, work-stream, ticket or "previously" references).
 * When a comment seems necessary, first make the code say it (a better name, a smaller function, an explicit type); write the comment only if that fails.
-* Remove every comment or docstring that violates this rule from the code you touch, and never add one.
+* In the code you change, remove comments and docstrings that violate this rule; leave untouched code as it is, and never add one that does.
 
 ### Versioning of agents and the orchestrator
 
@@ -91,7 +92,7 @@ The system architecture is described as code with the [FINOS CALM](https://calm.
 * `calm/architecture/quaia.arch.json` is the source of truth for the services/actors (`nodes`), their integration edges (`relationships`) and the security `controls` attached to them.
 * `calm/patterns/quaia.pattern.json` is the governance pattern that asserts the required nodes, relationships and controls are present; it is what makes the gate fail on drift.
 * Whenever a change adds, removes or renames a service, an integration edge, or a security control (e.g. a new agent, a new orchestrator-to-service call, a new authentication mechanism), you **must** update the CALM model in the same change, and extend the pattern if the new element is part of the contract you want enforced.
-* **Architecture first.** Such a change is never implemented before its architecture exists and is approved. The order is fixed: (1) update the CALM model, and the pattern when the element is enforced; (2) validate it with the command below; (3) when the change is more than a single edge, render the documentation with `npx -y @finos/calm-cli@1.46.0 docify -a architecture/quaia.arch.json -o <directory outside the repository>` and show the user the resulting diagram and pages; (4) present the changed architecture to the user and get their explicit approval; (5) only then implement. Implementation against an architecture that is not validated or not approved is not allowed, and a CALM update bolted on after the implementation does not count.
+* **Architecture first.** Such a change is never implemented before its architecture is checked and approved, and checking it creates no artifact in the repository. The order is fixed: (1) copy the whole `calm/` directory to a temporary directory outside the repository and draft the change there, in the architecture and in the pattern when the element is enforced; (2) validate the copy with the command below, run from the copy; (3) when the change is more than a single edge, render the copy with `npx -y @finos/calm-cli@1.46.0 docify -a architecture/quaia.arch.json -o <another directory outside the repository>` and show the user the resulting diagram and pages; (4) present the drafted architecture to the user and get their explicit approval; (5) delete the temporary copy and the rendered output; (6) only then implement, applying the approved change to `calm/` in the same change as the code and validating it again. Implementing a change whose architecture was not validated and approved is not allowed, and neither is changing `calm/` before the implementation starts.
 * The CALM CLI is a Node tool, not a Python dependency — it is invoked via `npx @finos/calm-cli` and requires Node.js 20+. It does **not** belong in `pyproject.toml`.
 * Validate locally before committing (run from the `calm/` directory):
   ```bash
@@ -117,6 +118,12 @@ The hermetic smoke suite under `tests/smoke/` is the end-to-end safety net for t
   docker compose -f docker-compose.smoke.yml down -v
   ```
   See the *Hermetic smoke tests* section of `README.md` for the full layout.
+
+### Definition of done
+
+A change is done when the unit tests pass, the affected versions are bumped, the smoke suite and the CALM model cover the change, README.md describes the changed behaviour, and everything temporary is cleaned up. Skip what doesn't apply; if you skip something that might look applicable, say why.
+
+Finish every implementation task with a report in three short parts: **Blocked on me** (decisions or approvals you need from the user, or "nothing"), **Changed** (what and where), **Found** (known limits of a deliberately simple solution, unrelated dead code, anything you couldn't confirm).
 
 ## General style requirements
 

@@ -47,7 +47,7 @@ Fix and format only files in scope; formatting the whole repository rewrites cod
 
 ruff enforces only part of `PYTHON_GUIDELINES.md`. Read the changed Python code against the whole document and fix violations in the lines this change touches; report the ones whose fix would change behaviour to the user.
 
-Check every docstring and comment in scope against the *Comments and docstrings* rule of `AGENTS.md` and compact the ones that violate it (a function docstring longer than one sentence, a class or module docstring longer than two, `Args`/`Returns` that repeat names and types outside LLM tools, a comment that restates the code or records history).
+Check every docstring and comment in the lines this change touches against the *Comments and docstrings* rule of `AGENTS.md` and compact the ones that violate it (a function docstring longer than one sentence, a class or module docstring longer than two, `Args`/`Returns` that repeat names and types outside LLM tools, a comment that restates the code or records history).
 
 ## 3. License headers
 
@@ -79,7 +79,7 @@ From the `calm/` directory:
 npx -y "@finos/calm-cli@1.46.0" validate -p patterns/quaia.pattern.json -a architecture/quaia.arch.json -u url-mapping.json --strict -f pretty
 ```
 
-It must print `No issues found.` If the change added, removed or renamed a service, integration edge or security control without updating `calm/architecture/quaia.arch.json` (and the pattern when enforced), the branch violates *Architecture first* in `AGENTS.md`: stop and tell the user, because the architecture has to be modelled, validated and approved before such a change is implemented, and a CALM update bolted on now does not count. When the plan of the change exists, its *Architecture* section must carry the line `CALM updated, validated and approved by the user on <date>`.
+It must print `No issues found.` If the change added, removed or renamed a service, integration edge or security control without updating `calm/architecture/quaia.arch.json` (and the pattern when enforced), stop and tell the user: the CALM update belongs to the same change as the code. When the plan of the change exists, its *Architecture* section must carry the line `CALM change validated on a temporary copy and approved by the user on <date>`, and the CALM update in the branch must match the elements that section lists. A topology change without that approval violates *Architecture first* in `AGENTS.md`, because its architecture has to be checked and approved before it is implemented: stop and tell the user.
 
 ## 7. Documentation, skills and smoke coverage
 

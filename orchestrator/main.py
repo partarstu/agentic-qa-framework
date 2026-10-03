@@ -26,7 +26,7 @@ import httpx2
 import uvicorn
 from a2a.client import ClientConfig, create_client
 from a2a.client.card_resolver import parse_agent_card
-from a2a.helpers import get_message_text, new_message, new_text_message
+from a2a.helpers import get_message_text, new_data_part, new_message, new_text_message, new_text_part
 from a2a.types import (
     AgentCard,
     Artifact,
@@ -51,13 +51,14 @@ import config
 from common import utils
 from common.a2a_contract import ArtifactName
 from common.custom_llm_wrapper import CustomLlmWrapper
+from common.jira_additional_fields import build_additional_fields_instruction
 from common.models import (
+    JIRA_ISSUE_KEY_PATTERN,
     AgentExecutionError,
     AgentInfo,
     AgentRoutingDecision,
     ConfluenceSyncRequest,
     FileArtifact,
-    GeneratedTestCases,
     IncidentCreationInput,
     IncidentCreationResult,
     JiraSyncRequest,
@@ -70,6 +71,8 @@ from common.models import (
     SyncRequest,
     SyncStatus,
     TestCase,
+    TestCaseDesignRequest,
+    TestCaseDesignResult,
     TestCaseType,
     TestExecutionRequest,
     TestExecutionResult,
@@ -106,7 +109,6 @@ from orchestrator.prompt import (
     MULTI_ROUTING_INSTRUCTION,
     RESULTS_EXTRACTOR_INSTRUCTION,
     ROUTING_INSTRUCTION,
-    build_additional_fields_instruction,
 )
 from orchestrator.rag_sync_trigger import RagSyncTrigger, SyncStartResult, SyncTriggerError
 from orchestrator.streaming_hub import _Subscriber, streaming_hub
@@ -561,11 +563,7 @@ def _get_agent_host(card: AgentCard | None) -> str:
 
 
 def _build_jira_issue_task_text(issue_key: str) -> str:
-    """Builds the task text for every task that hands a Jira issue to an agent.
-
-    When JIRA_ADDITIONAL_FIELD_IDS is configured, an instruction is appended that tells the agent to
-    fetch those custom fields together with the issue and to treat their values as issue content.
-    """
+    """Builds the requirements review task text, with the instruction to fetch the configured additional fields."""
     task_text = f"Jira user story with key {issue_key}"
     additional_fields_instruction = build_additional_fields_instruction()
     if additional_fields_instruction:
@@ -807,23 +805,17 @@ async def trigger_test_case_generation_workflow(request: Request, api_key: str =
     """
     try:
         await _verify_jira_webhook_signature(request)
-        logger.info("Received an event from Jira, requesting test case generation from an agent.")
-        user_story_id = await _get_jira_issue_key_from_request(request)
-        generated_test_cases = await _request_test_cases_generation(user_story_id)
-        if not generated_test_cases:
-            _handle_exception("Test case generation agent responded provided no generated test cases in its response.")
-
+        logger.info("Received an event from Jira, requesting the test case design from an agent.")
+        user_story_key = await _get_jira_issue_key_from_request(request)
+        result = await _request_test_case_design(user_story_key)
         logger.info(
-            f"Got {len(generated_test_cases.test_cases)} generated test cases, requesting their classification."
+            "Test case design for %s saved %d test case(s) after %d review iteration(s), stop reason: %s.",
+            user_story_key,
+            len(result.test_case_keys),
+            result.iterations,
+            result.stop_reason,
         )
-        await _request_test_cases_classification(generated_test_cases.test_cases, user_story_id)
-        logger.info("Received response from an agent, test case classification seems to be complete.")
-
-        logger.info("Requesting review of all generated test cases.")
-        await _request_test_cases_review(generated_test_cases.test_cases, user_story_id)
-        logger.info("Received response from an agent, test case review seems to be complete.")
-
-        return {"message": f"Test case generation and classification for Jira user story {user_story_id} completed."}
+        return {"message": f"Test case design for Jira user story {user_story_key} completed."}
     except HTTPException:
         raise
     except Exception as e:
@@ -1373,20 +1365,29 @@ async def _request_incident_creation(
     return result
 
 
-async def _request_test_cases_generation(user_story_id) -> GeneratedTestCases:
-    """Request test case generation for a user story.
+async def _request_test_case_design(user_story_key: str) -> TestCaseDesignResult:
+    """Request the test case design of a user story, passing its key as the design request data part.
 
     Raises:
         HTTPException: If an AgentExecutionError is returned by the agent.
     """
-    task_description = f"Generate test cases for Jira user story {user_story_id}"
-    completed_task = await _send_task_to_agent(_build_jira_issue_task_text(user_story_id), task_description)
-    task_description = f"Generation of test cases for the user story {user_story_id}"
+    task_description = f"Design test cases for Jira user story {user_story_key}"
+    # The design fetches the configured additional fields in code, so its LLM gets no instruction to fetch them.
+    message = new_message(
+        parts=[
+            new_text_part(task_description),
+            new_data_part(TestCaseDesignRequest(story_key=user_story_key).model_dump(mode="json")),
+        ],
+        role=Role.ROLE_USER,
+    )
+    completed_task = await _send_task_to_agent_with_message(
+        message, task_description, timeout_seconds=config.OrchestratorConfig.TEST_CASE_DESIGN_TASK_TIMEOUT_SECONDS
+    )
     received_artifacts = _get_artifacts_from_task(completed_task, task_description)
-    result = _get_model_from_artifacts(received_artifacts, task_description, GeneratedTestCases)
+    result = _get_model_from_artifacts(received_artifacts, task_description, TestCaseDesignResult)
 
     if isinstance(result, AgentExecutionError):
-        _handle_exception(f"Test case generation failed for user story {user_story_id}: {result.error_message}")
+        _handle_exception(f"Test case design failed for user story {user_story_key}: {result.error_message}")
 
     return result
 
@@ -1397,20 +1398,6 @@ def _get_artifacts_from_task(task: Task, task_description: str) -> list[Artifact
     if not results:
         _handle_exception(f"Received no execution results from the agent after it executed {task_description}.")
     return results
-
-
-async def _request_test_cases_classification(test_cases: list[TestCase], user_story_id: str) -> list[Artifact]:
-    task_description = f"Classify test cases for Jira user story {user_story_id}"
-    completed_task = await _send_task_to_agent(f"Test cases:\n{test_cases}", task_description)
-    return _get_artifacts_from_task(completed_task, f"Classification of test cases for the user story {user_story_id}")
-
-
-async def _request_test_cases_review(test_cases: list[TestCase], user_story_id: str) -> list[Artifact]:
-    task_description = f"Review test cases for Jira user story {user_story_id}"
-    completed_task = await _send_task_to_agent(
-        f"Test cases:\n{test_cases}\n{_build_jira_issue_task_text(user_story_id)}", task_description
-    )
-    return _get_artifacts_from_task(completed_task, "Review of test cases")
 
 
 def _get_text_content_from_artifacts(
@@ -1615,10 +1602,14 @@ async def _save_agent_usage_from_task(task: Task, internal_task_id: str) -> None
 
 
 async def _send_task_to_agent_with_message(
-    message: Message, task_description: str, selected_agent_id: str | None = None
+    message: Message,
+    task_description: str,
+    selected_agent_id: str | None = None,
+    timeout_seconds: float | None = None,
 ) -> Task | None:
-    """Send a custom message (with file parts) to an agent."""
+    """Send a custom message (with file or data parts) to an agent; a given timeout covers the wait for the agent too."""
 
+    deadline = None if timeout_seconds is None else time.time() + timeout_seconds
     internal_task_id = str(uuid4())
     agent_id = None
     last_task_id = None
@@ -1626,7 +1617,9 @@ async def _send_task_to_agent_with_message(
     try:
         # Wait for an agent and reserve it atomically
         if selected_agent_id is None:
-            agent_id, agent_card = await reserve_agent_waiting_if_needed(task_description, internal_task_id)
+            agent_id, agent_card = await reserve_agent_waiting_if_needed(
+                task_description, internal_task_id, max_wait_seconds=timeout_seconds
+            )
         else:
             async with agent_selection_lock:
                 agent_card = await agent_registry.get_card(selected_agent_id)
@@ -1639,6 +1632,17 @@ async def _send_task_to_agent_with_message(
                     raise HTTPException(status_code=503, detail="Execution agent is unavailable.")
                 await agent_registry.update_status(selected_agent_id, AgentStatus.BUSY)
                 agent_id = selected_agent_id
+        task_timeout_seconds = (
+            config.OrchestratorConfig.TASK_EXECUTION_TIMEOUT if deadline is None else deadline - time.time()
+        )
+        if task_timeout_seconds <= 0:
+            await agent_registry.update_status(agent_id, AgentStatus.AVAILABLE)
+            _handle_exception(
+                f"No time was left for task '{task_description}' after waiting for an available agent.",
+                503,
+                internal_task_id,
+                agent_id,
+            )
         # The routing call picks the agent, which is not necessarily the one the caller had in
         # mind, so the caller reads back who actually ran the task (see _reserved_agent_id).
         _reserved_agent_id.set(agent_id)
@@ -1657,9 +1661,7 @@ async def _send_task_to_agent_with_message(
         await task_history.add(task_record)
         await agent_registry.set_current_task(agent_id, internal_task_id)
 
-        httpx_client = httpx.AsyncClient(
-            timeout=config.OrchestratorConfig.TASK_EXECUTION_TIMEOUT, headers=_build_agent_auth_headers()
-        )
+        httpx_client = httpx.AsyncClient(timeout=task_timeout_seconds, headers=_build_agent_auth_headers())
         a2a_client = await create_client(
             agent_card,
             client_config=ClientConfig(httpx_client=httpx_client),
@@ -1669,7 +1671,7 @@ async def _send_task_to_agent_with_message(
         last_status = None
         collected_artifacts: list[Artifact] = []
         log_state = _LogStreamState()
-        while (time_left := _get_time_left_for_task_completion_waiting(start_time)) > 0:
+        while (time_left := _get_time_left_for_task_completion_waiting(start_time, task_timeout_seconds)) > 0:
             try:
                 chunk = await asyncio.wait_for(response_iterator.__anext__(), timeout=time_left)
             except StopAsyncIteration:
@@ -1823,9 +1825,9 @@ async def _send_task_to_agent(
 
 
 async def reserve_agent_waiting_if_needed(
-    task_description: str, task_id: str | None = None
+    task_description: str, task_id: str | None = None, max_wait_seconds: float | None = None
 ) -> tuple[str, AgentCard] | None:
-    """Wait for an available agent and atomically reserve it.
+    """Wait for an available agent, by default at most the task execution timeout, and atomically reserve it.
 
     Raises:
         HTTPException: If no agents are registered, no suitable agent found,
@@ -1834,7 +1836,7 @@ async def reserve_agent_waiting_if_needed(
     if await agent_registry.is_empty():
         _handle_exception("Orchestrator has currently no registered agents.", 404, task_id=task_id)
 
-    max_wait_time = config.OrchestratorConfig.TASK_EXECUTION_TIMEOUT
+    max_wait_time = config.OrchestratorConfig.TASK_EXECUTION_TIMEOUT if max_wait_seconds is None else max_wait_seconds
     start_time = time.time()
     last_justification = "no routing decision was made"
     decision: AgentRoutingDecision | None = None
@@ -1923,11 +1925,13 @@ async def _verify_jira_webhook_signature(request: Request) -> None:
         _handle_exception("Invalid or missing Jira webhook signature.", 401)
 
 
-async def _get_jira_issue_key_from_request(request):
+async def _get_jira_issue_key_from_request(request: Request) -> str:
     payload = await request.json()
     user_story_id = (payload or {}).get("issue_key", "")
     if not user_story_id:
         _handle_exception("Request has no Jira issue key in the payload.", 400)
+    if not isinstance(user_story_id, str) or not JIRA_ISSUE_KEY_PATTERN.fullmatch(user_story_id):
+        _handle_exception(f"'{str(user_story_id)[:50]}' is not a Jira issue key in the format PROJ-123.", 400)
     return user_story_id
 
 
@@ -1965,8 +1969,8 @@ def _validate_task_status(task: Task, task_description: str):
         )
 
 
-def _get_time_left_for_task_completion_waiting(start_time):
-    return config.OrchestratorConfig.TASK_EXECUTION_TIMEOUT - (time.time() - start_time)
+def _get_time_left_for_task_completion_waiting(start_time: float, timeout_seconds: float) -> float:
+    return timeout_seconds - (time.time() - start_time)
 
 
 async def _select_all_suitable_agent_ids(task_description: str) -> list[str]:

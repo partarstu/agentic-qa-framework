@@ -30,8 +30,8 @@ drift away from the system without the build failing.
 | `prompt-injection-guard` | every agent node | Prompt-injection screening (`PROMPT_INJECTION_CHECK_ENABLED`) |
 | `internal-service-api-key` | `embedding-service`, `prompt-guard-service` nodes; `rel-rag-sync-job-embedding`, `rel-requirements-review-embedding` | Shared `X-API-Key` (`INTERNAL_SERVICE_API_KEY`) |
 | `execution-agent-bearer-token` | `rel-orchestrator-routes-execution-tasks` | `Authorization: Bearer` on the execution agents' main A2A endpoint (`REMOTE_EXECUTION_AGENT_AUTH_TOKEN`) |
-| `vector-db-api-key` | `rel-incident-agent-qdrant`, `rel-orchestrator-qdrant`, `rel-rag-sync-job-qdrant`, `rel-requirements-review-qdrant` | Shared API key on every call into Qdrant (`QDRANT_API_KEY`, sent by all clients when configured) |
-| `jira-credential-origin-scope` | `rel-requirements-review-jira`, `rel-test-case-generation-jira`, `rel-test-case-review-jira` | The attachment downloader sends Jira basic auth only to attachment URLs on the `JIRA_URL` origin (scheme, host, port); others are skipped |
+| `vector-db-api-key` | `rel-incident-agent-qdrant`, `rel-orchestrator-qdrant`, `rel-rag-sync-job-qdrant`, `rel-requirements-review-qdrant`, `rel-test-case-design-qdrant` | Shared API key on every call into Qdrant (`QDRANT_API_KEY`, sent by all clients when configured) |
+| `jira-credential-origin-scope` | `rel-requirements-review-jira`, `rel-test-case-design-jira` | The attachment downloader sends Jira basic auth only to attachment URLs on the `JIRA_URL` origin (scheme, host, port); others are skipped |
 | `job-invocation-iam` | `rel-orchestrator-rag-sync-job` | The orchestrator's runtime identity may only run the sync job with overrides (`run.jobs.runWithOverrides`, scoped to `rag-sync-job`) |
 
 ## Running validation locally

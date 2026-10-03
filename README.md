@@ -18,9 +18,7 @@ Watch a demo of QuAIA™ in action:
 
 * **Modular Agent Architecture:** Includes specialized agents for:
     * Requirements Review
-    * Test Case Generation
-    * Test Case Classification
-    * Test Case Review
+    * Test Case Design: generates the test cases of a user story, reviews and fixes them in a loop, then saves, classifies and publishes them, running the Test Case Generation, Review and Classification agents in-process as its delegates
     * UI & API Test Execution (separate project)    
     * Incident Report Creation
 * **Jira RAG Sync:** Keeps the Qdrant vector store in sync with a project's Jira issues programmatically (triggered via the orchestrator's `/update-jira-db` endpoint, executed by the sync job or the local sync service), without invoking an LLM agent.
@@ -65,8 +63,17 @@ When an event occurs (e.g., a Jira webhook indicating new requirements), the orc
 2. Identifies the appropriate agent(s) based on the task description and registered agent capabilities.
 3. Routes the task to the selected agent(s).
 4. Monitors the task execution and collects results.
-5. Triggers subsequent agents or workflows as needed (e.g., after test case generation, trigger test case
-   classification).
+5. Triggers subsequent agents or workflows as needed (e.g., after the requirements of a story are reviewed, trigger its test case design).
+
+### Test Case Design
+
+The Test Case Design agent designs the test cases of one user story in a single A2A task. The orchestrator sends it the story key as text and as a structured data part which holds only `story_key` (any other field fails the task), and the agent starts a new *design session* from it: the state shared in-process with the generator, the reviewer and the classification agent it delegates to (the story content and attachments, the acceptance criteria, the test cases with the acceptance criteria each covers, the review findings, the deleted test cases and the progress of the design). Test case generation and review are plain in-process classes with their own sub-agents, and the Test Case Classification agent runs in-process too; none of them is an A2A service of its own. The design LLM only routes: it first fetches the story with the `jira_get_issue` tool of the Atlassian MCP server, then calls four tools in order, each running alone even when the model calls several at once and returning a short summary, while the story, the findings and the duplicate verdicts stay in the session. The Jira tool is the only Atlassian tool the design gets and accepts only the story's key, once; the instructions name the configured `JIRA_ADDITIONAL_FIELD_IDS` to request with it, and the tool stores the story in the session and answers with one line, so the story never enters the design LLM's context:
+
+1. **`generate_test_cases`** needs the fetched story. The acceptance criteria are extracted and stored in the session, then one test case is created per acceptance criterion, each naming the criteria it covers; a test case naming an unknown criterion is sent back to the model. The test cases are stored as drafts (`DRAFT-1`, `DRAFT-2`, ...), and the tool returns the drafts with the criteria each covers and the criteria left without a test case.
+2. **`review_test_cases`** reviews every new, changed or restored test case on its own, against the story, its attachments and the acceptance criteria: one review runs first and the rest concurrently, so they can reuse the cached prompt prefix they share. A test case that was fixed is reviewed together with its previous version and previous findings, and the review only verifies the fix: a previous finding that still applies is kept, a resolved one is dropped, and a new finding may concern only the changed content. Then the whole set is reviewed for coverage gaps and duplicate coverage, with the deleted test cases and the findings that removed them: a missing part that fits an existing flow is a `modify`, `add_test_case` is only for a new flow or condition, a test case is deleted only when another one fully covers it (otherwise the two are merged: the duplicate is deleted and the survivor modified with the deleted test case as related), and a gap that a deleted test case covered names it, which restores it instead of writing a new one; duplicate coverage is always `medium`. Every finding has a severity (`low`, `medium`, `high`, `critical`), an action (`modify`, `remove_duplicate_steps`, `delete_test_case`, `add_test_case`) and exactly one owner test case, or none for a missing test case. The whole-set review is sent back to the model when it deletes a test case in favour of one that is also deleted, removes duplicate steps from a test case that is deleted, has two test cases remove their shared steps from each other, would leave no test case, names a deleted test case on anything but `add_test_case`, or names an unknown acceptance criterion.
+3. **`fix_test_cases`**, offered only while the loop runs, applies the findings at or above `TEST_CASE_DESIGN_FIX_MIN_SEVERITY`: deleted test cases are kept with their findings so they can be restored, a gap naming a deleted test case restores it, one fixer per affected test case gets only the test cases its findings relate to (a merged, deleted one included), and the test cases of the remaining gaps are generated together by the same steps as the first ones (test steps, then test cases, one per gap), with all current test cases as context. One fixer runs first and the rest concurrently, alongside the generation of the missing test cases. The restores and deletions reach the session only once every fixer and that generation succeeded, so a fix repeated after a failed one plans the same changes and never writes a restored test case anew. Each fix is followed by another review, so the loop always ends with a review. It stops, in this order of precedence, as `converged` when no blocking finding is left, as `iteration_limit` after `TEST_CASE_DESIGN_MAX_ITERATIONS` reviews, or as `no_progress` when the number of blocking findings did not fall since the previous review. After the stop, deleted test cases that open gaps name are restored.
+4. **`publish_test_cases`**, offered only after the stop, first checks every final test case once for duplicates among the existing test cases of the project (see *Duplicate Check in Test Case Reviews*); a failed check asks the model to publish again, which repeats only the failed checks. It then saves the final test cases one at a time in the test management system, linked to the story, **classifies** them through the Test Case Classification agent, then adds to each test case a **review comment** (the iterations run, the stop reason, its remaining findings by severity, the open findings of the whole set and its duplicate check) and sets its status to "Review Complete". It runs alone even when the model calls it twice at once, and it records per test case what it has saved, commented and set, so a repeated call resumes without writing anything twice: a failed duplicate check or write asks the model to publish again (within the agent's tool retry budget), and a provider error in the classification reruns the design. The classification agent may label only the test cases of this design. Nothing is indexed: the saved test cases become duplicate candidates for later designs with the next `/update-test-case-db` sync.
+Nothing is written before the loop has stopped and the duplicate check is done: a failure up to then fails the task without touching the test management system. A failed write is retried by publishing again, which resumes after the last completed write; when the retries are used up, what was already written stays, since the test management client cannot delete, and the task fails and the dashboard shows it. When a step fails with an error the agent cannot resolve, it aborts the design at once with the reason instead of retrying, so the task fails without further model requests. The whole design, delegates included, shares one budget (`TEST_CASE_DESIGN_TOTAL_TOKENS_LIMIT`) and appears on the dashboard as one task.
 
 ### Agent State Management
 
@@ -229,7 +236,7 @@ behavior of the orchestrator and agents.
 # LLM Provider
 GOOGLE_API_KEY=YOUR_GOOGLE_API_KEY # Required for the default Gemini model. Gemini API key consumed directly by
                                  # pydantic-ai's google-gla provider for every agent's and the orchestrator's LLM calls.
-MODEL_NAME=google-gla:gemini-3.5-flash # Default: google-gla:gemini-3.5-flash. The model the orchestrator and every
+MODEL_NAME=google-gla:gemini-3.8-flash # Default: google-gla:gemini-3.8-flash. The model the orchestrator and every
                                  # agent use. Either a pydantic-ai model string, or "qwen:<model>" (e.g.
                                  # qwen:Qwen/Qwen3.8-27B-FP8) to route all workflows to the self-hosted, OpenAI-
                                  # compatible Qwen deployment configured below.
@@ -241,7 +248,8 @@ QWEN_API_KEY= # Optional. Static API key for the Qwen endpoint. An endpoint serv
                                  # GOOGLE_APPLICATION_CREDENTIALS, or 'gcloud auth application-default login
                                  # --impersonate-service-account=<invoker service account>'.
 QWEN_THINKING_ENABLED=False # Default: False, meaning thinking is disabled entirely through Qwen's chat template and
-                                 # the requests carry the global temperature and top_p. Set to True to let each agent's
+                                 # the requests carry the model card's non-thinking sampling (temperature 0.7, top_p 0.8,
+                                 # presence_penalty 1.5). Set to True to let each agent's
                                  # configured thinking level grade Qwen's reasoning effort (Qwen accepts low, medium and
                                  # xhigh, so "minimal" is sent as "low" and "high" as "xhigh"), with the model card's
                                  # thinking-mode sampling (temperature 1.0, top_p 0.95).
@@ -276,17 +284,20 @@ JIRA_WEBHOOK_SECRET= # Optional but recommended. When set, Jira webhook requests
                                  # 'X-Hub-Signature' HMAC-SHA256 of the raw body; invalid/missing signatures are rejected.
 JIRA_ADDITIONAL_FIELD_IDS= # Optional. Comma-separated Jira custom field IDs (e.g. customfield_10101,customfield_10202)
                                  # whose values are handed to agents as part of the issue content in the requirements
-                                 # review, test case generation and test case review tasks. Entries are trimmed, empty
+                                 # review and test case design tasks. Entries are trimmed, empty
                                  # entries and duplicates are dropped, and every entry must match the Jira custom field
                                  # ID format ('customfield_' followed by digits) - anything else fails startup. Unset
-                                 # means the task texts are unchanged.
+                                 # means the requirements review task text is unchanged.
+                                 # Set it on the orchestrator (requirements review) and on the Test Case Design agent,
+                                 # which requests the fields itself when it fetches the story (Cloud Run: `_JIRA_ADDITIONAL_FIELD_IDS`).
 ATLASSIAN_MCP_SERVER_URL=http://localhost:9000/mcp # Default: http://localhost:9000/mcp. The URL of the Atlassian (Jira + Confluence) MCP server.
 JIRA_URL=YOUR_JIRA_INSTANCE_URL # Required for Xray, the RAG sync runtime and the agents' attachment downloads. The base URL of your Jira
                                  # instance (e.g. https://your-company.atlassian.net). Also used by the separate Jira
                                  # MCP server (see "Jira MCP Server Setup" below), which has its own .env file.
 JIRA_USERNAME=YOUR_JIRA_USERNAME # Required alongside JIRA_URL. The email address associated with your Jira account.
 JIRA_API_TOKEN=YOUR_JIRA_API_TOKEN # Required alongside JIRA_URL. A Jira API token for authentication.
-ORCHESTRATOR_VERSION=2.0.1 # Default: 2.0.1. Version of the orchestrator, reported for traceability.
+ORCHESTRATOR_VERSION=2.1.0 # Default: 2.1.0. Version of the orchestrator, reported for traceability.
+TEST_CASE_DESIGN_TASK_TIMEOUT_SECONDS=3300 # Default: 3300. How long the orchestrator waits for one test case design, the wait for a free Test Case Design agent included; keep it below the orchestrator's request timeout (3500 s on Cloud Run).
 TEST_ENVIRONMENT_LABEL=Standard Test Environment # Default: Standard Test Environment. Label describing the
                                  # environment tests are executed against. Reported on every test execution
                                  # result and emitted as an Allure tag.
@@ -345,13 +356,16 @@ AGENT_BASE_URL=http://localhost # Default: http://localhost. Base URL for agents
 PORT=8001 # Default: 8001. The internal port an agent listens on.
 EXTERNAL_PORT=8001 # Default: 8001. The externally accessible port for the agent.
 REQUIREMENTS_REVIEW_FOCUS_AREA_COUNT=5 # Default: 5. Maximum number of focus areas the Requirements Review agent selects per story; each is reviewed by its own parallel sub-agent before the reviews are merged.
+TEST_CASE_DESIGN_FIX_MIN_SEVERITY=medium # Default: medium. One of low, medium, high, critical. A test case review finding at or above this severity blocks the test case design and gets fixed; lower ones are only reported in the review comment.
+TEST_CASE_DESIGN_MAX_ITERATIONS=4 # Default: 4. Maximum number of reviews in a test case design: the first follows the generation, every further one a fix.
+TEST_CASE_DESIGN_TOTAL_TOKENS_LIMIT=4000000 # Default: 4000000. Token budget of one test case design, shared with the generation, review and classification agents it runs in-process.
+TEST_CASE_DESIGN_MAX_OUTPUT_TOKENS= # Optional. Maximum output tokens per model response of the Test Case Design agent; defaults to MAX_OUTPUT_TOKENS.
 # Version each agent reports in its A2A agent card (visible in the dashboard) and, for execution agents,
 # on every test execution result. Each agent reads its own variable.
-REQUIREMENTS_REVIEW_AGENT_VERSION=1.2.0 # Default: 1.2.0.
-TEST_CASE_CLASSIFICATION_AGENT_VERSION=1.2.1 # Default: 1.2.1.
-TEST_CASE_GENERATION_AGENT_VERSION=1.2.1 # Default: 1.2.1.
-TEST_CASE_REVIEW_AGENT_VERSION=1.1.2 # Default: 1.1.2.
-INCIDENT_CREATION_AGENT_VERSION=1.1.1 # Default: 1.1.1.
+REQUIREMENTS_REVIEW_AGENT_VERSION=1.3.0 # Default: 1.3.0.
+TEST_CASE_DESIGN_AGENT_VERSION=1.0.0 # Default: 1.0.0.
+TEST_CASE_CLASSIFICATION_AGENT_VERSION=1.3.0 # Default: 1.3.0.
+INCIDENT_CREATION_AGENT_VERSION=1.2.0 # Default: 1.2.0.
 
 # Agent Discovery (for remote agents)
 REMOTE_EXECUTION_AGENT_HOSTS=http://localhost # Default: http://localhost. Comma-separated URLs of remote agent hosts.
@@ -542,17 +556,9 @@ To run the Jira MCP server, you will need Docker installed.
       ```bash
       python agents/requirements_review/main.py
       ```
-    * **Test Case Generation Agent:**
+    * **Test Case Design Agent** (it runs the Test Case Generation, Review and Classification agents in-process, so they need no process of their own):
       ```bash
-      python agents/test_case_generation/main.py
-      ```
-    * **Test Case Classification Agent:**
-      ```bash
-      python agents/test_case_classification/main.py
-      ```
-    * **Test Case Review Agent:**
-      ```bash
-      python agents/test_case_review/main.py
+      python agents/test_case_design/main.py
       ```
     * **Incident Creation Agent:**
       ```bash
@@ -621,13 +627,13 @@ orchestrator, and then start the dev server on top of that build.
 
 ### Model Settings and the pydantic-ai Version
 
-Provider-specific request settings (Claude 5 thinking and effort, Qwen reasoning, the maximum output tokens and the transport-level retries) are resolved in one place, `common/model_factory.py`, on **pydantic-ai 2.46.0**. Every model client (Gemini, Claude and the OpenAI-compatible Qwen endpoint) runs on `httpx2`, with pydantic-ai's `AsyncHTTPX2TenacityTransport` as the retry transport, and the Atlassian MCP server is reached through pydantic-ai's `MCPToolset`.
+Provider-specific request settings (Claude 5 thinking and effort, Qwen reasoning and sampling, the maximum output tokens and the transport-level retries) are resolved in one place, `common/model_factory.py`, on **pydantic-ai 2.46.0**. No global temperature or top_p is sent: Gemini and Claude run on their provider defaults, and Qwen on its model card's sampling for the active mode. Every model client (Gemini, Claude and the OpenAI-compatible Qwen endpoint) runs on `httpx2`, with pydantic-ai's `AsyncHTTPX2TenacityTransport` as the retry transport, and the Atlassian MCP server is reached through pydantic-ai's `MCPToolset`.
 
 The agents keep the pydantic-ai 1.x run semantics: `end_strategy="early"` (tools requested alongside the final output are skipped rather than run) and a single retry per MCP tool call. A custom `MODEL_NAME` left to pydantic-ai follows its 2.x prefixes: `openai:` now targets the Responses API (`openai-chat:` for Chat Completions), and `google-vertex:` is `google-cloud:`; the `google-gla:`, `anthropic:` and `qwen:` names are built by the model factory and are unaffected.
 
 #### Qwen3.8-27B: thinking stays off
 
-Run `qwen:Qwen/Qwen3.8-27B-FP8` with thinking off, which is the default (`QWEN_THINKING_ENABLED=False`): the chat template's `enable_thinking` is set to `false` and the requests carry the global temperature (0.0) and top_p (1.0). This is the configuration the model was evaluated in with the hermetic smoke suite and its A/B comparison against the Gemini baseline, over eight runs in three configurations:
+Run `qwen:Qwen/Qwen3.8-27B-FP8` with thinking off, which is the default (`QWEN_THINKING_ENABLED=False`): the chat template's `enable_thinking` is set to `false` and the requests carry the model card's non-thinking sampling (temperature 0.7, top_p 0.8, presence_penalty 1.5, with top_k 20 from the checkpoint's generation config). The model was evaluated, still with the earlier global temperature (0.0) and top_p (1.0), with the hermetic smoke suite and its A/B comparison against the Gemini baseline, over eight runs in three configurations:
 
 | Configuration | Runs | Outcome |
 | --- | --- | --- |
@@ -705,7 +711,7 @@ you run any of the commands below.
     * `DASHBOARD_JWT_SECRET`
     * `AGENT_AUTH_TOKEN` (mapped to the orchestrator's `REMOTE_EXECUTION_AGENT_AUTH_TOKEN`)
     * `CONFLUENCE_URL`, `CONFLUENCE_USERNAME`, `CONFLUENCE_API_TOKEN` (RAG sync job and Atlassian MCP server)
-    * `INTERNAL_SERVICE_API_KEY` (RAG sync job and Test Case Review agent, for the embedding service)
+    * `INTERNAL_SERVICE_API_KEY` (RAG sync job and Test Case Design agent, for the embedding service)
     * `SHAREPOINT_TENANT_ID`, `SHAREPOINT_CLIENT_ID`, `SHAREPOINT_CLIENT_SECRET` (RAG sync job; placeholder values
       are enough while no SharePoint drive is synced)
 5. Cloud Storage bucket for general operations (with all needed folders created, see "Substitution Variables").
@@ -748,11 +754,11 @@ whose configuration is unchanged.** The third-party images take their version fr
 After having all preconditions fulfilled, you can execute the following command:
 
 ```bash
-gcloud builds submit --config 'path/to/your/cloudbuild.yaml' --substitutions "^;^_BUCKET_NAME=YOUR_GCS_BUCKET_NAME;_ALLURE_REPORTS_BUCKET=YOUR_ALLURE_REPORTS_BUCKET_NAME;_REQUIREMENTS_REVIEW_AGENT_BASE_URL=YOUR_REQUIREMENTS_REVIEW_AGENT_URL;_TEST_CASE_GENERATION_AGENT_BASE_URL=YOUR_TEST_CASE_GENERATION_AGENT_URL;_TEST_CASE_CLASSIFICATION_AGENT_BASE_URL=YOUR_TEST_CASE_CLASSIFICATION_AGENT_URL;_TEST_CASE_REVIEW_AGENT_BASE_URL=YOUR_TEST_CASE_REVIEW_AGENT_URL;_INCIDENT_CREATION_AGENT_BASE_URL=YOUR_INCIDENT_CREATION_AGENT_URL;_REMOTE_EXECUTION_AGENT_HOSTS=YOUR_COMMA_SEPARATED_AGENT_HOSTS;_PROMPT_GUARD_SERVICE_URL=YOUR_PROMPT_GUARD_SERVICE_URL;_DEPLOY_ALL_SERVICES=true" .
+gcloud builds submit --config 'path/to/your/cloudbuild.yaml' --substitutions "^;^_BUCKET_NAME=YOUR_GCS_BUCKET_NAME;_ALLURE_REPORTS_BUCKET=YOUR_ALLURE_REPORTS_BUCKET_NAME;_REQUIREMENTS_REVIEW_AGENT_BASE_URL=YOUR_REQUIREMENTS_REVIEW_AGENT_URL;_TEST_CASE_DESIGN_AGENT_BASE_URL=YOUR_TEST_CASE_DESIGN_AGENT_URL;_INCIDENT_CREATION_AGENT_BASE_URL=YOUR_INCIDENT_CREATION_AGENT_URL;_REMOTE_EXECUTION_AGENT_HOSTS=YOUR_COMMA_SEPARATED_AGENT_HOSTS;_PROMPT_GUARD_SERVICE_URL=YOUR_PROMPT_GUARD_SERVICE_URL;_DEPLOY_ALL_SERVICES=true" .
 ```
 
 ```powershell
-gcloud builds submit --config 'path/to/your/cloudbuild.yaml' --substitutions "`^;`^_BUCKET_NAME=YOUR_GCS_BUCKET_NAME;_ALLURE_REPORTS_BUCKET=YOUR_ALLURE_REPORTS_BUCKET_NAME;_REQUIREMENTS_REVIEW_AGENT_BASE_URL=YOUR_REQUIREMENTS_REVIEW_AGENT_URL;_TEST_CASE_GENERATION_AGENT_BASE_URL=YOUR_TEST_CASE_GENERATION_AGENT_URL;_TEST_CASE_CLASSIFICATION_AGENT_BASE_URL=YOUR_TEST_CASE_CLASSIFICATION_AGENT_URL;_TEST_CASE_REVIEW_AGENT_BASE_URL=YOUR_TEST_CASE_REVIEW_AGENT_URL;_INCIDENT_CREATION_AGENT_BASE_URL=YOUR_INCIDENT_CREATION_AGENT_URL;_REMOTE_EXECUTION_AGENT_HOSTS=YOUR_COMMA_SEPARATED_AGENT_HOSTS;_PROMPT_GUARD_SERVICE_URL=YOUR_PROMPT_GUARD_SERVICE_URL;_DEPLOY_ALL_SERVICES=true" .
+gcloud builds submit --config 'path/to/your/cloudbuild.yaml' --substitutions "`^;`^_BUCKET_NAME=YOUR_GCS_BUCKET_NAME;_ALLURE_REPORTS_BUCKET=YOUR_ALLURE_REPORTS_BUCKET_NAME;_REQUIREMENTS_REVIEW_AGENT_BASE_URL=YOUR_REQUIREMENTS_REVIEW_AGENT_URL;_TEST_CASE_DESIGN_AGENT_BASE_URL=YOUR_TEST_CASE_DESIGN_AGENT_URL;_INCIDENT_CREATION_AGENT_BASE_URL=YOUR_INCIDENT_CREATION_AGENT_URL;_REMOTE_EXECUTION_AGENT_HOSTS=YOUR_COMMA_SEPARATED_AGENT_HOSTS;_PROMPT_GUARD_SERVICE_URL=YOUR_PROMPT_GUARD_SERVICE_URL;_DEPLOY_ALL_SERVICES=true" .
 ```
 
 **Substitution Variables:**
@@ -762,13 +768,12 @@ gcloud builds submit --config 'path/to/your/cloudbuild.yaml' --substitutions "`^
   server's attachments volume (`only-dir` on the Cloud Run volume mount). Default: `jira`.
 * `_ALLURE_REPORTS_BUCKET`: The GCS bucket where test execution HTML reports will be stored.
 * `_REQUIREMENTS_REVIEW_AGENT_BASE_URL`: The URL of the deployed Requirements Review Agent.
-* `_TEST_CASE_GENERATION_AGENT_BASE_URL`: The URL of the deployed Test Case Generation Agent.
-* `_TEST_CASE_CLASSIFICATION_AGENT_BASE_URL`: The URL of the deployed Test Case Classification Agent.
-* `_TEST_CASE_REVIEW_AGENT_BASE_URL`: The URL of the deployed Test Case Review Agent.
+* `_TEST_CASE_DESIGN_AGENT_BASE_URL`: The URL of the deployed Test Case Design Agent. It is the only deployed test case agent: the generation, review and classification agents run inside it, and its Cloud Run request timeout is 3600 s, so a whole design fits into one request.
 * `_INCIDENT_CREATION_AGENT_BASE_URL`: The URL of the deployed Incident Creation Agent.
 * `_REMOTE_EXECUTION_AGENT_HOSTS`: A comma-separated list of URLs for all deployed agents that the orchestrator will
   interact with.
 * `_PROMPT_GUARD_SERVICE_URL`: The URL of the deployed Prompt Guard Service.
+* `_JIRA_ADDITIONAL_FIELD_IDS`: The `JIRA_ADDITIONAL_FIELD_IDS` of the Test Case Design agent (see *Environment Variables*). Default: empty.
 * `_EMBEDDING_SERVICE_URL`: The URL of the deployed Embedding Service.
 * `_EMBEDDING_MEMORY` / `_EMBEDDING_CPU`: Memory and CPU of the embedding service. Defaults: `8Gi` / `2`.
 * `_EMBEDDING_BACKENDS` / `_EMBEDDING_TEXT_MODEL`: The embedding service's enabled backends and text model.
@@ -807,7 +812,7 @@ once, then identify the assigned URL of each service, update the substitution va
 ### Hermetic smoke tests
 
 The smoke suite is a self-contained integration test, independent of any Cloud Run deployment. It runs the real
-orchestrator and the QA agents (requirements review, test-case generation, classification, review and incident creation)
+orchestrator and the QA agents (requirements review, test case design and incident creation)
 under `docker-compose.smoke.yml`, driven by a real Gemini model (`gemini-3.8-flash`, set as `MODEL_NAME` in the compose
 file), with only the external boundaries replaced by mocks
 under `tests/smoke/mocks/` (Jira MCP, Jira REST, Zephyr, Qdrant + embedding, and
@@ -819,17 +824,11 @@ each mocked boundary:
   and the agent first fetched the source story via the Jira MCP. The comment carries the marker of the prompt override
   mounted from `tests/smoke/overrides/`, the story attachment is downloaded over Jira REST, and the review issues a
   hybrid documents query whose text is non-empty and shorter than the issue content. With `REQUIREMENTS_REVIEW_FOCUS_AREA_COUNT` set to 3, the usage artifact meters the focused reviews (`review_with_attachments`) and, whenever at least two of them succeeded, the merge run (`merge_reviews`).
-* **Additional Jira fields** (`JIRA_ADDITIONAL_FIELD_IDS`) → the Jira MCP mock records that the review and generation
-  flows requested the configured custom field IDs.
+* **Additional Jira fields** (`JIRA_ADDITIONAL_FIELD_IDS`) → the Jira MCP mock records that the requirements review and
+  the test case design flows requested the configured custom field IDs.
 * **Routing and cards** → routing decisions with justifications reach the dashboard logs, and every agent's card
   description carries its model, version and skill name.
-* **Test-case generation** (`POST /story-ready-for-test-case-generation`) → real test cases (name + steps) reach Zephyr,
-  linked back to the originating story.
-* **Test-case classification** (same webhook) → labels reach Zephyr.
-* **Test-case review** (same webhook) → a non-empty "Review Comments" value and the "Review Complete" status reach Zephyr;
-  every comment carries the "Duplicate check" section after the batch was indexed and searched per test case within
-  its project (the Qdrant mock answers test-case queries with the stored points, so the judge runs end to end), and
-  the usage artifact carries per-operation counters.
+* **Test case design** (`POST /story-ready-for-test-case-generation`) → the Test Case Design agent generates, reviews and fixes the test cases through the whole loop: a severity-classifier override mounted from `tests/smoke/overrides/` makes every review report a high finding per test case, so the design runs exactly one fix cycle and stops as `iteration_limit` after the second review (`TEST_CASE_DESIGN_MAX_ITERATIONS: "2"` in the compose file), and every final comment reports that; a design that converges on its own is covered by the unit tests. Then real test cases (name + steps) reach Zephyr exactly once, each linked once to the originating story; classification labels reach Zephyr; every test case gets the "Review Complete" status and a final review comment with the header naming the iterations and the stop reason, its severity-tagged findings or "No findings.", and the "Duplicate check" section, which states either "No duplicate test cases found." or a full or partial overlap. The design's LLM fetched the story exactly once through the Jira MCP, without comments (`comment_limit` 0) and with the content and the configured fields. When publishing, each final test case was searched for duplicates exactly once, within its project (the Qdrant mock answers test-case queries with the stored points, so the judge runs end to end); the usage artifact carries per-operation counters of the design agent and the sub-agents of its generation and review delegates, the test case fixer included.
 * **Test execution / incident creation** (`POST /execute-tests`) → a failed automated test drives a real Bug issue into
   the seeded Jira project, the failed execution is reported to Zephyr inside a fresh test cycle, the bug is linked to
   that execution, and the duplicate search consulted the vector DB with the project filter. The typed (`api`) test
@@ -914,7 +913,7 @@ the checks; deselect the comparison with `-m "smoke and not ab"` while iterating
 
 ### Triggering Workflows via Jira Webhooks
 
-The orchestrator listens for webhooks from Jira or CI/CD systems to initiate automated workflows.
+The orchestrator listens for webhooks from Jira or CI/CD systems to initiate automated workflows. Both Jira webhooks below reject an `issue_key` which is not a Jira issue key (`PROJ-123`) with `400` before any agent runs.
 
 * **New Requirements Available (Requirements Review):**
   Send a POST request to `/new-requirements-available` with a JSON payload containing the `issue_key` of the Jira user
@@ -929,7 +928,7 @@ The orchestrator listens for webhooks from Jira or CI/CD systems to initiate aut
 
 * **Story Ready for Test Case Generation:**
   Send a POST request to `/story-ready-for-test-case-generation` with a JSON payload containing the `issue_key` of the
-  Jira user story. This triggers the test case generation, classification, and review workflows.
+  Jira user story. This triggers the test case design of the story (see *Test Case Design* above): its test cases are generated, reviewed and fixed in a loop, then saved, classified and published with their review comments. `TEST_CASE_DESIGN_TASK_TIMEOUT_SECONDS` bounds the wait for a free Test Case Design agent and the design together. The agent designs one story at a time, so a story that arrives during another design waits for it and has only the rest of the budget; when too little is left, the call fails (`503` when the wait used it all, `408` when the design runs out of time) and the story has to be sent again.
 
   Example payload:
   ```json
@@ -1113,23 +1112,17 @@ log at startup and the review uses the issue and its attachments only.
 
 ### Duplicate Check in Test Case Reviews
 
-The Test Case Review agent checks every reviewed test case for duplicate coverage among the existing test cases of the
-same project, using the test-case collection (`QDRANT_TEST_CASES_COLLECTION_NAME`):
+The test case reviewer of the Test Case Design agent checks every final test case for duplicate coverage among the existing test cases of the same project, using the test-case collection (`QDRANT_TEST_CASES_COLLECTION_NAME`):
 
-1. The batch under review is indexed first, through the same rendering the test-case sync uses, so the check also sees
-   test cases created minutes earlier.
+1. The test case is rendered as the test-case sync renders it and compared by its content only; it is never indexed. A test case design runs the check once, over its final test cases when it publishes them, before anything is saved; a failed check is repeated only for the test cases it failed for.
 2. Per test case, a hybrid query searches the same project, excluding the test case itself, with
    `TEST_CASE_DUPLICATE_MIN_SCORE` on the dense branch and at most `TEST_CASE_DUPLICATE_MAX_CANDIDATES` results;
    candidates are de-duplicated by test case key.
-3. When candidates exist, a dedicated judge sub-agent (`test_case_duplicate_judge`, prompt
-   `agents/test_case_review/system_prompts/test_case_duplicate_judge_prompt.md`) decides which of them genuinely
-   overlap in **coverage** - not in topic - and explains each overlap.
-4. The verdict is rendered in code as a "Duplicate check" section and appended to the test case's review comment by
-   the comment-writing tool ("No duplicate test cases found." or the overlapping keys with their explanation). It is
-   also returned in the review feedback (`duplicate_check`).
+3. When candidates exist, a dedicated judge sub-agent (`test_case_duplicate_judge`, prompt `agents/test_case_review/system_prompts/test_case_duplicate_judge_prompt.md`) decides which of them genuinely overlap in **coverage** - not in topic - explains each overlap and tells whether the existing test case fully covers the checked one or only partly overlaps it. The checks of all test cases run concurrently.
+4. The verdict is stored with the test case and rendered in code as the "Duplicate check" section of its review comment: "No duplicate test cases found.", or the overlapping keys with their explanation under "Fully covered by:" and "Partially overlapping with:". It only informs: no test case is changed or deleted because of it.
 
-The check fails loudly: an indexing, search or judge failure is logged with the test case and project keys and aborts
-the review, so nobody reads "no duplicates" for a check that never ran.
+The check fails loudly: a search or judge failure is logged with the test case and project keys and aborts
+the review (and so the design, before anything is written), so nobody reads "no duplicates" for a check that never ran.
 
 ### Dashboard API Endpoints
 
@@ -1223,7 +1216,7 @@ dashboard. Missing it is not an error.
 
 ```json
 {
-  "model_name": "google-gla:gemini-3.5-flash",
+  "model_name": "google-gla:gemini-3.8-flash",
   "input_tokens": 1200,
   "output_tokens": 340,
   "total_tokens": 1540,
@@ -1318,9 +1311,11 @@ schedulers before upgrading:
 15. **Test-case point ids are derived from the test case key alone, and the payload keeps only `source`,
     `project_key`, `test_case_key`, `text`, `content_hash` and `indexed_at`.** Run `/update-test-case-db` once per
     project: the full resync writes the new points and deletes the old ones.
-16. **The Test Case Review agent needs the vector database and the embedding service** (`QDRANT_URL`,
-    `EMBEDDING_SERVICE_URL`, `INTERNAL_SERVICE_API_KEY`) for its duplicate check. Without them every review fails
-    instead of reporting "no duplicates".
+16. **The Test Case Design agent needs the vector database and the embedding service** (`QDRANT_URL`, `EMBEDDING_SERVICE_URL`, `INTERNAL_SERVICE_API_KEY`) for its duplicate check. Without them every design fails instead of reporting "no duplicates".
+17. **The Test Case Design agent replaces the separately deployed Test Case Generation, Classification and Review agents.** Deploy `test-case-design-agent` (image `agents/test_case_design/Dockerfile`, port 8005 locally, substitution `_TEST_CASE_DESIGN_AGENT_BASE_URL`, env vars and secrets of the three agents combined) and remove the three old Cloud Run services and their substitutions. The generation, review and classification agents run only in-process inside the design agent: they have no Dockerfile, server entry point or standalone mode any more, and the design agent accepts only `{"story_key": "<issue key>"}` as its structured A2A data part.
+18. **Review comments are rendered from structured findings.** `TestCaseReviewFeedback.review_feedback` (a list of strings) is replaced by `findings` (severity, action, owner test case, category, description, suggested fix, acceptance criterion, related test cases), and the review comment of a test case now starts with the design's iterations and stop reason. The duplicate check runs once, over the final test cases after the review loop, and nothing is indexed by a review or a design; run `/update-test-case-db` to make saved test cases duplicate candidates.
+19. **Prompt overrides of the Test Case Generation and Review agents must be rebased on the new bundled templates.** An override whose placeholders differ from its bundled template fails startup (e.g. `agents/test_case_review/system_prompts/review_with_attachments_prompt.md` and `test_suite_review_prompt.md` now need `{severity_classifier}`, whose fragment `severity_rubric.md` is renamed to `severity_classifier.md` (rename its override too), and the review prompt, `agents/test_case_generation/system_prompts/steps_generation_prompt.md` and `test_case_fixer_prompt.md` need `{test_step_quality_criteria}`, the test step rules they share), and an old override of either agent's `main_prompt_template.md` would still instruct the upload, review-comment and status steps these agents no longer have. `prompts/additional_fields_instruction_template.md` keeps its path, so its override keeps working.
+20. **The indexed text of a test case separates its sections by blank lines.** Every stored test case therefore has a new content hash, and the next `/update-test-case-db` sync re-embeds all of them once.
 
 ### Migrating a vector collection
 

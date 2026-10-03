@@ -4,27 +4,14 @@
 
 from pathlib import Path
 
-from common import utils
+from agents.test_case_review.prompt import TestStepQualityCriteriaFragment
 from common.prompt_base import PromptBase
 
-logger = utils.get_logger("test_case_generation_agent")
 PROMPTS_ROOT = "system_prompts"
 
 
 def _get_prompts_root() -> Path:
     return Path(__file__).resolve().parent.joinpath(PROMPTS_ROOT)
-
-
-class TestCaseGenerationSystemPrompt(PromptBase):
-    def get_script_dir(self) -> Path:
-        return _get_prompts_root()
-
-    def __init__(self, template_file_name: str = "main_prompt_template.md"):
-        super().__init__(template_file_name)
-
-    def get_prompt(self) -> str:
-        logger.info("Generating test case generation main system prompt")
-        return self.template
 
 
 class AcExtractionPrompt(PromptBase):
@@ -46,7 +33,20 @@ class StepsGenerationPrompt(PromptBase):
         super().__init__(template_file_name)
 
     def get_prompt(self) -> str:
-        return self.template
+        return self.template.format(test_step_quality_criteria=TestStepQualityCriteriaFragment().get_prompt())
+
+
+class TestCaseFixerPrompt(PromptBase):
+    __test__ = False
+
+    def get_script_dir(self) -> Path:
+        return _get_prompts_root()
+
+    def __init__(self, template_file_name: str = "test_case_fixer_prompt.md") -> None:
+        super().__init__(template_file_name)
+
+    def get_prompt(self) -> str:
+        return self.template.format(test_step_quality_criteria=TestStepQualityCriteriaFragment().get_prompt())
 
 
 class TestCaseCreationPrompt(PromptBase):

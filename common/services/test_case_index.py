@@ -8,7 +8,7 @@ import hashlib
 import uuid
 from datetime import UTC, datetime
 
-from common.models import TestCase, VectorizableBaseModel
+from common.models import DesignedTestCase, TestCase, VectorizableBaseModel
 
 
 class IndexedTestCase(VectorizableBaseModel):
@@ -26,12 +26,13 @@ class IndexedTestCase(VectorizableBaseModel):
         return self.text
 
 
-def render_test_case(project_key: str, test_case: TestCase) -> IndexedTestCase:
+def render_test_case_text(test_case: TestCase) -> str:
+    """The test case as compact text: its name, objective, preconditions and steps."""
     steps = "\n".join(
         f"- Action: {step.action}; Data: {', '.join(step.test_data)}; Expected: {step.expected_results}"
         for step in test_case.steps
     )
-    text = "\n".join(
+    return "\n\n".join(
         part
         for part in (
             f"Name: {test_case.name}",
@@ -41,6 +42,20 @@ def render_test_case(project_key: str, test_case: TestCase) -> IndexedTestCase:
         )
         if part
     )
+
+
+def render_designed_test_case_text(test_case: DesignedTestCase) -> str:
+    """The compact text of a test case of a design, with the IDs of the acceptance criteria it verifies."""
+    return f"{render_test_case_text(test_case)}\n\nAcceptance criteria: {', '.join(test_case.ac_ids)}"
+
+
+def render_designed_test_case_block(heading: str, test_case: DesignedTestCase) -> str:
+    """The compact text of a test case of a design as a fenced block under the given heading."""
+    return f"{heading}:\n```{render_designed_test_case_text(test_case)}```"
+
+
+def render_test_case(project_key: str, test_case: TestCase) -> IndexedTestCase:
+    text = render_test_case_text(test_case)
     return IndexedTestCase(
         project_key=project_key,
         test_case_key=test_case.key or "",

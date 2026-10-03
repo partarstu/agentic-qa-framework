@@ -15,24 +15,6 @@ def _get_prompts_root() -> Path:
     return Path(__file__).resolve().parent.joinpath(PROMPTS_ROOT)
 
 
-class TestCaseReviewSystemPrompt(PromptBase):
-    """
-    Loads a prompt template for instructions, replaces placeholders with actual values,
-    and provides the final prompt as a string.
-    """
-
-    def get_script_dir(self) -> Path:
-        return _get_prompts_root()
-
-    def __init__(self, template_file_name: str = "main_prompt_template.md"):
-        super().__init__(template_file_name)
-
-    def get_prompt(self) -> str:
-        """Returns the formatted prompt as a string."""
-        logger.info("Generating test case review system prompt")
-        return self.template
-
-
 class TestCaseReviewWithAttachmentsPrompt(PromptBase):
     """
     Prompt for the sub-agent that reviews test cases with binary attachments.
@@ -49,6 +31,53 @@ class TestCaseReviewWithAttachmentsPrompt(PromptBase):
         logger.info(
             "Generating system prompt for sub-agent which performs test case review with all attachments included"
         )
+        return self.template.format(
+            severity_classifier=SeverityClassifierFragment().get_prompt(),
+            test_step_quality_criteria=TestStepQualityCriteriaFragment().get_prompt(),
+        )
+
+
+class TestSuiteReviewPrompt(PromptBase):
+    """Prompt for the sub-agent which reviews the whole set of test cases for coverage gaps and duplicates."""
+
+    __test__ = False
+
+    def get_script_dir(self) -> Path:
+        return _get_prompts_root()
+
+    def __init__(self, template_file_name: str = "test_suite_review_prompt.md") -> None:
+        super().__init__(template_file_name)
+
+    def get_prompt(self) -> str:
+        logger.info("Generating system prompt for the test suite reviewer sub-agent")
+        return self.template.format(severity_classifier=SeverityClassifierFragment().get_prompt())
+
+
+class SeverityClassifierFragment(PromptBase):
+    """The findings and severity classification rules shared by the per-test-case and the whole-set review prompts."""
+
+    def get_script_dir(self) -> Path:
+        return _get_prompts_root()
+
+    def __init__(self, template_file_name: str = "severity_classifier.md") -> None:
+        super().__init__(template_file_name)
+
+    def get_prompt(self) -> str:
+        return self.template
+
+
+class TestStepQualityCriteriaFragment(PromptBase):
+    """The test step rules shared by the steps generation, the per-test-case review and the fixer prompts."""
+
+    __test__ = False
+
+    def get_script_dir(self) -> Path:
+        return _get_prompts_root()
+
+    def __init__(self, template_file_name: str = "test_step_quality_criteria.md") -> None:
+        super().__init__(template_file_name)
+
+    def get_prompt(self) -> str:
         return self.template
 
 

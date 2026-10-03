@@ -1,24 +1,25 @@
 ---
 name: creating-new-agent
-description: Creates a new A2A agent service in the QuAIA framework - CALM architecture node first, then config class, output model, prompts, agent class, Dockerfile, unit tests and smoke-suite coverage. Use when the user asks to add a new specialized agent with its own tools, prompts or MCP integrations.
+description: Creates a new A2A agent service in the QuAIA framework - architecture check first, then config class, output model, prompts, agent class, Dockerfile, CALM node, unit tests and smoke-suite coverage. Use when the user asks to add a new specialized agent with its own tools, prompts or MCP integrations.
 ---
 
 # Creating a New Agent
 
-An agent is an A2A service under `agents/<agent_name>/` built on `common.agent_base.AgentBase`. There are no code templates: every step names the existing file to mirror. `agents/test_case_classification/` is the smallest complete agent (config, prompt, one custom tool, Dockerfile); `agents/test_case_generation/main.py` shows a sub-agent with its own MCP session per run; `agents/requirements_review/main.py` shows retrieval (RAG) over the vector database. All code follows `PYTHON_GUIDELINES.md` and the *Comments and docstrings* rule of `AGENTS.md`.
+An agent is an A2A service under `agents/<agent_name>/` built on `common.agent_base.AgentBase`. There are no code templates: every step names the existing file to mirror. `agents/test_case_classification/main.py` is the smallest agent class (config, prompt, one custom tool), though it runs only in-process inside the Test Case Design agent, so `agents/incident_creation/` shows the deployed parts (module-level `app`, Dockerfile); `agents/test_case_design/main.py` shows an agent whose MCP tool stores its result in the run's dependencies; `agents/requirements_review/main.py` shows retrieval (RAG) over the vector database. All code follows `PYTHON_GUIDELINES.md` and the *Comments and docstrings* rule of `AGENTS.md`.
 
 Copy this checklist and track progress:
 
 ```
-- [ ] 1. CALM model (architecture first)
+- [ ] 1. Architecture check (architecture first)
 - [ ] 2. Config class
 - [ ] 3. Output model
 - [ ] 4. Prompt class and system prompt
 - [ ] 5. Agent class
 - [ ] 6. Dockerfile and Cloud Build
-- [ ] 7. Unit tests
-- [ ] 8. Smoke suite
-- [ ] 9. Agent starts locally
+- [ ] 7. CALM model
+- [ ] 8. Unit tests
+- [ ] 9. Smoke suite
+- [ ] 10. Agent starts locally
 ```
 
 Target layout (no `__init__.py`; `agents/` uses namespace packages):
@@ -32,18 +33,9 @@ agents/<agent_name>/
     └── main_prompt_template.md
 ```
 
-## 1. CALM model (architecture first)
+## 1. Architecture check (architecture first)
 
-A new agent is a new architecture node, and *Architecture first* in `AGENTS.md` fixes the order: model, validate, render, approval, then code. Nothing below is written before the user has approved the architecture.
-
-1. Add a `node` (`node-type: "service"`) to `calm/architecture/quaia.arch.json`, mirroring the existing agent nodes, including the `prompt-injection-guard` control with a unique `control-id`.
-2. Add its `unique-id` to the Cloud Run `deployed-in` relationship's `nodes`, plus every new `relationship` it introduces (e.g. a call to the embedding service or Qdrant).
-3. Assert the node and its control in `calm/patterns/quaia.pattern.json`.
-4. Validate from the `calm/` directory; a clean run prints `No issues found.`:
-   ```bash
-   npx -y "@finos/calm-cli@1.46.0" validate -p patterns/quaia.pattern.json -a architecture/quaia.arch.json -u url-mapping.json --strict -f pretty
-   ```
-5. Render the documentation with `npx -y @finos/calm-cli@1.46.0 docify -a architecture/quaia.arch.json -o <directory outside the repository>`, show the user the diagram and pages, and get their explicit approval.
+A new agent is a new architecture node, so *Architecture first* in `AGENTS.md` applies: nothing below is written before the user has approved its architecture, and `calm/` itself changes only in step 7. When the approved plan's *Architecture* section carries the line `CALM change validated on a temporary copy and approved by the user on <date>`, continue with step 2. Otherwise draft the elements of step 7 in a temporary copy of `calm/` outside the repository, validate and render the copy as section 4 of the `architecting-features` skill describes, show the user the diagram and pages, get their explicit approval and delete the copy.
 
 ## 2. Config class
 
@@ -75,17 +67,29 @@ Create `agents/<agent_name>/main.py`, mirroring `agents/test_case_classification
 - A sub-agent needing Jira tools opens its own session per run, as `agents/test_case_generation/main.py` does with `async with build_atlassian_mcp_server_toolset(...) as toolset: await sub_agent.run(prompt, toolsets=[toolset])`.
 - Retrieval over the vector database follows `agents/requirements_review/main.py` (`common.services.document_retrieval` and `VectorDbService`).
 - Custom tools are methods passed via `tools=[...]`. The LLM sees their signature and docstring, so the docstring is the tool specification and keeps its `Args` and `Returns` (the one place the comment rule requires them).
-- A tool takes every value it needs as its own parameter, which the model fills from the task text (e.g. a Jira issue key). `AgentBase` runs the agent without dependencies, so a tool reading `ctx.deps` fails at its first call; do not declare `deps_type` (the classification agent's `deps_type=TestCaseKeys` is unused and not part of the pattern to mirror).
+- A tool takes every value it needs as its own parameter, which the model fills from the task text (e.g. a Jira issue key). `AgentBase` gives a task run dependencies only when the agent declares `deps_type` and the task message carries a structured data part, as the Test Case Design agent's request does; a text-driven agent declares no `deps_type`, and its tools never read `ctx.deps` (the classification agent's `deps_type=TestCaseKeys` is not read by its tool and not part of the pattern to mirror).
 - Pass the declared skill via `skill=AgentSkillDeclaration(...)` (required): it becomes the agent card's skill and feeds the composed card description.
 - Prompt-injection screening, agent registration and activity streaming are handled by `AgentBase`; do not reimplement them.
 - Module-level `app = agent.a2a_server` is what gunicorn serves.
 
 ## 6. Dockerfile and Cloud Build
 
-- `agents/<agent_name>/Dockerfile`, copied from `agents/test_case_classification/Dockerfile` with the module path changed. It builds on `agentic-qa-base:latest` (`docker build -t agentic-qa-base:latest -f Dockerfile.base .`).
+- `agents/<agent_name>/Dockerfile`, copied from `agents/incident_creation/Dockerfile` with the module path changed. It builds on `agentic-qa-base:latest` (`docker build -t agentic-qa-base:latest -f Dockerfile.base .`).
 - If the agent is deployed to Cloud Run, mirror every `requirements-review-agent` entry in `cloudbuild.yaml`: build, push, deploy, and the final `images` list.
 
-## 7. Unit tests
+## 7. CALM model
+
+Apply the architecture the user approved in step 1 to `calm/`:
+
+1. Add a `node` (`node-type: "service"`) to `calm/architecture/quaia.arch.json`, mirroring the existing agent nodes, including the `prompt-injection-guard` control with a unique `control-id`.
+2. Add its `unique-id` to the Cloud Run `deployed-in` relationship's `nodes`, plus every new `relationship` it introduces (e.g. a call to the embedding service or Qdrant).
+3. Assert the node and its control in `calm/patterns/quaia.pattern.json`.
+4. Validate from the `calm/` directory; a clean run prints `No issues found.`:
+   ```bash
+   npx -y "@finos/calm-cli@1.46.0" validate -p patterns/quaia.pattern.json -a architecture/quaia.arch.json -u url-mapping.json --strict -f pretty
+   ```
+
+## 8. Unit tests
 
 Create `tests/agents/test_<agent_name>.py` with the `writing-unit-tests` skill. Model construction tests on `tests/agents/test_requirements_review.py` and custom tool tests on `tests/agents/test_test_case_review.py`.
 
@@ -93,7 +97,7 @@ Create `tests/agents/test_<agent_name>.py` with the `writing-unit-tests` skill. 
 uv run pytest tests/agents/test_<agent_name>.py -v
 ```
 
-## 8. Smoke suite
+## 9. Smoke suite
 
 A new agent is new end-to-end behaviour, so `tests/smoke/` must cover it in the same change:
 
@@ -110,7 +114,7 @@ uv run pytest tests/smoke -m smoke -v
 docker compose -f docker-compose.smoke.yml down -v
 ```
 
-## 9. Agent starts locally
+## 10. Agent starts locally
 
 From the repository root (running `main.py` as a script cannot import `config`):
 

@@ -8,7 +8,9 @@ import logging
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
+from a2a.helpers import new_text_message
 from a2a.types import Task, TaskState
 from a2a.types import TaskStatus as A2ATaskStatus
 
@@ -19,6 +21,7 @@ from orchestrator.main import (
     _get_agent_host,
     _retry_cancellation_task,
     _send_task_to_agent,
+    _send_task_to_agent_with_message,
     cancellation_queue,
 )
 from tests.orchestrator.conftest import agent_card
@@ -128,6 +131,93 @@ async def test_send_task_timeout(mock_registry, caplog):
             if len(c.args) >= 2 and c.args[1] == AgentStatus.BROKEN
         ]
         assert len(broken_calls) > 0, "Expected at least one call with AgentStatus.BROKEN"
+
+
+@pytest.mark.asyncio
+async def test_a_per_call_timeout_replaces_the_default_task_timeout(mock_registry):
+    mock_registry.get_card = AsyncMock(return_value=agent_card())
+
+    with (
+        patch("orchestrator.main.create_client", new_callable=AsyncMock) as mock_create_client,
+        patch("orchestrator.main.config.OrchestratorConfig.TASK_EXECUTION_TIMEOUT", 60.0),
+        patch("orchestrator.main.reserve_agent_waiting_if_needed", new_callable=AsyncMock) as mock_reserve,
+        patch("orchestrator.main.httpx.AsyncClient", wraps=httpx.AsyncClient) as mock_http_client,
+    ):
+        mock_reserve.return_value = ("agent-1", agent_card())
+        mock_a2a_client = MagicMock()
+        mock_create_client.return_value = mock_a2a_client
+
+        async def response_generator():
+            await asyncio.sleep(5)
+            yield MagicMock()
+
+        mock_a2a_client.send_message.return_value = response_generator()
+
+        from fastapi import HTTPException
+
+        with pytest.raises(HTTPException) as exc:
+            await _send_task_to_agent_with_message(new_text_message("input"), "desc", timeout_seconds=0.1)
+
+        assert exc.value.status_code == 408
+        assert 0 < mock_http_client.call_args.kwargs["timeout"] <= 0.1
+
+
+def _clock_advanced_by_the_reservation(wait_seconds: float) -> tuple[MagicMock, AsyncMock]:
+    """A fake clock and a reservation which advances it by the given wait before reserving agent-1."""
+    now = [1000.0]
+    fake_time = MagicMock()
+    fake_time.time.side_effect = lambda: now[0]
+
+    async def reserve_after_waiting(*args, **kwargs):
+        now[0] += wait_seconds
+        return "agent-1", agent_card()
+
+    return fake_time, AsyncMock(side_effect=reserve_after_waiting)
+
+
+@pytest.mark.asyncio
+async def test_a_per_call_timeout_is_shared_by_the_wait_for_an_agent_and_the_task(mock_registry):
+    fake_time, reserve = _clock_advanced_by_the_reservation(3200.0)
+    completed = MagicMock(status_update=MagicMock(task_id="task-1"))
+    completed.HasField.side_effect = lambda field: field == "status_update"
+    completed.status_update.status = A2ATaskStatus(state=TaskState.TASK_STATE_COMPLETED)
+
+    async def response_generator():
+        yield completed
+
+    with (
+        patch("orchestrator.main.time", fake_time),
+        patch("orchestrator.main.reserve_agent_waiting_if_needed", reserve),
+        patch("orchestrator.main.create_client", new_callable=AsyncMock) as mock_create_client,
+        patch("orchestrator.main.httpx.AsyncClient", wraps=httpx.AsyncClient) as mock_http_client,
+    ):
+        mock_create_client.return_value = MagicMock()
+        mock_create_client.return_value.send_message.return_value = response_generator()
+        task = await _send_task_to_agent_with_message(new_text_message("input"), "desc", timeout_seconds=3300.0)
+
+    assert task.status.state == TaskState.TASK_STATE_COMPLETED
+    assert reserve.await_args.kwargs["max_wait_seconds"] == 3300.0
+    assert mock_http_client.call_args.kwargs["timeout"] == 100.0
+
+
+@pytest.mark.asyncio
+async def test_no_time_left_after_the_wait_releases_the_agent_without_sending_the_task(mock_registry):
+    fake_time, reserve = _clock_advanced_by_the_reservation(3301.0)
+
+    from fastapi import HTTPException
+
+    with (
+        patch("orchestrator.main.time", fake_time),
+        patch("orchestrator.main.reserve_agent_waiting_if_needed", reserve),
+        patch("orchestrator.main.create_client", new_callable=AsyncMock) as mock_create_client,
+        patch("orchestrator.main._record_error"),
+        pytest.raises(HTTPException) as exc,
+    ):
+        await _send_task_to_agent_with_message(new_text_message("input"), "desc", timeout_seconds=3300.0)
+
+    assert exc.value.status_code == 503
+    mock_registry.update_status.assert_awaited_once_with("agent-1", AgentStatus.AVAILABLE)
+    mock_create_client.assert_not_awaited()
 
 
 @pytest.mark.asyncio

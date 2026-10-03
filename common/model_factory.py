@@ -55,10 +55,10 @@ QWEN_REASONING_EFFORT_MAP: dict[ThinkingLevel, ReasoningEffort] = {
     "xhigh": "xhigh",
 }
 THINKING_DISABLED_BODY = {"chat_template_kwargs": {"enable_thinking": False}}
-# Qwen3.8's model card sampling for thinking mode, where it warns that greedy decoding repeats endlessly; its
-# top_k of 20 comes from the checkpoint's generation config, which the server applies when a request omits it.
-QWEN_THINKING_TEMPERATURE = 1.0
-QWEN_THINKING_TOP_P = 0.95
+# Qwen3.8's model card sampling for each mode; their top_k of 20 comes from the checkpoint's generation config,
+# which the server applies when a request omits it.
+QWEN_THINKING_SAMPLING = OpenAIChatModelSettings(temperature=1.0, top_p=0.95)
+QWEN_NON_THINKING_SAMPLING = OpenAIChatModelSettings(temperature=0.7, top_p=0.8, presence_penalty=1.5)
 CLAUDE_5_PREFIXES = ("claude-opus-5", "claude-sonnet-5", "claude-fable-5", "claude-mythos-5")
 # Models whose API rejects explicitly disabled thinking: they run adaptive at effort low instead.
 DISABLED_THINKING_UNSUPPORTED_PREFIXES = ("claude-fable-5", "claude-mythos-5")
@@ -261,10 +261,10 @@ def _log_retry_attempt(model_name: str) -> Callable[[RetryCallState], None]:
 
 
 def _build_qwen_settings(thinking_level: ThinkingLevel | None) -> OpenAIChatModelSettings:
-    """Return Qwen's thinking settings: off via its chat template, or model-card sampling plus any effort."""
+    """Return Qwen's model-card sampling for its mode: thinking off via its chat template, or on with any effort."""
     if not config.QWEN_THINKING_ENABLED or thinking_level is False:
-        return OpenAIChatModelSettings(extra_body=THINKING_DISABLED_BODY)
-    settings = OpenAIChatModelSettings(temperature=QWEN_THINKING_TEMPERATURE, top_p=QWEN_THINKING_TOP_P)
+        return OpenAIChatModelSettings(**QWEN_NON_THINKING_SAMPLING, extra_body=THINKING_DISABLED_BODY)
+    settings = OpenAIChatModelSettings(**QWEN_THINKING_SAMPLING)
     if thinking_level is not None:
         settings["openai_reasoning_effort"] = QWEN_REASONING_EFFORT_MAP[thinking_level]
     return settings

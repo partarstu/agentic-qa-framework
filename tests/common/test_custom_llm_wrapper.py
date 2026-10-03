@@ -48,7 +48,7 @@ async def test_request_passthrough(custom_llm, mock_wrapped_model):
     assert sent_messages is messages
     assert sent_params is request_params
     assert sent_settings["temperature"] == 0.5
-    assert sent_settings["top_p"] == 1.0
+    assert "top_p" not in sent_settings
 
 
 @pytest.mark.asyncio
@@ -280,9 +280,7 @@ async def test_defaults_reach_a_model_built_without_settings_of_its_own():
     with patch("config.PROMPT_INJECTION_CHECK_ENABLED", False):
         await agent.run("go")
 
-    assert received_settings["temperature"] == 0.0
-    assert received_settings["top_p"] == 1.0
-    assert received_settings["max_tokens"] == 2048
+    assert received_settings == {"max_tokens": 2048}
 
 
 async def _settings_reaching_qwen(thinking_level: ThinkingLevel) -> dict:
@@ -316,13 +314,14 @@ async def test_qwen_thinking_request_carries_the_model_card_sampling_the_cap_and
 
 
 @pytest.mark.asyncio
-async def test_qwen_request_without_thinking_carries_the_global_sampling_and_the_cap():
+async def test_qwen_request_without_thinking_carries_the_model_card_sampling_and_the_cap():
     with patch("config.QWEN_THINKING_ENABLED", False):
         settings = await _settings_reaching_qwen("medium")
 
     assert settings == {
-        "temperature": 0.0,
-        "top_p": 1.0,
+        "temperature": 0.7,
+        "top_p": 0.8,
+        "presence_penalty": 1.5,
         "max_tokens": 4096,
         "extra_body": {"chat_template_kwargs": {"enable_thinking": False}},
     }
@@ -331,6 +330,6 @@ async def test_qwen_request_without_thinking_carries_the_global_sampling_and_the
 def test_provided_settings_override_the_defaults_key_by_key(mock_wrapped_model):
     wrapper = CustomLlmWrapper(mock_wrapped_model, thinking_level="low", max_output_tokens=2048)
 
-    settings = wrapper._get_model_settings({"temperature": 0.5})
+    settings = wrapper._get_model_settings({"max_tokens": 512, "temperature": 0.5})
 
-    assert settings == {"temperature": 0.5, "top_p": 1.0, "thinking": "low", "max_tokens": 2048}
+    assert settings == {"thinking": "low", "max_tokens": 512, "temperature": 0.5}

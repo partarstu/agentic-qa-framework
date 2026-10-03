@@ -2,19 +2,21 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
+import asyncio
 import json
 import logging
 import mimetypes
 import os
 import re
 import sys
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from contextvars import ContextVar
 from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
 from dateutil import parser
+from pydantic import BaseModel
 from pydantic_ai import BinaryContent
 
 import config
@@ -308,3 +310,18 @@ def parse_timestamp(timestamp_str: str | None, field_name: str = "timestamp") ->
             f"Ignoring invalid timestamp value for '{field_name}': '{timestamp_str}'. Error: {e}"
         )
         return None
+
+
+def json_list(models: Iterable[BaseModel]) -> str:
+    return "[" + ", ".join(model.model_dump_json() for model in models) + "]"
+
+
+async def run_first_then_concurrently[T](calls: Sequence[Callable[[], Awaitable[T]]]) -> list[T]:
+    """Awaits the first call alone and the others concurrently after it, returning the results in call order."""
+    if not calls:
+        return []
+    # Calls sharing a long prompt prefix let the provider cache it during the first one, so the others can read it.
+    first = await calls[0]()
+    async with asyncio.TaskGroup() as task_group:
+        others = [task_group.create_task(call()) for call in calls[1:]]
+    return [first, *(task.result() for task in others)]

@@ -21,6 +21,7 @@ steps:
       - 'QUAIA_DEPLOY_OVERRIDE_EMBEDDING_SERVICE_URL=$_EMBEDDING_SERVICE_URL'
       - 'QUAIA_DEPLOY_OVERRIDE_PROMPT_GUARD_SERVICE_URL=$_PROMPT_GUARD_SERVICE_URL'
       - 'QUAIA_DEPLOY_OVERRIDE_PROMPT_OVERRIDES_DIR=$_PROMPT_OVERRIDES_DIR'
+      - 'QUAIA_DEPLOY_OVERRIDE_JIRA_ADDITIONAL_FIELD_IDS=$_JIRA_ADDITIONAL_FIELD_IDS'
       - 'QUAIA_DEPLOY_OVERRIDE_REMOTE_EXECUTION_AGENT_HOSTS=$_REMOTE_EXECUTION_AGENT_HOSTS'
       - 'QUAIA_DEPLOY_OVERRIDE_EMBEDDING_BACKENDS=$_EMBEDDING_BACKENDS'
       - 'QUAIA_DEPLOY_OVERRIDE_EMBEDDING_TEXT_MODEL=$_EMBEDDING_TEXT_MODEL'
@@ -47,9 +48,7 @@ steps:
         done
         # AGENT_BASE_URL differs per agent, so it is passed per rendering.
         QUAIA_DEPLOY_OVERRIDE_AGENT_BASE_URL="$_REQUIREMENTS_REVIEW_AGENT_BASE_URL" render requirements-review-agent
-        QUAIA_DEPLOY_OVERRIDE_AGENT_BASE_URL="$_TEST_CASE_GENERATION_AGENT_BASE_URL" render test-case-generation-agent
-        QUAIA_DEPLOY_OVERRIDE_AGENT_BASE_URL="$_TEST_CASE_CLASSIFICATION_AGENT_BASE_URL" render test-case-classification-agent
-        QUAIA_DEPLOY_OVERRIDE_AGENT_BASE_URL="$_TEST_CASE_REVIEW_AGENT_BASE_URL" render test-case-review-agent
+        QUAIA_DEPLOY_OVERRIDE_AGENT_BASE_URL="$_TEST_CASE_DESIGN_AGENT_BASE_URL" render test-case-design-agent
         QUAIA_DEPLOY_OVERRIDE_AGENT_BASE_URL="$_INCIDENT_CREATION_AGENT_BASE_URL" render incident-creation-agent
 
   # Build the orchestrator image
@@ -60,17 +59,9 @@ steps:
   - name: 'docker:29.8.1-cli'
     args: [ 'build', '-t', 'gcr.io/$PROJECT_ID/requirements-review-agent', '-f', 'agents/requirements_review/Dockerfile', '.' ]
 
-  # Build the test-case-generation-agent image
+  # Build the test-case-design-agent image
   - name: 'docker:29.8.1-cli'
-    args: [ 'build', '-t', 'gcr.io/$PROJECT_ID/test-case-generation-agent', '-f', 'agents/test_case_generation/Dockerfile', '.' ]
-
-  # Build the test-case-classification-agent image
-  - name: 'docker:29.8.1-cli'
-    args: [ 'build', '-t', 'gcr.io/$PROJECT_ID/test-case-classification-agent', '-f', 'agents/test_case_classification/Dockerfile', '.' ]
-
-  # Build the test-case-review-agent image
-  - name: 'docker:29.8.1-cli'
-    args: [ 'build', '-t', 'gcr.io/$PROJECT_ID/test-case-review-agent', '-f', 'agents/test_case_review/Dockerfile', '.' ]
+    args: [ 'build', '-t', 'gcr.io/$PROJECT_ID/test-case-design-agent', '-f', 'agents/test_case_design/Dockerfile', '.' ]
 
   # Build the incident-creation-agent image
   - name: 'docker:29.8.1-cli'
@@ -88,17 +79,9 @@ steps:
   - name: 'docker:29.8.1-cli'
     args: [ 'push', 'gcr.io/$PROJECT_ID/requirements-review-agent' ]
 
-  # Push the test-case-generation-agent image to Container Registry
+  # Push the test-case-design-agent image to Container Registry
   - name: 'docker:29.8.1-cli'
-    args: [ 'push', 'gcr.io/$PROJECT_ID/test-case-generation-agent' ]
-
-  # Push the test-case-classification-agent image to Container Registry
-  - name: 'docker:29.8.1-cli'
-    args: [ 'push', 'gcr.io/$PROJECT_ID/test-case-classification-agent' ]
-
-  # Push the test-case-review-agent image to Container Registry
-  - name: 'docker:29.8.1-cli'
-    args: [ 'push', 'gcr.io/$PROJECT_ID/test-case-review-agent' ]
+    args: [ 'push', 'gcr.io/$PROJECT_ID/test-case-design-agent' ]
 
   # Push the incident-creation-agent image to Container Registry
   - name: 'docker:29.8.1-cli'
@@ -397,14 +380,14 @@ steps:
           --port=8001 \
           $$PROMPT_OVERRIDE_ARGS
 
-  # Deploy to Cloud Run test-case-generation-agent
+  # Deploy to Cloud Run test-case-design-agent
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:586.0.0'
     entrypoint: 'bash'
     args:
       - '-c'
       - |
-        MARKER=$$(cat deploy/rendered/test-case-generation-agent.marker)
-        if [ "$$(bash deploy/redeploy_gate.sh service test-case-generation-agent us-central1 "$$MARKER")" = "skip" ]; then
+        MARKER=$$(cat deploy/rendered/test-case-design-agent.marker)
+        if [ "$$(bash deploy/redeploy_gate.sh service test-case-design-agent us-central1 "$$MARKER")" = "skip" ]; then
           exit 0
         fi
         PROMPT_OVERRIDE_ARGS=""
@@ -412,8 +395,9 @@ steps:
           PROMPT_OVERRIDE_ARGS="--add-volume=type=cloud-storage,name=prompt-overrides,bucket=$_PROMPT_OVERRIDES_BUCKET,mount-options=only-dir=$_PROMPT_OVERRIDES_FOLDER --add-volume-mount=volume=prompt-overrides,mount-path=$_PROMPT_OVERRIDES_DIR"
         fi
 
-        gcloud run deploy test-case-generation-agent \
-          --image=gcr.io/$PROJECT_ID/test-case-generation-agent \
+        # A design runs its whole generate-review-fix loop in one request, hence the long timeout.
+        gcloud run deploy test-case-design-agent \
+          --image=gcr.io/$PROJECT_ID/test-case-design-agent \
           --platform=managed \
           --ingress=internal \
           --network=agent-network \
@@ -424,74 +408,9 @@ steps:
           --memory=3Gi \
           --max-instances=1 \
           --concurrency=2 \
-          --env-vars-file=deploy/rendered/test-case-generation-agent.env.yaml \
-          --set-secrets="$$(cat deploy/rendered/test-case-generation-agent.secrets.txt)" \
-          --update-labels=quaia_deploy_marker=$$MARKER \
-          --port=8001 \
-          $$PROMPT_OVERRIDE_ARGS
-
-  # Deploy to Cloud Run test-case-classification-agent
-  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:586.0.0'
-    entrypoint: 'bash'
-    args:
-      - '-c'
-      - |
-        MARKER=$$(cat deploy/rendered/test-case-classification-agent.marker)
-        if [ "$$(bash deploy/redeploy_gate.sh service test-case-classification-agent us-central1 "$$MARKER")" = "skip" ]; then
-          exit 0
-        fi
-        PROMPT_OVERRIDE_ARGS=""
-        if [ -n "$_PROMPT_OVERRIDES_DIR" ]; then
-          PROMPT_OVERRIDE_ARGS="--add-volume=type=cloud-storage,name=prompt-overrides,bucket=$_PROMPT_OVERRIDES_BUCKET,mount-options=only-dir=$_PROMPT_OVERRIDES_FOLDER --add-volume-mount=volume=prompt-overrides,mount-path=$_PROMPT_OVERRIDES_DIR"
-        fi
-
-        gcloud run deploy test-case-classification-agent \
-          --image=gcr.io/$PROJECT_ID/test-case-classification-agent \
-          --platform=managed \
-          --ingress=internal \
-          --network=agent-network \
-          --subnet=agent-network \
-          --vpc-egress=all-traffic \
-          --region=us-central1 \
-          --allow-unauthenticated \
-          --memory=3Gi \
-          --max-instances=1 \
-          --concurrency=2 \
-          --env-vars-file=deploy/rendered/test-case-classification-agent.env.yaml \
-          --set-secrets="$$(cat deploy/rendered/test-case-classification-agent.secrets.txt)" \
-          --update-labels=quaia_deploy_marker=$$MARKER \
-          --port=8001 \
-          $$PROMPT_OVERRIDE_ARGS
-
-  # Deploy to Cloud Run test-case-review-agent
-  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:586.0.0'
-    entrypoint: 'bash'
-    args:
-      - '-c'
-      - |
-        MARKER=$$(cat deploy/rendered/test-case-review-agent.marker)
-        if [ "$$(bash deploy/redeploy_gate.sh service test-case-review-agent us-central1 "$$MARKER")" = "skip" ]; then
-          exit 0
-        fi
-        PROMPT_OVERRIDE_ARGS=""
-        if [ -n "$_PROMPT_OVERRIDES_DIR" ]; then
-          PROMPT_OVERRIDE_ARGS="--add-volume=type=cloud-storage,name=prompt-overrides,bucket=$_PROMPT_OVERRIDES_BUCKET,mount-options=only-dir=$_PROMPT_OVERRIDES_FOLDER --add-volume-mount=volume=prompt-overrides,mount-path=$_PROMPT_OVERRIDES_DIR"
-        fi
-
-        gcloud run deploy test-case-review-agent \
-          --image=gcr.io/$PROJECT_ID/test-case-review-agent \
-          --platform=managed \
-          --ingress=internal \
-          --network=agent-network \
-          --subnet=agent-network \
-          --vpc-egress=all-traffic \
-          --region=us-central1 \
-          --allow-unauthenticated \
-          --memory=3Gi \
-          --max-instances=1 \
-          --concurrency=2 \
-          --env-vars-file=deploy/rendered/test-case-review-agent.env.yaml \
-          --set-secrets="$$(cat deploy/rendered/test-case-review-agent.secrets.txt)" \
+          --timeout=3600s \
+          --env-vars-file=deploy/rendered/test-case-design-agent.env.yaml \
+          --set-secrets="$$(cat deploy/rendered/test-case-design-agent.secrets.txt)" \
           --update-labels=quaia_deploy_marker=$$MARKER \
           --port=8001 \
           $$PROMPT_OVERRIDE_ARGS
@@ -548,9 +467,8 @@ substitutions:
   _ALLURE_REPORTS_BUCKET: ''
   _REMOTE_EXECUTION_AGENT_HOSTS: ''
   _REQUIREMENTS_REVIEW_AGENT_BASE_URL: ''
-  _TEST_CASE_CLASSIFICATION_AGENT_BASE_URL: ''
-  _TEST_CASE_GENERATION_AGENT_BASE_URL: ''
-  _TEST_CASE_REVIEW_AGENT_BASE_URL: ''
+  _TEST_CASE_DESIGN_AGENT_BASE_URL: ''
+  _JIRA_ADDITIONAL_FIELD_IDS: ''
   _INCIDENT_CREATION_AGENT_BASE_URL: ''
   _ORCHESTRATOR_REQUEST_TIMEOUT: '3500s'
   _EMBEDDING_SERVICE_URL: ''
@@ -579,9 +497,7 @@ substitutions:
 images:
   - 'gcr.io/$PROJECT_ID/rag-sync-job'
   - 'gcr.io/$PROJECT_ID/requirements-review-agent'
-  - 'gcr.io/$PROJECT_ID/test-case-generation-agent'
-  - 'gcr.io/$PROJECT_ID/test-case-classification-agent'
-  - 'gcr.io/$PROJECT_ID/test-case-review-agent'
+  - 'gcr.io/$PROJECT_ID/test-case-design-agent'
   - 'gcr.io/$PROJECT_ID/incident-creation-agent'
   - 'gcr.io/$PROJECT_ID/orchestrator'
 

@@ -155,13 +155,9 @@ ALLURE_REPORT_DIR = "allure-report"
 OPEN_TELEMETRY_URL = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT")
 MAX_OUTPUT_TOKENS = _optional_positive_int("MAX_OUTPUT_TOKENS")
 
-# Common model config
-TOP_P = 1.0
-TEMPERATURE = 0.0
-
 # Model used by the orchestrator and every agent. Either a pydantic-ai model string
-# (e.g. "google-gla:gemini-3.5-flash") or "qwen:<model>" for the self-hosted Qwen endpoint below.
-DEFAULT_MODEL_NAME = os.environ.get("MODEL_NAME", "google-gla:gemini-3.5-flash")
+# (e.g. "google-gla:gemini-3.8-flash") or "qwen:<model>" for the self-hosted Qwen endpoint below.
+DEFAULT_MODEL_NAME = os.environ.get("MODEL_NAME", "google-gla:gemini-3.8-flash")
 
 # Provider API keys, read by the provider SDKs when their model family is configured.
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
@@ -217,7 +213,7 @@ PROMPT_GUARD_SERVICE_URL = os.environ.get("PROMPT_GUARD_SERVICE_URL")
 # Orchestrator
 class OrchestratorConfig:
     THINKING_LEVEL: ThinkingLevel = "low"
-    VERSION = os.environ.get("ORCHESTRATOR_VERSION", "2.0.1")
+    VERSION = os.environ.get("ORCHESTRATOR_VERSION", "2.1.0")
     # Label describing the environment the execution agents run their test cases against; reported
     # alongside every test execution result.
     TEST_ENVIRONMENT_LABEL = os.environ.get("TEST_ENVIRONMENT_LABEL", "Standard Test Environment")
@@ -226,6 +222,8 @@ class OrchestratorConfig:
     AGENT_HEALTH_CHECK_INTERVAL_SECONDS = 60
     AGENT_HEALTH_CHECK_TIMEOUT_SECONDS = 10
     TASK_EXECUTION_TIMEOUT = 500.0
+    # Kept below the orchestrator's 3500 s request timeout, which the whole workflow call has to fit into.
+    TEST_CASE_DESIGN_TASK_TIMEOUT_SECONDS = float(os.environ.get("TEST_CASE_DESIGN_TASK_TIMEOUT_SECONDS", "3300"))
     AGENT_DISCOVERY_TIMEOUT_SECONDS = 120
     INCOMING_REQUEST_WAIT_TIMEOUT = AGENT_DISCOVERY_TIMEOUT_SECONDS + 5
     MODEL_NAME = DEFAULT_MODEL_NAME
@@ -265,7 +263,7 @@ class DashboardPersistenceConfig:
 # Requirements Review Agent
 class RequirementsReviewAgentConfig:
     THINKING_LEVEL: ThinkingLevel = "medium"
-    VERSION = os.environ.get("REQUIREMENTS_REVIEW_AGENT_VERSION", "1.2.0")
+    VERSION = os.environ.get("REQUIREMENTS_REVIEW_AGENT_VERSION", "1.3.0")
     OWN_NAME = "Jira Requirements Reviewer"
     SKILL_ID = "jira-requirements-review"
     SKILL_NAME = "Jira Requirements Review"
@@ -282,7 +280,7 @@ class RequirementsReviewAgentConfig:
 # Test Case Classification Agent
 class TestCaseClassificationAgentConfig:
     THINKING_LEVEL: ThinkingLevel = "medium"
-    VERSION = os.environ.get("TEST_CASE_CLASSIFICATION_AGENT_VERSION", "1.2.1")
+    VERSION = os.environ.get("TEST_CASE_CLASSIFICATION_AGENT_VERSION", "1.3.0")
     OWN_NAME = "Test Case Classification Agent"
     SKILL_ID = "test-case-classification"
     SKILL_NAME = "Test Case Classification"
@@ -298,40 +296,46 @@ class TestCaseClassificationAgentConfig:
 # Test Case Generation Agent
 class TestCaseGenerationAgentConfig:
     THINKING_LEVEL: ThinkingLevel = "medium"
-    VERSION = os.environ.get("TEST_CASE_GENERATION_AGENT_VERSION", "1.2.1")
-    OWN_NAME = "Test Case Generation Agent"
-    SKILL_ID = "test-case-generation"
-    SKILL_NAME = "Test Case Generation"
-    SKILL_DESCRIPTION = "Generation of test cases based on Jira user stories and their acceptance criteria"
-    PORT = int(os.environ.get("PORT", "8002"))
+    MODEL_NAME = DEFAULT_MODEL_NAME
+    MAX_OUTPUT_TOKENS = _optional_positive_int("TEST_CASE_GENERATION_MAX_OUTPUT_TOKENS") or MAX_OUTPUT_TOKENS
+
+
+# Test Case Design Agent
+class TestCaseDesignAgentConfig:
+    THINKING_LEVEL: ThinkingLevel = "low"
+    VERSION = os.environ.get("TEST_CASE_DESIGN_AGENT_VERSION", "1.0.0")
+    OWN_NAME = "Test Case Design Agent"
+    SKILL_ID = "test-case-design"
+    SKILL_NAME = "Test Case Design"
+    SKILL_DESCRIPTION = (
+        "Design of the test cases of a Jira user story: generation, review and fixing in a loop, then saving, "
+        "classification and publishing of the final review of every test case"
+    )
+    PORT = int(os.environ.get("PORT", "8005"))
     EXTERNAL_PORT = int(os.environ.get("EXTERNAL_PORT", PORT))
     PROTOCOL = "http"
     MODEL_NAME = DEFAULT_MODEL_NAME
-    MAX_OUTPUT_TOKENS = _optional_positive_int("TEST_CASE_GENERATION_MAX_OUTPUT_TOKENS") or MAX_OUTPUT_TOKENS
-    MAX_REQUESTS_PER_TASK = 30
+    MAX_OUTPUT_TOKENS = _optional_positive_int("TEST_CASE_DESIGN_MAX_OUTPUT_TOKENS") or MAX_OUTPUT_TOKENS
+    # The delegated generation, review and classification runs share this budget with the design agent.
+    MAX_REQUESTS_PER_TASK = 150
+    MAX_ITERATIONS = _optional_positive_int("TEST_CASE_DESIGN_MAX_ITERATIONS") or 4
+    # One of low, medium, high, critical: a review finding at or above it blocks the design and gets fixed.
+    FIX_MIN_SEVERITY = os.environ.get("TEST_CASE_DESIGN_FIX_MIN_SEVERITY", "medium").strip().lower()
+    TOTAL_TOKENS_LIMIT = _optional_positive_int("TEST_CASE_DESIGN_TOTAL_TOKENS_LIMIT") or 4_000_000
 
 
 # Test Case Review Agent
 class TestCaseReviewAgentConfig:
-    THINKING_LEVEL: ThinkingLevel = "high"
-    VERSION = os.environ.get("TEST_CASE_REVIEW_AGENT_VERSION", "1.1.2")
+    THINKING_LEVEL: ThinkingLevel = "medium"
     REVIEW_COMPLETE_STATUS_NAME = "Review Complete"
-    OWN_NAME = "Test Case Review Agent"
-    SKILL_ID = "test-case-review"
-    SKILL_NAME = "Test Case Review"
-    SKILL_DESCRIPTION = "Review of generated test cases for coherence, redundancy, and effectiveness"
-    PORT = int(os.environ.get("PORT", "8004"))
-    EXTERNAL_PORT = int(os.environ.get("EXTERNAL_PORT", PORT))
-    PROTOCOL = "http"
     MODEL_NAME = DEFAULT_MODEL_NAME
     MAX_OUTPUT_TOKENS = _optional_positive_int("TEST_CASE_REVIEW_MAX_OUTPUT_TOKENS") or MAX_OUTPUT_TOKENS
-    MAX_REQUESTS_PER_TASK = 30
 
 
 # Incident Creation Agent
 class IncidentCreationAgentConfig:
     THINKING_LEVEL: ThinkingLevel = "medium"
-    VERSION = os.environ.get("INCIDENT_CREATION_AGENT_VERSION", "1.1.1")
+    VERSION = os.environ.get("INCIDENT_CREATION_AGENT_VERSION", "1.2.0")
     OWN_NAME = "Incident Creation Agent"
     SKILL_ID = "incident-creation"
     SKILL_NAME = "Incident Creation"

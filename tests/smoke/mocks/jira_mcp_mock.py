@@ -76,15 +76,16 @@ mcp = MCPServer("jira-mock")
 
 
 @mcp.tool()
-async def jira_get_issue(issue_key: str, fields: str = "") -> str:
+async def jira_get_issue(issue_key: str, fields: str = "", comment_limit: int = 10) -> str:
     """Get the complete details of a Jira issue by its key (e.g. 'PROJ-123').
 
     Returns the issue as JSON, including its project, summary, description and
     acceptance criteria. Always call this first to read a Jira issue's content.
     Optionally restrict the response to the given fields (a comma-separated list of
-    field names or custom field IDs); omitting it returns all fields.
+    field names or custom field IDs); omitting it returns all fields. comment_limit
+    caps the number of returned comments.
     """
-    _recorded["get_issue"].append({"issue_key": issue_key, "fields": fields})
+    _recorded["get_issue"].append({"issue_key": issue_key, "fields": fields, "comment_limit": comment_limit})
     return json.dumps(_SEEDED_STORY)
 
 

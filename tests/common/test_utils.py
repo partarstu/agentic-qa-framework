@@ -2,8 +2,10 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
+import asyncio
 import mimetypes
 import os
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import MagicMock, mock_open, patch
@@ -151,3 +153,46 @@ def test_compile_name_pattern_rejects_an_over_long_pattern():
 def test_compile_name_pattern_rejects_an_uncompilable_pattern():
     with pytest.raises(ValueError, match="Invalid name pattern"):
         utils.compile_name_pattern("([unclosed")
+
+
+async def test_run_first_then_concurrently_finishes_the_first_call_before_starting_the_others():
+    events: list[str] = []
+
+    def call(name: str) -> Callable[[], Awaitable[str]]:
+        async def run() -> str:
+            events.append(f"start {name}")
+            await asyncio.sleep(0)
+            events.append(f"end {name}")
+            return name
+
+        return run
+
+    results = await utils.run_first_then_concurrently([call("a"), call("b"), call("c")])
+
+    assert results == ["a", "b", "c"]
+    assert events[:2] == ["start a", "end a"]
+
+
+async def test_run_first_then_concurrently_runs_the_others_at_the_same_time():
+    second_started = asyncio.Event()
+
+    async def first() -> int:
+        return 1
+
+    async def second() -> int:
+        second_started.set()
+        return 2
+
+    async def third() -> int:
+        # Run one after the other, the third call would wait for the second forever.
+        await second_started.wait()
+        return 3
+
+    async with asyncio.timeout(5):
+        results = await utils.run_first_then_concurrently([first, third, second])
+
+    assert results == [1, 3, 2]
+
+
+async def test_run_first_then_concurrently_returns_nothing_for_no_calls():
+    assert await utils.run_first_then_concurrently([]) == []

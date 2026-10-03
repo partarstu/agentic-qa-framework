@@ -16,6 +16,7 @@ boundary, read back from its ``/__recorded`` endpoint:
                            (shorter than the issue) query text.
 * Requirements review   -> with JIRA_ADDITIONAL_FIELD_IDS configured, the agent requests those custom
                            field IDs (together with the standard content fields) when fetching the story.
+* Test-case design      -> the design's model fetched the story once via the Jira MCP, without comments, with the standard and configured fields.
 * Test-case generation  -> real test cases (name + steps) reached Zephyr.
 * Test-case generation  -> the created test cases were linked to the seeded story's numeric id.
 * Test-case classification -> labels reached Zephyr.
@@ -24,8 +25,8 @@ boundary, read back from its ``/__recorded`` endpoint:
 * Requirements review   -> the usage artifact meters the focused reviews, at most the configured count, and a merge run whenever at least two focused reviews succeeded.
 * Test-case review      -> a non-empty "Review Comments" value reached Zephyr for every generated test case.
 * Test-case review      -> at least one test case reached the "Review Complete" status.
-* Test-case review      -> every review comment carries the duplicate-check section, after the batch was
-                           indexed and searched per test case within its project; the usage
+* Test-case review      -> every review comment carries the duplicate-check section, after each final test
+                           case was searched once within its project, by content; the usage
                            artifact carries per-operation counters.
 * Test execution        -> a failed automated test drove a real Bug issue into the seeded project.
 * Test execution        -> a failed execution for the seeded case was reported to Zephyr with UTC
@@ -58,10 +59,11 @@ import httpx
 import pytest
 
 import config
+from common.models import DRAFT_ID_PREFIX, DesignStopReason, TestCaseReviewFindingSeverity
+from common.services.test_management_tools import DUPLICATE_CHECK_HEADING, REVIEW_COMMENT_HEADING
 from tests.smoke.conftest import (
     CONFLUENCE_RECORDED_URL,
     DOCUMENTS_COLLECTION_NAME,
-    DUPLICATE_CHECK_HEADING,
     EXECUTION_AGENT_NAME,
     EXECUTION_AGENT_VERSION,
     EXPECTED_AGENT_NAMES,
@@ -150,9 +152,8 @@ def test_agents_requested_the_configured_additional_fields(
     test_case_flow_response: httpx.Response,
     http_client: httpx.Client,
 ) -> None:
-    """With JIRA_ADDITIONAL_FIELD_IDS configured, the review and generation flows must both ask
-    for those field IDs when fetching the story (three agents fetch it, so at least two
-    field-aware calls must exist)."""
+    """With JIRA_ADDITIONAL_FIELD_IDS configured, the requirements review and the design agent must both ask for those
+    field IDs when fetching the story."""
     configured_field_ids = ("customfield_10101", "customfield_10202")
 
     def _requested(call: dict) -> bool:
@@ -166,7 +167,7 @@ def test_agents_requested_the_configured_additional_fields(
     matching = [call for call in data.get("get_issue", []) if _requested(call)]
     assert len(matching) >= 2, (
         f"Fewer than two jira_get_issue calls requested all configured additional field IDs "
-        f"{configured_field_ids}, so not both the review and generation flows forwarded them. "
+        f"{configured_field_ids}, so not both the review and design flows forwarded them. "
         f"Recorded: {data.get('get_issue')}"
     )
     # The pitfall: restricting to the additional IDs must not drop the standard content fields.
@@ -176,6 +177,29 @@ def test_agents_requested_the_configured_additional_fields(
             f"The fields parameter {fields!r} lists only the custom field IDs, so the agent would lose "
             f"the standard issue content. Recorded: {call}"
         )
+
+
+def test_design_fetched_the_story_once_without_comments(
+    test_case_flow_response: httpx.Response, http_client: httpx.Client
+) -> None:
+    """The design's model fetches the story once, without comments and with the standard and configured fields."""
+
+    def _design_fetches(recorded: dict) -> list[dict]:
+        return [
+            call
+            for call in recorded.get("get_issue", [])
+            if call.get("issue_key") == SEEDED_ISSUE_KEY and call.get("comment_limit") == 0
+        ]
+
+    data = wait_for_recorded(http_client, JIRA_MCP_RECORDED_URL, lambda d: bool(_design_fetches(d)))
+    fetches = _design_fetches(data)
+    assert len(fetches) == 1, f"Expected exactly one story fetch without comments. Recorded: {data.get('get_issue')}"
+    fields = {field.strip() for field in fetches[0]["fields"].split(",")}
+    # The model picks the fields itself, so only the content fields and the configured ones are required.
+    expected_fields = {"summary", "description", "customfield_10101", "customfield_10202"}
+    assert "*all" in fields or expected_fields <= fields, (
+        f"The design's story fetch lacks fields. Recorded: {fetches[0]}"
+    )
 
 
 def test_agent_downloaded_the_story_attachment_over_rest(
@@ -309,14 +333,23 @@ def test_requirements_review_usage_carries_focused_review_and_merge_operations(
 def test_usage_artifact_carries_per_operation_counters(
     test_case_flow_response: httpx.Response, http_client: httpx.Client, auth_headers: dict[str, str]
 ) -> None:
-    """The review task's usage artifact breaks the tokens down per operation (the main agent
-    and its review sub-agent) with the cached/uncached split, and its totals include every operation."""
-    tasks = _completed_tasks_of(http_client, auth_headers, config.TestCaseReviewAgentConfig.OWN_NAME)
-    assert tasks, "No completed test-case review task is listed on the dashboard."
+    """The design task's usage artifact breaks the tokens down per operation (`main` for the design and classification
+    LLMs, plus the generation and review sub-agents) with the cached/uncached split, and its totals include them all."""
+    tasks = _completed_tasks_of(http_client, auth_headers, config.TestCaseDesignAgentConfig.OWN_NAME)
+    assert tasks, "No completed test case design task is listed on the dashboard."
     token_usage = tasks[0].get("token_usage") or {}
     operations = token_usage.get("operations") or []
     by_name = {operation["operation"]: operation for operation in operations}
-    assert {"main", "review_test_cases_with_attachments"} <= set(by_name), f"Operations: {operations}"
+    delegate_operations = {
+        "ac_extractor",
+        "steps_generator",
+        "test_case_creator",
+        "review_test_cases_with_attachments",
+        "test_suite_reviewer",
+        # the forced findings of the smoke rubric override make every review blocking, so the fixes always run.
+        "test_case_fixer",
+    }
+    assert {"main", *delegate_operations} <= set(by_name), f"Operations: {operations}"
     for operation in by_name.values():
         assert operation["requests"] >= 1, operation
         for counter in ("uncached_input_tokens", "cache_read_tokens", "cache_write_tokens", "output_tokens"):
@@ -342,7 +375,7 @@ def test_agent_read_source_story_from_jira(
     )
 
 
-# --- Test-case generation / classification / review flow -------------------------------
+# --- Test case design flow (generation, review and fixing, then classification) --------
 
 
 def test_test_case_flow_webhook_accepted(test_case_flow_response: httpx.Response) -> None:
@@ -362,18 +395,24 @@ def test_real_test_cases_created_in_zephyr(test_case_flow_response: httpx.Respon
     assert real_cases, f"Zephyr received no test cases with both a name and steps. Recorded: {data}"
 
 
-def test_generated_test_cases_linked_to_story(
+def test_test_cases_created_exactly_once_and_linked_to_story(
     test_case_flow_response: httpx.Response, http_client: httpx.Client
 ) -> None:
-    """Generation must link the created test cases to the seeded story's numeric id."""
+    """The design saves its final test cases once, after the loop, each linked once to the seeded story's numeric id."""
     data = wait_for_recorded(http_client, ZEPHYR_RECORDED_URL, lambda d: bool(d.get("issue_links")))
-    created_keys = {tc.get("key") for tc in data.get("test_cases", [])}
-    links = [
-        link
+    names = [tc.get("name") for tc in data.get("test_cases", [])]
+    repeated = {name for name in names if names.count(name) > 1}
+    assert not repeated, f"Test case(s) {repeated} were created more than once. Recorded: {data}"
+    story_links = [
+        link.get("test_case_key")
         for link in data.get("issue_links", [])
-        if link.get("test_case_key") in created_keys and str(link.get("issue_id")) == str(SEEDED_ISSUE_ID)
+        if str(link.get("issue_id")) == str(SEEDED_ISSUE_ID)
     ]
-    assert links, f"No created test case was linked to the seeded story (id {SEEDED_ISSUE_ID}). Recorded: {data}"
+    created_keys = [tc.get("key") for tc in data.get("test_cases", [])]
+    assert sorted(story_links) == sorted(created_keys), (
+        f"Not every created test case was linked exactly once to the seeded story (id {SEEDED_ISSUE_ID}). "
+        f"Created: {created_keys}, linked: {story_links}"
+    )
 
 
 def test_classification_added_labels(test_case_flow_response: httpx.Response, http_client: httpx.Client) -> None:
@@ -387,30 +426,70 @@ def test_classification_added_labels(test_case_flow_response: httpx.Response, ht
     assert labelled, f"No test case received labels from classification. Recorded: {data}"
 
 
+def _is_final_review_comment(comment: str) -> bool:
+    """A final review comment carries the header with the stop reason and severity-tagged findings or none."""
+    has_stop_reason = any(f"stop reason: {reason.value}" in comment for reason in DesignStopReason)
+    has_findings = "No findings." in comment or any(
+        f"[{s.value.upper()}]" in comment for s in TestCaseReviewFindingSeverity
+    )
+    return f"<h4>{REVIEW_COMMENT_HEADING}</h4>" in comment and has_stop_reason and has_findings
+
+
 def test_review_comment_added_to_zephyr(test_case_flow_response: httpx.Response, http_client: httpx.Client) -> None:
-    """Review must write a non-empty "Review Comments" value to every generated test case."""
+    """Every saved test case gets its final review as a comment: the header naming the iterations and the stop
+    reason, then its severity-tagged findings or "No findings."."""
     data = wait_for_recorded(
         http_client,
         ZEPHYR_RECORDED_URL,
-        lambda d: bool(d.get("test_cases")) and all(tc.get("review_comments", "").strip() for tc in d["test_cases"]),
+        lambda d: (
+            bool(d.get("test_cases"))
+            and all(_is_final_review_comment(tc.get("review_comments", "")) for tc in d["test_cases"])
+        ),
     )
     generated = data.get("test_cases", [])
     assert generated, f"No generated test case reached Zephyr at all. Recorded: {data}"
-    unreviewed = [tc["key"] for tc in generated if not tc.get("review_comments", "").strip()]
-    assert not unreviewed, f"Test case(s) {unreviewed} received no review comment. Recorded: {data}"
+    malformed = [tc["key"] for tc in generated if not _is_final_review_comment(tc.get("review_comments", ""))]
+    assert not malformed, f"Test case(s) {malformed} lack a well-formed final review comment. Recorded: {data}"
+
+
+def test_design_ran_the_whole_loop_up_to_the_iteration_limit(
+    test_case_flow_response: httpx.Response, http_client: httpx.Client
+) -> None:
+    """With the smoke rubric override forcing a high finding per test case, the design never converges: every final
+    comment reports the iteration limit of docker-compose.smoke.yml (2) as reached and still carries a high finding."""
+    expected_header = f"Review iterations: 2, stop reason: {DesignStopReason.ITERATION_LIMIT.value}"
+    high_tag = f"[{TestCaseReviewFindingSeverity.HIGH.value.upper()}]"
+    data = wait_for_recorded(
+        http_client,
+        ZEPHYR_RECORDED_URL,
+        lambda d: bool(d.get("test_cases")) and all(tc.get("review_comments") for tc in d["test_cases"]),
+    )
+    comments = {tc["key"]: tc.get("review_comments", "") for tc in data.get("test_cases", [])}
+    assert comments, f"No generated test case reached Zephyr at all. Recorded: {data}"
+    not_at_limit = [key for key, comment in comments.items() if expected_header not in comment]
+    assert not not_at_limit, f"Test case(s) {not_at_limit} do not report '{expected_header}'. Comments: {comments}"
+    without_high = [key for key, comment in comments.items() if high_tag not in comment]
+    assert not without_high, f"Test case(s) {without_high} carry no {high_tag} finding. Comments: {comments}"
 
 
 def test_review_set_status_to_review_complete(
     test_case_flow_response: httpx.Response, http_client: httpx.Client
 ) -> None:
-    """Review must move at least one test case to the "Review Complete" status."""
+    """The design must move every saved test case to the "Review Complete" status."""
     data = wait_for_recorded(
         http_client,
         ZEPHYR_RECORDED_URL,
-        lambda d: any(tc.get("status", {}).get("name") == REVIEW_COMPLETE_STATUS for tc in d.get("test_cases", [])),
+        lambda d: (
+            bool(d.get("test_cases"))
+            and all(tc.get("status", {}).get("name") == REVIEW_COMPLETE_STATUS for tc in d["test_cases"])
+        ),
     )
-    completed = [tc for tc in data.get("test_cases", []) if tc.get("status", {}).get("name") == REVIEW_COMPLETE_STATUS]
-    assert completed, f"No test case was moved to '{REVIEW_COMPLETE_STATUS}'. Recorded: {data}"
+    incomplete = [
+        tc.get("key") for tc in data.get("test_cases", []) if tc.get("status", {}).get("name") != REVIEW_COMPLETE_STATUS
+    ]
+    assert data.get("test_cases") and not incomplete, (
+        f"Test case(s) {incomplete} were not moved to '{REVIEW_COMPLETE_STATUS}'. Recorded: {data}"
+    )
 
 
 def test_review_comment_carries_the_duplicate_check(
@@ -432,37 +511,46 @@ def test_review_comment_carries_the_duplicate_check(
     assert data.get("test_cases") and not missing, (
         f"Review comment(s) of {missing} carry no '{DUPLICATE_CHECK_HEADING}' section. Recorded: {data}"
     )
+    outcomes = ("No duplicate test cases found.", "Fully covered by:", "Partially overlapping with:")
+    for tc in data["test_cases"]:
+        section = tc["review_comments"].split(DUPLICATE_CHECK_HEADING, 1)[1]
+        assert any(outcome in section for outcome in outcomes), (
+            f"The duplicate-check section of {tc['key']} states neither no duplicates nor a full or partial overlap: "
+            f"{section}"
+        )
 
 
-def test_review_indexed_its_batch_and_searched_the_project_for_duplicates(
+def _draft_duplicate_searches(recorded: dict) -> list[dict]:
+    """The design's duplicate searches: test-case queries whose dense filter excludes a draft ID."""
+    searches = []
+    for query in recorded.get("hybrid_queries", []):
+        dense_filter = query["prefetches"][0].get("filter") or {}
+        excluded = [c.get("match", {}).get("value") for c in dense_filter.get("must_not", [])]
+        if query.get("collection") == TEST_CASES_COLLECTION_NAME and any(
+            str(value).startswith(DRAFT_ID_PREFIX) for value in excluded
+        ):
+            searches.append({"filter": dense_filter, "excluded": excluded})
+    return searches
+
+
+def test_design_checked_each_final_test_case_once_for_duplicates_in_its_project(
     test_case_flow_response: httpx.Response, http_client: httpx.Client
 ) -> None:
-    """The review indexes the reviewed test cases and runs one project-scoped duplicate
-    search per test case which excludes the test case itself."""
+    """After the review loop the design searches the project once per final test case, by its content, so there are
+    exactly as many draft searches as saved test cases, one per draft, none during the loop."""
     zephyr = wait_for_recorded(http_client, ZEPHYR_RECORDED_URL, lambda d: bool(d.get("test_cases")))
     generated_keys = {tc["key"] for tc in zephyr.get("test_cases", [])}
     data = wait_for_recorded(
-        http_client,
-        QDRANT_RECORDED_URL,
-        lambda d: (
-            generated_keys
-            <= {
-                p.get("payload", {}).get("test_case_key")
-                for p in d.get("upserted_points", [])
-                if p.get("collection") == TEST_CASES_COLLECTION_NAME
-            }
-        ),
+        http_client, QDRANT_RECORDED_URL, lambda d: len(_draft_duplicate_searches(d)) >= len(generated_keys)
     )
-    queries = [q for q in data.get("hybrid_queries", []) if q.get("collection") == TEST_CASES_COLLECTION_NAME]
-    excluded_keys = set()
-    for query in queries:
-        dense_filter = query["prefetches"][0].get("filter") or {}
-        must = {(c.get("key"), c.get("match", {}).get("value")) for c in dense_filter.get("must", [])}
-        assert ("project_key", SEEDED_PROJECT_KEY) in must, f"A duplicate search is not project-scoped: {query}"
-        excluded_keys |= {c.get("match", {}).get("value") for c in dense_filter.get("must_not", [])}
-    assert generated_keys <= excluded_keys, (
-        f"Not every reviewed test case ran a duplicate search excluding itself. Reviewed: {generated_keys}, "
-        f"excluded in searches: {excluded_keys}"
+    searches = _draft_duplicate_searches(data)
+    for search in searches:
+        must = {(c.get("key"), c.get("match", {}).get("value")) for c in search["filter"].get("must", [])}
+        assert ("project_key", SEEDED_PROJECT_KEY) in must, f"A duplicate search is not project-scoped: {search}"
+    searched_drafts = [value for search in searches for value in search["excluded"]]
+    assert len(searched_drafts) == len(set(searched_drafts)) == len(generated_keys), (
+        f"Expected exactly one duplicate search per saved test case. "
+        f"Saved: {generated_keys}, searched drafts: {searched_drafts}"
     )
 
 

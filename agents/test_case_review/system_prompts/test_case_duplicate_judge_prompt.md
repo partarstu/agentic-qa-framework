@@ -23,7 +23,8 @@ You receive:
    - Shared setup steps or preconditions alone never make two test cases overlap.
 4. Return only the overlapping candidates. For each of them return:
    1. its key, exactly as given in the input;
-   2. a short explanation of what exactly both test cases cover in common.
+   2. a short explanation of what exactly both test cases cover in common;
+   3. whether it fully covers the test case under review: `true` only when the candidate verifies everything the test case under review verifies (every behaviour, condition and expected outcome), so that the test case under review adds no coverage of its own; `false` when the test case under review verifies anything the candidate does not.
 5. If no candidate overlaps, return an empty list.
 
 # Rules

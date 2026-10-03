@@ -287,6 +287,34 @@ async def test_reserve_invalid_selected_id_is_treated_like_busy(
 
 
 @pytest.mark.asyncio
+async def test_reserve_waits_for_a_busy_agent_as_long_as_the_given_budget(
+    clear_registry, mock_agent_card, mock_error_history, monkeypatch
+):
+    await agent_registry.register("test-id", mock_agent_card)
+    await agent_registry.update_status("test-id", AgentStatus.BUSY)
+    budget = config.OrchestratorConfig.TASK_EXECUTION_TIMEOUT * 2
+    fake_time = MagicMock()
+    fake_time.time.side_effect = [0, 0, config.OrchestratorConfig.TASK_EXECUTION_TIMEOUT + 1, budget + 1]
+    monkeypatch.setattr("orchestrator.main.time", fake_time)
+    sleep = AsyncMock()
+    monkeypatch.setattr("orchestrator.main.asyncio.sleep", sleep)
+
+    with (
+        patch(
+            "orchestrator.main._route_task",
+            new_callable=AsyncMock,
+            return_value=_routing_decision(RoutingOutcome.SUITABLE_BUT_BUSY),
+        ),
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await reserve_agent_waiting_if_needed("some task", max_wait_seconds=budget)
+
+    assert sleep.await_count == 2, "The wait must outlast the default task execution timeout"
+    assert exc_info.value.status_code == 503
+    assert f"within {budget} seconds" in exc_info.value.detail
+
+
+@pytest.mark.asyncio
 async def test_reserve_routes_once_while_the_registry_is_unchanged(
     clear_registry, mock_agent_card, mock_error_history, monkeypatch
 ):

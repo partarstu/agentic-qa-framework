@@ -105,7 +105,7 @@ class CustomLlmWrapper(WrapperModel):
     def _default_model_settings(self) -> ModelSettings:
         if is_claude_5(self.wrapped_model_name):
             return build_claude_5_settings(self.thinking_level, self.max_output_tokens, self.wrapped_model_name)
-        settings = ModelSettings(top_p=config.TOP_P, temperature=config.TEMPERATURE)
+        settings = ModelSettings()
         if self.thinking_level is not None:
             settings["thinking"] = self.thinking_level
         if self.max_output_tokens is not None:

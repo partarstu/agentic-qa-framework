@@ -80,12 +80,10 @@ ORCHESTRATOR_VERSION = "8.8-smoke"
 # TEST_ENVIRONMENT_LABEL in docker-compose.smoke.yml.
 TEST_ENVIRONMENT_LABEL = "Smoke Test Environment"
 
-# Canonical agent names the four agents register under; tracks config as the source of truth.
+# Canonical agent names the QA agents register under; tracks config as the source of truth.
 EXPECTED_AGENT_NAMES: set[str] = {
     config.RequirementsReviewAgentConfig.OWN_NAME,
-    config.TestCaseGenerationAgentConfig.OWN_NAME,
-    config.TestCaseClassificationAgentConfig.OWN_NAME,
-    config.TestCaseReviewAgentConfig.OWN_NAME,
+    config.TestCaseDesignAgentConfig.OWN_NAME,
 }
 HEALTHY_AGENT_STATUSES = {"AVAILABLE", "BUSY"}
 
@@ -95,9 +93,6 @@ REVIEW_COMPLETE_STATUS = config.TestCaseReviewAgentConfig.REVIEW_COMPLETE_STATUS
 TEST_CASES_COLLECTION_NAME = config.QdrantConfig.TEST_CASES_COLLECTION_NAME
 # Login attempts allowed per window; the smoke stack keeps the default.
 LOGIN_RATE_LIMIT_ATTEMPTS = config.DashboardAuthConfig.LOGIN_RATE_LIMIT_ATTEMPTS
-# Heading of the duplicate-check section of a review comment; must match
-# agents.test_case_review.main.DUPLICATE_CHECK_HEADING (not imported: importing it starts the agent).
-DUPLICATE_CHECK_HEADING = "Duplicate check"
 # The token the prompt override mounted from tests/smoke/overrides/ makes the review agent end its
 # Jira comment with; it proves the override reached the agent and is no part of the review itself.
 PROMPT_OVERRIDE_MARKER = "OVERRIDE-7f3d-active"
@@ -108,8 +103,9 @@ EXECUTION_FLOW_AGENT_NAMES: set[str] = {EXECUTION_AGENT_NAME, config.IncidentCre
 # The orchestrator startup + initial agent discovery can take a while to settle.
 ORCHESTRATOR_READY_TIMEOUT = 120.0
 AGENT_READY_TIMEOUT = 240.0
-# A single webhook drives real LLM routing plus one or more full agent runs.
-WEBHOOK_TIMEOUT = httpx.Timeout(1200.0)
+# A single webhook drives real LLM routing plus one or more full agent runs; the test case design, forced through
+# two reviews and one fix cycle, is the longest of them.
+WEBHOOK_TIMEOUT = httpx.Timeout(2400.0)
 POLL_INTERVAL = 5.0
 
 logger = utils.get_logger("smoke")
