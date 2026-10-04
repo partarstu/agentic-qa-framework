@@ -4,10 +4,8 @@
 
 """Scripted OpenAI-compatible model standing in for every LLM of the hermetic smoke stack.
 
-A request is attributed to the operation that sent it by the tools it offers and the shape of its output tool, and is
-answered deterministically from the conversation so far: the next tool call of that operation's workflow, or its final
-output built from the framework's own models. Every request is recorded at ``GET /__recorded``; one that matches no
-operation is answered with HTTP 400 and recorded as unhandled, so a new LLM call fails the suite until it is scripted.
+It answers each request deterministically for the operation its tools and output tool identify, and records every
+request at ``GET /__recorded`` and one it cannot answer as unhandled, so a new LLM call fails the suite until scripted.
 """
 
 import json
@@ -22,6 +20,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 import config
+from common import utils
 from common.models import (
     AcceptanceCriteriaItem,
     AcceptanceCriteriaList,
@@ -52,6 +51,7 @@ from common.models import (
 )
 
 app = FastAPI()
+logger = utils.get_logger("llm_mock")
 
 OUTPUT_TOOL_NAME = "final_result"
 # pydantic-ai ends every retry prompt with this sentence, so a tool result ending with it is a failed call.
@@ -694,14 +694,23 @@ async def chat_completions(request: Request) -> JSONResponse:
             "tools": sorted(conversation.tool_schemas),
         }
     )
+    signature = {"tools": sorted(conversation.tool_schemas), "output_fields": sorted(conversation.output_fields)}
     if operation is None:
-        signature = {"tools": sorted(conversation.tool_schemas), "output_fields": sorted(conversation.output_fields)}
-        _recorded["unhandled"].append(signature)
-        return JSONResponse(
-            status_code=400,
-            content={"error": {"message": f"No scripted answer for {signature}", "type": "invalid_request_error"}},
-        )
-    return JSONResponse(_completion(body, _HANDLERS[operation](conversation)))
+        return _unhandled(signature)
+    try:
+        answer = _HANDLERS[operation](conversation)
+    except Exception as exc:
+        logger.exception("The scripted answer of the operation %s failed", operation)
+        return _unhandled({"operation": operation, **signature, "error": repr(exc)})
+    return JSONResponse(_completion(body, answer))
+
+
+def _unhandled(signature: dict) -> JSONResponse:
+    _recorded["unhandled"].append(signature)
+    return JSONResponse(
+        status_code=400,
+        content={"error": {"message": f"No scripted answer for {signature}", "type": "invalid_request_error"}},
+    )
 
 
 @app.get("/__recorded")

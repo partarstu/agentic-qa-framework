@@ -4,24 +4,8 @@
 
 """A/B comparison of every LLM-driven workflow's outputs on a real model against its committed baseline.
 
-The smoke suite proves the flows work on a scripted model; this checks whether a change to the model, its
-settings or the agents' prompts made what a real model produces better or worse. Every workflow of
-``artifacts.WORKFLOWS`` has its own A/B test: it runs the workflow once and compares the run against the
-snapshot in ``baselines/<name>/<workflow>.json``, structurally and on judged quality. A metric regression or
-a much worse judged dimension fails; a somewhat worse one only warns. Every run costs real model calls, so
-select only the workflows a change touches with ``-k``, e.g. ``-k test_case_design``.
-
-Capture a baseline (once per configuration you want to compare against)::
-
-    AB_WRITE_BASELINE=1 AB_BASELINE_NAME=gemini uv run pytest tests/ab -m ab
-
-Compare a later run against it::
-
-    AB_BASELINE_NAME=gemini uv run pytest tests/ab -m ab
-
-Environment variables: ``AB_BASELINE_NAME`` (which baseline to use, default ``default``),
-``AB_WRITE_BASELINE`` (capture instead of compare), ``AB_RUN_LABEL`` (what to call this run in the
-report) and ``AB_JUDGE_MODEL`` (see ``judge.py``).
+Every run costs real model calls, so select only the workflows a change touches with ``-k``; the README's *A/B tests
+against a baseline* describes how to capture and compare baselines.
 """
 
 import os
@@ -53,9 +37,7 @@ pytestmark = pytest.mark.ab
 BASELINE_NAME = os.environ.get("AB_BASELINE_NAME", "default")
 BASELINES_DIR = Path(__file__).parent / "baselines" / BASELINE_NAME
 WRITE_BASELINE = os.environ.get("AB_WRITE_BASELINE", "").lower() in ("true", "1", "t")
-# What this run is called in the report. The default is the model docker-compose.ab.yml configures
-# for the stack; name the run explicitly when the two differ.
-RUN_LABEL = os.environ.get("AB_RUN_LABEL", "google-gla:gemini-3.8-flash")
+RUN_LABEL = os.environ.get("AB_RUN_LABEL")
 CAPTURE_HINT = f"AB_WRITE_BASELINE=1 AB_BASELINE_NAME={BASELINE_NAME} uv run pytest tests/ab -m ab -k <workflow>"
 
 
@@ -75,6 +57,7 @@ def workflow(request: pytest.FixtureRequest) -> Workflow:
 @pytest.fixture(scope="session")
 def candidate_snapshot(
     workflow: Workflow,
+    stack_model: str,
     synced_knowledge_bases: None,
     judge_google_api_key: None,
     webhook_headers: dict[str, str],
@@ -85,7 +68,7 @@ def candidate_snapshot(
     response = post_webhook(path, webhook_headers, payload)
     if response.is_error:
         pytest.fail(f"The {workflow.name} workflow failed: {response.status_code} {response.text}")
-    return collect_snapshot(http_client, RUN_LABEL, workflow)
+    return collect_snapshot(http_client, RUN_LABEL or stack_model, workflow)
 
 
 @pytest.fixture(scope="session")

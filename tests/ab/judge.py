@@ -31,7 +31,7 @@ from tests.ab.artifacts import RunSnapshot, execution_context, render_for_judge,
 # Overridable for a stack that cannot reach Gemini.
 JUDGE_MODEL_NAME = os.environ.get("AB_JUDGE_MODEL", "google-gla:gemini-3.8-flash")
 
-logger = utils.get_logger("smoke_judge")
+logger = utils.get_logger("ab_judge")
 
 # The label the judge picks for a blinded pair, on the five-level scale Arena-Hard uses.
 Label = Literal["A>>B", "A>B", "A=B", "B>A", "B>>A"]

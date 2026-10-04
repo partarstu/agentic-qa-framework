@@ -904,7 +904,7 @@ docker compose -f docker-compose.smoke.yml -f docker-compose.ab.yml down -v
 | --- | --- | --- |
 | `AB_BASELINE_NAME` | `default` | Which snapshots under `tests/ab/baselines/` to compare against. |
 | `AB_WRITE_BASELINE` | unset | When set, each selected workflow's run is saved as its baseline instead of being compared. |
-| `AB_RUN_LABEL` | `google-gla:gemini-3.8-flash` | What the candidate run is called in the report (the stack's own model is configured in `docker-compose.ab.yml`). |
+| `AB_RUN_LABEL` | the model the running agents report | What the candidate run is called in the report. |
 | `AB_JUDGE_MODEL` | `google-gla:gemini-3.8-flash` | The judge, the same model the A/B stack runs on. |
 
 The committed baselines under `tests/ab/baselines/default/` are recorded runs of the A/B stack's model (their `label` and `captured_at` say which and when), so the bar is what the current prompts and model produced on the seeded `SMOKE-1` story, and a later run must not fall below it beyond the tolerance. Refresh a workflow's baseline by capturing over it (`AB_WRITE_BASELINE=1 ... -k <workflow>`) whenever its outputs are meant to change, and keep additional named baselines beside it for the configurations you compare against. Asking for a baseline that does not exist skips the comparison with the capture command in its message.

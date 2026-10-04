@@ -4,12 +4,8 @@
 
 """Comparable snapshots of what a workflow run on a real model actually produced.
 
-The smoke suite proves that a flow *runs*, on a scripted model; it says nothing about the
-quality of what a real model writes, so a model or prompt change can degrade every output while
-the smoke suite stays green. A snapshot captures one workflow's outputs - the requirements
-review, the generated test cases with their review comments and classification labels, or the
-bug created for a failed execution - so the run can be compared against a committed baseline of
-that workflow, structurally here and on judged quality in ``judge.py``.
+A snapshot is compared against the workflow's committed baseline structurally here and on judged quality in
+``judge.py``.
 """
 
 import json
@@ -103,11 +99,7 @@ class MetricRegression:
 
 
 def collect_snapshot(http_client: httpx.Client, label: str, workflow: Workflow) -> RunSnapshot:
-    """Read one finished workflow run's outputs back from the recording mocks.
-
-    Waits for the workflow's outputs the same way the smoke assertions do, so the snapshot cannot
-    capture a half-written run when it is collected right after the webhook returns.
-    """
+    """Read one finished workflow run's outputs back from the recording mocks, waiting until they are complete."""
     snapshot = RunSnapshot(
         label=label,
         captured_at=datetime.now(UTC).isoformat(timespec="seconds"),

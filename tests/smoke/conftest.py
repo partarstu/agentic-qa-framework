@@ -2,21 +2,10 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
-"""Fixtures for the hermetic smoke suite.
+"""Fixtures for the hermetic smoke suite, whose stack helpers the A/B suite under ``tests/ab/`` shares.
 
-The suite runs against the ``docker-compose.smoke.yml`` topology: a real
-orchestrator and the agents, with every external boundary (the LLM, Jira MCP,
-Jira REST, Zephyr, Confluence, SharePoint, Qdrant + embedding) replaced by
-recording mocks. The fixtures wait for all agents to register on the mocked
-model, then fire the webhooks once, concurrently — the flows are mutually
-independent, so the wall time is the longest flow instead of their sum. The test
-functions read the mocks' ``/__recorded`` endpoints and assert on what reached
-each boundary. The stack helpers here are shared with the A/B suite under
-``tests/ab/``, which runs the same topology on a real model.
-
-URLs default to the published compose ports and are overridable via ``SMOKE_*``
-env vars. The dashboard/API credentials are the fixed throwaway values baked into
-``docker-compose.smoke.yml``.
+URLs default to the published compose ports and are overridable via ``SMOKE_*`` env vars; the dashboard/API
+credentials are the fixed throwaway values baked into ``docker-compose.smoke.yml``.
 """
 
 import os
@@ -221,11 +210,7 @@ SYNC_WEBHOOKS = ("update_jira_db", "update_confluence_db", "update_test_case_db"
 
 
 def post_webhooks_concurrently(names: Iterable[str], headers: dict[str, str]) -> dict[str, httpx.Response]:
-    """Fire the named webhooks at once and return their responses by name.
-
-    Each webhook returns only after its whole flow completes, so posting them from
-    a thread pool cuts the wall time from the sum of the flows to the max.
-    """
+    """Fire the named webhooks at once, so the wall time is the longest flow, and return their responses by name."""
     with ThreadPoolExecutor(max_workers=len(WEBHOOKS)) as pool:
         futures = {}
         for name in names:
@@ -236,11 +221,9 @@ def post_webhooks_concurrently(names: Iterable[str], headers: dict[str, str]) ->
 
 @pytest.fixture(scope="session")
 def webhook_responses(all_agents_ready: None, webhook_headers: dict[str, str]) -> dict[str, httpx.Response]:
-    """Fire every webhook once, the syncs first, and share the responses.
-
-    The mocked model answers at once, so a model-driven flow would otherwise query the vector DB before the
-    syncs have created the collections it retrieves from.
-    """
+    """Fire every webhook once, the syncs first, and share the responses."""
+    # The mocked model answers at once, so a model-driven flow would otherwise query the vector DB before the
+    # syncs have created the collections it retrieves from.
     responses = post_webhooks_concurrently(SYNC_WEBHOOKS, webhook_headers)
     model_driven = [name for name in WEBHOOKS if name not in SYNC_WEBHOOKS]
     return responses | post_webhooks_concurrently(model_driven, webhook_headers)
