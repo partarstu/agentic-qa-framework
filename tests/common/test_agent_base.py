@@ -2,7 +2,9 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
+import itertools
 import logging
+from collections.abc import Callable, Sequence
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx2
@@ -13,13 +15,27 @@ from a2a.utils.constants import AGENT_CARD_WELL_KNOWN_PATH
 from fastapi.testclient import TestClient
 from pydantic import BaseModel, ConfigDict
 from pydantic_ai import RunContext
+from pydantic_ai.capabilities.abstract import leaf_capabilities
 from pydantic_ai.exceptions import ModelHTTPError
+from pydantic_ai.messages import (
+    ModelMessage,
+    ModelRequest,
+    ModelResponse,
+    TextPart,
+    ToolCallPart,
+    ToolReturnPart,
+    UserPromptPart,
+)
+from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.models.test import TestModel
+from pydantic_ai.profiles import ModelProfile
 from pydantic_ai.usage import RunUsage, UsageLimits
+from pydantic_ai_harness.compaction import TieredCompaction
 
 import config
-from common.agent_base import AgentBase
+from common.agent_base import _COMPACTION_KEEP_MESSAGES, AgentBase
 from common.agent_log_capture import AgentLogCaptureHandler
+from common.custom_llm_wrapper import CustomLlmWrapper
 from common.models import AgentRuntimeError, AgentSkillDeclaration, JsonSerializableModel
 from common.streaming import reset_current_log_handler, set_current_log_handler
 from common.token_usage import OperationMeter, operation_meter
@@ -582,3 +598,127 @@ def test_sub_agent_limits_cap_only_the_tokens_of_the_task() -> None:
 def test_total_tokens_limit_defaults_to_the_global_budget_and_can_be_overridden() -> None:
     assert _agent_with("default").get_total_tokens_limit() == config.BudgetConfig.TOTAL_TOKENS_LIMIT_PER_TASK
     assert _agent_with("big", agent_class=_BigBudgetAgent)._get_usage_limits().total_tokens_limit == 4_000_000
+
+
+_COMPACTION_TEST_WINDOW = 10_000
+_CLEARED_PLACEHOLDER = "[tool result cleared]"
+
+
+def _fetch_result(index: int) -> str:
+    return f"result {index} " + "lorem ipsum " * 300
+
+
+def fetch(index: int) -> str:
+    """Fetches the document with the given index."""
+    return _fetch_result(index)
+
+
+def noop() -> str:
+    """Does nothing."""
+    return "ok"
+
+
+type _Respond = Callable[[int, AgentInfo], ModelResponse]
+
+
+async def _run_compacting_agent(
+    tools: Sequence[Callable[..., str]], respond: _Respond
+) -> tuple[list[list[ModelMessage]], MockOutput]:
+    """Run an AgentBase agent on a small-window model, returning the history each request carried and the output."""
+    received: list[list[ModelMessage]] = []
+
+    def record_and_respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        received.append(list(messages))
+        return respond(len(received), info)
+
+    agent = _agent_with("compacting", tools=tools, deps_type=None)
+    model = FunctionModel(record_and_respond, profile=ModelProfile(context_window=_COMPACTION_TEST_WINDOW))
+    with agent.agent.override(model=model):
+        result = await agent.agent.run("the task")
+    return received, result.output
+
+
+def _final_output(info: AgentInfo) -> ModelResponse:
+    return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, {"result": "done"})])
+
+
+def _fetch_calls(count: int) -> _Respond:
+    def respond(request_number: int, info: AgentInfo) -> ModelResponse:
+        if request_number > count:
+            return _final_output(info)
+        return ModelResponse(parts=[ToolCallPart("fetch", {"index": request_number})])
+
+    return respond
+
+
+def _tool_returns(messages: list[ModelMessage]) -> list[ToolReturnPart]:
+    return [
+        part
+        for message in messages
+        if isinstance(message, ModelRequest)
+        for part in message.parts
+        if isinstance(part, ToolReturnPart)
+    ]
+
+
+def _assert_task_prompt_and_tool_pairs_intact(messages: list[ModelMessage]) -> None:
+    first_parts = messages[0].parts
+    assert any(isinstance(part, UserPromptPart) and part.content == "the task" for part in first_parts)
+    call_ids = {
+        part.tool_call_id
+        for message in messages
+        if isinstance(message, ModelResponse)
+        for part in message.parts
+        if isinstance(part, ToolCallPart)
+    }
+    assert call_ids == {part.tool_call_id for part in _tool_returns(messages)}
+
+
+@pytest.mark.asyncio
+async def test_history_below_the_compaction_target_reaches_the_model_unchanged() -> None:
+    received, output = await _run_compacting_agent([fetch], _fetch_calls(3))
+
+    assert output == MockOutput(result="done")
+    assert [part.content for part in _tool_returns(received[-1])] == [_fetch_result(index) for index in (1, 2, 3)]
+
+
+@pytest.mark.asyncio
+async def test_history_over_the_compaction_target_clears_old_tool_results_and_keeps_the_newest_pairs() -> None:
+    received, output = await _run_compacting_agent([fetch], _fetch_calls(20))
+
+    assert output == MockOutput(result="done")
+    final_history = received[-1]
+    returns = _tool_returns(final_history)
+    # All 20 pairs are still present: clearing the results was enough, so no turn was dropped.
+    assert len(returns) == 20
+    assert returns[0].content == _CLEARED_PLACEHOLDER
+    assert [part.content for part in returns[-6:]] == [_fetch_result(index) for index in range(15, 21)]
+    _assert_task_prompt_and_tool_pairs_intact(final_history)
+
+
+@pytest.mark.asyncio
+async def test_history_still_over_target_after_clearing_drops_the_oldest_turns() -> None:
+    turns = 30
+
+    def respond(request_number: int, info: AgentInfo) -> ModelResponse:
+        if request_number > turns:
+            return _final_output(info)
+        return ModelResponse(parts=[TextPart("thinking aloud " * 150), ToolCallPart("noop", {})])
+
+    received, output = await _run_compacting_agent([noop], respond)
+
+    assert output == MockOutput(result="done")
+    compacted_histories = [later for earlier, later in itertools.pairwise(received) if len(later) < len(earlier)]
+    assert compacted_histories
+    # The window keeps the newest messages and re-adds the task prompt in front of them.
+    assert all(len(history) <= _COMPACTION_KEEP_MESSAGES + 1 for history in compacted_histories)
+    _assert_task_prompt_and_tool_pairs_intact(received[-1])
+
+
+def test_agent_base_agent_carries_context_compaction_but_a_sub_agent_does_not() -> None:
+    sub_agent = CustomLlmWrapper.create_agent("openai:test-model", output_type=MockOutput)
+
+    assert any(
+        isinstance(cap, TieredCompaction) for cap in leaf_capabilities(_agent_with("main").agent.root_capability)
+    )
+    assert not any(isinstance(cap, TieredCompaction) for cap in leaf_capabilities(sub_agent.root_capability))

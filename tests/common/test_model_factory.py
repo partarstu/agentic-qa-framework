@@ -67,6 +67,21 @@ def test_qwen_model_uses_configured_endpoint_and_key():
     assert model.profile["ignore_streamed_leading_whitespace"] is True
 
 
+def test_configured_qwen_context_window_reaches_the_model():
+    with patch("config.QWEN_ENDPOINT", "http://localhost:8080/v1/"), patch("config.QWEN_CONTEXT_WINDOW", 262_144):
+        model = build_model("qwen:Qwen/Qwen3.8-27B-FP8")
+
+    assert model.context_window == 262_144
+    assert model.profile["ignore_streamed_leading_whitespace"] is True
+
+
+def test_qwen_context_window_is_unknown_when_not_configured():
+    with patch("config.QWEN_ENDPOINT", "http://localhost:8080/v1/"), patch("config.QWEN_CONTEXT_WINDOW", None):
+        model = build_model("qwen:Qwen/Qwen3.8-27B-FP8")
+
+    assert model.context_window is None
+
+
 @pytest.mark.parametrize(
     ("thinking_level", "expected_effort"),
     [("minimal", "low"), ("low", "low"), ("medium", "medium"), ("high", "xhigh"), ("xhigh", "xhigh"), (True, "xhigh")],

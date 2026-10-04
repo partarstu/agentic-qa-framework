@@ -4,17 +4,22 @@
 
 """Attachment extraction, rendering, normalization, and OCR for document RAG.
 
-The format-specific readers (pymupdf, Pillow, openpyxl, python-docx, python-pptx, the OCR
+The format-specific readers (pypdfium2, Pillow, openpyxl, python-docx, python-pptx, the OCR
 module) are imported inside the functions that use them: each is heavy, and a run only ever
 touches the formats it actually encounters.
 """
 
 import asyncio
+import hashlib
 import io
 import re
+import threading
 import warnings
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from pypdfium2 import PdfImage
 
 import config
 from common import utils
@@ -28,6 +33,11 @@ CONVERT_ONLY_EXTENSIONS = {".doc", ".ppt", ".odt", ".odp", ".rtf", ".xls", ".ods
 CONVERT_WITH_FALLBACK_EXTENSIONS = {".docx", ".pptx"}
 TEXT_ONLY_CONVERTED_EXTENSIONS = {".xls", ".ods"}
 OFFICE_EXTENSIONS = CONVERT_ONLY_EXTENSIONS | CONVERT_WITH_FALLBACK_EXTENSIONS
+PDF_POINTS_PER_INCH = 72
+# PDFium joins a word hyphenated across a line break itself and leaves this control character for the hyphen.
+PDFIUM_LINE_END_HYPHEN = "\x02"
+# PDFium is not thread-safe even across documents, and pypdfium2 releases the GIL during its calls.
+_pdfium_lock = threading.Lock()
 
 # Text normalization patterns, compiled once (they run per line of every extracted page).
 _HYPHENATED_LINE_BREAK = re.compile(r"(?<=\w)-\n(?=\w)")
@@ -113,34 +123,39 @@ async def extract_attachment_async(file_name: str, content: bytes) -> ExtractedD
 
 def _extract_pdf(content: bytes, include_images: bool = True) -> ExtractedDocument:
     """Extracts native text and, when enabled, a PNG rendering for each PDF page."""
-    import pymupdf
+    import pypdfium2
 
-    try:
-        document = pymupdf.open(stream=content, filetype="pdf")
-    except Exception as error:
-        raise ExtractionError(f"The PDF could not be opened: {error}") from error
+    with _pdfium_lock:
+        try:
+            document = pypdfium2.PdfDocument(content)
+        except pypdfium2.PdfiumError as error:
+            raise ExtractionError(f"The PDF could not be opened: {error}") from error
 
-    try:
-        with document:
-            total_page_count = document.page_count
-            page_limit = config.DocumentRagConfig.MAX_PAGES_PER_DOCUMENT
-            _log_truncation("PDF", total_page_count, page_limit)
-            pages: list[PageContent] = []
-            for page_number in range(min(total_page_count, page_limit)):
-                page = document[page_number]
-                native_text = page.get_text()
-                image = _render_page(page) if include_images else None
-                text = _page_text_with_ocr(page, native_text, image) if include_images else native_text
-                pages.append(PageContent(_normalize_extracted_text(text, strip_page_numbers=True), image))
-            return ExtractedDocument(pages, total_page_count)
-    except ExtractionError:
-        raise
-    except Exception as error:
-        raise ExtractionError(f"PDF extraction failed: {error}") from error
+        try:
+            with document:
+                # Without the form environment, PDFium renders no form fields, so filled-in values would be lost.
+                document.init_forms()
+                total_page_count = len(document)
+                page_limit = config.DocumentRagConfig.MAX_PAGES_PER_DOCUMENT
+                _log_truncation("PDF", total_page_count, page_limit)
+                pages: list[PageContent] = []
+                for page_number in range(min(total_page_count, page_limit)):
+                    page = document[page_number]
+                    native_text = page.get_textpage().get_text_bounded().replace(PDFIUM_LINE_END_HYPHEN, "")
+                    image = _render_page(page) if include_images else None
+                    text = _page_text_with_ocr(page, native_text, image) if include_images else native_text
+                    pages.append(PageContent(_normalize_extracted_text(text, strip_page_numbers=True), image))
+                return ExtractedDocument(pages, total_page_count)
+        except ExtractionError:
+            raise
+        except Exception as error:
+            raise ExtractionError(f"PDF extraction failed: {error}") from error
 
 
 def _page_text_with_ocr(page: Any, native_text: str, page_image: bytes | None) -> str:
     """Applies full-page OCR to image-only pages and embedded-image OCR otherwise."""
+    import pypdfium2.raw as pdfium_c
+
     from rag_sync import ocr as ocr_module
 
     if page_image is None:
@@ -150,15 +165,15 @@ def _page_text_with_ocr(page: Any, native_text: str, page_image: bytes | None) -
         return ocr_module.extract_text(page_image) or native_text
 
     embedded_text: list[str] = []
-    seen_xrefs: set[int] = set()
+    seen_image_digests: set[bytes] = set()
     try:
-        for image_info in page.get_images(full=True):
-            xref = image_info[0]
-            if xref in seen_xrefs:
+        for image_object in page.get_objects(filter=[pdfium_c.FPDF_PAGEOBJ_IMAGE]):
+            # Every placement of an image is its own page object, so repeats are recognized by their stream data.
+            digest = hashlib.sha256(image_object.get_data()).digest()
+            if digest in seen_image_digests:
                 continue
-            seen_xrefs.add(xref)
-            extracted = page.parent.extract_image(xref)
-            normalized = _normalize_png(extracted["image"])
+            seen_image_digests.add(digest)
+            normalized = _embedded_image_png(image_object)
             if normalized is not None:
                 text = ocr_module.extract_text(normalized)
                 if text:
@@ -171,45 +186,34 @@ def _page_text_with_ocr(page: Any, native_text: str, page_image: bytes | None) -
 
 
 def _render_page(page: Any) -> bytes | None:
-    """Renders one PDF page to a normalized PNG within the configured pixel cap.
-
-    The PIL image is built directly from the pixmap samples (encoding the pixmap to
-    PNG and re-decoding it with Pillow would do the pixel work twice).
-    """
-    from PIL import Image
-
+    """Renders one PDF page to a normalized PNG within the configured pixel cap."""
     try:
-        pixmap = page.get_pixmap(dpi=config.DocumentRagConfig.RENDER_DPI)
+        scale = config.DocumentRagConfig.RENDER_DPI / PDF_POINTS_PER_INCH
+        width, height = (round(side * scale) for side in page.get_size())
         max_dimension = config.DocumentRagConfig.MAX_IMAGE_DIMENSION
-        # Decompression-bomb guard on the raw raster, mirroring the decoder-side cap: the
-        # largest raster the dimension cap allows is a square of it.
-        if pixmap.width * pixmap.height > max_dimension * max_dimension:
-            logger.warning(
-                "Rendered page exceeds the pixel cap (%dx%d); the page stays text-only.",
-                pixmap.width,
-                pixmap.height,
-            )
+        # Decompression-bomb guard, checked before the raster is allocated: the largest
+        # raster the dimension cap allows is a square of it.
+        if width * height > max_dimension * max_dimension:
+            logger.warning("Rendered page exceeds the pixel cap (%dx%d); the page stays text-only.", width, height)
             return None
-        mode = "RGBA" if pixmap.alpha else "RGB"
-        image = Image.frombytes(mode, (pixmap.width, pixmap.height), pixmap.samples)
-        return _image_to_png(image)
+        return _image_to_png(page.render(scale=scale).to_pil())
     except Exception:
         logger.warning("Page rendering failed; the page stays text-only.", exc_info=True)
         return None
 
 
-def _normalize_png(content: bytes) -> bytes | None:
-    """Decodes an image with Pillow's bomb guard, caps its dimensions, and returns PNG."""
+def _embedded_image_png(image_object: "PdfImage") -> bytes | None:
+    """Decodes one embedded PDF image within Pillow's decompression-bomb limit and returns it as normalized PNG."""
     from PIL import Image
 
     try:
-        with warnings.catch_warnings():
-            warnings.simplefilter("error", Image.DecompressionBombWarning)
-            with Image.open(io.BytesIO(content)) as image:
-                image.load()
-                return _image_to_png(image)
+        width, height = image_object.get_px_size()
+        if width * height > Image.MAX_IMAGE_PIXELS:
+            logger.warning("An embedded image exceeds the pixel cap (%dx%d); it is not OCR'd.", width, height)
+            return None
+        return _image_to_png(image_object.get_bitmap().to_pil())
     except Exception:
-        logger.warning("A page image could not be decoded safely; the page stays text-only.", exc_info=True)
+        logger.warning("An embedded image could not be decoded safely; it is not OCR'd.", exc_info=True)
         return None
 
 

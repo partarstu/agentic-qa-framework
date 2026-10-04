@@ -253,6 +253,9 @@ QWEN_THINKING_ENABLED=False # Default: False, meaning thinking is disabled entir
                                  # configured thinking level grade Qwen's reasoning effort (Qwen accepts low, medium and
                                  # xhigh, so "minimal" is sent as "low" and "high" as "xhigh"), with the model card's
                                  # thinking-mode sampling (temperature 1.0, top_p 0.95).
+QWEN_CONTEXT_WINDOW= # Optional. Context window of the Qwen deployment in tokens; set it to the served
+                                 # --max-model-len (e.g. 262144). Context compaction starts at 90 % of it; unset, a
+                                 # conservative 200000-token window is assumed.
 
 # Logging
 LOG_LEVEL=INFO # Default: INFO. Controls the verbosity of logging.
@@ -362,10 +365,10 @@ TEST_CASE_DESIGN_TOTAL_TOKENS_LIMIT=4000000 # Default: 4000000. Token budget of 
 TEST_CASE_DESIGN_MAX_OUTPUT_TOKENS= # Optional. Maximum output tokens per model response of the Test Case Design agent; defaults to MAX_OUTPUT_TOKENS.
 # Version each agent reports in its A2A agent card (visible in the dashboard) and, for execution agents,
 # on every test execution result. Each agent reads its own variable.
-REQUIREMENTS_REVIEW_AGENT_VERSION=1.3.0 # Default: 1.3.0.
-TEST_CASE_DESIGN_AGENT_VERSION=1.0.0 # Default: 1.0.0.
-TEST_CASE_CLASSIFICATION_AGENT_VERSION=1.3.0 # Default: 1.3.0.
-INCIDENT_CREATION_AGENT_VERSION=1.2.0 # Default: 1.2.0.
+REQUIREMENTS_REVIEW_AGENT_VERSION=1.4.0 # Default: 1.4.0.
+TEST_CASE_DESIGN_AGENT_VERSION=1.1.0 # Default: 1.1.0.
+TEST_CASE_CLASSIFICATION_AGENT_VERSION=1.4.0 # Default: 1.4.0.
+INCIDENT_CREATION_AGENT_VERSION=1.3.0 # Default: 1.3.0.
 
 # Agent Discovery (for remote agents)
 REMOTE_EXECUTION_AGENT_HOSTS=http://localhost # Default: http://localhost. Comma-separated URLs of remote agent hosts.
@@ -642,6 +645,15 @@ Run `qwen:Qwen/Qwen3.8-27B-FP8` with thinking off, which is the default (`QWEN_T
 | Thinking on, `low` | 2 | Every flow completed, but no quality gain over thinking off, and one test-case generation judged much worse than the baseline. |
 
 The quality gaps against Gemini did not depend on thinking: test-case generation repeatedly asserted that a single-use link was consumed without the test ever completing the action that consumes it, and the requirements review tended to pad its feedback with generic checklist items and advice addressed to testers rather than to the story author. Thinking only added latency and the risk of timeouts, so it is not worth enabling for this model.
+
+#### Context compaction
+
+The main loop of every A2A agent, including the generation, review and classification runs the test case design delegates to in-process, compacts its older history before the context window fills, instead of failing the task. It uses `TieredCompaction` from `pydantic-ai-harness` with two zero-LLM tiers, applied before each model request:
+
+1. When the estimated history exceeds 90 % of the model's context window, the oldest tool results are replaced with the placeholder `[tool result cleared]`, keeping the newest 6 tool call/result pairs. The calls stay, so the model can run a tool again if it needs the data.
+2. Only if the history is still over the target, the oldest whole messages are dropped down to the last 20, always keeping the first user prompt (the task) and never splitting a tool call from its result.
+
+The estimate is anchored on the provider-reported usage of the last response, plus about 4 characters per token for what was added since. Gemini and Claude windows come from the pricing data pydantic-ai ships; for Qwen, set `QWEN_CONTEXT_WINDOW` to the served `--max-model-len` (e.g. 262144), otherwise a conservative 200K window is assumed. No LLM summary is generated: masking old tool output matches summarization at a lower cost, and a summary would put text derived from untrusted Jira and Confluence content into a system prompt. The sub-agents that make a single call, and the orchestrator's routing agents, get no compaction, since their history does not grow. A single message larger than the window, such as one huge tool result, cannot be compacted. A compaction rewrites the history, so the next request misses the prompt cache once.
 
 ### Token Budget and Cost Oversight
 
@@ -1364,3 +1376,5 @@ how to contribute.
 ## License
 
 This project is licensed under the GNU Affero General Public License v3.0 (AGPL-3.0) - see the [LICENSE](LICENSE) file for details.
+
+The third-party components it uses, bundles or installs, and their licenses, are listed in the [NOTICE](NOTICE) file.

@@ -1,0 +1,216 @@
+QuAIA - an open-source framework for intelligent automation of the software testing life cycle
+Copyright © 2025-2026 Taras Paruta (partarstu@gmail.com)
+
+This product is licensed under the GNU Affero General Public License, Version 3.0 only (AGPL-3.0-only). See the LICENSE file for the full license text, or visit <https://www.gnu.org/licenses/agpl-3.0.html>.
+
+Source code for this work is available at:
+    https://github.com/partarstu/agentic-qa-framework
+
+================================================================================
+THIRD-PARTY ATTRIBUTIONS
+================================================================================
+
+This project depends on, bundles, or redistributes the following third-party components. Each component is provided under its own license; the canonical license texts and upstream NOTICE files are obtainable from each component's project page listed below.
+
+Direct runtime dependencies (pyproject.toml, including the service-specific extras) and the packages bundled into the orchestrator UI are listed in full. Transitive Python dependencies under permissive licenses (Apache-2.0, MIT, BSD, ISC, PSF) ship their own license files inside their distributions and are not listed individually; every transitive dependency under any other license, and every weak-copyleft library bundled inside a dependency, is listed.
+
+--------------------------------------------------------------------------------
+Apache License, Version 2.0  -  <https://www.apache.org/licenses/LICENSE-2.0>
+--------------------------------------------------------------------------------
+
+  * A2A Python SDK
+    a2a-sdk
+    https://github.com/a2aproject/a2a-python
+
+  * Allure Python Commons
+    allure-python-commons
+    https://github.com/allure-framework/allure-python
+
+  * Google Cloud client libraries
+    google-cloud-logging, google-cloud-run
+    https://github.com/googleapis/google-cloud-python
+
+  * Requests
+    requests
+    https://github.com/psf/requests
+
+  * Qdrant Python client
+    qdrant-client
+    https://github.com/qdrant/qdrant-client
+
+  * bcrypt
+    bcrypt
+    https://github.com/pyca/bcrypt
+
+  * OpenTelemetry Python
+    opentelemetry-sdk, opentelemetry-exporter-otlp-proto-http
+    https://github.com/open-telemetry/opentelemetry-python
+
+  * Tenacity
+    tenacity
+    https://github.com/jd/tenacity
+
+  * python-dateutil (Apache-2.0 AND BSD-3-Clause: all of its code is under the BSD 3-Clause License, and contributions since 2017-12-01 also under Apache-2.0)
+    python-dateutil
+    https://github.com/dateutil/dateutil
+
+  * Hugging Face libraries (embedding and prompt-guard services)
+    huggingface-hub, transformers
+    https://github.com/huggingface
+
+  * Sentence Transformers (embedding service)
+    sentence-transformers
+    https://www.sbert.net/
+
+  * RapidOCR, with its packaged PP-OCR models (RAG sync)
+    rapidocr
+    https://github.com/RapidAI/RapidOCR
+
+  * pypdfium2 and PDFium (dual-licensed Apache-2.0 OR BSD-3-Clause, used under Apache-2.0; RAG sync). The wheel bundles PDFium's third-party libraries (FreeType, ICU, Little CMS, libjpeg-turbo, OpenJPEG, libpng, libtiff, Abseil, AGG, fast_float, LLVM libc) under their own permissive licenses, whose texts ship in the wheel's BUILD_LICENSES directory
+    pypdfium2
+    https://github.com/pypdfium2-team/pypdfium2
+
+  * DOMPurify (dual-licensed MPL-2.0 OR Apache-2.0, used under Apache-2.0; bundled unmodified into the orchestrator UI)
+    npm: dompurify
+    https://github.com/cure53/DOMPurify
+
+--------------------------------------------------------------------------------
+MIT License  -  <https://opensource.org/licenses/MIT>
+--------------------------------------------------------------------------------
+
+  * Pydantic AI
+    pydantic-ai-slim, pydantic-ai-harness
+    https://github.com/pydantic/pydantic-ai, https://github.com/pydantic/pydantic-ai-harness
+
+  * FastAPI
+    fastapi
+    https://github.com/fastapi/fastapi
+
+  * Gunicorn
+    gunicorn
+    https://github.com/benoitc/gunicorn
+
+  * PyJWT
+    PyJWT
+    https://github.com/jpadilla/pyjwt
+
+  * PyYAML
+    PyYAML
+    https://github.com/yaml/pyyaml
+
+  * FlagEmbedding (embedding service)
+    FlagEmbedding
+    https://github.com/FlagOpen/FlagEmbedding
+
+  * einops (embedding service)
+    einops
+    https://github.com/arogozhnikov/einops
+
+  * ONNX Runtime (RAG sync)
+    onnxruntime
+    https://github.com/microsoft/onnxruntime
+
+  * python-docx, python-pptx and openpyxl (RAG sync)
+    python-docx, python-pptx, openpyxl
+    https://github.com/python-openxml/python-docx, https://github.com/scanny/python-pptx, https://foss.heptapod.net/openpyxl/openpyxl
+
+  * Pillow (MIT-CMU licence, RAG sync)
+    pillow
+    https://github.com/python-pillow/Pillow
+
+  * React, React DOM and TanStack Query (bundled into the orchestrator UI)
+    npm: react, react-dom, scheduler, @tanstack/react-query, @tanstack/query-core
+    https://react.dev/, https://github.com/TanStack/query
+
+  * Axios and its dependencies (bundled into the orchestrator UI)
+    npm: axios, follow-redirects, form-data, proxy-from-env, https-proxy-agent, agent-base, debug, ms, asynckit, combined-stream, delayed-stream, mime-types, mime-db, call-bind-apply-helpers, dunder-proto, es-define-property, es-errors, es-object-atoms, es-set-tostringtag, function-bind, get-intrinsic, get-proto, gopd, has-symbols, has-tostringtag, hasown, math-intrinsics, @types/trusted-types
+    https://github.com/axios/axios
+
+  * Tailwind CSS (its generated stylesheet is bundled into the orchestrator UI)
+    npm: tailwindcss
+    https://github.com/tailwindlabs/tailwindcss
+
+--------------------------------------------------------------------------------
+BSD 3-Clause License  -  <https://opensource.org/licenses/BSD-3-Clause>
+--------------------------------------------------------------------------------
+
+  * HTTPX and httpx2
+    httpx, httpx2
+    https://github.com/encode/httpx, https://github.com/pydantic/httpx2
+
+  * python-dotenv
+    python-dotenv
+    https://github.com/theskumar/python-dotenv
+
+  * uvicorn-worker
+    uvicorn-worker
+    https://github.com/Kludex/uvicorn-worker
+
+  * sse-starlette
+    sse-starlette
+    https://github.com/sysid/sse-starlette
+
+  * PyTorch (BSD-3-Clause, with bundled components under Apache-2.0, BSD-2-Clause, BSL-1.0 and MIT; prompt-guard service)
+    torch
+    https://github.com/pytorch/pytorch
+
+--------------------------------------------------------------------------------
+BSD 2-Clause License  -  <https://opensource.org/licenses/BSD-2-Clause>
+--------------------------------------------------------------------------------
+
+  * Jira Python library
+    jira
+    https://github.com/pycontribs/jira
+
+--------------------------------------------------------------------------------
+ISC License  -  <https://opensource.org/licenses/ISC>
+--------------------------------------------------------------------------------
+
+  * Lucide React (bundled into the orchestrator UI)
+    npm: lucide-react
+    https://github.com/lucide-icons/lucide
+
+--------------------------------------------------------------------------------
+Mozilla Public License, Version 2.0  -  <https://www.mozilla.org/MPL/2.0/>
+--------------------------------------------------------------------------------
+
+  * certifi (used unmodified, transitive through Requests and HTTPX)
+    certifi
+    Source code: https://github.com/certifi/python-certifi
+
+--------------------------------------------------------------------------------
+GNU Lesser General Public License (libraries bundled inside a dependency)
+--------------------------------------------------------------------------------
+
+  * opencv-python (Apache-2.0; transitive through RapidOCR in the RAG sync service) ships shared libraries under the LGPL inside its wheel: FFmpeg (LGPL-2.1) in all packages and Qt 5 (LGPL-3.0) in its Linux and macOS packages. They are loaded dynamically, used unmodified and replaceable; their license texts ship in the wheel's LICENSE-3RD-PARTY.txt
+    https://github.com/opencv/opencv-python
+
+--------------------------------------------------------------------------------
+Software installed into the Docker images at build time
+--------------------------------------------------------------------------------
+
+The Dockerfiles install the following software from its publishers while an image is built. It runs as separate programs, and whoever builds an image obtains it directly from its publisher under the publisher's terms.
+
+  * Python 3.14 slim base image (Debian trixie)  -  Python Software Foundation License; Debian packages under their own licenses
+    https://hub.docker.com/_/python
+  * uv (copied into the base image)  -  dual-licensed Apache-2.0 OR MIT
+    https://github.com/astral-sh/uv
+  * OpenJDK 25 JRE (orchestrator image, Debian package)  -  GNU GPL 2.0 with the Classpath Exception
+    https://openjdk.org/legal/gplv2+ce.html
+  * Allure Commandline 2.34.1 (orchestrator image)  -  Apache License 2.0
+    https://github.com/allure-framework/allure2
+  * LibreOffice Writer, Impress and Calc (RAG sync image, used for office-to-PDF conversion)  -  Mozilla Public License 2.0
+    https://www.libreoffice.org/about-us/licenses/
+  * Fonts in the RAG sync image  -  Carlito, Liberation and Noto under the SIL Open Font License 1.1, Caladea under the Apache License 2.0
+    https://openfontlicense.org/
+  * Node.js (build stage of the orchestrator image only, not part of the final image)  -  MIT License
+    https://nodejs.org/
+
+--------------------------------------------------------------------------------
+AI models (downloaded at runtime, not redistributed by this project)
+--------------------------------------------------------------------------------
+
+  * BAAI/bge-m3 (embedding service)  -  MIT License  -  https://huggingface.co/BAAI/bge-m3
+  * ProtectAI/deberta-v3-base-prompt-injection-v2 (prompt-guard service)  -  Apache License 2.0  -  https://huggingface.co/protectai/deberta-v3-base-prompt-injection-v2
+
+================================================================================
