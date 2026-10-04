@@ -5,9 +5,7 @@ description: Prepares the current branch of the QuAIA repository for a pull requ
 
 # Preparing Pull Requests
 
-The checks mirror `.github/workflows/ci.yml`. Run commands from the repository root unless noted.
-
-Commits, pushes and pull requests are visible to others: perform them only after the user explicitly approves them in step 8.
+The checks mirror `.github/workflows/ci.yml`. Commits, pushes and pull requests happen only after the user approves them in step 8.
 
 Copy this checklist and track progress:
 
@@ -43,23 +41,17 @@ uv run ruff format <changed .py files>
 uv run ruff check .
 ```
 
-Fix and format only files in scope; formatting the whole repository rewrites code this change does not touch. The final `ruff check .` is the CI gate and must pass. Fix remaining findings by hand and ask the user only when a fix would change behaviour.
+Fix and format only files in scope; formatting the whole repository rewrites code this change does not touch. The final `ruff check .` must pass. Fix remaining findings by hand and ask the user only when a fix would change behaviour.
 
-ruff enforces only part of `PYTHON_GUIDELINES.md`. Read the changed Python code against the whole document and fix violations in the lines this change touches; report the ones whose fix would change behaviour to the user.
-
-Check every docstring and comment in the lines this change touches against the *Comments and docstrings* rule of `AGENTS.md` and compact the ones that violate it (a function docstring longer than one sentence, a class or module docstring longer than two, `Args`/`Returns` that repeat names and types outside LLM tools, a comment that restates the code or records history).
+ruff enforces only part of `PYTHON_GUIDELINES.md`. Read the changed Python code against the whole document and fix violations in the lines this change touches; report the ones whose fix would change behaviour to the user. Compact every docstring and comment in those lines that violates *Comments and docstrings* in `AGENTS.md`.
 
 ## 3. License headers
 
-New `.py` files must start with the SPDX header that existing files use (copy the first three lines of `config.py`). Add it where missing, except for empty `__init__.py` files. Ask the user about generated or third-party code.
+Add the SPDX header (*Project conventions* in `AGENTS.md`) to new `.py` files in scope that lack it. Ask the user about generated or third-party code.
 
 ## 4. Unit tests
 
-```bash
-uv run pytest --cov=. --cov-report=term-missing
-```
-
-If tests fail, fix them with the `running-unit-tests` skill before continuing.
+Run the unit tests with coverage (*Commands* in `AGENTS.md`). If tests fail, fix them with the `running-unit-tests` skill before continuing.
 
 ## 5. Security and dependency checks
 
@@ -73,22 +65,16 @@ uv audit --preview-features audit-command --frozen --no-dev
 
 ## 6. CALM validation
 
-From the `calm/` directory:
-
-```bash
-npx -y "@finos/calm-cli@1.46.0" validate -p patterns/quaia.pattern.json -a architecture/quaia.arch.json -u url-mapping.json --strict -f pretty
-```
-
-It must print `No issues found.` If the change added, removed or renamed a service, integration edge or security control without updating `calm/architecture/quaia.arch.json` (and the pattern when enforced), stop and tell the user: the CALM update belongs to the same change as the code. When the plan of the change exists, its *Architecture* section must carry the line `CALM change validated on a temporary copy and approved by the user on <date>`, and the CALM update in the branch must match the elements that section lists. A topology change without that approval violates *Architecture first* in `AGENTS.md`, because its architecture has to be checked and approved before it is implemented: stop and tell the user.
+Validate `calm/` (*Commands* in `AGENTS.md`). Then stop and tell the user when the branch contains an architecture change (*Architecture first (CALM)* in `AGENTS.md`) without the matching CALM update, or without the approval line in its plan, or when the CALM update differs from the elements the plan's *Architecture* section lists.
 
 ## 7. Documentation, skills and smoke coverage
 
 Compare the scope from step 1 with:
 
 - **`README.md`**: sections describing changed endpoints, environment variables, setup or features. Remove statements that are no longer true.
-- **Versions**: for every agent and the orchestrator whose logic the branch alters (prompts, tools, workflow, routing, output content, integration behaviour), the `VERSION` default in `config.py` and the README *Environment Variables* block is bumped at the level *Versioning of agents and the orchestrator* in `AGENTS.md` prescribes. Add a missing bump and list every bump in the PR description.
-- **Skills in `.agents/skills/`**: any instruction, template or referenced code path the change made inaccurate.
-- **Smoke suite**: a new agent, endpoint or integration, or changed agent output, must be covered in `tests/smoke/` by this branch, including a refreshed A/B baseline when outputs changed intentionally. If coverage is missing, stop and tell the user. Do not run the smoke suite unless the user asks: it needs the docker-compose stack and makes billed LLM calls, and CI runs it only on a manual `workflow_dispatch`. A pure refactor needs no smoke change; say so explicitly.
+- **Versions**: every bump *Versioning* in `AGENTS.md` requires for the branch. Add a missing bump and list every bump in the PR description.
+- **Skills in `.agents/skills/` and `AGENTS.md`**: any instruction, template or referenced code path the change made inaccurate.
+- **Smoke suite**: the coverage *Smoke suite* in `AGENTS.md` requires for the branch. If it is missing, stop and tell the user.
 
 ## 8. Review with the user and get approval
 
@@ -112,6 +98,5 @@ gh pr create --base main --title "<type>: <summary>" --body-file <path to PR des
 ```
 
 - Stage files by name; `git add -A` also picks up unrelated local files.
-- Use Conventional Commits types (`feat`, `fix`, `refactor`, `test`, `docs`, `chore`); keep the title under 72 characters.
-- Write the description from [resources/pr_body_template.md](resources/pr_body_template.md) into a temporary file outside the repository and pass it with `--body-file`; multi-line `--body` arguments break in some shells.
+- Write the description from [resources/pr_body_template.md](resources/pr_body_template.md) into a temporary file and pass it with `--body-file`; multi-line `--body` arguments break in some shells.
 - Report the PR URL to the user.

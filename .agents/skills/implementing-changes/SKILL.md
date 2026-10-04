@@ -1,6 +1,6 @@
 ---
 name: implementing-changes
-description: Implements an approved plan, change request or bug fix completely in one run (every phase, or only the phases the user names) with review and test loops - the lead agent implements and fixes in its own context, while an independent headless reviewer and tester (separate claude -p processes, fed from handover files in the run directory) verify each round in parallel, until no CRITICAL, HIGH or MEDIUM finding with confidence >= 40 is open and the unit tests pass with 80% changed-line coverage. Use when the user asks to implement an approved plan, to implement a change or bug fix with review and test loops, to run the implementation loop, or to resume an implementation run after a context reset.
+description: Implements an approved plan, change request or bug fix completely in one run (the whole plan, or only the parts the user names) with review and test loops - the lead agent implements and fixes in its own context, while an independent headless reviewer and tester (separate claude -p processes, fed from handover files in the run directory) verify each round in parallel, until no CRITICAL, HIGH or MEDIUM finding with confidence >= 40 is open and the unit tests pass with 80% changed-line coverage. Use when the user asks to implement an approved plan, to implement a change or bug fix with review and test loops, to run the implementation loop, or to resume an implementation run after a context reset.
 argument-hint: "[plan file or change request] | resume [run directory]"
 ---
 
@@ -31,11 +31,7 @@ Read `resources/implementer.md` when the IMPLEMENT phase starts and follow it in
 
 ## Context budget
 
-Every turn re-reads the whole context, so its size is the cost:
-
-- Read a file over about 300 lines with Grep and ranged reads (offset and limit), not whole. Never print several files at once, and do not re-read a file after editing it.
-- From a headless phase read only its report file, never its log or its raw JSON output. The script prints one summary line; that is all that enters your context.
-- Keep test output out of the context: redirect it to a log file in the run directory and read only the summary and the failure blocks.
+*Context budget* in `AGENTS.md` applies; test logs go into the run directory. From a headless phase read only its report file, never its log or its raw JSON output: the script prints one summary line, and that is all that enters your context.
 
 When your context has grown large between rounds, you may run `/compact "keep only the ledger path and the next phase"`; the ledger holds everything a phase needs.
 
@@ -61,7 +57,7 @@ The brief is a Markdown file you write, with absolute paths, since the headless 
 Phase: REVIEW of an implementing-changes run, round <r>, mode <FULL | FOLLOW_UP>. Follow your role instructions.
 - Repository root: <path>
 - Plan file: <path>
-- Scope: all phases | <the phases the user named>
+- Scope: everything | <the parts the user named>
 - Changes file: <run dir>/rounds/R<r>-changes.md
 - Task diff: <run dir>/task.diff; changed paths: <paths>
 - Round diff (FOLLOW_UP): <run dir>/round.diff; changed paths: <paths>
@@ -107,7 +103,7 @@ logs/                    pytest logs and the raw output of the headless runs
 The ledger holds:
 
 - the plan or its path, the run directory, the skill directory, the repository root
-- the scope: `all phases`, or the phases the user named
+- the scope: `everything`, or the parts the user named
 - the model and effort chosen for the reviewer and the tester
 - the baseline tree ID, the tree ID of every round and the round count
 - the baseline report
@@ -128,9 +124,9 @@ Coverage is measured by the tester with [scripts/coverage.py](scripts/coverage.p
 
 ## 1. Intake
 
-1. The input is an implementation plan, a change request or a request for a bug fix. Without a plan the user has approved, write one with the `architecting-features` skill and get the user's approval. The approval covers the whole loop, including the fixes the review and test phases request. A plan whose *Architecture* section names a CALM change but lacks the line `CALM change validated on a temporary copy and approved by the user on <date>` is refused: send it back to the `architecting-features` skill (*Architecture first* in `AGENTS.md`) and do not start. The approved CALM change is applied to `calm/` in the IMPLEMENT phase, together with the code that realises it, never before.
+1. The input is an implementation plan, a change request or a request for a bug fix. Without a plan the user has approved, write one with the `architecting-features` skill and get the user's approval. The approval covers the whole loop, including the fixes the review and test phases request. A plan that names an architecture change without the approval line of *Architecture first (CALM)* in `AGENTS.md` is refused: send it back to the `architecting-features` skill and do not start. The approved CALM change is applied to `calm/` in the IMPLEMENT phase.
 2. Every open question in the plan or the change request must be answered by the user before anything else starts. Ask them now, write the answers into the plan, and do not take the baseline while a question is unanswered.
-3. Ask the user every time with one `AskUserQuestion` single-select question which part of the plan to implement: `Implement everything` (first, recommended) or `Implement specific phases`, whose description tells the user to type the phases through *Other*. When the user picks `Implement specific phases` without naming them, ask for them before going on. Record the scope in the ledger: `all phases`, or the named phases verbatim. The scope is implemented completely in this run: never batch it, split it over several runs or stop after a part of it; a phase outside the scope is not touched.
+3. Settle the scope, the part of the plan to implement. When the user's request already names the parts to implement (phases, steps, findings or specific logic), never offer to implement everything: list those parts in a short summary and confirm them with one `AskUserQuestion` single-select question, `Implement these` (first, recommended) or `Change the selection`, whose description tells the user to type the changed parts through *Other*. Only when the request names no parts, ask with one `AskUserQuestion` single-select question: `Implement everything` (first, recommended) or `Implement specific parts`, whose description tells the user to type the parts through *Other*; when the user picks `Implement specific parts` without naming them, ask for them before going on. Record the scope in the ledger: `everything`, or the named parts verbatim. The scope is implemented completely in this run: never batch it, split it over several runs or stop after a part of it; a part outside the scope is not touched.
 4. Ask the user with one `AskUserQuestion` call of four single-select questions: the reviewer's model, the reviewer's effort, the tester's model and the tester's effort. Offer the model aliases `opus`, `sonnet`, `haiku` and `fable` as the options and `low`, `medium`, `high` and `xhigh` as the effort options. Put the recommended option first and label it: for the reviewer a model that differs from yours, so that the two do not share blind spots, at `high`; for the tester, whose work is mechanical, `sonnet` at `low`. Record the answers in the ledger.
 5. Create the run directory, take the baseline snapshot and record its tree ID.
 6. Run the BASELINE phase headless with the tester's brief and record its report.
@@ -158,7 +154,7 @@ At most 5 rounds over the whole task. In each round:
 
 When the loop reaches its limit, show the user what is still open and ask whether to continue with more rounds, and how many, or to stop and write the final report.
 
-The smoke suite, including its A/B comparison, never runs in this loop: it needs the Docker stack and makes billed Gemini calls, so the user runs it manually after the task.
+The smoke suite, including its A/B comparison, never runs in this loop (*Smoke suite* in `AGENTS.md`); the user runs it after the task.
 
 ## 4. Final report
 
@@ -166,9 +162,9 @@ Report in the conversation, in the three parts `AGENTS.md` prescribes:
 
 - **Blocked on me**:
   - every `DISPUTED` finding with the reason, for the user to decide
-  - the steps left for the user: running the smoke suite, including the A/B comparison (*Hermetic smoke suite* in `AGENTS.md`); refreshing the recorded A/B baselines and every baseline refresh the plan asks for, with the capture command in `AGENTS.md`; CALM validation, lint, license, security and dependency checks and the other pull request checks, with the `preparing-pull-requests` skill
+  - the steps left for the user: running the smoke suite with its A/B comparison, and every baseline refresh the plan asks for (*Smoke suite* in `AGENTS.md`); CALM validation, lint, license, security and dependency checks and the other pull request checks, with the `preparing-pull-requests` skill
 - **Changed**:
-  - the scope implemented: all phases, or the phases the user named
+  - the scope implemented: everything, or the parts the user named
   - the changed files and the number of verification rounds
   - the fixed findings by severity
   - the test result, the changed-line coverage and the total coverage against the baseline
@@ -178,4 +174,4 @@ Report in the conversation, in the three parts `AGENTS.md` prescribes:
   - the LOW findings and the findings with a confidence below 40
   - the plan file, if there is one, for the user to keep or delete, and the run directory
 
-Never commit, push or open a pull request.
+Never open a pull request.

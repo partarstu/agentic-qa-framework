@@ -37,15 +37,11 @@ git fetch origin pull/<number>/head
 git show FETCH_HEAD:<path>
 ```
 
-Read the full new version of each changed file with `git show`, not only the diff hunks. Do not check out the PR branch: the working tree may hold uncommitted work.
+Read the changed files with `git show`. Do not check out the PR branch: the working tree may hold uncommitted work.
 
 ## 3. Analyse against the criteria
 
-Apply [resources/review_criteria.md](resources/review_criteria.md). For each finding record the file path, the line in the new version of the file, the severity, the problem and a suggested fix.
-
-- Inline comments are only possible on lines inside a diff hunk. Report issues in untouched code in the review body.
-- Confirm every finding against the code before keeping it; drop speculative ones.
-- Also check what the PR is missing: tests, CALM model update, smoke-suite update, README or skill updates.
+Apply [resources/review_criteria.md](resources/review_criteria.md). For each finding record the file path, the line in the new version of the file, the severity, the problem and a suggested fix. Inline comments are only possible on lines inside a diff hunk; report issues in untouched code in the review body.
 
 ## 4. Present the findings and get approval
 
@@ -53,7 +49,7 @@ Number the findings `1..n` and show them to the user grouped by severity, each w
 
 ## 5. Post one review
 
-Only the findings the user named go into the review, as inline comments where their line is inside a diff hunk and in the review body otherwise; the counts in the body cover the posted findings only. Write the review as JSON to a temporary file outside the repository:
+Only the findings the user named go into the review, as inline comments where their line is inside a diff hunk and in the review body otherwise; the counts in the body cover the posted findings only. Write the review as JSON to a temporary file:
 
 ```json
 {

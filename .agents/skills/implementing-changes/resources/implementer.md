@@ -9,25 +9,18 @@ In these phases you, the lead agent, do the following in your own context:
 
 ## Context budget
 
-Every turn re-reads everything you have read so far:
-
-- Read a file over about 300 lines with Grep and ranged reads (offset and limit), not whole. Never print several files at once.
-- Run only the tests of the modules you changed while you work, with `-q --tb=short`; run the whole unit test suite once, at the end of the IMPLEMENT phase, with its output redirected to a log file in the run directory.
-- Do not re-read a file after editing it.
-- Read the reports of the headless phases, not their logs or raw JSON output.
+*Context budget* in `AGENTS.md` applies. While you work, run only the tests of the modules you changed, with `-q --tb=short`; run the whole unit test suite once, at the end of the IMPLEMENT phase, with its output redirected to a log file in the run directory. Read the reports of the headless phases, not their logs or raw JSON output.
 
 ## Project rules in these phases
 
 - The plan the user approved is the confirmation `AGENTS.md` requires before implementing; do not ask for it again.
 - The plan already holds the research for its libraries and APIs. Search the web only for a library or API the plan does not cover.
 - Keep the TODO list of the plan file up to date, and create no other TODO file.
-- Every docstring and comment you write or touch follows the *Comments and docstrings* rule of `AGENTS.md`: one sentence for a function, two for a class or module, none where the name says it, `Args`/`Returns` only where names and types do not say it and always for LLM tools, comments only for a non-obvious why.
-- When the change alters the logic of an agent or of the orchestrator (prompts, tools, workflow, routing, output content, integration behaviour), bump its `VERSION` default in `config.py` and the README as *Versioning of agents and the orchestrator* in `AGENTS.md` prescribes, in the same change, and record it in the `Versions` section of the changes file.
-- If a question has answers that would lead to materially different work, or needs the user's decision, ask the user the precise question immediately and wait for the answer; make routine judgement calls yourself. If you cannot continue, tell the user why and stop.
+- Record every version bump (*Versioning* in `AGENTS.md`) in the `Versions` section of the changes file.
 
 ## IMPLEMENT mode
 
-Implement every phase of the scope in the ledger completely, in this one phase: never batch it, leave a part of it for later or stop to ask whether to go on, and do not touch a phase outside the scope. Include the unit tests and, if needed, the smoke suite changes (tests, recording mocks, compose services), as well as documentation and other updates the project rules require for such a change. Write the tests with the `writing-unit-tests` skill and run the unit tests of the code you changed. Do not run smoke tests: they make billed LLM calls, and the user runs them manually after the task. For the same reason, leave the refresh of an A/B baseline under `tests/smoke/baselines/` to the user, even when the plan asks for it.
+Implement every part of the scope in the ledger completely, in this one phase: never batch it, leave a part of it for later or stop to ask whether to go on, and do not touch a part outside the scope. Include the unit tests and, if needed, the smoke suite changes, as well as documentation and other updates the project rules require for such a change. Write the tests with the `writing-unit-tests` skill and run the unit tests of the code you changed.
 
 ## FIX_FINDINGS mode
 
@@ -43,12 +36,11 @@ A FIX phase can combine `FIX_FINDINGS` and `FIX_TESTS` mode: handle the findings
 
 ## FIX_TESTS mode
 
-Fix the failing unit tests from the test report with the `running-unit-tests` skill, and cover the reported uncovered changed lines with the `writing-unit-tests` skill. Where those skills require the user's approval for a change, ask the user before making the change. Never skip, disable or weaken a test to make it pass.
+Fix the failing unit tests from the test report with the `running-unit-tests` skill, and cover the reported uncovered changed lines with the `writing-unit-tests` skill. Where those skills require the user's approval for a change, ask the user before making the change.
 
 ## Rules
 
-- Change only what the plan or the ledger requires. Leave unrelated code alone, and never revert, reformat or overwrite uncommitted changes that existed before the task.
-- Never commit or push. Never spawn subagents: the only other agents of the loop are the headless reviewer and tester that `SKILL.md` describes.
+Change only what the plan or the ledger requires, and never revert, reformat or overwrite uncommitted changes that existed before the task.
 
 ## Changes file
 

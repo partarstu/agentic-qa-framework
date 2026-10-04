@@ -5,7 +5,7 @@ description: Adds a workflow endpoint to the QuAIA orchestrator that receives a 
 
 # Adding an Orchestrator Workflow
 
-Workflow endpoints live in `orchestrator/main.py`. All code follows `PYTHON_GUIDELINES.md` and the *Comments and docstrings* rule of `AGENTS.md`: an endpoint docstring is one sentence, and a comment states only a non-obvious why. Model new endpoints on the closest existing one:
+Workflow endpoints live in `orchestrator/main.py`. Model new endpoints on the closest existing one:
 
 | Pattern                                         | Reference                                                                 |
 |-------------------------------------------------|---------------------------------------------------------------------------|
@@ -35,7 +35,7 @@ Decide first whether the workflow alters the topology in `calm/architecture/quai
 - A new call to a service or external system → a `connects` relationship (or an `interacts` edge for a new agent fan-out).
 - A new authentication or protection mechanism → a `controls` block on the node or relationship, asserted in `calm/patterns/quaia.pattern.json`.
 
-Endpoints that reuse existing agents and edges need no change; say so explicitly. When the topology changes, *Architecture first* in `AGENTS.md` applies: nothing below is written before the user has approved the architecture, and `calm/` itself changes only in step 4. When the approved plan's *Architecture* section carries the line `CALM change validated on a temporary copy and approved by the user on <date>`, continue with step 2. Otherwise draft the change in a temporary copy of `calm/` outside the repository, validate it (and render it when it is more than a single edge) as section 4 of the `architecting-features` skill describes, show the user the result, get their explicit approval and delete the copy.
+Endpoints that reuse existing agents and edges need no change; say so explicitly. When the topology changes, *Architecture first (CALM)* in `AGENTS.md` applies: when the approved plan carries its approval line, continue with step 2; otherwise carry out steps 1-5 of its procedure before anything below. `calm/` itself changes only in step 4.
 
 ## 2. Request and result models
 
@@ -47,7 +47,6 @@ Start from [resources/endpoint_template.py](resources/endpoint_template.py). Rul
 
 - Every workflow endpoint takes `api_key: str = Depends(_validate_api_key)`.
 - Jira webhook endpoints call `await _verify_jira_webhook_signature(request)` first and read the issue key with `await _get_jira_issue_key_from_request(request)`.
-- Put `except HTTPException: raise` before `except Exception`. Otherwise the 4xx raised by `_handle_exception` becomes a 500 and the error is recorded twice.
 - Workflows that must not overlap run inside `async with execution_lock:`.
 - Fan out to agents concurrently as `PYTHON_GUIDELINES.md` § 9 describes.
 - If Jira calls the endpoint, add a `<NAME>_WEBHOOK_URL` constant next to the existing ones in `config.py`.
@@ -68,11 +67,7 @@ Helpers available in `orchestrator/main.py`:
 
 ## 4. CALM model
 
-When the topology changes, apply the architecture the user approved in step 1 to `calm/architecture/quaia.arch.json`, and to `calm/patterns/quaia.pattern.json` when the element is enforced, then validate from `calm/`; a clean run prints `No issues found.`:
-
-```bash
-npx -y "@finos/calm-cli@1.46.0" validate -p patterns/quaia.pattern.json -a architecture/quaia.arch.json -u url-mapping.json --strict -f pretty
-```
+When the topology changes, apply the architecture the user approved in step 1 to `calm/` and validate it (*Commands* in `AGENTS.md`).
 
 ## 5. README documentation
 
@@ -80,7 +75,7 @@ Add a subsection under *Invoking Orchestrator Workflows* in `README.md`, in the 
 
 ## 6. Orchestrator version
 
-A new or changed workflow alters the orchestrator's logic, so bump the default of `ORCHESTRATOR_VERSION` in `config.py` (`OrchestratorConfig.VERSION`) and in the README *Environment Variables* block at the level *Versioning of agents and the orchestrator* in `AGENTS.md` prescribes: MINOR for a new endpoint or a backwards-compatible change of a flow, MAJOR for a changed request contract or endpoint, PATCH for a fix that keeps the contract.
+A new or changed workflow alters the orchestrator's logic, so bump `ORCHESTRATOR_VERSION` (`OrchestratorConfig.VERSION`) as *Versioning* in `AGENTS.md` prescribes.
 
 ## 7. Unit tests
 
@@ -92,17 +87,4 @@ uv run pytest tests/orchestrator -v
 
 ## 8. Smoke suite
 
-A new workflow, or a change to what an existing one produces, is end-to-end behaviour and must be covered in `tests/smoke/` in the same change:
-
-- **New endpoint** → a test in `tests/smoke/test_smoke.py` (fixtures in `tests/smoke/conftest.py`, recording mocks under `tests/smoke/mocks/`) that calls the endpoint and asserts on what reached the mocked boundary.
-- **Extended flow** → strengthen the existing assertions.
-- **Intentionally changed agent output** → refresh the A/B baseline (see *A/B comparison against a baseline* in `README.md`).
-
-The suite needs `GOOGLE_API_KEY` and makes billed LLM calls, so ask the user before running it:
-
-```bash
-docker build -t agentic-qa-base:latest -f Dockerfile.base .
-docker compose -f docker-compose.smoke.yml up -d --build --wait
-uv run pytest tests/smoke -m smoke -v
-docker compose -f docker-compose.smoke.yml down -v
-```
+A new workflow is a new flow, and a change to what an existing one produces an extended flow: cover it in `tests/smoke/` as *Smoke suite* in `AGENTS.md` requires, with a test that calls the endpoint.
