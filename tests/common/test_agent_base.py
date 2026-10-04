@@ -2,6 +2,7 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
+import itertools
 import logging
 from collections.abc import Callable, Sequence
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -32,7 +33,7 @@ from pydantic_ai.usage import RunUsage, UsageLimits
 from pydantic_ai_harness.compaction import TieredCompaction
 
 import config
-from common.agent_base import AgentBase
+from common.agent_base import _COMPACTION_KEEP_MESSAGES, AgentBase
 from common.agent_log_capture import AgentLogCaptureHandler
 from common.custom_llm_wrapper import CustomLlmWrapper
 from common.models import AgentRuntimeError, AgentSkillDeclaration, JsonSerializableModel
@@ -707,9 +708,11 @@ async def test_history_still_over_target_after_clearing_drops_the_oldest_turns()
     received, output = await _run_compacting_agent([noop], respond)
 
     assert output == MockOutput(result="done")
-    final_history = received[-1]
-    assert sum(isinstance(message, ModelResponse) for message in final_history) < turns
-    _assert_task_prompt_and_tool_pairs_intact(final_history)
+    compacted_histories = [later for earlier, later in itertools.pairwise(received) if len(later) < len(earlier)]
+    assert compacted_histories
+    # The window keeps the newest messages and re-adds the task prompt in front of them.
+    assert all(len(history) <= _COMPACTION_KEEP_MESSAGES + 1 for history in compacted_histories)
+    _assert_task_prompt_and_tool_pairs_intact(received[-1])
 
 
 def test_agent_base_agent_carries_context_compaction_but_a_sub_agent_does_not() -> None:

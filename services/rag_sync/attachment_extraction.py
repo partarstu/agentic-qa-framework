@@ -13,9 +13,13 @@ import asyncio
 import hashlib
 import io
 import re
+import threading
 import warnings
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from pypdfium2 import PdfImage
 
 import config
 from common import utils
@@ -32,6 +36,8 @@ OFFICE_EXTENSIONS = CONVERT_ONLY_EXTENSIONS | CONVERT_WITH_FALLBACK_EXTENSIONS
 PDF_POINTS_PER_INCH = 72
 # PDFium joins a word hyphenated across a line break itself and leaves this control character for the hyphen.
 PDFIUM_LINE_END_HYPHEN = "\x02"
+# PDFium is not thread-safe even across documents, and pypdfium2 releases the GIL during its calls.
+_pdfium_lock = threading.Lock()
 
 # Text normalization patterns, compiled once (they run per line of every extracted page).
 _HYPHENATED_LINE_BREAK = re.compile(r"(?<=\w)-\n(?=\w)")
@@ -119,28 +125,31 @@ def _extract_pdf(content: bytes, include_images: bool = True) -> ExtractedDocume
     """Extracts native text and, when enabled, a PNG rendering for each PDF page."""
     import pypdfium2
 
-    try:
-        document = pypdfium2.PdfDocument(content)
-    except pypdfium2.PdfiumError as error:
-        raise ExtractionError(f"The PDF could not be opened: {error}") from error
+    with _pdfium_lock:
+        try:
+            document = pypdfium2.PdfDocument(content)
+        except pypdfium2.PdfiumError as error:
+            raise ExtractionError(f"The PDF could not be opened: {error}") from error
 
-    try:
-        with document:
-            total_page_count = len(document)
-            page_limit = config.DocumentRagConfig.MAX_PAGES_PER_DOCUMENT
-            _log_truncation("PDF", total_page_count, page_limit)
-            pages: list[PageContent] = []
-            for page_number in range(min(total_page_count, page_limit)):
-                page = document[page_number]
-                native_text = page.get_textpage().get_text_bounded().replace(PDFIUM_LINE_END_HYPHEN, "")
-                image = _render_page(page) if include_images else None
-                text = _page_text_with_ocr(page, native_text, image) if include_images else native_text
-                pages.append(PageContent(_normalize_extracted_text(text, strip_page_numbers=True), image))
-            return ExtractedDocument(pages, total_page_count)
-    except ExtractionError:
-        raise
-    except Exception as error:
-        raise ExtractionError(f"PDF extraction failed: {error}") from error
+        try:
+            with document:
+                # Without the form environment, PDFium renders no form fields, so filled-in values would be lost.
+                document.init_forms()
+                total_page_count = len(document)
+                page_limit = config.DocumentRagConfig.MAX_PAGES_PER_DOCUMENT
+                _log_truncation("PDF", total_page_count, page_limit)
+                pages: list[PageContent] = []
+                for page_number in range(min(total_page_count, page_limit)):
+                    page = document[page_number]
+                    native_text = page.get_textpage().get_text_bounded().replace(PDFIUM_LINE_END_HYPHEN, "")
+                    image = _render_page(page) if include_images else None
+                    text = _page_text_with_ocr(page, native_text, image) if include_images else native_text
+                    pages.append(PageContent(_normalize_extracted_text(text, strip_page_numbers=True), image))
+                return ExtractedDocument(pages, total_page_count)
+        except ExtractionError:
+            raise
+        except Exception as error:
+            raise ExtractionError(f"PDF extraction failed: {error}") from error
 
 
 def _page_text_with_ocr(page: Any, native_text: str, page_image: bytes | None) -> str:
@@ -193,7 +202,7 @@ def _render_page(page: Any) -> bytes | None:
         return None
 
 
-def _embedded_image_png(image_object: Any) -> bytes | None:
+def _embedded_image_png(image_object: "PdfImage") -> bytes | None:
     """Decodes one embedded PDF image within Pillow's decompression-bomb limit and returns it as normalized PNG."""
     from PIL import Image
 

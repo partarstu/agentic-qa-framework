@@ -4,10 +4,13 @@
 
 """Unit tests for attachment extraction, OCR, conversion, and limits."""
 
+import asyncio
 import ctypes
 import io
 import subprocess
 import sys
+import threading
+import time
 import types
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -54,6 +57,30 @@ def _pdf_bytes(*texts: str, embedded_image_copies: int = 0) -> bytes:
     buffer = io.BytesIO()
     document.save(buffer)
     return buffer.getvalue()
+
+
+def _filled_form_pdf_bytes() -> bytes:
+    """Build a one-page PDF whose only content is a text field with a black appearance stream."""
+    appearance = b"0 0 0 rg 0 0 200 50 re f"
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] >> >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Annots [4 0 R] >>",
+        b"<< /Type /Annot /Subtype /Widget /FT /Tx /T (name) /V (value) /Rect [50 50 250 100] /F 4 /P 3 0 R"
+        b" /AP << /N 5 0 R >> >>",
+        b"<< /Type /XObject /Subtype /Form /BBox [0 0 200 50] /Length %d >>\nstream\n%b\nendstream"
+        % (len(appearance), appearance),
+    ]
+    content = bytearray(b"%PDF-1.7\n")
+    offsets = []
+    for number, body in enumerate(objects, start=1):
+        offsets.append(len(content))
+        content += b"%d 0 obj\n%b\nendobj\n" % (number, body)
+    xref_offset = len(content)
+    content += b"xref\n0 %d\n0000000000 65535 f \n" % (len(objects) + 1)
+    content += b"".join(b"%010d 00000 n \n" % offset for offset in offsets)
+    content += b"trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n" % (len(objects) + 1, xref_offset)
+    return bytes(content)
 
 
 def _image_bytes(size: tuple[int, int] = (80, 40), image_format: str = "PNG") -> bytes:
@@ -181,6 +208,37 @@ class TestAttachmentExtraction:
 
         assert document.pages[0].text == native
         extract_text.assert_not_called()
+
+    def test_pdf_page_rendering_includes_filled_form_fields(self):
+        from PIL import Image
+
+        with patch("rag_sync.ocr.extract_text", return_value=""):
+            document = extract_attachment("form.pdf", _filled_form_pdf_bytes())
+
+        darkest_pixel, _ = Image.open(io.BytesIO(document.pages[0].image)).convert("L").getextrema()
+        assert darkest_pixel == 0
+
+    async def test_concurrent_pdf_extractions_never_call_pdfium_in_parallel(self):
+        active = 0
+        peak = 0
+        counter_lock = threading.Lock()
+
+        def slow_render(page: object) -> None:
+            nonlocal active, peak
+            with counter_lock:
+                active += 1
+                peak = max(peak, active)
+            # Long enough for an unserialized second extraction to enter rendering meanwhile.
+            time.sleep(0.1)
+            with counter_lock:
+                active -= 1
+
+        with patch("rag_sync.attachment_extraction._render_page", side_effect=slow_render):
+            await asyncio.gather(
+                *(extract_attachment_async(f"doc{index}.pdf", _pdf_bytes("text")) for index in range(2))
+            )
+
+        assert peak == 1
 
     def test_raster_image_is_resized_normalized_and_ocrd(self):
         with (
