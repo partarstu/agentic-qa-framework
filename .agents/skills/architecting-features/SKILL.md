@@ -21,39 +21,19 @@ Copy this checklist and track progress:
 
 ## 1. Understand the request
 
-- Restate the goal and list your assumptions.
-- If the request has readings that would lead to materially different work, present them and ask; make routine judgement calls yourself.
-- If a simpler approach meets the need, propose it.
+Restate the goal and list your assumptions.
 
 ## 2. Study the existing code
 
-- Find the closest existing implementation and follow its structure: agents in `agents/`, workflows in `orchestrator/main.py`, integrations in `common/services/`, settings in `config.py`.
-- List what the change reuses. Existing logic must not be duplicated; if it cannot be reused as-is, plan its extraction.
+Find the closest existing implementation and follow its structure. List what the change reuses, and plan the extraction of logic that cannot be reused as it is.
 
 ## 3. Research
 
-Search the web for the official documentation of every library, protocol or external API the change touches, for the version pinned in `pyproject.toml` (pydantic-ai, a2a-sdk, FastAPI, Pydantic, qdrant-client, jira). Prefer official docs and changelogs over blog posts. Mention a source in the plan only where it drives a design decision.
+Research every library, protocol or external API the change touches for the version pinned in `pyproject.toml` (pydantic-ai, a2a-sdk, FastAPI, Pydantic, qdrant-client, jira), preferring official docs and changelogs over blog posts. Mention a source in the plan only where it drives a design decision.
 
 ## 4. Architecture first (CALM)
 
-Decide whether the change alters the architecture: a service, agent, actor or external system is added, removed or renamed; an integration edge appears or disappears; a security control (authentication, prompt-injection protection, credential scope, job invocation) is added, removed or changed. In-process changes (a helper, a prompt, a setting, a new endpoint over existing edges) do not.
-
-If it does, the architecture is checked and approved before anything is implemented, as *Architecture first* in `AGENTS.md` requires, and the check creates no artifact in the repository:
-
-1. Copy the whole `calm/` directory to a temporary directory outside the repository (the scratchpad directory when there is one); validation needs its URL mapping and control schemas too.
-2. In the copy, draft the change in `architecture/quaia.arch.json`, and in `patterns/quaia.pattern.json` when the element must be enforced, mirroring the existing nodes, relationships and controls (`calm/README.md` lists the controls and their requirement schemas).
-3. Validate from the copy; a clean run prints `No issues found.`:
-   ```bash
-   npx -y @finos/calm-cli@1.46.0 validate -p patterns/quaia.pattern.json -a architecture/quaia.arch.json -u url-mapping.json --strict -f pretty
-   ```
-4. When the change is more than a single edge, render the copy to another temporary directory and show the user the Mermaid diagram in `docs/index.md` and the pages of the changed nodes and relationships:
-   ```bash
-   npx -y @finos/calm-cli@1.46.0 docify -a architecture/quaia.arch.json -o <another directory outside the repository>
-   ```
-5. Present the drafted architecture to the user: what changes in the model and why, the validation result and the rendered diagram. Get their explicit approval; when the plan is written in step 6, its *Architecture* section lists the drafted elements and records that approval with the date.
-6. Delete the temporary copy and the rendered documentation.
-
-Nothing under `calm/` changes before the implementation starts. The plan's TODO list carries a step that applies the approved elements to `calm/` together with the code that realises them and validates the result.
+Decide whether the change is an architecture change as *Architecture first (CALM)* in `AGENTS.md` defines it. If it is, carry out steps 1-5 of that procedure now. The plan written in step 6 records the approval in its *Architecture* section, and its TODO list carries step 7: applying the approved elements to `calm/` together with the code that realises them, and validating the result.
 
 ## 5. Design
 
@@ -61,20 +41,20 @@ Decide and justify each point that applies, in one line each:
 
 - **Components**: which modules change and which are new. Prefer extending existing modules over new abstractions.
 - **Alternatives**: for a significant choice, name the chosen option and why.
-- **Smoke suite**: a new or changed end-to-end behaviour requires a `tests/smoke/` update (test, recording mock, compose service, or an A/B baseline refresh when agent output changes intentionally). Otherwise state that none is needed.
-- **Security**: external input validated with Pydantic, secrets only from env vars, new endpoints behind `_validate_api_key`, untrusted text reaching an LLM screened by the prompt-injection guard.
+- **Smoke and A/B suites**: the updates *Smoke suite* and *A/B suite* in `AGENTS.md` require (smoke tests, scripted answers of the LLM mock, an A/B test, baselines to refresh), or that none is needed.
+- **Security**: how external input, secrets and untrusted text reaching an LLM are handled (*Project conventions* in `AGENTS.md`, `PYTHON_GUIDELINES.md` § 11).
 - **Python design**: data models, error handling and the concurrency model follow `PYTHON_GUIDELINES.md` (§ 5, § 7, § 9).
 - **Dependencies**: a new package must meet `PYTHON_GUIDELINES.md` § 15.
-- **Configuration**: new settings go in `config.py`, read from SCREAMING_SNAKE_CASE env vars, and are documented in the README *Environment Variables* block.
-- **Versions**: name every agent, and the orchestrator, whose logic the change alters, with the bump *Versioning* in `AGENTS.md` prescribes.
+- **Configuration**: new settings and their environment variables.
+- **Versions**: every agent, and the orchestrator, whose logic the change alters, with the bump *Versioning* in `AGENTS.md` prescribes.
 
 Add a Mermaid diagram only when the interaction is not obvious from the text, such as a new multi-agent sequence.
 
 ## 6. Write the plan and get approval
 
-Write the plan to an .MD file in the `plans` folder using [resources/implementation_plan_template.md](resources/implementation_plan_template.md), omitting sections that do not apply. Keep it compact: architecture, logic and data workflows, impact and the steps; no explanatory prose, no restated code, no hard wraps. Keep its TODO list current during implementation.
+Write the plan with [resources/implementation_plan_template.md](resources/implementation_plan_template.md), omitting sections that do not apply. Keep it compact: architecture, logic and data workflows, impact and the steps; no explanatory prose and no restated code.
 
-Then reply with only the file's path and a short summary that names the decisions needing the user's input (trade-offs, new dependencies, security-sensitive choices), and ask for approval. Do not start implementing before the user approves.
+The summary in your reply names the decisions needing the user's input (trade-offs, new dependencies, security-sensitive choices) and asks for approval. Do not start implementing before the user approves.
 
 ## 7. Hand off
 

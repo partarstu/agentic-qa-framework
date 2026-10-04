@@ -2,11 +2,12 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
-# Hermetic smoke topology: real orchestrator + the QA agents (all our own code,
-# real Gemini), with only the external boundaries mocked (Jira MCP, Jira REST,
-# Zephyr, Qdrant + embedding). A mock test-execution agent stands in for the
-# VM-hosted real executors so the /execute-tests + incident-creation flow can run
-# end to end.
+# Hermetic smoke topology: real orchestrator + the QA agents (all our own code),
+# with every external boundary mocked (the LLM, Jira MCP, Jira REST, Zephyr,
+# Confluence, SharePoint, Qdrant + embedding). The scripted LLM mock answers every
+# model call, so the stack needs no provider key. A mock test-execution agent
+# stands in for the VM-hosted real executors so the /execute-tests +
+# incident-creation flow can run end to end.
 #
 # Prerequisite: the shared base image must be built first, since every service
 # here derives from it:
@@ -14,7 +15,8 @@
 #
 # Then:  docker compose -f docker-compose.smoke.yml up --build --wait
 #
-# GOOGLE_API_KEY must be exported in the environment (real Gemini calls).
+# The A/B suite runs this topology on a real model through the
+# docker-compose.ab.yml override.
 
 # Shared environment for the four execution agents. Each agent serves on :8001
 # inside its own service, and advertises its card URL as http://<service>:8001 so
@@ -30,8 +32,9 @@ x-agent-env: &agent-env
   ZEPHYR_API_TOKEN: "smoke-token"
   TEST_MANAGEMENT_SYSTEM: "zephyr"
   PROMPT_INJECTION_CHECK_ENABLED: "false"
-  GOOGLE_API_KEY: "${GOOGLE_API_KEY}"
-  MODEL_NAME: "google-gla:gemini-3.8-flash"
+  # The OpenAI-compatible "qwen:" route reaches the scripted LLM mock.
+  MODEL_NAME: "qwen:smoke-mock"
+  QWEN_ENDPOINT: "http://llm_mock:8099/v1"
 
 # Agents serve their A2A card as soon as they are ready to take tasks.
 x-agent-healthcheck: &agent-healthcheck
@@ -42,6 +45,8 @@ x-agent-healthcheck: &agent-healthcheck
   start_period: 20s
 
 x-mock-dependencies: &mock-dependencies
+  llm_mock:
+    condition: service_healthy
   jira_mcp_mock:
     condition: service_healthy
   jira_rest_mock:
@@ -62,6 +67,21 @@ x-sync-dependencies: &sync-dependencies
     condition: service_healthy
 
 services:
+  # The scripted model every agent and the orchestrator call. It imports the framework's
+  # models, so it runs on the image execution_agent builds, which carries common/ and config.py.
+  llm_mock:
+    image: smoke-framework-mocks:latest
+    pull_policy: never
+    command: ["uvicorn", "mocks.llm_mock:app", "--host", "0.0.0.0", "--port", "8099"]
+    ports:
+      - "8099:8099"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8099/__recorded')"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+
   # The four recording mocks share one image; only jira_mcp_mock builds it, the
   # others reference the tag so it is built exactly once.
   jira_mcp_mock:
@@ -194,7 +214,8 @@ services:
       # proves prompt overrides reach the agent - the override file under
       # tests/smoke/overrides/ replaces the bundled retrieval instruction, so the real main prompt still runs.
       PROMPT_OVERRIDES_DIR: "/prompt-overrides"
-      # three focus areas keep the run cheaper than the default while covering the story broadly enough for the A/B judge.
+      # the LLM mock asks for exactly three; on a real model, three keep the A/B run cheaper than the default while
+      # covering the story broadly enough for the judge.
       REQUIREMENTS_REVIEW_FOCUS_AREA_COUNT: "3"
       # retrieval enabled, Confluence-only - the review grounds itself in the
       # documents the concurrently running Confluence sync ingests into the mocked vector DB.
@@ -222,8 +243,9 @@ services:
       EMBEDDING_SERVICE_URL: "http://qdrant_mock:6333"
       # the design agent's model fetches the story with these fields.
       JIRA_ADDITIONAL_FIELD_IDS: "customfield_10101,customfield_10202"
-      # the severity classifier override under tests/smoke/overrides/ forces a high finding per test case in every review, so the
-      # loop runs exactly one fix cycle up to this limit, then stops as iteration_limit.
+      # the LLM mock - and, on a real model, the severity classifier override under tests/smoke/overrides/ - reports a high
+      # finding per test case in every review, so the loop runs exactly one fix cycle up to this limit, then stops as
+      # iteration_limit.
       TEST_CASE_DESIGN_MAX_ITERATIONS: "2"
       PROMPT_OVERRIDES_DIR: "/prompt-overrides"
     volumes:
@@ -257,6 +279,7 @@ services:
     build:
       context: .
       dockerfile: tests/smoke/mocks/Dockerfile.execution_agent
+    image: smoke-framework-mocks:latest
     environment:
       <<: *agent-env
       AGENT_BASE_URL: "http://execution_agent"
@@ -286,8 +309,8 @@ services:
       DASHBOARD_PASSWORD_HASH: "$$2b$$12$$OZG8i8zm/ulUkJ7mqIBqwekJNMXG5Ia.6rOTr0Oqb/1tPFZs1IWNW"
       DASHBOARD_JWT_SECRET: "smoke-jwt-secret"
       PROMPT_INJECTION_CHECK_ENABLED: "false"
-      GOOGLE_API_KEY: "${GOOGLE_API_KEY}"
-      MODEL_NAME: "google-gla:gemini-3.8-flash"
+      MODEL_NAME: "qwen:smoke-mock"
+      QWEN_ENDPOINT: "http://llm_mock:8099/v1"
       # proves the additional Jira custom fields instruction reaches the requirements review:
       # the Jira MCP mock records that jira_get_issue was asked for these field IDs.
       JIRA_ADDITIONAL_FIELD_IDS: "customfield_10101,customfield_10202"
@@ -309,6 +332,8 @@ services:
     ports:
       - "8000:8000"
     depends_on:
+      llm_mock:
+        condition: service_healthy
       rag_sync_local:
         condition: service_healthy
       zephyr_mock:

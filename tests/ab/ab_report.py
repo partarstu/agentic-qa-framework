@@ -8,8 +8,8 @@ import re
 from dataclasses import dataclass
 from html import escape
 
-from tests.smoke import judge
-from tests.smoke.artifacts import MetricRegression, RunSnapshot
+from tests.ab import judge
+from tests.ab.artifacts import MetricRegression, RunSnapshot
 
 _RESULT_LABELS: dict[judge.Outcome, str] = {
     "much_better": "IMPROVED",
@@ -93,19 +93,22 @@ class AbResult:
     comparisons: list[judge.Comparison]
 
 
-def render_html(baseline_name: str, baseline: RunSnapshot, candidate: RunSnapshot, result: AbResult) -> str:
+def render_html(
+    workflow_name: str, baseline_name: str, baseline: RunSnapshot, candidate: RunSnapshot, result: AbResult
+) -> str:
     status = _overall_status(result)
+    title = escape(f"A/B report: {workflow_name}")
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Smoke A/B report</title>
+<title>{title}</title>
 <style>{_STYLE}</style>
 </head>
 <body>
 <main>
-<div class="header"><h1>Smoke A/B report</h1>{_badge(status, big=True)}</div>
+<div class="header"><h1>{title}</h1>{_badge(status, big=True)}</div>
 <div class="meta">
 {_meta_card("Baseline", baseline_name, f"{escape(baseline.label)}<br>captured {escape(baseline.captured_at)}")}
 {_meta_card("Candidate", candidate.label, f"captured {escape(candidate.captured_at)}")}

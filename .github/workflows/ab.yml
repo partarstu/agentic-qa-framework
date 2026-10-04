@@ -1,0 +1,97 @@
+# SPDX-FileCopyrightText: 2025-2026 Taras Paruta (partarstu@gmail.com)
+#
+# SPDX-License-Identifier: AGPL-3.0-only
+
+name: A/B
+
+# Real, billed model calls: only ever started by hand, for the workflows a change touches.
+on:
+  workflow_dispatch:
+    inputs:
+      workflow:
+        description: "The LLM-driven workflow to compare against its baseline"
+        type: choice
+        options:
+          - all
+          - requirements_review
+          - test_case_design
+          - incident_creation
+        default: all
+
+permissions:
+  contents: read
+
+jobs:
+  ab:
+    name: A/B (real LLM)
+    runs-on: ubuntu-latest
+    # The workflows run one after another; the test case design alone runs two reviews and a fix cycle.
+    timeout-minutes: 120
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
+        with:
+          version: "0.11.21"
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+
+      - name: Build base image (GHA-cached)
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: .
+          file: Dockerfile.base
+          tags: agentic-qa-base:latest
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # The compose build below must see the base image via the local daemon's
+      # image store, which the docker-container builder above does not share.
+      - name: Switch back to the default builder
+        run: docker buildx use default
+
+      - name: Start the A/B topology
+        env:
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          COMPOSE_BAKE: "false"
+        run: docker compose -f docker-compose.smoke.yml -f docker-compose.ab.yml up -d --build --wait
+
+      - name: Run A/B tests
+        env:
+          # The judge runs its model in the pytest process, not in a container.
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          WORKFLOW: ${{ inputs.workflow }}
+        run: |
+          selection=()
+          if [ "$WORKFLOW" != "all" ]; then
+            selection=(-k "$WORKFLOW")
+          fi
+          uv run pytest tests/ab -m ab "${selection[@]}" -v --durations=10 -o log_cli=true --log-cli-level=INFO
+
+      - name: Upload A/B reports
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: ab-reports
+          path: logs/ab_report_*.html
+          retention-days: 30
+
+      - name: Dump compose logs
+        if: always()
+        env:
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+        run: docker compose -f docker-compose.smoke.yml -f docker-compose.ab.yml logs --no-color
+
+      - name: Tear down
+        if: always()
+        env:
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+        run: docker compose -f docker-compose.smoke.yml -f docker-compose.ab.yml down -v

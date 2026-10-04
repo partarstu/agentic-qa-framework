@@ -25,6 +25,7 @@ from pydantic_ai.models.anthropic import AnthropicModel, AnthropicModelSettings
 from pydantic_ai.models.google import GoogleModel
 from pydantic_ai.models.openai import OpenAIChatModel, OpenAIChatModelSettings
 from pydantic_ai.profiles import ModelProfile, merge_profile
+from pydantic_ai.profiles.openai import OpenAIModelProfile
 from pydantic_ai.profiles.qwen import qwen_model_profile
 from pydantic_ai.providers.anthropic import AnthropicProvider
 from pydantic_ai.providers.google import GoogleProvider
@@ -121,7 +122,11 @@ def build_model(model_name: str | Model, thinking_level: ThinkingLevel | None = 
         if not config.QWEN_ENDPOINT:
             raise ValueError(f"QWEN_ENDPOINT must be set to use the model '{model_name}'.")
         qwen_model_name = model_name.removeprefix(QWEN_MODEL_PREFIX)
-        profile = qwen_model_profile(qwen_model_name)
+        # Qwen's chat template accepts a system message only at the start, so the instruction parts become one.
+        profile = merge_profile(
+            qwen_model_profile(qwen_model_name),
+            OpenAIModelProfile(openai_chat_supports_multiple_system_messages=False),
+        )
         if config.QWEN_CONTEXT_WINDOW is not None:
             profile = merge_profile(profile, ModelProfile(context_window=config.QWEN_CONTEXT_WINDOW))
         return OpenAIChatModel(

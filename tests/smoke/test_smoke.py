@@ -4,11 +4,14 @@
 
 """Hermetic end-to-end smoke checks for the core QuAIA flows.
 
-All of our own code runs for real (orchestrator + agents + real Gemini); only
-the external boundaries are mocked. Each test asserts on what reached a mocked
-boundary, read back from its ``/__recorded`` endpoint:
+All of our own code runs for real (orchestrator + agents); every external
+boundary is mocked, the LLM included: the scripted LLM mock answers every model
+call deterministically, so no real model is called. Each test asserts on what
+reached a mocked boundary, read back from its ``/__recorded`` endpoint:
 
+* Every LLM call        -> each model-driven operation of the flows reached the LLM mock, and none went unanswered.
 * Requirements review   -> a non-empty comment reached Jira (REST or MCP) on the seeded story.
+* Requirements review   -> the mounted prompt override reached the review model's instructions.
 * Requirements review   -> the agent first fetched the source story via the Jira MCP.
 * Requirements review   -> the story's attachment was downloaded over the Jira REST API,
                            with the MCP download tool left unused.
@@ -19,10 +22,10 @@ boundary, read back from its ``/__recorded`` endpoint:
 * Test-case design      -> the design's model fetched the story once via the Jira MCP, without comments, with the standard and configured fields.
 * Test-case generation  -> real test cases (name + steps) reached Zephyr.
 * Test-case generation  -> the created test cases were linked to the seeded story's numeric id.
-* Test-case classification -> labels reached Zephyr.
+* Test-case classification -> the classification labels reached Zephyr for every saved test case.
 * Requirements review   -> a Confluence-only configuration queries only the Confluence collection, with the
                            source pinned; the agent's log lines carry its name and task id.
-* Requirements review   -> the usage artifact meters the focused reviews, at most the configured count, and a merge run whenever at least two focused reviews succeeded.
+* Requirements review   -> the usage artifact meters the three focused reviews the configured count allows and the merge run.
 * Test-case review      -> a non-empty "Review Comments" value reached Zephyr for every generated test case.
 * Test-case review      -> at least one test case reached the "Review Complete" status.
 * Test-case review      -> every review comment carries the duplicate-check section, after each final test
@@ -40,7 +43,8 @@ boundary, read back from its ``/__recorded`` endpoint:
                            restart (the restart check runs last).
 * Agent traceability    -> the version an agent is started with reaches the dashboard agents view,
                            the orchestrator's own version reaches the dashboard status view, and the
-                           executing agent's name, version and environment reach the created bug.
+                           executing agent's name, version and environment reach the incident model and the
+                           created bug.
 * Agent traceability    -> every framework agent's card description carries its model, version and
                            skill name, and routing decisions with agent name and justification
                            appear in the dashboard logs.
@@ -70,6 +74,7 @@ from tests.smoke.conftest import (
     JIRA_MCP_RECORDED_URL,
     JIRA_MCP_SEEDED_STORY_URL,
     JIRA_REST_RECORDED_URL,
+    LLM_MOCK_RECORDED_URL,
     LOGIN_RATE_LIMIT_ATTEMPTS,
     ORCHESTRATOR_URL,
     ORCHESTRATOR_VERSION,
@@ -91,9 +96,50 @@ from tests.smoke.conftest import (
     TICKETS_COLLECTION_NAME,
     ZEPHYR_RECORDED_URL,
 )
+from tests.smoke.mocks.llm_mock import CLASSIFICATION_LABELS, FOCUS_AREA_FINDINGS, TEST_CASE_NAMES
 from tests.smoke.recordings import wait_for_any_recorded, wait_for_recorded
 
 pytestmark = pytest.mark.smoke
+
+
+# --- LLM boundary ----------------------------------------------------------------------------------------------------
+
+# Every model call the flows make. The incident's duplicate detection is left out: the seeded tickets hold no open bug,
+# so the incident creation finds no duplicate candidate to judge.
+SCRIPTED_OPERATIONS = {
+    "routing",
+    "multi_routing",
+    "results_extraction",
+    "requirements_review",
+    "focused_requirements_review",
+    "requirements_review_merge",
+    "test_case_design",
+    "acceptance_criteria_extraction",
+    "test_steps_generation",
+    "test_case_creation",
+    "test_case_fixing",
+    "test_case_review",
+    "test_suite_review",
+    "test_case_duplicate_judgement",
+    "test_case_classification",
+    "incident_creation",
+}
+
+
+def _model_requests(http_client: httpx.Client, operation: str) -> list[dict]:
+    recorded = http_client.get(LLM_MOCK_RECORDED_URL).json()
+    return [request for request in recorded["requests"] if request["operation"] == operation]
+
+
+def test_every_model_call_reached_the_llm_mock(
+    webhook_responses: dict[str, httpx.Response], http_client: httpx.Client
+) -> None:
+    """Every model-driven operation of the flows was answered by the LLM mock, and none was left unscripted."""
+    recorded = http_client.get(LLM_MOCK_RECORDED_URL).json()
+    assert not recorded["unhandled"], f"Model calls the LLM mock has no scripted answer for: {recorded['unhandled']}"
+    operations = {request["operation"] for request in recorded["requests"]}
+    missing = SCRIPTED_OPERATIONS - operations
+    assert not missing, f"Operations that never called the model: {missing}"
 
 
 # --- Requirements review flow ----------------------------------------------------------
@@ -125,25 +171,15 @@ def test_review_comment_reached_jira(requirements_review_response: httpx.Respons
     assert _has_jira_comment(data), f"No non-empty review comment reached Jira. REST={data['rest']}, MCP={data['mcp']}"
 
 
-def test_prompt_override_marker_reaches_jira_comment(
+def test_prompt_override_reaches_the_review_model(
     requirements_review_response: httpx.Response, http_client: httpx.Client
 ) -> None:
-    """The mounted prompt override must drive the agent: its marker token ends up in the Jira comment."""
-
-    def _comment_texts(data: dict[str, dict]) -> list[str]:
-        rest = [c.get("body", "") for c in data.get("rest", {}).get("comments", [])]
-        mcp = [c.get("comment", "") for c in data.get("mcp", {}).get("comments", [])]
-        return [text for text in rest + mcp if text.strip()]
-
-    data = wait_for_any_recorded(
-        http_client,
-        {"rest": JIRA_REST_RECORDED_URL, "mcp": JIRA_MCP_RECORDED_URL},
-        lambda d: any(PROMPT_OVERRIDE_MARKER in text for text in _comment_texts(d)),
-    )
-    comments = _comment_texts(data)
-    assert any(PROMPT_OVERRIDE_MARKER in text for text in comments), (
-        f"The prompt override marker '{PROMPT_OVERRIDE_MARKER}' never reached the Jira comment, "
-        f"so the override was not applied. Comments seen: {comments}"
+    """The mounted prompt override replaces the bundled instruction: its marker reaches the review model's instructions."""
+    requests = _model_requests(http_client, "requirements_review")
+    assert requests, "The requirements review never called the model."
+    assert all(PROMPT_OVERRIDE_MARKER in request["system"] for request in requests), (
+        f"The prompt override marker '{PROMPT_OVERRIDE_MARKER}' is missing from the review model's instructions, "
+        f"so the override was not applied. Instructions: {requests[0]['system']}"
     )
 
 
@@ -152,9 +188,16 @@ def test_agents_requested_the_configured_additional_fields(
     test_case_flow_response: httpx.Response,
     http_client: httpx.Client,
 ) -> None:
-    """With JIRA_ADDITIONAL_FIELD_IDS configured, the requirements review and the design agent must both ask for those
-    field IDs when fetching the story."""
+    """With JIRA_ADDITIONAL_FIELD_IDS configured, the field IDs reach the models of the requirements review and the
+    design agent, which both ask for them when fetching the story."""
     configured_field_ids = ("customfield_10101", "customfield_10202")
+    for operation in ("requirements_review", "test_case_design"):
+        first_request = next(iter(_model_requests(http_client, operation)), None)
+        assert first_request, f"The {operation} never called the model."
+        prompt = "\n".join([first_request["system"], *first_request["user"]])
+        assert all(field_id in prompt for field_id in configured_field_ids), (
+            f"The {operation} model was not told about the configured field IDs {configured_field_ids}: {prompt}"
+        )
 
     def _requested(call: dict) -> bool:
         return call.get("issue_key") == SEEDED_ISSUE_KEY and all(
@@ -302,14 +345,16 @@ def test_agent_log_lines_carry_agent_name_and_task_id(
 def test_requirements_review_usage_carries_focused_review_and_merge_operations(
     requirements_review_response: httpx.Response, http_client: httpx.Client, auth_headers: dict[str, str]
 ) -> None:
-    """The review task meters its focused reviews and, once at least two of them succeeded, the merge run."""
+    """The review task meters one focused review per focus area of the model and the merge run of their reviews."""
     agent_name = config.RequirementsReviewAgentConfig.OWN_NAME
     tasks = _completed_tasks_of(http_client, auth_headers, agent_name)
     assert tasks, f"No completed task of '{agent_name}' is listed on the dashboard."
     operations = (tasks[0].get("token_usage") or {}).get("operations") or []
     requests_by_name = {operation["operation"]: operation["requests"] for operation in operations}
-    assert {"main", "review_with_attachments"} <= set(requests_by_name), f"Operations: {operations}"
-    assert requests_by_name["review_with_attachments"] >= 1, operations
+    focus_area_count = len(FOCUS_AREA_FINDINGS)
+    assert requests_by_name.get("review_with_attachments") == focus_area_count, f"Operations: {operations}"
+    assert requests_by_name.get("merge_reviews") == 1, f"Operations: {operations}"
+    assert requests_by_name.get("main", 0) >= 1, f"Operations: {operations}"
 
     response = http_client.get(
         f"{ORCHESTRATOR_URL}/api/dashboard/logs",
@@ -324,10 +369,7 @@ def test_requirements_review_usage_carries_focused_review_and_merge_operations(
     ]
     assert summaries, "No focused-review summary line reached the task's dashboard logs."
     succeeded, requested = (int(count) for count in summaries[-1].groups())
-    # docker-compose.smoke.yml caps the focus areas at 3.
-    assert 1 <= requested <= 3, summaries[-1].group(0)
-    if succeeded >= 2:
-        assert requests_by_name.get("merge_reviews", 0) >= 1, f"No merge run was metered: {operations}"
+    assert succeeded == requested == focus_area_count, summaries[-1].group(0)
 
 
 def test_usage_artifact_carries_per_operation_counters(
@@ -385,7 +427,7 @@ def test_test_case_flow_webhook_accepted(test_case_flow_response: httpx.Response
 
 
 def test_real_test_cases_created_in_zephyr(test_case_flow_response: httpx.Response, http_client: httpx.Client) -> None:
-    """Generation must create real test cases (non-empty name + steps) in Zephyr."""
+    """Generation must create real test cases (non-empty name + steps) in Zephyr, one per scripted acceptance criterion."""
     data = wait_for_recorded(
         http_client,
         ZEPHYR_RECORDED_URL,
@@ -393,6 +435,7 @@ def test_real_test_cases_created_in_zephyr(test_case_flow_response: httpx.Respon
     )
     real_cases = [tc for tc in data.get("test_cases", []) if tc.get("name", "").strip() and tc.get("steps")]
     assert real_cases, f"Zephyr received no test cases with both a name and steps. Recorded: {data}"
+    assert sorted(tc["name"] for tc in real_cases) == sorted(TEST_CASE_NAMES.values()), real_cases
 
 
 def test_test_cases_created_exactly_once_and_linked_to_story(
@@ -416,14 +459,19 @@ def test_test_cases_created_exactly_once_and_linked_to_story(
 
 
 def test_classification_added_labels(test_case_flow_response: httpx.Response, http_client: httpx.Client) -> None:
-    """Classification must add labels to at least one test case in Zephyr."""
+    """Classification must add the labels of the classification model to every saved test case in Zephyr."""
     data = wait_for_recorded(
         http_client,
         ZEPHYR_RECORDED_URL,
-        lambda d: any(tc.get("labels") for tc in d.get("test_cases", [])),
+        lambda d: bool(d.get("test_cases")) and all(tc.get("labels") for tc in d["test_cases"]),
     )
-    labelled = [tc for tc in data.get("test_cases", []) if tc.get("labels")]
-    assert labelled, f"No test case received labels from classification. Recorded: {data}"
+    # The client merges the labels into the existing ones, so their order is not kept.
+    unlabelled = [
+        tc["key"] for tc in data.get("test_cases", []) if set(tc.get("labels", [])) != set(CLASSIFICATION_LABELS)
+    ]
+    assert data.get("test_cases") and not unlabelled, (
+        f"Test case(s) {unlabelled} did not receive the labels {CLASSIFICATION_LABELS}. Recorded: {data}"
+    )
 
 
 def _is_final_review_comment(comment: str) -> bool:
@@ -495,8 +543,8 @@ def test_review_set_status_to_review_complete(
 def test_review_comment_carries_the_duplicate_check(
     test_case_flow_response: httpx.Response, http_client: httpx.Client
 ) -> None:
-    """Every review comment written to Zephyr ends with the duplicate-check section
-    rendered in code, whatever the judge decided."""
+    """Every review comment written to Zephyr ends with the duplicate-check section rendered in code from the
+    judge's verdict, which the scripted judge makes a partial overlap with a seeded test case."""
     data = wait_for_recorded(
         http_client,
         ZEPHYR_RECORDED_URL,
@@ -511,12 +559,10 @@ def test_review_comment_carries_the_duplicate_check(
     assert data.get("test_cases") and not missing, (
         f"Review comment(s) of {missing} carry no '{DUPLICATE_CHECK_HEADING}' section. Recorded: {data}"
     )
-    outcomes = ("No duplicate test cases found.", "Fully covered by:", "Partially overlapping with:")
     for tc in data["test_cases"]:
         section = tc["review_comments"].split(DUPLICATE_CHECK_HEADING, 1)[1]
-        assert any(outcome in section for outcome in outcomes), (
-            f"The duplicate-check section of {tc['key']} states neither no duplicates nor a full or partial overlap: "
-            f"{section}"
+        assert "Partially overlapping with:" in section, (
+            f"The duplicate-check section of {tc['key']} does not render the judge's partial overlap: {section}"
         )
 
 
@@ -588,9 +634,15 @@ def test_created_bug_carries_execution_traceability(
 
     When the executor describes no environment of its own - as the mock executor deliberately does
     not - the orchestrator falls back to describing the execution itself, from the executing agent's
-    card and its own environment label, and hands that to the incident-creation agent, which turns
+    card and its own environment label, and hands that to the incident-creation model, which turns
     it into the environment details of the created bug.
     """
+    incident_requests = _model_requests(http_client, "incident_creation")
+    assert incident_requests, "The incident creation never called the model."
+    for traced_value in (TEST_ENVIRONMENT_LABEL, EXECUTION_AGENT_NAME, EXECUTION_AGENT_VERSION):
+        assert traced_value in incident_requests[0]["user"][0], (
+            f"The incident-creation model was not given {traced_value!r}: {incident_requests[0]['user'][0]}"
+        )
     data = wait_for_recorded(
         http_client,
         JIRA_MCP_RECORDED_URL,

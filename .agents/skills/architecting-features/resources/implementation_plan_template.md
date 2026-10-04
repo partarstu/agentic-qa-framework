@@ -10,7 +10,7 @@
 
 ## Architecture
 
-<"No architecture change." or: the nodes, relationships and controls to add, remove or rename under `calm/`, one line each, followed by the line `CALM change validated on a temporary copy and approved by the user on <date>`. `calm/` itself changes only during the implementation, and the implementation does not start without that line (*Architecture first* in `AGENTS.md`).>
+<"No architecture change." or: the nodes, relationships and controls to add, remove or rename under `calm/`, one line each, followed by the line `CALM change validated on a temporary copy and approved by the user on <date>`.>
 
 ## Design
 
@@ -27,7 +27,7 @@
 
 ## Impact
 
-<One line per affected area only: smoke suite, configuration, dependencies, security, and the version bump of every agent or orchestrator whose logic changes.>
+<One line per affected area only: smoke and A/B suites, configuration, dependencies, security, and the version bump of every agent or orchestrator whose logic changes.>
 
 ## TODO
 

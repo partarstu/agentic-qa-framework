@@ -19,7 +19,7 @@ permissions:
   contents: read
   pull-requests: write
 
-# A new push to a pull request supersedes its running CI, which would otherwise keep billing Gemini and compete for its rate limit.
+# A new push to a pull request supersedes its running CI.
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -68,7 +68,7 @@ jobs:
       - name: Run tests with coverage
         run: |
           uv run pytest tests/ \
-            -m "not smoke" \
+            -m "not smoke and not ab" \
             --cov=. \
             --cov-report=xml \
             --cov-report=term-missing \
@@ -161,12 +161,10 @@ jobs:
           -f pretty
 
   smoke:
-    name: Smoke (hermetic, real LLM)
+    name: Smoke (hermetic, mocked LLM)
     runs-on: ubuntu-latest
-    # Real, billed Gemini calls: only on manual runs, until the cost of running it on every pull request is justified.
-    if: github.event_name == 'workflow_dispatch'
-    # The test case design flow runs two reviews and a fix cycle, on top of the image builds.
-    timeout-minutes: 60
+    # Mostly the image builds: the scripted LLM mock answers every model call at once.
+    timeout-minutes: 30
     steps:
       - name: Checkout repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -203,23 +201,11 @@ jobs:
 
       - name: Start the smoke topology
         env:
-          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
           COMPOSE_BAKE: "false"
         run: docker compose -f docker-compose.smoke.yml up -d --build --wait
 
       - name: Run smoke tests
-        env:
-          # The A/B judge runs its model in the pytest process, not in a container.
-          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
         run: uv run pytest tests/smoke -m smoke -v --durations=10 -o log_cli=true --log-cli-level=INFO
-
-      - name: Upload smoke A/B report
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        if: always()
-        with:
-          name: smoke-ab-report
-          path: logs/smoke_ab_report.html
-          retention-days: 30
 
       - name: Dump compose logs
         if: always()

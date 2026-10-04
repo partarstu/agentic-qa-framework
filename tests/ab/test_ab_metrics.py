@@ -4,14 +4,15 @@
 
 """Unit tests for the pure A/B comparison logic.
 
-These need neither the smoke stack nor a model, so they carry no ``smoke`` marker and run
-with the ordinary test suite.
+These need neither the stack nor a model, so they carry no ``ab`` marker and run with the
+ordinary test suite.
 """
 
 import pytest
 
-from tests.smoke.ab_report import AbResult, render_html
-from tests.smoke.artifacts import (
+from tests.ab.ab_report import AbResult, render_html
+from tests.ab.artifacts import (
+    DIMENSIONS,
     METRIC_TOLERANCE,
     MetricRegression,
     RunSnapshot,
@@ -24,8 +25,8 @@ from tests.smoke.artifacts import (
     save_snapshot,
     story_context,
 )
+from tests.ab.judge import Comparison, verdict_for_candidate
 from tests.smoke.conftest import PROMPT_OVERRIDE_MARKER, SEEDED_ISSUE_KEY
-from tests.smoke.judge import Comparison, verdict_for_candidate
 
 
 def _snapshot(**overrides) -> RunSnapshot:
@@ -66,39 +67,55 @@ def _snapshot(**overrides) -> RunSnapshot:
 
 class TestComputeMetrics:
     def test_metrics_describe_what_the_run_produced(self):
-        metrics = compute_metrics(_snapshot())
+        metrics = compute_metrics(_snapshot(), DIMENSIONS)
         assert metrics["requirements_review"]["comments"] == 1.0
         assert metrics["test_case_generation"]["test_cases"] == 1.0
         assert metrics["test_case_generation"]["avg_steps_per_case"] == 1.0
         assert metrics["test_case_generation"]["cases_with_objective"] == 1.0
         assert metrics["test_case_generation"]["steps_with_expected_result"] == 1.0
         assert metrics["test_case_review"]["reviewed_cases"] == 1.0
+        assert metrics["test_case_classification"]["cases_with_labels"] == 1.0
         assert metrics["incident_report"]["bugs"] == 1.0
 
+    def test_only_the_requested_dimensions_are_measured(self):
+        metrics = compute_metrics(_snapshot(), ("test_case_review", "test_case_classification"))
+        assert set(metrics) == {"test_case_review", "test_case_classification"}
+
     def test_empty_run_yields_zeroes_instead_of_failing(self):
-        metrics = compute_metrics(_snapshot(review_comments=[], test_cases=[], bugs=[]))
+        metrics = compute_metrics(_snapshot(review_comments=[], test_cases=[], bugs=[]), DIMENSIONS)
         assert metrics["test_case_generation"]["test_cases"] == 0.0
         assert metrics["test_case_generation"]["avg_steps_per_case"] == 0.0
         assert metrics["test_case_review"]["reviewed_cases"] == 0.0
+        assert metrics["test_case_classification"]["cases_with_labels"] == 0.0
         assert metrics["incident_report"]["avg_bug_description_length"] == 0.0
 
     def test_unreviewed_case_lowers_the_reviewed_ratio(self):
         reviewed_case = _snapshot().test_cases[0]
         cases = [reviewed_case, {**reviewed_case, "key": "SMOKE-T2", "review_comments": "  "}]
-        metrics = compute_metrics(_snapshot(test_cases=cases))
+        metrics = compute_metrics(_snapshot(test_cases=cases), DIMENSIONS)
         assert metrics["test_case_review"]["reviewed_cases"] == 0.5
+
+    def test_unlabelled_case_lowers_the_labelled_ratio(self):
+        labelled_case = _snapshot().test_cases[0]
+        cases = [labelled_case, {**labelled_case, "key": "SMOKE-T2", "labels": []}]
+        metrics = compute_metrics(_snapshot(test_cases=cases), DIMENSIONS)
+        assert metrics["test_case_classification"]["cases_with_labels"] == 0.5
 
 
 class TestSnapshotStorage:
     def test_a_stored_baseline_is_read_back_unchanged(self, tmp_path):
-        path = tmp_path / "baselines" / "default.json"
+        path = tmp_path / "baselines" / "default" / "test_case_design.json"
         save_snapshot(path, _snapshot())
         assert load_snapshot(path) == _snapshot()
+
+    def test_a_workflow_snapshot_leaves_the_other_workflows_outputs_empty(self):
+        snapshot = RunSnapshot(label="test-model", captured_at="2026-01-01T00:00:00+00:00", story={}, attachments={})
+        assert (snapshot.review_comments, snapshot.test_cases, snapshot.bugs, snapshot.execution) == ([], [], [], {})
 
 
 class TestFindMetricRegressions:
     def test_identical_runs_do_not_regress(self):
-        metrics = compute_metrics(_snapshot())
+        metrics = compute_metrics(_snapshot(), DIMENSIONS)
         assert find_metric_regressions(metrics, metrics) == []
 
     def test_a_drop_within_the_tolerance_is_not_a_regression(self):
@@ -127,6 +144,7 @@ class TestRenderForJudge:
             ("requirements_review", "expiry of the reset link"),
             ("test_case_generation", "Wait 61 minutes"),
             ("test_case_review", "Add the exact expiry period."),
+            ("test_case_classification", "Labels: negative"),
             ("incident_report", "Reset link never expires"),
         ],
     )
@@ -228,7 +246,7 @@ def _ab_result(comparisons: list[Comparison], metric_regressions: list[MetricReg
 class TestHtmlReport:
     def test_the_judge_rationale_is_escaped_and_keeps_its_bold_emphasis(self):
         comparison = Comparison("test_case_generation", "same", "same", "**Coverage** <script>x</script>", "")
-        html = render_html("default", _snapshot(), _snapshot(), _ab_result([comparison]))
+        html = render_html("test_case_design", "default", _snapshot(), _snapshot(), _ab_result([comparison]))
         assert "<strong>Coverage</strong> &lt;script&gt;x&lt;/script&gt;" in html
         assert "<script>" not in html
 
@@ -243,6 +261,10 @@ class TestHtmlReport:
     )
     def test_the_overall_status_follows_the_gate(self, verdict, metric_regressions, status):
         html = render_html(
-            "default", _snapshot(), _snapshot(), _ab_result([_comparison(verdict, verdict)], metric_regressions)
+            "test_case_design",
+            "default",
+            _snapshot(),
+            _snapshot(),
+            _ab_result([_comparison(verdict, verdict)], metric_regressions),
         )
         assert f'big">{status}</span>' in html

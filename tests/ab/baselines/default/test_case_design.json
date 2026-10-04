@@ -30,9 +30,7 @@
     "reset-policy.md": "Password reset policy\n- A reset link stays valid for 60 minutes.\n- At most 3 reset requests per account per hour.\n",
     "reset-request.json": "{\"email\": \"user@example.com\", \"locale\": \"en-GB\"}"
   },
-  "review_comments": [
-    "**Review Feedback from Testing Team**\n\n1. Define rate-limiting requirements and error handling for initial and renewed requests:\n   - `reset-policy.md` specifies a limit of \"At most 3 reset requests per account per hour\", but the issue does not specify this rate limit. Explicitly define how rate-limiting is enforced for both initial password reset requests and link renewals via the \"Request a new link\" button, and define the expected system behavior and user-facing error message when the threshold is reached.\n\n2. Specify input variations, edge cases, and UI feedback for the reset request:\n   - The criteria currently only cover submitting a valid registered email address. Add explicit requirements for:\n     - Unregistered email addresses (e.g., returning a generic confirmation message to prevent user enumeration attacks versus returning an explicit error).\n     - Invalid email address formats and corresponding validation error messages.\n     - The immediate feedback/confirmation message displayed on the UI upon submitting the reset request.\n\n3. Define the workflow and expected results for link renewal:\n   - Acceptance Criteria 2 mentions a \"Request a new link\" button on the expired link page, but does not define the interaction workflow, inputs, or expected behavior (e.g., whether clicking it automatically triggers a new email to the previously associated address, redirects to the \"Forgot password\" page, or requires the user to re-enter their email address).\n\n4. Clarify handling of multiple active reset requests and token invalidation:\n   - Specify whether requesting a new reset link immediately invalidates previously issued, unexpired reset links/tokens before their 60-minute window closes, or if multiple active links can coexist.\n\n5. Define email content, link generation, and token specifications:\n   - The acceptance criteria do not define the email specifications (sender address, subject line, body template) or link generation details (token format, cryptographic/security properties, and target URL structure).\n\n6. Define request payload and localization behavior:\n   - `reset-request.json` includes a `locale` property (`en-GB`), but the acceptance criteria do not specify how this locale should be processed or how language selection applies when generating and dispatching the password reset email.\n\n7. Explicitly reference attachments in the issue requirements:\n   - Neither `reset-policy.md` nor `reset-request.json` is referenced in the issue description or acceptance criteria. Explicitly link or reference both attachments to ensure traceable requirements."
-  ],
+  "review_comments": [],
   "test_cases": [
     {
       "key": "SMOKE-T1",
@@ -124,29 +122,6 @@
       ]
     }
   ],
-  "bugs": [
-    {
-      "summary": "[Password Reset] - POST /api/password-reset returns HTTP 500 instead of HTTP 200",
-      "description": "## Description\nAn error occurred during the execution of step: \"Send POST /api/password-reset with a registered email address\". The request failed with an AssertionError: expected response status 200 but received 500. HTTP 500 Internal Server Error was returned and no password-reset email was queued.\n\nError Message:\n`AssertionError: expected response status 200 but received 500`\n\n## Environment Details\n- Agent: Smoke API Test Executor (version 9.9-smoke)\n- Environment: Smoke Test Environment\n\n## Steps to Reproduce\n1. Ensure a user account exists for the test email address (email=registered@example.com).\n2. Send POST /api/password-reset with registered email address (email=registered@example.com).\n\n## Expected Result\nHTTP 200 and a password-reset email is queued.\n\n## Actual Result\nHTTP 500 Internal Server Error; no email was queued."
-    }
-  ],
-  "execution": {
-    "key": "SMOKE-T100",
-    "name": "Password reset email is sent for a registered address",
-    "objective": "Verify the API queues a reset email when given a registered address.",
-    "precondition": "A user account exists for the test email address.",
-    "labels": [
-      "automated",
-      "api"
-    ],
-    "review_comments": "",
-    "steps": [
-      {
-        "description": "Send POST /api/password-reset with a registered email address",
-        "expected_result": "HTTP 200 and a password-reset email is queued",
-        "test_data": "email=registered@example.com"
-      }
-    ],
-    "failure": "AssertionError: expected response status 200 but received 500"
-  }
+  "bugs": [],
+  "execution": {}
 }

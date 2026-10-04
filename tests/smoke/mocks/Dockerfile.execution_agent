@@ -2,8 +2,9 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
-# Image for the mock A2A test-execution agent. Unlike the plain recording mocks
-# it imports the framework's AgentBase, so it also needs `common` and `config`.
+# Image for the mock A2A test-execution agent and the scripted LLM mock. Unlike the
+# plain recording mocks they import the framework's AgentBase and models, so they
+# also need `common` and `config`.
 FROM agentic-qa-base:latest
 
 ARG WORK_DIR=/app

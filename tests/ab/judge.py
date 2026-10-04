@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
-"""Blinded pairwise judging of two smoke runs' outputs by an LLM judge.
+"""Blinded pairwise judging of two workflow runs' outputs by an LLM judge.
 
 The metrics in ``artifacts.py`` see how much a run produced; this sees how good it is. Both
 runs' outputs for a dimension are handed to a judge model as anonymous "Output A" and
@@ -14,6 +14,7 @@ that disagree are judge noise, reported as such and never a regression.
 """
 
 import os
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Literal
 
@@ -24,13 +25,13 @@ from pydantic_ai.settings import ModelSettings
 from common import utils
 from common.model_factory import build_model
 from common.token_usage import TokenUsage
-from tests.smoke.artifacts import DIMENSIONS, RunSnapshot, execution_context, render_for_judge, story_context
+from tests.ab.artifacts import RunSnapshot, execution_context, render_for_judge, story_context
 
-# The judge runs the same model the smoke stack is configured with in docker-compose.smoke.yml.
+# The judge runs the same model docker-compose.ab.yml configures for the stack.
 # Overridable for a stack that cannot reach Gemini.
-JUDGE_MODEL_NAME = os.environ.get("SMOKE_JUDGE_MODEL", "google-gla:gemini-3.8-flash")
+JUDGE_MODEL_NAME = os.environ.get("AB_JUDGE_MODEL", "google-gla:gemini-3.8-flash")
 
-logger = utils.get_logger("smoke_judge")
+logger = utils.get_logger("ab_judge")
 
 # The label the judge picks for a blinded pair, on the five-level scale Arena-Hard uses.
 Label = Literal["A>>B", "A>B", "A=B", "B>A", "B>>A"]
@@ -86,6 +87,12 @@ CRITERIA: dict[str, str] = {
     "test_case_review": (
         "review comments written about generated test cases. Reward specific, actionable findings about the very "
         "case they refer to. Penalise empty praise, generic remarks and comments that ignore the case's content."
+    ),
+    "test_case_classification": (
+        "classifications of generated test cases, judged on their labels only: each case must carry the label of the "
+        "one test type it belongs to (ui, api, security, performance, load or stress) and one automation label "
+        "(automated, semi-automated or manual). Reward labels that match what the case verifies and how it can be "
+        "executed. Penalise wrong, missing or contradictory labels; ignore the quality of the cases themselves."
     ),
     "incident_report": (
         "bug reports created from a failed automated test of the requirement above. Reward a summary naming the "
@@ -146,26 +153,23 @@ def verdict_for_candidate(label: Label, candidate_slot: Literal["A", "B"]) -> Ve
     return for_slot_a if candidate_slot == "A" else _MIRROR[for_slot_a]
 
 
-def compare(baseline: RunSnapshot, candidate: RunSnapshot) -> list[Comparison]:
-    """Judge the candidate against the baseline on every dimension either of them produced something for."""
+def compare(baseline: RunSnapshot, candidate: RunSnapshot, dimensions: Iterable[str]) -> list[Comparison]:
+    """Judge the candidate against the baseline on every given dimension either of them produced something for."""
     agent = Agent(
         build_model(JUDGE_MODEL_NAME),
         output_type=_Judgement,
         instructions=JUDGE_INSTRUCTIONS,
         model_settings=ModelSettings(thinking="high"),
     )
-    story = story_context(baseline)
-    # The bug report is written from the failed execution, so its judge must see that too - the
-    # test case key, its test data and the failure are facts of the run, not inventions.
-    contexts = dict.fromkeys(DIMENSIONS, story) | {"incident_report": f"{story}\n\n{execution_context(baseline)}"}
     comparisons: list[Comparison] = []
-    for dimension in DIMENSIONS:
+    for dimension in dimensions:
         baseline_output = render_for_judge(dimension, baseline)
         candidate_output = render_for_judge(dimension, candidate)
         if not baseline_output.strip() and not candidate_output.strip():
             continue
-        forward = _judge(agent, dimension, contexts[dimension], baseline_output, candidate_output)
-        swapped = _judge(agent, dimension, contexts[dimension], candidate_output, baseline_output)
+        context = _requirement_context(dimension, baseline)
+        forward = _judge(agent, dimension, context, baseline_output, candidate_output)
+        swapped = _judge(agent, dimension, context, candidate_output, baseline_output)
         comparisons.append(
             Comparison(
                 dimension=dimension,
@@ -176,6 +180,15 @@ def compare(baseline: RunSnapshot, candidate: RunSnapshot) -> list[Comparison]:
             )
         )
     return comparisons
+
+
+def _requirement_context(dimension: str, baseline: RunSnapshot) -> str:
+    story = story_context(baseline)
+    # The bug report is written from the failed execution, so its judge must see that too - the
+    # test case key, its test data and the failure are facts of the run, not inventions.
+    if dimension == "incident_report":
+        return f"{story}\n\n{execution_context(baseline)}"
+    return story
 
 
 def _judge(agent: Agent, dimension: str, requirement: str, output_a: str, output_b: str) -> _Judgement:
