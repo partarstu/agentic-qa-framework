@@ -305,7 +305,7 @@ class TestCaseGenerationAgentConfig:
 # Test Case Design Agent
 class TestCaseDesignAgentConfig:
     THINKING_LEVEL: ThinkingLevel = "low"
-    VERSION = os.environ.get("TEST_CASE_DESIGN_AGENT_VERSION", "1.1.0")
+    VERSION = os.environ.get("TEST_CASE_DESIGN_AGENT_VERSION", "1.1.1")
     OWN_NAME = "Test Case Design Agent"
     SKILL_ID = "test-case-design"
     SKILL_NAME = "Test Case Design"

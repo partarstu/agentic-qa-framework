@@ -34,6 +34,21 @@ def test_a_call_of_no_known_operation_is_rejected_and_recorded_as_unhandled(clie
     ]
 
 
+def test_a_system_message_after_the_first_message_is_rejected_like_qwen_does(client: TestClient) -> None:
+    request = _request("Anything", ["unknown_field"])
+    request["messages"] = [
+        {"role": "system", "content": "Static instructions."},
+        {"role": "system", "content": "Dynamic instructions."},
+        *request["messages"],
+    ]
+
+    response = client.post("/v1/chat/completions", json=request)
+
+    assert response.status_code == 400
+    assert "System message must be at the beginning." in response.json()["error"]["message"]
+    assert client.get("/__recorded").json()["unhandled"] == [{"error": "System message must be at the beginning."}]
+
+
 def test_a_failing_scripted_answer_is_rejected_and_recorded_as_unhandled(client: TestClient) -> None:
     response = client.post("/v1/chat/completions", json=_request("A prompt without the test case to fix", ["ac_ids"]))
 

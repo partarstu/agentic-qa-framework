@@ -694,6 +694,9 @@ async def chat_completions(request: Request) -> JSONResponse:
             "tools": sorted(conversation.tool_schemas),
         }
     )
+    if any(message.get("role") == "system" for message in body.get("messages", [])[1:]):
+        # Qwen's chat template, as served by vLLM, rejects every system message but the first one.
+        return _unhandled({"error": "System message must be at the beginning."})
     signature = {"tools": sorted(conversation.tool_schemas), "output_fields": sorted(conversation.output_fields)}
     if operation is None:
         return _unhandled(signature)

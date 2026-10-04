@@ -366,7 +366,7 @@ TEST_CASE_DESIGN_MAX_OUTPUT_TOKENS= # Optional. Maximum output tokens per model 
 # Version each agent reports in its A2A agent card (visible in the dashboard) and, for execution agents,
 # on every test execution result. Each agent reads its own variable.
 REQUIREMENTS_REVIEW_AGENT_VERSION=1.4.0 # Default: 1.4.0.
-TEST_CASE_DESIGN_AGENT_VERSION=1.1.0 # Default: 1.1.0.
+TEST_CASE_DESIGN_AGENT_VERSION=1.1.1 # Default: 1.1.1.
 TEST_CASE_CLASSIFICATION_AGENT_VERSION=1.4.0 # Default: 1.4.0.
 INCIDENT_CREATION_AGENT_VERSION=1.3.0 # Default: 1.3.0.
 
@@ -630,7 +630,7 @@ orchestrator, and then start the dev server on top of that build.
 
 ### Model Settings and the pydantic-ai Version
 
-Provider-specific request settings (Claude 5 thinking and effort, Qwen reasoning and sampling, the maximum output tokens and the transport-level retries) are resolved in one place, `common/model_factory.py`, on **pydantic-ai 2.46.0**. No global temperature or top_p is sent: Gemini and Claude run on their provider defaults, and Qwen on its model card's sampling for the active mode. Every model client (Gemini, Claude and the OpenAI-compatible Qwen endpoint) runs on `httpx2`, with pydantic-ai's `AsyncHTTPX2TenacityTransport` as the retry transport, and the Atlassian MCP server is reached through pydantic-ai's `MCPToolset`.
+Provider-specific request settings (Claude 5 thinking and effort, Qwen reasoning and sampling, the maximum output tokens and the transport-level retries) are resolved in one place, `common/model_factory.py`, on **pydantic-ai 2.46.0**. No global temperature or top_p is sent: Gemini and Claude run on their provider defaults, and Qwen on its model card's sampling for the active mode. Every model client (Gemini, Claude and the OpenAI-compatible Qwen endpoint) runs on `httpx2`, with pydantic-ai's `AsyncHTTPX2TenacityTransport` as the retry transport, and the Atlassian MCP server is reached through pydantic-ai's `MCPToolset`. Qwen's chat template accepts a system message only at the start of the conversation, so the Qwen model profile merges all instruction parts of an agent (e.g. the test case design's main prompt and its per-story instruction) into one leading system message; the smoke suite's LLM mock rejects a later system message the same way.
 
 The agents keep the pydantic-ai 1.x run semantics: `end_strategy="early"` (tools requested alongside the final output are skipped rather than run) and a single retry per MCP tool call. A custom `MODEL_NAME` left to pydantic-ai follows its 2.x prefixes: `openai:` now targets the Responses API (`openai-chat:` for Chat Completions), and `google-vertex:` is `google-cloud:`; the `google-gla:`, `anthropic:` and `qwen:` names are built by the model factory and are unaffected.
 
@@ -645,6 +645,15 @@ Run `qwen:Qwen/Qwen3.8-27B-FP8` with thinking off, which is the default (`QWEN_T
 | Thinking on, `low` | 2 | Every flow completed, but no quality gain over thinking off, and one test-case generation judged much worse than the baseline. |
 
 The quality gaps against Gemini did not depend on thinking: test-case generation repeatedly asserted that a single-use link was consumed without the test ever completing the action that consumes it, and the requirements review tended to pad its feedback with generic checklist items and advice addressed to testers rather than to the story author. Thinking only added latency and the risk of timeouts, so it is not worth enabling for this model.
+A second evaluation ran requirements review, test case design and incident creation once per configuration against Gemini 3.8 Flash, on a large synthetic checkout story (10 acceptance criteria with sub-items, a business-rules attachment with 18 rules the acceptance criteria do not state), with unchanged prompts:
+
+| Configuration | Requirements review | Test case design | Incident creation |
+| --- | --- | --- | --- |
+| Thinking off, `presence_penalty` 1.5 (model card) | On par with Gemini: 12 consolidated points, all 18 rules found | Split the 10 acceptance criteria into 25 against the prompt's rule; 23 shallow test cases, one case with two test type labels | Failed: repeated duplicate searches until the tool call limit, no bug created |
+| Thinking off, `presence_penalty` 0 | All 18 rules found, but 49 barely merged points | Correct 10 acceptance criteria, the widest rule coverage of all runs (12 of 18, Gemini 8 of 18), but duplicated test cases and some invented test data | Complete and accurate bug report |
+| Thinking `low`, model card thinking sampling | 30 well-prioritised points, 16 of 18 rules, slower | Did not finish within the A/B suite's 40-minute webhook timeout | Complete and accurate bug report |
+
+The best single setting for every workflow is thinking off with `presence_penalty` 0: the penalty of 1.5 breaks agentic steps (instruction following, tool loops), while 0 only makes the merged requirements review wordier. The default remains the model card's 1.5 until a sweep of further values confirms it. Gemini still produced the cleaner test case suite, while Qwen matched it on requirements review.
 
 #### Context compaction
 

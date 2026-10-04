@@ -7,6 +7,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx2
 import pytest
+from openai.types.chat import ChatCompletion, ChatCompletionMessage
+from openai.types.chat.chat_completion import Choice
+from pydantic_ai import Agent
 from pydantic_ai.models import Model
 from pydantic_ai.models.anthropic import AnthropicModel
 from pydantic_ai.models.google import GoogleModel
@@ -73,6 +76,29 @@ def test_configured_qwen_context_window_reaches_the_model():
 
     assert model.context_window == 262_144
     assert model.profile["ignore_streamed_leading_whitespace"] is True
+
+
+def test_qwen_receives_every_instruction_in_one_leading_system_message():
+    # Qwen's chat template rejects a second system message with "System message must be at the beginning".
+    with patch("config.QWEN_ENDPOINT", "http://localhost:8080/v1/"):
+        model = build_model("qwen:Qwen/Qwen3.8-27B-FP8")
+    completion = ChatCompletion(
+        id="completion",
+        object="chat.completion",
+        created=0,
+        model="Qwen/Qwen3.8-27B-FP8",
+        choices=[Choice(index=0, finish_reason="stop", message=ChatCompletionMessage(role="assistant", content="ok"))],
+    )
+    agent = Agent(model, instructions="Static instructions.")
+    agent.instructions(lambda: "Dynamic instructions.")
+
+    with patch.object(model.client.chat.completions, "create", AsyncMock(return_value=completion)) as create:
+        agent.run_sync("Task.")
+
+    assert create.call_args.kwargs["messages"] == [
+        {"role": "system", "content": "Static instructions.\n\nDynamic instructions."},
+        {"role": "user", "content": "Task."},
+    ]
 
 
 def test_qwen_context_window_is_unknown_when_not_configured():
