@@ -1,0 +1,60 @@
+{
+  "label": "google-gla:gemini-3.8-flash",
+  "captured_at": "2026-10-01T20:51:58+00:00",
+  "story": {
+    "key": "SMOKE-1",
+    "id": "10001",
+    "fields": {
+      "project": {
+        "key": "SMOKE",
+        "id": "10000"
+      },
+      "issuetype": {
+        "name": "Story"
+      },
+      "summary": "User can reset their password via an emailed link",
+      "description": "As a registered user I want to reset my password through a link sent to my email so that I can regain access when I forget it.\n\nProject Key: SMOKE\nIssue ID (numeric): 10001\n\nAcceptance Criteria:\n1. Submitting a registered email address on the 'Forgot password' form sends an email with a single-use password-reset link that is valid for 60 minutes.\n2. Opening a reset link more than 60 minutes after it was sent shows the message 'This reset link has expired' and a 'Request a new link' button.",
+      "attachment": [
+        {
+          "filename": "reset-policy.md",
+          "mimeType": "text/plain"
+        },
+        {
+          "filename": "reset-request.json",
+          "mimeType": "application/json"
+        }
+      ]
+    }
+  },
+  "attachments": {
+    "reset-policy.md": "Password reset policy\n- A reset link stays valid for 60 minutes.\n- At most 3 reset requests per account per hour.\n",
+    "reset-request.json": "{\"email\": \"user@example.com\", \"locale\": \"en-GB\"}"
+  },
+  "review_comments": [],
+  "test_cases": [],
+  "bugs": [
+    {
+      "summary": "[Password Reset] - POST /api/password-reset returns HTTP 500 instead of HTTP 200",
+      "description": "## Description\nAn error occurred during the execution of step: \"Send POST /api/password-reset with a registered email address\". The request failed with an AssertionError: expected response status 200 but received 500. HTTP 500 Internal Server Error was returned and no password-reset email was queued.\n\nError Message:\n`AssertionError: expected response status 200 but received 500`\n\n## Environment Details\n- Agent: Smoke API Test Executor (version 9.9-smoke)\n- Environment: Smoke Test Environment\n\n## Steps to Reproduce\n1. Ensure a user account exists for the test email address (email=registered@example.com).\n2. Send POST /api/password-reset with registered email address (email=registered@example.com).\n\n## Expected Result\nHTTP 200 and a password-reset email is queued.\n\n## Actual Result\nHTTP 500 Internal Server Error; no email was queued."
+    }
+  ],
+  "execution": {
+    "key": "SMOKE-T100",
+    "name": "Password reset email is sent for a registered address",
+    "objective": "Verify the API queues a reset email when given a registered address.",
+    "precondition": "A user account exists for the test email address.",
+    "labels": [
+      "automated",
+      "api"
+    ],
+    "review_comments": "",
+    "steps": [
+      {
+        "description": "Send POST /api/password-reset with a registered email address",
+        "expected_result": "HTTP 200 and a password-reset email is queued",
+        "test_data": "email=registered@example.com"
+      }
+    ],
+    "failure": "AssertionError: expected response status 200 but received 500"
+  }
+}

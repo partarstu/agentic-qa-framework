@@ -75,6 +75,7 @@ Compare the scope from step 1 with:
 - **Versions**: every bump *Versioning* in `AGENTS.md` requires for the branch. Add a missing bump and list every bump in the PR description.
 - **Skills in `.agents/skills/` and `AGENTS.md`**: any instruction, template or referenced code path the change made inaccurate.
 - **Smoke suite**: the coverage *Smoke suite* in `AGENTS.md` requires for the branch. If it is missing, stop and tell the user.
+- **A/B suite**: the A/B test of every new LLM-driven workflow and the refreshed baseline of every workflow whose output changes on purpose (*A/B suite* in `AGENTS.md`). If one is missing, stop and tell the user; never run the A/B suite yourself.
 
 ## 8. Review with the user and get approval
 

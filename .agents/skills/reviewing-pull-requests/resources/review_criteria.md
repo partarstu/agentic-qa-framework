@@ -35,3 +35,4 @@ Check every changed line, tests included, against `PYTHON_GUIDELINES.md` and eve
 - A missing version bump, or one at the wrong level (*Versioning*): `[MEDIUM]`.
 - An architecture change without the CALM update (*Architecture first (CALM)*): `[HIGH]`.
 - An added or extended end-to-end flow without smoke coverage (*Smoke suite*): `[HIGH]`. A pure internal refactor is exempt; confirm that it really is one.
+- A new LLM-driven workflow without its A/B test, or an intended change of an agent's output without the refreshed baseline (*A/B suite*): `[HIGH]`.

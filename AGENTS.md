@@ -10,7 +10,7 @@ QuAIA orchestrator and its A2A agents (requirements review, test case design - w
 
 Run from the repository root unless noted; if imports of third-party packages fail, run `uv sync` first.
 
-* Unit tests: `uv run pytest` (`pytest.ini` deselects the smoke tests); one file: `uv run pytest tests/<path>/test_<module>.py -v`; with coverage, as CI runs them: `uv run pytest --cov=. --cov-report=term-missing`.
+* Unit tests: `uv run pytest` (`pytest.ini` deselects the smoke and A/B tests); one file: `uv run pytest tests/<path>/test_<module>.py -v`; with coverage, as CI runs them: `uv run pytest --cov=. --cov-report=term-missing`.
 * Lint, the CI gate: `uv run ruff check .`
 * CALM validation, run from `calm/` or from its temporary copy; a clean run prints `No issues found.` and exits `0`:
   ```bash
@@ -20,7 +20,7 @@ Run from the repository root unless noted; if imports of third-party packages fa
   ```bash
   npx -y @finos/calm-cli@1.46.0 docify -a architecture/quaia.arch.json -o <another directory outside the repository>
   ```
-* Smoke suite: see *Smoke suite*.
+* Smoke and A/B suites: see *Smoke suite* and *A/B suite*.
 
 ## Project conventions
 
@@ -67,22 +67,35 @@ An architecture change is approved before anything is implemented, and checking 
 
 ## Smoke suite
 
-The hermetic smoke suite in `tests/smoke/` runs the real orchestrator and agents under `docker-compose.smoke.yml` with a real Gemini model and recording mocks at the external boundaries, and asserts on what reaches those boundaries. CI runs it (the `smoke` job) only when triggered manually; *Hermetic smoke tests* in `README.md` describes the layout.
+The hermetic smoke suite in `tests/smoke/` runs the real orchestrator and agents under `docker-compose.smoke.yml` with every external boundary mocked, the LLM included: the scripted LLM mock (`tests/smoke/mocks/llm_mock.py`) answers every model call, so the suite needs no key and makes no billed call. It asserts on what reaches those boundaries; CI runs it (the `smoke` job) on every push and pull request. *Hermetic smoke tests* in `README.md` describes the layout.
 
 * A change that adds or extends end-to-end behaviour - a new agent, orchestrator workflow or endpoint, external integration or step in a flow, or a change to what a flow produces - updates the suite in the same change:
     - **New flow**: a test in `tests/smoke/test_smoke.py` (fixtures in `tests/smoke/conftest.py`, recording mocks in `tests/smoke/mocks/`) that drives it through the orchestrator's public endpoints and asserts on what reached the mocked boundary.
     - **Extended flow**: stronger assertions in the existing tests that cover the new behaviour.
     - **New external boundary**: a new or extended recording mock in `tests/smoke/mocks/`, wired into `docker-compose.smoke.yml`.
-    - **Intentionally changed agent output**: a refreshed A/B baseline (below), never loosened checks.
+    - **New or changed LLM call** (a new agent, sub-agent, tool or output model, or a changed tool sequence): its scripted answer in `tests/smoke/mocks/llm_mock.py`; the suite fails on every model call the mock cannot attribute.
 * A change that adds no observable end-to-end behaviour (e.g. an internal refactor) needs no smoke change; say so explicitly instead of skipping it silently.
-* Never run the suite or refresh a baseline unless the user asks for that run in the conversation (a plan step is not such a request): it needs the Docker stack and `GOOGLE_API_KEY` and makes billed Gemini calls. When asked:
+* Run it with:
   ```bash
   docker build -t agentic-qa-base:latest -f Dockerfile.base .
-  GOOGLE_API_KEY=<your-key> docker compose -f docker-compose.smoke.yml up -d --build --wait
+  docker compose -f docker-compose.smoke.yml up -d --build --wait
   uv run pytest tests/smoke -m smoke -v
   docker compose -f docker-compose.smoke.yml down -v
   ```
-* Every run A/B-compares the agents' outputs with the committed baseline in `tests/smoke/baselines/` (`tests/smoke/test_ab_compare.py`) on structural metrics and judged quality, and fails on a regression. A baseline is refreshed with `SMOKE_WRITE_BASELINE=1 SMOKE_BASELINE_NAME=<name> uv run pytest tests/smoke -m smoke`; see *A/B comparison against a baseline* in `README.md`.
+
+## A/B suite
+
+The A/B suite in `tests/ab/` runs the smoke topology with the model-driven services on a real model (the `docker-compose.ab.yml` override) and gives every LLM-driven workflow its own A/B test, which compares that workflow's outputs with its committed baseline in `tests/ab/baselines/<name>/` on structural metrics and judged quality and fails on a regression. It never runs automatically: CI runs it only through the manually started `A/B` workflow (`.github/workflows/ab.yml`). *A/B tests against a baseline* in `README.md` describes it.
+
+* A new LLM-driven workflow gets its own A/B test in the same change: an entry in `WORKFLOWS` of `tests/ab/artifacts.py` with its dimensions (snapshot collection, metrics, judge rendering and criteria) and its captured baseline.
+* An intentionally changed agent output gets the baselines of the affected workflows refreshed, never loosened checks.
+* Never run the A/B suite or refresh a baseline unless the user asks for that run in the conversation (a plan step is not such a request): it needs `GOOGLE_API_KEY` and makes billed model calls. When asked, run only the affected workflows, on a fresh stack:
+  ```bash
+  GOOGLE_API_KEY=<your-key> docker compose -f docker-compose.smoke.yml -f docker-compose.ab.yml up -d --build --wait
+  uv run pytest tests/ab -m ab -k <workflow> -v
+  AB_WRITE_BASELINE=1 AB_BASELINE_NAME=<name> uv run pytest tests/ab -m ab -k <workflow>  # refreshes the baseline instead
+  docker compose -f docker-compose.smoke.yml -f docker-compose.ab.yml down -v
+  ```
 
 <!-- Shared rules: start. This block is identical in the agentic-qa-framework and test-execution-agents repositories; edit it in one of them and copy it unchanged to the other. -->
 
@@ -144,7 +157,7 @@ Temporary files - scratch scripts, drafts, PR descriptions, review JSON, copies 
 
 ## Definition of done
 
-A change is done when the unit tests of every touched module pass, the affected versions are bumped (*Versioning*), the smoke suite and the CALM model cover the change (*Smoke suite*, *Architecture first (CALM)*), README.md describes the changed behaviour, and everything temporary is cleaned up. Skip what doesn't apply; if you skip something that might look applicable, say why.
+A change is done when the unit tests of every touched module pass, the affected versions are bumped (*Versioning*), the smoke suite, the A/B suite and the CALM model cover the change (*Smoke suite*, *A/B suite*, *Architecture first (CALM)*), README.md describes the changed behaviour, and everything temporary is cleaned up. Skip what doesn't apply; if you skip something that might look applicable, say why.
 
 Finish every implementation task with a report in three short parts:
 

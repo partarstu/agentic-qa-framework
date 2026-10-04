@@ -27,7 +27,7 @@
 
 ## Impact
 
-<One line per affected area only: smoke suite, configuration, dependencies, security, and the version bump of every agent or orchestrator whose logic changes.>
+<One line per affected area only: smoke and A/B suites, configuration, dependencies, security, and the version bump of every agent or orchestrator whose logic changes.>
 
 ## TODO
 

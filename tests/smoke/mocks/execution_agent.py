@@ -79,7 +79,7 @@ class MockExecutionAgent(AgentBase):
             protocol="http",
             port=port,
             external_port=int(os.environ.get("EXTERNAL_PORT", port)),
-            model_name="google-gla:gemini-3.5-flash",
+            model_name=config.DEFAULT_MODEL_NAME,
             version=os.environ.get("EXECUTION_AGENT_VERSION", "1.0"),
             output_type=_ExecutionOutput,
             instructions="Unused: this mock returns a fixed result without calling the model.",

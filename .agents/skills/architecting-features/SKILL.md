@@ -41,7 +41,7 @@ Decide and justify each point that applies, in one line each:
 
 - **Components**: which modules change and which are new. Prefer extending existing modules over new abstractions.
 - **Alternatives**: for a significant choice, name the chosen option and why.
-- **Smoke suite**: the update *Smoke suite* in `AGENTS.md` requires, or that none is needed.
+- **Smoke and A/B suites**: the updates *Smoke suite* and *A/B suite* in `AGENTS.md` require (smoke tests, scripted answers of the LLM mock, an A/B test, baselines to refresh), or that none is needed.
 - **Security**: how external input, secrets and untrusted text reaching an LLM are handled (*Project conventions* in `AGENTS.md`, `PYTHON_GUIDELINES.md` § 11).
 - **Python design**: data models, error handling and the concurrency model follow `PYTHON_GUIDELINES.md` (§ 5, § 7, § 9).
 - **Dependencies**: a new package must meet `PYTHON_GUIDELINES.md` § 15.

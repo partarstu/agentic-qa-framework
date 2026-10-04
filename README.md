@@ -823,28 +823,19 @@ once, then identify the assigned URL of each service, update the substitution va
 
 ### Hermetic smoke tests
 
-The smoke suite is a self-contained integration test, independent of any Cloud Run deployment. It runs the real
-orchestrator and the QA agents (requirements review, test case design and incident creation)
-under `docker-compose.smoke.yml`, driven by a real Gemini model (`gemini-3.8-flash`, set as `MODEL_NAME` in the compose
-file), with only the external boundaries replaced by mocks
-under `tests/smoke/mocks/` (Jira MCP, Jira REST, Zephyr, Qdrant + embedding, and
-Confluence REST). A mock test-execution agent stands in for the
-VM-hosted real executors. It drives the system through the orchestrator's public webhooks and asserts on what reaches
-each mocked boundary:
+The smoke suite is a self-contained integration test, independent of any Cloud Run deployment and of any LLM provider. It runs the real orchestrator and the QA agents (requirements review, test case design and incident creation) under `docker-compose.smoke.yml`, with every external boundary replaced by a mock under `tests/smoke/mocks/` (the LLM, Jira MCP, Jira REST, Zephyr, Qdrant + embedding, Confluence REST and Microsoft Graph). A mock test-execution agent stands in for the VM-hosted real executors.
 
-* **Requirements review** (`POST /new-requirements-available`) → a non-empty review comment reaches Jira (REST or MCP),
-  and the agent first fetched the source story via the Jira MCP. The comment carries the marker of the prompt override
-  mounted from `tests/smoke/overrides/`, the story attachment is downloaded over Jira REST, and the review issues a
-  hybrid documents query whose text is non-empty and shorter than the issue content. With `REQUIREMENTS_REVIEW_FOCUS_AREA_COUNT` set to 3, the usage artifact meters the focused reviews (`review_with_attachments`) and, whenever at least two of them succeeded, the merge run (`merge_reviews`).
-* **Additional Jira fields** (`JIRA_ADDITIONAL_FIELD_IDS`) → the Jira MCP mock records that the requirements review and
-  the test case design flows requested the configured custom field IDs.
+The LLM mock (`tests/smoke/mocks/llm_mock.py`) is an OpenAI-compatible Chat Completions server that every agent and the orchestrator reach through the existing `qwen:` route (`MODEL_NAME: "qwen:smoke-mock"` and `QWEN_ENDPOINT` in the compose file), so no production code knows about it and the real model client, its retries, the tool loop, output validation and usage metering stay under test. It recognises the calling operation by the tools a request offers and the shape of its output tool, and answers deterministically from the conversation: the next tool call of that operation's workflow, or its final output built from the framework's own models. Every request is recorded at `/__recorded`; a request that matches no operation is answered with HTTP 400 and recorded as unhandled, which fails the suite, so a new LLM call needs a scripted answer in the mock. The stack carries no provider key, and the suite refuses to run when an agent card reports any other model.
+
+The suite drives the system through the orchestrator's public webhooks and asserts on what reaches each mocked boundary:
+
+* **Every LLM call** → each model-driven operation of the flows (routing, results extraction, the requirements review with its focused reviews and their merge, every step of the test case design including the duplicate judgement, classification and incident creation) reached the LLM mock, and none went unanswered.
+* **Requirements review** (`POST /new-requirements-available`) → a non-empty review comment reaches Jira (REST or MCP), and the agent first fetched the source story via the Jira MCP. The prompt override mounted from `tests/smoke/overrides/` reaches the review model's instructions, the story attachment is downloaded over Jira REST, and the review issues a hybrid documents query whose text is non-empty and shorter than the issue content. With `REQUIREMENTS_REVIEW_FOCUS_AREA_COUNT` set to 3, the usage artifact meters the three focused reviews (`review_with_attachments`) and the merge run (`merge_reviews`).
+* **Additional Jira fields** (`JIRA_ADDITIONAL_FIELD_IDS`) → the configured custom field IDs reach the models of the requirements review and the test case design, and the Jira MCP mock records that both flows requested them.
 * **Routing and cards** → routing decisions with justifications reach the dashboard logs, and every agent's card
   description carries its model, version and skill name.
-* **Test case design** (`POST /story-ready-for-test-case-generation`) → the Test Case Design agent generates, reviews and fixes the test cases through the whole loop: a severity-classifier override mounted from `tests/smoke/overrides/` makes every review report a high finding per test case, so the design runs exactly one fix cycle and stops as `iteration_limit` after the second review (`TEST_CASE_DESIGN_MAX_ITERATIONS: "2"` in the compose file), and every final comment reports that; a design that converges on its own is covered by the unit tests. Then real test cases (name + steps) reach Zephyr exactly once, each linked once to the originating story; classification labels reach Zephyr; every test case gets the "Review Complete" status and a final review comment with the header naming the iterations and the stop reason, its severity-tagged findings or "No findings.", and the "Duplicate check" section, which states either "No duplicate test cases found." or a full or partial overlap. The design's LLM fetched the story exactly once through the Jira MCP, without comments (`comment_limit` 0) and with the content and the configured fields. When publishing, each final test case was searched for duplicates exactly once, within its project (the Qdrant mock answers test-case queries with the stored points, so the judge runs end to end); the usage artifact carries per-operation counters of the design agent and the sub-agents of its generation and review delegates, the test case fixer included.
-* **Test execution / incident creation** (`POST /execute-tests`) → a failed automated test drives a real Bug issue into
-  the seeded Jira project, the failed execution is reported to Zephyr inside a fresh test cycle, the bug is linked to
-  that execution, and the duplicate search consulted the vector DB with the project filter. The typed (`api`) test
-  case reaches the execution agent while the seeded untyped one is skipped with a warning.
+* **Test case design** (`POST /story-ready-for-test-case-generation`) → the Test Case Design agent generates, reviews and fixes the test cases through the whole loop: the LLM mock reports a high finding per test case in every review (on a real model, the severity-classifier override mounted from `tests/smoke/overrides/` does), so the design runs exactly one fix cycle and stops as `iteration_limit` after the second review (`TEST_CASE_DESIGN_MAX_ITERATIONS: "2"` in the compose file), and every final comment reports that; a design that converges on its own is covered by the unit tests. Then the scripted test cases (name + steps, one per acceptance criterion) reach Zephyr exactly once, each linked once to the originating story; the classification labels reach every test case; every test case gets the "Review Complete" status and a final review comment with the header naming the iterations and the stop reason, its severity-tagged findings, and the "Duplicate check" section, which renders the judge's partial overlap with a seeded test case. The design's LLM fetched the story exactly once through the Jira MCP, without comments (`comment_limit` 0) and with the content and the configured fields. When publishing, each final test case was searched for duplicates exactly once, within its project (the Qdrant mock answers test-case queries with the stored points, so the judge runs end to end); the usage artifact carries per-operation counters of the design agent and the sub-agents of its generation and review delegates, the test case fixer included.
+* **Test execution / incident creation** (`POST /execute-tests`) → a failed automated test drives a real Bug issue into the seeded Jira project, the failed execution is reported to Zephyr inside a fresh test cycle, the bug is linked to that execution, and the duplicate search consulted the vector DB with the project filter. The executing agent's name and version and the environment label reach the incident model and the bug. The typed (`api`) test case reaches the execution agent while the seeded untyped one is skipped with a warning.
 * **Manual execution** (`POST /execute-test`) → one result for the chosen mock agent reaches Zephyr and no bug is
   created.
 * **Structured logging** → the requirements review's log lines carry the agent's name and task id.
@@ -863,63 +854,62 @@ each mocked boundary:
   missing `project_key` or `space_key` fails with 422, and the dashboard API rejects a missing token (401) — all without dispatching
   to an agent.
 
-The five webhooks are fired once, concurrently (the flows are mutually independent), so the suite's wall time is the
-longest flow rather than the sum of all flows.
+The RAG syncs are fired first, concurrently: they fill the vector DB the other flows retrieve from, and the mocked model would otherwise reach it before them. Then the model-driven webhooks are fired once, concurrently (the flows are mutually independent), so the suite runs in seconds once the stack is up.
 
-Set `SMOKE_SEQUENTIAL_WEBHOOKS=1` to fire them one at a time instead: the RAG syncs first, since they call no model and fill the vector DB the other flows retrieve from, then the model-driven flows one after another. This suits a self-hosted model that should not serve several flows at once; the suite's wall time becomes the sum of the flows.
-
-It runs in GitHub Actions (the `smoke` job in `.github/workflows/ci.yml`) on manual
-`workflow_dispatch` only — never on pull requests or pushes to `main` — because every run makes real, billed Gemini calls. The job needs a
-`GOOGLE_API_KEY` repository secret. To run it locally:
+It runs in GitHub Actions (the `smoke` job in `.github/workflows/ci.yml`) on every push and pull request, and needs no secret. To run it locally:
 
 ```bash
 docker build -t agentic-qa-base:latest -f Dockerfile.base .
-GOOGLE_API_KEY=<your-key> docker compose -f docker-compose.smoke.yml up -d --build --wait
+docker compose -f docker-compose.smoke.yml up -d --build --wait
 uv run pytest tests/smoke -m smoke -v
 docker compose -f docker-compose.smoke.yml down -v
 ```
 
-#### A/B comparison against a baseline
+### A/B tests against a baseline
 
-The assertions above prove that a flow *ran*; they say nothing about the quality of what the model wrote, so a change to
-the model, its settings or an agent's prompt can degrade every output while the suite stays green. The A/B checks in
-`tests/smoke/test_ab_compare.py` (marker `ab`, part of the same smoke run and reusing the same webhook execution) close
-that gap: they capture what a run produced - the requirements review, the generated test cases, their review comments and
-the bug created for a failed execution - and compare it against a snapshot committed under `tests/smoke/baselines/`, on
-two levels:
+The smoke suite proves that the flows work on a scripted model; it says nothing about the quality of what a real model writes, so a change to the model, its settings or an agent's prompt can degrade every output while the suite stays green. The A/B suite under `tests/ab/` (marker `ab`) closes that gap. It runs the same topology with the model-driven services on a real model - `docker-compose.ab.yml` sets `MODEL_NAME` and `GOOGLE_API_KEY` for the orchestrator, requirements review, test case design and incident creation - and gives every LLM-driven workflow its own A/B test, which runs that workflow once and compares what it produced against the workflow's snapshot committed under `tests/ab/baselines/<name>/`:
 
-* **Structural metrics** (`tests/smoke/artifacts.py`) - test cases per run, steps per case, share of cases carrying an
-  objective, labels and a review comment, bugs created, output lengths. Each is "higher is better", so a candidate below
-  its baseline value means the run produced *less*.
-* **Judged quality** (`tests/smoke/judge.py`) - both runs' outputs for a dimension are handed to a judge model as anonymous "Output A" and "Output B" and judged against the requirement they came from - the seeded story together with the attachments the agents received, and for the bug report also the failed execution it was written from, so a detail grounded in those is not mistaken for an invention; the prompt-override marker the review flow appends is stripped before judging - on a five-level scale - `much_better`, `better`, `same`, `worse`, `much_worse`, read from the candidate's side - with a rationale that must name the concrete content behind the label. The pair is judged a second time with the two swapped: a verdict only counts when both orders agree on its direction (at the milder of the two magnitudes), and orders that disagree are reported as `inconsistent` - judge noise, never a regression. A candidate judged `much_worse` in both orders means the run produced something clearly *worse* and is a regression; one judged `worse` (in both orders, or `worse` in one and `much_worse` in the other) is reported as a warning only, because a single run of a non-deterministic model can land somewhat below a single baseline run without any change.
+| Workflow (`-k`) | Webhook | Compared outputs (dimensions) |
+| --- | --- | --- |
+| `requirements_review` | `POST /new-requirements-available` | the review comment (`requirements_review`) |
+| `test_case_design` | `POST /story-ready-for-test-case-generation` | the generated test cases (`test_case_generation`), their review comments (`test_case_review`) and their classification labels (`test_case_classification`) |
+| `incident_creation` | `POST /execute-tests` | the bug report created for the failed execution (`incident_report`) |
 
-Metrics apply a 25% tolerance because the artifacts come from a non-deterministic model; the judge's tolerance is the
-agreement of both orders. A regression on either level fails the run; a judged `worse` shows up in the pytest warnings summary and as `WARNING` in the report. Every comparison writes a full report - per-metric
-deltas, per-dimension verdicts for each order and the judge's rationale behind them - to `logs/smoke_ab_report.html`, a self-contained page to open in any browser; the
-`smoke` CI job uploads it as the `smoke-ab-report` artifact of the workflow run.
+Routing and results extraction have no dimension of their own: a wrong route or extraction fails the run of the workflow itself. The RAG syncs, `/execute-test` and the dashboard produce no model output, so the smoke suite alone covers them. The suite runs the RAG syncs once first, then each selected workflow one after another, and refuses a stack whose agents report the LLM mock's model. Each workflow is compared on two levels:
 
-Capture a baseline once per configuration you want to compare against, then compare later runs against it (both with the
-smoke stack up):
+* **Structural metrics** (`tests/ab/artifacts.py`) - test cases per run, steps per case, share of cases carrying an objective, labels and a review comment, bugs created, output lengths. Each is "higher is better", so a candidate below its baseline value means the run produced *less*.
+* **Judged quality** (`tests/ab/judge.py`) - both runs' outputs for a dimension are handed to a judge model as anonymous "Output A" and "Output B" and judged against the requirement they came from - the seeded story together with the attachments the agents received, and for the bug report also the failed execution it was written from, so a detail grounded in those is not mistaken for an invention; the prompt-override marker the review flow appends is stripped before judging - on a five-level scale - `much_better`, `better`, `same`, `worse`, `much_worse`, read from the candidate's side - with a rationale that must name the concrete content behind the label. The pair is judged a second time with the two swapped: a verdict only counts when both orders agree on its direction (at the milder of the two magnitudes), and orders that disagree are reported as `inconsistent` - judge noise, never a regression. A candidate judged `much_worse` in both orders means the run produced something clearly *worse* and is a regression; one judged `worse` (in both orders, or `worse` in one and `much_worse` in the other) is reported as a warning only, because a single run of a non-deterministic model can land somewhat below a single baseline run without any change.
+
+Metrics apply a 25% tolerance because the artifacts come from a non-deterministic model; the judge's tolerance is the agreement of both orders. A regression on either level fails the workflow's test; a judged `worse` shows up in the pytest warnings summary and as `WARNING` in the report. Every comparison writes a full report - per-metric deltas, per-dimension verdicts for each order and the judge's rationale behind them - to `logs/ab_report_<workflow>.html`, a self-contained page to open in any browser.
+
+The A/B suite never runs automatically, because every run makes real, billed model calls: run it by hand, for the workflows a change touches. In GitHub Actions, start the **A/B** workflow (`.github/workflows/ab.yml`) with its `workflow` input set to `all` or to one workflow; it needs a `GOOGLE_API_KEY` repository secret and uploads the reports as the `ab-reports` artifact. Locally, run it against a fresh stack, since the recording mocks keep what earlier runs wrote:
 
 ```bash
-# Capture: this run becomes tests/smoke/baselines/gemini.json
-SMOKE_WRITE_BASELINE=1 SMOKE_BASELINE_NAME=gemini uv run pytest tests/smoke -m smoke -v
+docker build -t agentic-qa-base:latest -f Dockerfile.base .
+GOOGLE_API_KEY=<your-key> docker compose -f docker-compose.smoke.yml -f docker-compose.ab.yml up -d --build --wait
+
+# Compare one workflow against the default baseline
+uv run pytest tests/ab -m ab -k test_case_design -v
+
+# Capture: this run becomes tests/ab/baselines/gemini/<workflow>.json for every selected workflow
+AB_WRITE_BASELINE=1 AB_BASELINE_NAME=gemini uv run pytest tests/ab -m ab -v
 
 # Compare a candidate configuration against it
-SMOKE_BASELINE_NAME=gemini SMOKE_RUN_LABEL=qwen3-vl-32b uv run pytest tests/smoke -m smoke -v
+AB_BASELINE_NAME=gemini AB_RUN_LABEL=qwen3-vl-32b uv run pytest tests/ab -m ab -v
+
+docker compose -f docker-compose.smoke.yml -f docker-compose.ab.yml down -v
 ```
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `SMOKE_BASELINE_NAME` | `default` | Which snapshot under `tests/smoke/baselines/` to compare against. |
-| `SMOKE_WRITE_BASELINE` | unset | When set, the run is saved as that baseline instead of being compared. |
-| `SMOKE_RUN_LABEL` | `google-gla:gemini-3.8-flash` | What the candidate run is called in the report (the stack's own model is configured in compose). |
-| `SMOKE_JUDGE_MODEL` | `google-gla:gemini-3.8-flash` | The judge, the same model the smoke stack runs on. |
+| `AB_BASELINE_NAME` | `default` | Which snapshots under `tests/ab/baselines/` to compare against. |
+| `AB_WRITE_BASELINE` | unset | When set, each selected workflow's run is saved as its baseline instead of being compared. |
+| `AB_RUN_LABEL` | `google-gla:gemini-3.8-flash` | What the candidate run is called in the report (the stack's own model is configured in `docker-compose.ab.yml`). |
+| `AB_JUDGE_MODEL` | `google-gla:gemini-3.8-flash` | The judge, the same model the A/B stack runs on. |
 
-The committed `tests/smoke/baselines/default.json` is a recorded run of the stack's configured model (its `label` and `captured_at` say which and when), so the bar is what the current prompts and model produced on the seeded `SMOKE-1` story, and a later run must not fall below it beyond the tolerance. Refresh it by capturing over it (`SMOKE_WRITE_BASELINE=1`) whenever the outputs are meant to change, and keep additional named baselines beside it for the configurations you compare against. Asking for a baseline name that does not exist skips the comparison with the capture command in its message.
+The committed baselines under `tests/ab/baselines/default/` are recorded runs of the A/B stack's model (their `label` and `captured_at` say which and when), so the bar is what the current prompts and model produced on the seeded `SMOKE-1` story, and a later run must not fall below it beyond the tolerance. Refresh a workflow's baseline by capturing over it (`AB_WRITE_BASELINE=1 ... -k <workflow>`) whenever its outputs are meant to change, and keep additional named baselines beside it for the configurations you compare against. Asking for a baseline that does not exist skips the comparison with the capture command in its message.
 
-When a change is *meant* to alter what the agents produce, refresh the baseline in the same change instead of loosening
-the checks; deselect the comparison with `-m "smoke and not ab"` while iterating.
+When a change is *meant* to alter what the agents produce, refresh the affected baselines in the same change instead of loosening the checks.
 
 ## Invoking Orchestrator Workflows
 
@@ -1362,11 +1352,7 @@ uv run pytest tests/orchestrator/
 uv run pytest tests/common/
 ```
 
-The suite under `tests/smoke/` is marked `smoke` and drives the hermetic docker-compose topology described in
-[Hermetic smoke tests](#hermetic-smoke-tests) above, not local code in isolation. Because it needs that stack running, it
-is excluded from a bare `uv run pytest` by default (via `addopts` in `pytest.ini`), so local runs stay harmless. Once the
-stack is up, run it explicitly with `uv run pytest -m smoke`. It runs in CI on manual
-`workflow_dispatch` only (see *Hermetic smoke tests* above).
+The suite under `tests/smoke/` is marked `smoke` and drives the hermetic docker-compose topology described in [Hermetic smoke tests](#hermetic-smoke-tests) above, not local code in isolation; the suite under `tests/ab/` is marked `ab` and drives the same topology on a real, billed model (see [A/B tests against a baseline](#ab-tests-against-a-baseline)). Because both need a stack running, a bare `uv run pytest` excludes them (via `addopts` in `pytest.ini`), so local runs stay harmless. Once the stack is up, run them explicitly with `uv run pytest -m smoke` or `uv run pytest -m ab`. CI runs the smoke suite on every push and pull request, and the A/B suite only when its workflow is started by hand.
 
 ## Contributing
 

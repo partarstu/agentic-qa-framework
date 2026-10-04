@@ -18,7 +18,7 @@ Copy this checklist and track progress:
 - [ ] 6. Dockerfile and Cloud Build
 - [ ] 7. CALM model
 - [ ] 8. Unit tests
-- [ ] 9. Smoke suite
+- [ ] 9. Smoke and A/B suites
 - [ ] 10. Agent starts locally
 ```
 
@@ -92,9 +92,9 @@ Create `tests/agents/test_<agent_name>.py` with the `writing-unit-tests` skill. 
 uv run pytest tests/agents/test_<agent_name>.py -v
 ```
 
-## 9. Smoke suite
+## 9. Smoke and A/B suites
 
-A new agent is a new flow, so `tests/smoke/` covers it in the same change as *Smoke suite* in `AGENTS.md` requires. The agent also needs its own service in `docker-compose.smoke.yml`, mirroring `requirements_review` (build, `<<: *agent-env`, `AGENT_BASE_URL`, `depends_on`, healthcheck), added to the orchestrator's `REMOTE_EXECUTION_AGENT_HOSTS` and `depends_on`.
+A new agent is a new flow, so `tests/smoke/` covers it in the same change as *Smoke suite* in `AGENTS.md` requires. The agent also needs its own service in `docker-compose.smoke.yml`, mirroring `requirements_review` (build, `<<: *agent-env`, which points it at the LLM mock, `AGENT_BASE_URL`, `depends_on`, healthcheck), added to the orchestrator's `REMOTE_EXECUTION_AGENT_HOSTS` and `depends_on`. Every LLM call of the agent and its sub-agents needs a scripted answer in `tests/smoke/mocks/llm_mock.py` (an operation in its dispatch and a handler), a routing rule for the agent's task description there, and the agent's name in `MODEL_DRIVEN_AGENT_NAMES` of `tests/smoke/conftest.py`. The A/B stack runs the agent on the real model through its service in `docker-compose.ab.yml`, and the workflow whose output the agent produces gets its A/B test as *A/B suite* in `AGENTS.md` requires.
 
 ## 10. Agent starts locally
 

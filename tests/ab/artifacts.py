@@ -2,18 +2,19 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
-"""Comparable snapshots of what a smoke run actually produced.
+"""Comparable snapshots of what a workflow run on a real model actually produced.
 
-The assertions in ``test_smoke.py`` prove that a flow *ran*; they say nothing about the
-quality of what the model wrote, so a model or prompt change can degrade every output while
-the whole suite stays green. A snapshot captures those outputs - the requirements review,
-the generated test cases, their review comments and the bug created for a failed execution -
-so one run can be compared against a committed baseline, structurally here and on judged
-quality in ``judge.py``.
+The smoke suite proves that a flow *runs*, on a scripted model; it says nothing about the
+quality of what a real model writes, so a model or prompt change can degrade every output while
+the smoke suite stays green. A snapshot captures one workflow's outputs - the requirements
+review, the generated test cases with their review comments and classification labels, or the
+bug created for a failed execution - so the run can be compared against a committed baseline of
+that workflow, structurally here and on judged quality in ``judge.py``.
 """
 
 import json
-from dataclasses import asdict, dataclass
+from collections.abc import Iterable
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from statistics import mean
@@ -35,7 +36,34 @@ from tests.smoke.recordings import wait_for_recorded
 ZEPHYR_URL = ZEPHYR_RECORDED_URL.removesuffix("/__recorded")
 
 # The output dimensions a run is compared on, each produced by a different agent.
-DIMENSIONS = ("requirements_review", "test_case_generation", "test_case_review", "incident_report")
+DIMENSIONS = (
+    "requirements_review",
+    "test_case_generation",
+    "test_case_review",
+    "test_case_classification",
+    "incident_report",
+)
+
+
+@dataclass(slots=True, frozen=True)
+class Workflow:
+    """An LLM-driven workflow of the orchestrator with its own A/B test and baseline."""
+
+    name: str
+    webhook: str
+    """The key of the webhook in the smoke suite's ``WEBHOOKS`` that starts the workflow."""
+    dimensions: tuple[str, ...]
+
+
+WORKFLOWS = (
+    Workflow("requirements_review", "requirements_review", ("requirements_review",)),
+    Workflow(
+        "test_case_design",
+        "test_case_flow",
+        ("test_case_generation", "test_case_review", "test_case_classification"),
+    ),
+    Workflow("incident_creation", "execute_tests", ("incident_report",)),
+)
 
 # How far below the baseline a metric may fall before it counts as a regression. Every
 # artifact here is written by a non-deterministic model, so two runs of the very same
@@ -45,16 +73,16 @@ METRIC_TOLERANCE = 0.25
 
 @dataclass(slots=True)
 class RunSnapshot:
-    """Everything an A/B comparison needs from one smoke run."""
+    """Everything an A/B comparison needs from one workflow run; the outputs of other workflows stay empty."""
 
     label: str
     captured_at: str
     story: dict
     attachments: dict[str, str]
-    review_comments: list[str]
-    test_cases: list[dict]
-    bugs: list[dict]
-    execution: dict
+    review_comments: list[str] = field(default_factory=list)
+    test_cases: list[dict] = field(default_factory=list)
+    bugs: list[dict] = field(default_factory=list)
+    execution: dict = field(default_factory=dict)
     """The failed test execution the bug was created from: the executed test case and its failure."""
 
 
@@ -74,35 +102,40 @@ class MetricRegression:
         )
 
 
-def collect_snapshot(http_client: httpx.Client, label: str) -> RunSnapshot:
-    """Read one finished run's outputs back from the recording mocks.
+def collect_snapshot(http_client: httpx.Client, label: str, workflow: Workflow) -> RunSnapshot:
+    """Read one finished workflow run's outputs back from the recording mocks.
 
-    Waits for the outputs of the slowest flows the same way the assertions do, so the snapshot
-    cannot capture a half-written run when it is collected right after the webhooks return.
+    Waits for the workflow's outputs the same way the smoke assertions do, so the snapshot cannot
+    capture a half-written run when it is collected right after the webhook returns.
     """
-    jira_mcp = wait_for_recorded(
-        http_client, JIRA_MCP_RECORDED_URL, lambda d: bool(d.get("comments")) and bool(d.get("created_issues"))
-    )
-    zephyr = wait_for_recorded(
-        http_client,
-        ZEPHYR_RECORDED_URL,
-        lambda d: bool(d.get("test_cases")) and all(tc.get("review_comments", "").strip() for tc in d["test_cases"]),
-    )
-    jira_rest = http_client.get(JIRA_REST_RECORDED_URL).json()
-    return RunSnapshot(
+    snapshot = RunSnapshot(
         label=label,
         captured_at=datetime.now(UTC).isoformat(timespec="seconds"),
         story=http_client.get(JIRA_MCP_SEEDED_STORY_URL).json(),
         attachments=http_client.get(JIRA_MCP_SEEDED_ATTACHMENTS_URL).json(),
-        review_comments=_review_comments(jira_rest, jira_mcp),
-        test_cases=[_normalized_test_case(tc) for tc in zephyr.get("test_cases", [])],
-        bugs=[
-            {"summary": issue.get("summary", ""), "description": issue.get("description", "")}
-            for issue in jira_mcp.get("created_issues", [])
-            if issue.get("issue_type") == "Bug"
-        ],
-        execution=_failed_execution(http_client, zephyr),
     )
+    match workflow.name:
+        case "requirements_review":
+            jira_mcp = wait_for_recorded(http_client, JIRA_MCP_RECORDED_URL, lambda d: bool(d.get("comments")))
+            snapshot.review_comments = _review_comments(http_client.get(JIRA_REST_RECORDED_URL).json(), jira_mcp)
+        case "test_case_design":
+            zephyr = wait_for_recorded(http_client, ZEPHYR_RECORDED_URL, _all_test_cases_reviewed)
+            snapshot.test_cases = [_normalized_test_case(tc) for tc in zephyr.get("test_cases", [])]
+        case "incident_creation":
+            jira_mcp = wait_for_recorded(http_client, JIRA_MCP_RECORDED_URL, lambda d: bool(d.get("created_issues")))
+            snapshot.bugs = [
+                {"summary": issue.get("summary", ""), "description": issue.get("description", "")}
+                for issue in jira_mcp.get("created_issues", [])
+                if issue.get("issue_type") == "Bug"
+            ]
+            snapshot.execution = _failed_execution(http_client, http_client.get(ZEPHYR_RECORDED_URL).json())
+        case _:
+            raise ValueError(f"Unknown workflow: {workflow.name}")
+    return snapshot
+
+
+def _all_test_cases_reviewed(zephyr: dict) -> bool:
+    return bool(zephyr.get("test_cases")) and all(tc.get("review_comments", "").strip() for tc in zephyr["test_cases"])
 
 
 def _failed_execution(http_client: httpx.Client, zephyr: dict) -> dict:
@@ -126,8 +159,8 @@ def load_snapshot(path: Path) -> RunSnapshot:
     return RunSnapshot(**json.loads(path.read_text(encoding="utf-8")))
 
 
-def compute_metrics(snapshot: RunSnapshot) -> dict[str, dict[str, float]]:
-    """The structural side of a run's outputs, per dimension.
+def compute_metrics(snapshot: RunSnapshot, dimensions: Iterable[str]) -> dict[str, dict[str, float]]:
+    """The structural side of a run's outputs, for each of the given dimensions.
 
     Every metric is "higher is better", so a candidate value below its baseline is a regression;
     together they catch the degradations a quality judge cannot see, such as a run that produced
@@ -136,7 +169,7 @@ def compute_metrics(snapshot: RunSnapshot) -> dict[str, dict[str, float]]:
     cases = snapshot.test_cases
     steps = [step for case in cases for step in case["steps"]]
     reviewed = [case for case in cases if case["review_comments"].strip()]
-    return {
+    metrics = {
         "requirements_review": {
             "comments": float(len(snapshot.review_comments)),
             "avg_comment_length": _mean([len(comment) for comment in snapshot.review_comments]),
@@ -145,18 +178,21 @@ def compute_metrics(snapshot: RunSnapshot) -> dict[str, dict[str, float]]:
             "test_cases": float(len(cases)),
             "avg_steps_per_case": _mean([len(case["steps"]) for case in cases]),
             "cases_with_objective": _ratio([case for case in cases if case["objective"].strip()], cases),
-            "cases_with_labels": _ratio([case for case in cases if case["labels"]], cases),
             "steps_with_expected_result": _ratio([s for s in steps if s["expected_result"].strip()], steps),
         },
         "test_case_review": {
             "reviewed_cases": _ratio(reviewed, cases),
             "avg_review_comment_length": _mean([len(case["review_comments"]) for case in reviewed]),
         },
+        "test_case_classification": {
+            "cases_with_labels": _ratio([case for case in cases if case["labels"]], cases),
+        },
         "incident_report": {
             "bugs": float(len(snapshot.bugs)),
             "avg_bug_description_length": _mean([len(bug["description"]) for bug in snapshot.bugs]),
         },
     }
+    return {dimension: metrics[dimension] for dimension in dimensions}
 
 
 def find_metric_regressions(
@@ -197,7 +233,7 @@ def render_for_judge(dimension: str, snapshot: RunSnapshot) -> str:
     match dimension:
         case "requirements_review":
             return "\n\n".join(snapshot.review_comments)
-        case "test_case_generation":
+        case "test_case_generation" | "test_case_classification":
             return "\n\n".join(_render_test_case(case) for case in snapshot.test_cases)
         case "test_case_review":
             return "\n\n".join(

@@ -1,0 +1,39 @@
+{
+  "label": "google-gla:gemini-3.8-flash",
+  "captured_at": "2026-10-01T20:51:58+00:00",
+  "story": {
+    "key": "SMOKE-1",
+    "id": "10001",
+    "fields": {
+      "project": {
+        "key": "SMOKE",
+        "id": "10000"
+      },
+      "issuetype": {
+        "name": "Story"
+      },
+      "summary": "User can reset their password via an emailed link",
+      "description": "As a registered user I want to reset my password through a link sent to my email so that I can regain access when I forget it.\n\nProject Key: SMOKE\nIssue ID (numeric): 10001\n\nAcceptance Criteria:\n1. Submitting a registered email address on the 'Forgot password' form sends an email with a single-use password-reset link that is valid for 60 minutes.\n2. Opening a reset link more than 60 minutes after it was sent shows the message 'This reset link has expired' and a 'Request a new link' button.",
+      "attachment": [
+        {
+          "filename": "reset-policy.md",
+          "mimeType": "text/plain"
+        },
+        {
+          "filename": "reset-request.json",
+          "mimeType": "application/json"
+        }
+      ]
+    }
+  },
+  "attachments": {
+    "reset-policy.md": "Password reset policy\n- A reset link stays valid for 60 minutes.\n- At most 3 reset requests per account per hour.\n",
+    "reset-request.json": "{\"email\": \"user@example.com\", \"locale\": \"en-GB\"}"
+  },
+  "review_comments": [
+    "**Review Feedback from Testing Team**\n\n1. Define rate-limiting requirements and error handling for initial and renewed requests:\n   - `reset-policy.md` specifies a limit of \"At most 3 reset requests per account per hour\", but the issue does not specify this rate limit. Explicitly define how rate-limiting is enforced for both initial password reset requests and link renewals via the \"Request a new link\" button, and define the expected system behavior and user-facing error message when the threshold is reached.\n\n2. Specify input variations, edge cases, and UI feedback for the reset request:\n   - The criteria currently only cover submitting a valid registered email address. Add explicit requirements for:\n     - Unregistered email addresses (e.g., returning a generic confirmation message to prevent user enumeration attacks versus returning an explicit error).\n     - Invalid email address formats and corresponding validation error messages.\n     - The immediate feedback/confirmation message displayed on the UI upon submitting the reset request.\n\n3. Define the workflow and expected results for link renewal:\n   - Acceptance Criteria 2 mentions a \"Request a new link\" button on the expired link page, but does not define the interaction workflow, inputs, or expected behavior (e.g., whether clicking it automatically triggers a new email to the previously associated address, redirects to the \"Forgot password\" page, or requires the user to re-enter their email address).\n\n4. Clarify handling of multiple active reset requests and token invalidation:\n   - Specify whether requesting a new reset link immediately invalidates previously issued, unexpired reset links/tokens before their 60-minute window closes, or if multiple active links can coexist.\n\n5. Define email content, link generation, and token specifications:\n   - The acceptance criteria do not define the email specifications (sender address, subject line, body template) or link generation details (token format, cryptographic/security properties, and target URL structure).\n\n6. Define request payload and localization behavior:\n   - `reset-request.json` includes a `locale` property (`en-GB`), but the acceptance criteria do not specify how this locale should be processed or how language selection applies when generating and dispatching the password reset email.\n\n7. Explicitly reference attachments in the issue requirements:\n   - Neither `reset-policy.md` nor `reset-request.json` is referenced in the issue description or acceptance criteria. Explicitly link or reference both attachments to ensure traceable requirements."
+  ],
+  "test_cases": [],
+  "bugs": [],
+  "execution": {}
+}

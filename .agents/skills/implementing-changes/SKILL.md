@@ -154,7 +154,7 @@ At most 5 rounds over the whole task. In each round:
 
 When the loop reaches its limit, show the user what is still open and ask whether to continue with more rounds, and how many, or to stop and write the final report.
 
-The smoke suite, including its A/B comparison, never runs in this loop (*Smoke suite* in `AGENTS.md`); the user runs it after the task.
+The smoke suite, which needs the Docker stack, and the billed A/B suite never run in this loop (*Smoke suite* and *A/B suite* in `AGENTS.md`); the user runs them after the task.
 
 ## 4. Final report
 
@@ -162,7 +162,7 @@ Report in the conversation, in the three parts `AGENTS.md` prescribes:
 
 - **Blocked on me**:
   - every `DISPUTED` finding with the reason, for the user to decide
-  - the steps left for the user: running the smoke suite with its A/B comparison, and every baseline refresh the plan asks for (*Smoke suite* in `AGENTS.md`); CALM validation, lint, license, security and dependency checks and the other pull request checks, with the `preparing-pull-requests` skill
+  - the steps left for the user: running the smoke suite, the A/B tests of the workflows the change touches and every baseline refresh the plan asks for (*Smoke suite* and *A/B suite* in `AGENTS.md`); CALM validation, lint, license, security and dependency checks and the other pull request checks, with the `preparing-pull-requests` skill
 - **Changed**:
   - the scope implemented: everything, or the parts the user named
   - the changed files and the number of verification rounds

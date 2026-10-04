@@ -5,12 +5,14 @@
 """Fixtures for the hermetic smoke suite.
 
 The suite runs against the ``docker-compose.smoke.yml`` topology: a real
-orchestrator and the agents (driven by real Gemini), with the external
-boundaries (Jira MCP, Jira REST, Zephyr, Qdrant + embedding) replaced by
-recording mocks. The fixtures wait for all agents to register, then fire the
-webhooks once, concurrently — the flows are mutually independent, so the
-wall time is the longest flow instead of their sum. The test functions read the
-mocks' ``/__recorded`` endpoints and assert on what reached each boundary.
+orchestrator and the agents, with every external boundary (the LLM, Jira MCP,
+Jira REST, Zephyr, Confluence, SharePoint, Qdrant + embedding) replaced by
+recording mocks. The fixtures wait for all agents to register on the mocked
+model, then fire the webhooks once, concurrently — the flows are mutually
+independent, so the wall time is the longest flow instead of their sum. The test
+functions read the mocks' ``/__recorded`` endpoints and assert on what reached
+each boundary. The stack helpers here are shared with the A/B suite under
+``tests/ab/``, which runs the same topology on a real model.
 
 URLs default to the published compose ports and are overridable via ``SMOKE_*``
 env vars. The dashboard/API credentials are the fixed throwaway values baked into
@@ -18,8 +20,9 @@ env vars. The dashboard/API credentials are the fixed throwaway values baked int
 """
 
 import os
+import re
 import time
-from collections.abc import Iterator
+from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -28,7 +31,6 @@ import pytest
 
 import config
 from common import utils
-from tests.conftest import CONFIGURED_GOOGLE_API_KEY
 
 ORCHESTRATOR_URL = os.environ.get("SMOKE_ORCHESTRATOR_URL", "http://localhost:8000").rstrip("/")
 JIRA_REST_RECORDED_URL = os.environ.get("SMOKE_JIRA_REST_RECORDED_URL", "http://localhost:8080/__recorded")
@@ -41,6 +43,7 @@ ZEPHYR_RECORDED_URL = os.environ.get("SMOKE_ZEPHYR_RECORDED_URL", "http://localh
 QDRANT_RECORDED_URL = os.environ.get("SMOKE_QDRANT_RECORDED_URL", "http://localhost:6333/__recorded")
 CONFLUENCE_RECORDED_URL = os.environ.get("SMOKE_CONFLUENCE_RECORDED_URL", "http://localhost:8095/__recorded")
 SHAREPOINT_RECORDED_URL = os.environ.get("SMOKE_SHAREPOINT_RECORDED_URL", "http://localhost:8097/__recorded")
+LLM_MOCK_RECORDED_URL = os.environ.get("SMOKE_LLM_MOCK_RECORDED_URL", "http://localhost:8099/__recorded")
 
 # Fixed test credentials, matching docker-compose.smoke.yml.
 ORCHESTRATOR_API_KEY = "smoke-api-key"
@@ -86,6 +89,11 @@ EXPECTED_AGENT_NAMES: set[str] = {
     config.TestCaseDesignAgentConfig.OWN_NAME,
 }
 HEALTHY_AGENT_STATUSES = {"AVAILABLE", "BUSY"}
+# The model docker-compose.smoke.yml points every agent and the orchestrator at: the scripted LLM mock.
+MOCK_MODEL_NAME = "qwen:smoke-mock"
+# The framework agents that call a model; the mock executor never does.
+MODEL_DRIVEN_AGENT_NAMES: set[str] = EXPECTED_AGENT_NAMES | {config.IncidentCreationAgentConfig.OWN_NAME}
+_CARD_MODEL = re.compile(r"Model: (?P<model>[^<]+)")
 
 # The status the review flow moves a reviewed test case to; tracks config as the source of truth.
 REVIEW_COMPLETE_STATUS = config.TestCaseReviewAgentConfig.REVIEW_COMPLETE_STATUS_NAME
@@ -93,8 +101,8 @@ REVIEW_COMPLETE_STATUS = config.TestCaseReviewAgentConfig.REVIEW_COMPLETE_STATUS
 TEST_CASES_COLLECTION_NAME = config.QdrantConfig.TEST_CASES_COLLECTION_NAME
 # Login attempts allowed per window; the smoke stack keeps the default.
 LOGIN_RATE_LIMIT_ATTEMPTS = config.DashboardAuthConfig.LOGIN_RATE_LIMIT_ATTEMPTS
-# The token the prompt override mounted from tests/smoke/overrides/ makes the review agent end its
-# Jira comment with; it proves the override reached the agent and is no part of the review itself.
+# The token of the prompt override mounted from tests/smoke/overrides/: it proves the override reached the review
+# model, and a real model ends its Jira comment with it, which is no part of the review itself.
 PROMPT_OVERRIDE_MARKER = "OVERRIDE-7f3d-active"
 
 # Agents the /execute-tests + incident-creation flow needs (beyond the core four).
@@ -103,35 +111,12 @@ EXECUTION_FLOW_AGENT_NAMES: set[str] = {EXECUTION_AGENT_NAME, config.IncidentCre
 # The orchestrator startup + initial agent discovery can take a while to settle.
 ORCHESTRATOR_READY_TIMEOUT = 120.0
 AGENT_READY_TIMEOUT = 240.0
-# A single webhook drives real LLM routing plus one or more full agent runs; the test case design, forced through
-# two reviews and one fix cycle, is the longest of them.
+# A single webhook drives LLM routing plus one or more full agent runs; the test case design, forced through
+# two reviews and one fix cycle, is the longest of them, and on a real model it takes tens of minutes.
 WEBHOOK_TIMEOUT = httpx.Timeout(2400.0)
 POLL_INTERVAL = 5.0
 
 logger = utils.get_logger("smoke")
-
-
-@pytest.fixture(scope="session")
-def judge_google_api_key() -> Iterator[None]:
-    """Give the A/B judge the real Gemini key it calls Gemini with.
-
-    The root conftest replaces GOOGLE_API_KEY with a dummy so no unit test can reach a real
-    provider. Only the judge runs a model inside the pytest process - every other smoke test
-    drives the containers, which get their key from the environment - so the configured key is
-    restored just for the tests that request this fixture.
-    """
-    if not CONFIGURED_GOOGLE_API_KEY:
-        pytest.fail(
-            "GOOGLE_API_KEY is not set in the environment or in .env; the smoke suite drives real "
-            "Gemini calls and cannot run without it."
-        )
-    dummy_key = os.environ["GOOGLE_API_KEY"]
-    os.environ["GOOGLE_API_KEY"] = CONFIGURED_GOOGLE_API_KEY
-    # The model factory builds the Gemini client from config, which read the dummy at import time.
-    config.GOOGLE_API_KEY = CONFIGURED_GOOGLE_API_KEY
-    yield
-    os.environ["GOOGLE_API_KEY"] = dummy_key
-    config.GOOGLE_API_KEY = dummy_key
 
 
 @pytest.fixture(scope="session")
@@ -165,7 +150,7 @@ def webhook_headers() -> dict[str, str]:
     return {"X-API-Key": ORCHESTRATOR_API_KEY}
 
 
-def _wait_for_agents_healthy(http_client: httpx.Client, auth_headers: dict[str, str], expected_names: set[str]) -> None:
+def wait_for_agents_healthy(http_client: httpx.Client, auth_headers: dict[str, str], expected_names: set[str]) -> None:
     """Wait until every expected agent is registered and healthy.
 
     Triggers a fresh discovery each cycle so the wait does not depend on the
@@ -186,13 +171,31 @@ def _wait_for_agents_healthy(http_client: httpx.Client, auth_headers: dict[str, 
     pytest.fail(f"Agents not registered/healthy within {AGENT_READY_TIMEOUT}s. Missing: {missing}. Seen: {registered}")
 
 
+def agent_models(http_client: httpx.Client, auth_headers: dict[str, str]) -> dict[str, str]:
+    """The model each model-driven agent reports on its card, by agent name."""
+    response = http_client.get(f"{ORCHESTRATOR_URL}/api/dashboard/agents", headers=auth_headers)
+    response.raise_for_status()
+    models: dict[str, str] = {}
+    for agent in response.json():
+        match = _CARD_MODEL.search(agent.get("description") or "")
+        if agent.get("name") in MODEL_DRIVEN_AGENT_NAMES and match:
+            models[agent["name"]] = match["model"].strip()
+    return models
+
+
 @pytest.fixture(scope="session")
 def all_agents_ready(http_client: httpx.Client, auth_headers: dict[str, str]) -> None:
-    """Wait once until every agent the flows need is registered and healthy."""
-    _wait_for_agents_healthy(http_client, auth_headers, EXPECTED_AGENT_NAMES | EXECUTION_FLOW_AGENT_NAMES)
+    """Wait once until every agent the flows need is registered and healthy, and runs on the LLM mock."""
+    wait_for_agents_healthy(http_client, auth_headers, EXPECTED_AGENT_NAMES | EXECUTION_FLOW_AGENT_NAMES)
+    models = agent_models(http_client, auth_headers)
+    if set(models) != MODEL_DRIVEN_AGENT_NAMES or set(models.values()) != {MOCK_MODEL_NAME}:
+        pytest.fail(
+            f"The smoke suite runs only against the hermetic stack, whose agents all use {MOCK_MODEL_NAME!r}; "
+            f"the running agents report {models}. Start the stack from docker-compose.smoke.yml alone."
+        )
 
 
-def _post_webhook(path: str, headers: dict[str, str], payload: dict[str, str]) -> httpx.Response:
+def post_webhook(path: str, headers: dict[str, str], payload: dict[str, str]) -> httpx.Response:
     started = time.monotonic()
     with httpx.Client(timeout=WEBHOOK_TIMEOUT, follow_redirects=True) as client:
         response = client.post(f"{ORCHESTRATOR_URL}{path}", headers=headers, json=payload)
@@ -204,7 +207,7 @@ def _post_webhook(path: str, headers: dict[str, str], payload: dict[str, str]) -
 # the test-case flow's cases end at "Review Complete" and never become executable;
 # /execute-tests selects only the seeded Approved + "automated" case; the RAG sync
 # involves no agent at all. So they can safely run concurrently.
-_WEBHOOKS: dict[str, tuple[str, dict[str, str]]] = {
+WEBHOOKS: dict[str, tuple[str, dict[str, str]]] = {
     "requirements_review": ("/new-requirements-available", {"issue_key": SEEDED_ISSUE_KEY}),
     "test_case_flow": ("/story-ready-for-test-case-generation", {"issue_key": SEEDED_ISSUE_KEY}),
     "execute_tests": ("/execute-tests", {"project_key": SEEDED_PROJECT_KEY}),
@@ -213,31 +216,34 @@ _WEBHOOKS: dict[str, tuple[str, dict[str, str]]] = {
     "update_test_case_db": ("/update-test-case-db", {"project_key": SEEDED_PROJECT_KEY}),
     "update_sharepoint_db": ("/update-sharepoint-db", {"drive_id": "drive-smoke"}),
 }
-# The syncs call no model and fill the vector DB the model-driven flows retrieve from, so they go first.
-_SYNC_WEBHOOKS = ("update_jira_db", "update_confluence_db", "update_test_case_db", "update_sharepoint_db")
-SEQUENTIAL_WEBHOOKS = os.environ.get("SMOKE_SEQUENTIAL_WEBHOOKS", "").lower() in ("true", "1", "t")
+# The syncs call no model and fill the vector DB the model-driven flows retrieve from.
+SYNC_WEBHOOKS = ("update_jira_db", "update_confluence_db", "update_test_case_db", "update_sharepoint_db")
+
+
+def post_webhooks_concurrently(names: Iterable[str], headers: dict[str, str]) -> dict[str, httpx.Response]:
+    """Fire the named webhooks at once and return their responses by name.
+
+    Each webhook returns only after its whole flow completes, so posting them from
+    a thread pool cuts the wall time from the sum of the flows to the max.
+    """
+    with ThreadPoolExecutor(max_workers=len(WEBHOOKS)) as pool:
+        futures = {}
+        for name in names:
+            path, payload = WEBHOOKS[name]
+            futures[name] = pool.submit(post_webhook, path, headers, payload)
+        return {name: future.result() for name, future in futures.items()}
 
 
 @pytest.fixture(scope="session")
 def webhook_responses(all_agents_ready: None, webhook_headers: dict[str, str]) -> dict[str, httpx.Response]:
-    """Fire every webhook once, concurrently or one at a time, and share the responses.
+    """Fire every webhook once, the syncs first, and share the responses.
 
-    Each webhook returns only after its whole flow completes, so posting them from
-    a thread pool cuts the suite's wall time from the sum of the flows to the max.
+    The mocked model answers at once, so a model-driven flow would otherwise query the vector DB before the
+    syncs have created the collections it retrieves from.
     """
-    if SEQUENTIAL_WEBHOOKS:
-        order = [*_SYNC_WEBHOOKS, *(name for name in _WEBHOOKS if name not in _SYNC_WEBHOOKS)]
-        responses = {}
-        for name in order:
-            path, payload = _WEBHOOKS[name]
-            responses[name] = _post_webhook(path, webhook_headers, payload)
-        return responses
-    with ThreadPoolExecutor(max_workers=len(_WEBHOOKS)) as pool:
-        futures = {
-            name: pool.submit(_post_webhook, path, webhook_headers, payload)
-            for name, (path, payload) in _WEBHOOKS.items()
-        }
-        return {name: future.result() for name, future in futures.items()}
+    responses = post_webhooks_concurrently(SYNC_WEBHOOKS, webhook_headers)
+    model_driven = [name for name in WEBHOOKS if name not in SYNC_WEBHOOKS]
+    return responses | post_webhooks_concurrently(model_driven, webhook_headers)
 
 
 @pytest.fixture(scope="session")

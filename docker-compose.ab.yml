@@ -1,0 +1,27 @@
+# SPDX-FileCopyrightText: 2025-2026 Taras Paruta (partarstu@gmail.com)
+#
+# SPDX-License-Identifier: AGPL-3.0-only
+
+# A/B topology: the hermetic smoke stack with the model-driven services on a real,
+# billed model instead of the scripted LLM mock; every other boundary stays mocked.
+# The A/B suite (tests/ab) compares each workflow's outputs against its baseline.
+#
+#   GOOGLE_API_KEY=<your-key> docker compose -f docker-compose.smoke.yml -f docker-compose.ab.yml up -d --build --wait
+#   uv run pytest tests/ab -m ab -v
+
+x-real-model: &real-model
+  MODEL_NAME: "google-gla:gemini-3.8-flash"
+  GOOGLE_API_KEY: "${GOOGLE_API_KEY:?GOOGLE_API_KEY must be set for the A/B stack}"
+
+services:
+  orchestrator:
+    environment: *real-model
+
+  requirements_review:
+    environment: *real-model
+
+  test_case_design:
+    environment: *real-model
+
+  incident_creation:
+    environment: *real-model

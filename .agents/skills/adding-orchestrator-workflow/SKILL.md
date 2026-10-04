@@ -25,7 +25,7 @@ Copy this checklist and track progress:
 - [ ] 5. README documentation
 - [ ] 6. Orchestrator version
 - [ ] 7. Unit tests
-- [ ] 8. Smoke suite
+- [ ] 8. Smoke and A/B suites
 ```
 
 ## 1. Architecture check (architecture first)
@@ -85,6 +85,6 @@ Use the `writing-unit-tests` skill and model the tests on `tests/orchestrator/te
 uv run pytest tests/orchestrator -v
 ```
 
-## 8. Smoke suite
+## 8. Smoke and A/B suites
 
-A new workflow is a new flow, and a change to what an existing one produces an extended flow: cover it in `tests/smoke/` as *Smoke suite* in `AGENTS.md` requires, with a test that calls the endpoint.
+A new workflow is a new flow, and a change to what an existing one produces an extended flow: cover it in `tests/smoke/` as *Smoke suite* in `AGENTS.md` requires, with a test that calls the endpoint. The LLM mock (`tests/smoke/mocks/llm_mock.py`) routes a task by its description, so a new task description needs its routing rule there, and every new LLM call its scripted answer. A workflow whose output a model writes gets its own A/B test, and a workflow whose output changes on purpose gets its baseline refreshed, as *A/B suite* in `AGENTS.md` requires.

@@ -18,7 +18,7 @@
 
 ### Tests
 
-- <Unit and smoke test changes, if any>
+- <Unit, smoke and A/B test changes, if any>
 
 ### Documentation
 
@@ -40,6 +40,7 @@
 - [ ] Dependency audit reviewed (`uv audit`)
 - [ ] CALM validation passes
 - [ ] Smoke suite updated, or no end-to-end behaviour change
+- [ ] A/B tests and baselines updated, or no change to what an LLM-driven workflow produces
 
 ## Notes
 

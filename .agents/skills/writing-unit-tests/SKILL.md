@@ -10,7 +10,7 @@ Tests follow `PYTHON_GUIDELINES.md` § 13 and *Unit tests* in `AGENTS.md`. This 
 ## Setup facts
 
 - `pytest.ini` sets `pythonpath = .`, `testpaths = tests` and `asyncio_mode = auto` (async tests need no marker; match the style of the file you edit).
-- Tests mirror the source tree: `tests/agents/`, `tests/orchestrator/` (shared stubs in its `conftest.py`), `tests/common/`, `tests/scripts/`. `tests/smoke/` is the separate end-to-end suite.
+- Tests mirror the source tree: `tests/agents/`, `tests/orchestrator/` (shared stubs in its `conftest.py`), `tests/common/`, `tests/scripts/`. `tests/smoke/` (mocked LLM) and `tests/ab/` (real model, run manually) are the separate end-to-end suites; the unit tests of the A/B comparison logic live in `tests/ab/test_ab_metrics.py`.
 - New test files are named `test_<module>.py`.
 
 ## Follow the existing tests
