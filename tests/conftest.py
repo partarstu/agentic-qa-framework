@@ -30,6 +30,21 @@ os.environ["GOOGLE_API_KEY"] = "dummy"
 os.environ["QDRANT_URL"] = "http://localhost:6333"
 os.environ.pop("QDRANT_API_KEY", None)
 
+# Blank values give the code defaults: a developer's .env may hold the recommended Qwen settings, and
+# load_dotenv never overrides a variable that is already set.
+for _agent in (
+    "ORCHESTRATOR",
+    "REQUIREMENTS_REVIEW",
+    "TEST_CASE_DESIGN",
+    "TEST_CASE_GENERATION",
+    "TEST_CASE_REVIEW",
+    "TEST_CASE_CLASSIFICATION",
+    "INCIDENT_CREATION",
+):
+    os.environ[f"{_agent}_THINKING_LEVEL"] = ""
+os.environ["QWEN_NON_THINKING_PRESENCE_PENALTY"] = ""
+os.environ["QWEN_THINKING_PRESENCE_PENALTY"] = ""
+
 # Provide dummy auth configuration so the now fail-closed auth has valid settings under test,
 # and keep prompt-injection checks off by default (tests that need them opt in explicitly).
 os.environ.setdefault("ORCHESTRATOR_API_KEY", "test-orchestrator-key")

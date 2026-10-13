@@ -311,7 +311,7 @@ services:
       PROMPT_INJECTION_CHECK_ENABLED: "false"
       MODEL_NAME: "qwen:smoke-mock"
       QWEN_ENDPOINT: "http://llm_mock:8099/v1"
-      # The recommended Qwen value: the routing runs with thinking off while the agents keep their default levels.
+      # The recommended Qwen value: the routing, multi-agent routing and results extraction run with thinking off while the agents keep their default levels.
       ORCHESTRATOR_THINKING_LEVEL: "none"
       # proves the additional Jira custom fields instruction reaches the requirements review:
       # the Jira MCP mock records that jira_get_issue was asked for these field IDs.
