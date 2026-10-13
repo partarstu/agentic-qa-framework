@@ -52,7 +52,14 @@ Add a Mermaid diagram only when the interaction is not obvious from the text, su
 
 ## 6. Write the plan and get approval
 
-Write the plan with [resources/implementation_plan_template.md](resources/implementation_plan_template.md), omitting sections that do not apply. Keep it compact: architecture, logic and data workflows, impact and the steps; no explanatory prose and no restated code.
+Write the plan with [resources/implementation_plan_template.md](resources/implementation_plan_template.md), omitting sections that do not apply. The plan is read by a person, so it must be comprehensive, visually well structured and comfortable to read:
+
+- **Top-down**: the *At a glance* table answers goal, scope, architecture, versions and risk first; the details follow in the template's section order.
+- **Structure over prose**: put comparisons, component lists, decisions and impact in tables, steps in numbered or checkbox lists, and a flow that branches or involves several actors in a Mermaid `flowchart` or `sequenceDiagram`; an arrow chain is enough for a linear flow.
+- **Scannable**: one emoji per section heading, bold only for the key term of a line, short sentences, one idea per line, consistent heading levels, no walls of text.
+- **Understandable**: spell out an abbreviation or project term at first use, put the reason next to every decision, and name concrete modules, files and settings instead of describing them vaguely; do not restate code.
+- **Renders everywhere**: plain Markdown plus Mermaid only; callouts are `> **Label**` blockquotes, not GitHub-only `[!NOTE]` alerts, and diagram labels must still make sense as plain text.
+- **Scaled and not repetitive**: a small fix keeps the *At a glance* table and the TODO list; every added section earns its place, and nothing is said twice.
 
 The summary in your reply names the decisions needing the user's input (trade-offs, new dependencies, security-sensitive choices) and asks for approval. Do not start implementing before the user approves.
 

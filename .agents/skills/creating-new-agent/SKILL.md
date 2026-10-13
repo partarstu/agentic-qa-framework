@@ -42,7 +42,7 @@ A new agent is a new architecture node, so *Architecture first (CALM)* in `AGENT
 Add a `<AgentName>AgentConfig` class to `config.py`, mirroring `TestCaseClassificationAgentConfig`:
 
 - `PORT`: pick a default no other agent uses (search `config.py` for `"PORT"`).
-- `THINKING_LEVEL`: a pydantic-ai `ThinkingLevel` literal in lowercase, e.g. `"minimal"` or `"medium"`.
+- `THINKING_LEVEL`: `ThinkingEffort | None` read through the `_thinking_level("<AGENT_NAME>", "<default>")` helper of `config.py`, e.g. `_thinking_level("TEST_CASE_CLASSIFICATION", "medium")`; the default is a lowercase level (`"minimal"`, `"low"`, `"medium"`, `"high"` or `"xhigh"`) or `None` (thinking off), the `<AGENT_NAME>_THINKING_LEVEL` environment variable overrides it (`none` = off), and the variable is documented in the README *Environment Variables* block.
 - `MODEL_NAME`: keep `DEFAULT_MODEL_NAME` unless the agent needs a different model.
 - `VERSION`: read from `<AGENT_NAME>_AGENT_VERSION` with the default `"1.0.0"`; document the variable in the README *Environment Variables* block next to the other agent versions.
 - `MAX_REQUESTS_PER_TASK`: the tool-call budget per task.

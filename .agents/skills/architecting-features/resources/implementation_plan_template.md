@@ -1,23 +1,36 @@
-# Plan: <Feature or fix>
+# 🗺️ Plan: <Feature or fix>
 
-## Goal
+| At a glance | |
+|-------------|---|
+| **Goal** | <One sentence.> |
+| **Scope** | <Modules and areas touched.> |
+| **Architecture** | <No change, or the change in a few words.> |
+| **Versions** | <Agent or orchestrator → bump, or none.> |
+| **Risk** | <🟢 Low / 🟡 Medium / 🔴 High: the reason in a few words.> |
 
-<One sentence.>
+## ❓ Open questions
 
-## Open questions
+> **Needs your answer before implementation**
+>
+> 1. <Only questions the user must answer; omit the section if none.>
 
-- <Only questions the user must answer; omit the section if none.>
+## 🏛️ Architecture
 
-## Architecture
+<"No architecture change." or a table of the nodes, relationships and controls to add, remove or rename under `calm/` (columns: Element, Kind, Change), followed by the line `CALM change validated on a temporary copy and approved by the user on <date>`.>
 
-<"No architecture change." or: the nodes, relationships and controls to add, remove or rename under `calm/`, one line each, followed by the line `CALM change validated on a temporary copy and approved by the user on <date>`.>
+## 🧩 Design
 
-## Design
+| Component | Module | Change | Reuses |
+|-----------|--------|--------|--------|
+| <Module or class> | <Module> | <New or changed: responsibility> | <Existing component, or none> |
 
-- **Components**: <new or changed modules, one line each: responsibility and what it reuses>
-- **Decision**: <only for a significant choice: chosen option and why, in one line>
+**Decisions** (only for significant choices):
 
-## Workflows
+| Decision | Chosen | Why | Rejected |
+|----------|--------|-----|----------|
+| <Question> | <Option> | <Reason> | <Option and why not> |
+
+## 🔄 Workflows
 
 **Logic flow:**
 
@@ -25,10 +38,12 @@
 
 **Data flow:** <only if relevant: what data is created, transformed, stored or returned, and where>
 
-## Impact
+## 📌 Impact
 
-<One line per affected area only: smoke and A/B suites, configuration, dependencies, security, and the version bump of every agent or orchestrator whose logic changes.>
+| Area | Impact |
+|------|--------|
+| <Smoke and A/B suites, configuration, dependencies, security or the version bump of an agent or orchestrator> | <What changes, or "none"> |
 
-## TODO
+## ✅ TODO
 
 - [ ] <Step> → verify: <check>

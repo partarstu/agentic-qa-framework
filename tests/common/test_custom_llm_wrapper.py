@@ -12,7 +12,7 @@ from pydantic_ai.exceptions import UnexpectedModelBehavior
 from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse, ToolCallPart, UserPromptPart
 from pydantic_ai.models import Model, ModelRequestParameters
 from pydantic_ai.models.function import AgentInfo, FunctionModel
-from pydantic_ai.settings import ModelSettings, ThinkingLevel
+from pydantic_ai.settings import ModelSettings, ThinkingEffort
 
 from common.custom_llm_wrapper import CustomLlmWrapper
 
@@ -258,6 +258,11 @@ class TestOutputTokenCap:
         assert settings["max_tokens"] == 2048
         assert settings["thinking"] == "low"
 
+    def test_no_thinking_level_sends_thinking_disabled(self, mock_wrapped_model):
+        wrapper = CustomLlmWrapper(mock_wrapped_model, thinking_level=None, max_output_tokens=2048)
+
+        assert wrapper._get_model_settings(None)["thinking"] is False
+
     def test_no_cap_configured_leaves_max_tokens_unset(self, mock_wrapped_model):
         with patch("common.custom_llm_wrapper.config.MAX_OUTPUT_TOKENS", None):
             wrapper = CustomLlmWrapper(mock_wrapped_model)
@@ -283,7 +288,7 @@ async def test_defaults_reach_a_model_built_without_settings_of_its_own():
     assert received_settings == {"max_tokens": 2048}
 
 
-async def _settings_reaching_qwen(thinking_level: ThinkingLevel) -> dict:
+async def _settings_reaching_qwen(thinking_level: ThinkingEffort | None) -> dict:
     """Run an agent on the Qwen model and return the request settings its OpenAI client would send."""
     with patch("config.QWEN_ENDPOINT", "http://localhost:8080/v1/"):
         agent = CustomLlmWrapper.create_agent(
@@ -307,21 +312,27 @@ async def _settings_reaching_qwen(thinking_level: ThinkingLevel) -> dict:
 
 @pytest.mark.asyncio
 async def test_qwen_thinking_request_carries_the_model_card_sampling_the_cap_and_the_effort():
-    with patch("config.QWEN_THINKING_ENABLED", True):
+    with patch("config.QWEN_THINKING_PRESENCE_PENALTY", 0.5):
         settings = await _settings_reaching_qwen("medium")
 
-    assert settings == {"temperature": 1.0, "top_p": 0.95, "max_tokens": 4096, "openai_reasoning_effort": "medium"}
+    assert settings == {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "presence_penalty": 0.5,
+        "max_tokens": 4096,
+        "openai_reasoning_effort": "medium",
+    }
 
 
 @pytest.mark.asyncio
-async def test_qwen_request_without_thinking_carries_the_model_card_sampling_and_the_cap():
-    with patch("config.QWEN_THINKING_ENABLED", False):
-        settings = await _settings_reaching_qwen("medium")
+async def test_qwen_request_without_a_thinking_level_carries_the_model_card_sampling_and_the_cap():
+    with patch("config.QWEN_NON_THINKING_PRESENCE_PENALTY", 0.0):
+        settings = await _settings_reaching_qwen(None)
 
     assert settings == {
         "temperature": 0.7,
         "top_p": 0.8,
-        "presence_penalty": 1.5,
+        "presence_penalty": 0.0,
         "max_tokens": 4096,
         "extra_body": {"chat_template_kwargs": {"enable_thinking": False}},
     }

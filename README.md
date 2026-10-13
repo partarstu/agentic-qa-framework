@@ -247,12 +247,12 @@ QWEN_API_KEY= # Optional. Static API key for the Qwen endpoint. An endpoint serv
                                  # credentials instead, so it needs either a service account key file in
                                  # GOOGLE_APPLICATION_CREDENTIALS, or 'gcloud auth application-default login
                                  # --impersonate-service-account=<invoker service account>'.
-QWEN_THINKING_ENABLED=False # Default: False, meaning thinking is disabled entirely through Qwen's chat template and
-                                 # the requests carry the model card's non-thinking sampling (temperature 0.7, top_p 0.8,
-                                 # presence_penalty 1.5). Set to True to let each agent's
-                                 # configured thinking level grade Qwen's reasoning effort (Qwen accepts low, medium and
-                                 # xhigh, so "minimal" is sent as "low" and "high" as "xhigh"), with the model card's
-                                 # thinking-mode sampling (temperature 1.0, top_p 0.95).
+QWEN_NON_THINKING_PRESENCE_PENALTY=0 # Default: 0. Presence penalty of Qwen requests whose agent has no thinking level
+                                 # (thinking off), sent with the model card's non-thinking sampling (temperature 0.7, top_p 0.8).
+QWEN_THINKING_PRESENCE_PENALTY=0.5 # Default: 0.5. Presence penalty of Qwen requests whose agent has a thinking level,
+                                 # sent with the model card's thinking sampling (temperature 1.0, top_p 0.95) and a
+                                 # reasoning effort graded from the level (Qwen accepts low, medium and xhigh, so
+                                 # "minimal" is sent as "low" and "high" as "xhigh").
 QWEN_CONTEXT_WINDOW= # Optional. Context window of the Qwen deployment in tokens; set it to the served
                                  # --max-model-len (e.g. 262144). Context compaction starts at 90 % of it; unset, a
                                  # conservative 200000-token window is assumed.
@@ -299,7 +299,8 @@ JIRA_URL=YOUR_JIRA_INSTANCE_URL # Required for Xray, the RAG sync runtime and th
                                  # MCP server (see "Jira MCP Server Setup" below), which has its own .env file.
 JIRA_USERNAME=YOUR_JIRA_USERNAME # Required alongside JIRA_URL. The email address associated with your Jira account.
 JIRA_API_TOKEN=YOUR_JIRA_API_TOKEN # Required alongside JIRA_URL. A Jira API token for authentication.
-ORCHESTRATOR_VERSION=2.1.0 # Default: 2.1.0. Version of the orchestrator, reported for traceability.
+ORCHESTRATOR_VERSION=3.0.0 # Default: 3.0.0. Version of the orchestrator, reported for traceability.
+ORCHESTRATOR_THINKING_LEVEL=low # Default: low. Thinking level of the orchestrator's model calls (routing and results extraction): none (thinking off), minimal, low, medium, high or xhigh. On Qwen, a level turns thinking on at the matching reasoning effort and none turns it off through the chat template (recommended on Qwen: none).
 TEST_CASE_DESIGN_TASK_TIMEOUT_SECONDS=3300 # Default: 3300. How long the orchestrator waits for one test case design, the wait for a free Test Case Design agent included; keep it below the orchestrator's request timeout (3500 s on Cloud Run).
 TEST_ENVIRONMENT_LABEL=Standard Test Environment # Default: Standard Test Environment. Label describing the
                                  # environment tests are executed against. Reported on every test execution
@@ -363,12 +364,21 @@ TEST_CASE_DESIGN_FIX_MIN_SEVERITY=medium # Default: medium. One of low, medium, 
 TEST_CASE_DESIGN_MAX_ITERATIONS=4 # Default: 4. Maximum number of reviews in a test case design: the first follows the generation, every further one a fix.
 TEST_CASE_DESIGN_TOTAL_TOKENS_LIMIT=4000000 # Default: 4000000. Token budget of one test case design, shared with the generation, review and classification agents it runs in-process.
 TEST_CASE_DESIGN_MAX_OUTPUT_TOKENS= # Optional. Maximum output tokens per model response of the Test Case Design agent; defaults to MAX_OUTPUT_TOKENS.
+# Thinking level of each agent's model calls: none (thinking off), minimal, low, medium, high or xhigh. Unset keeps the default
+# shown; on Qwen a level turns thinking on at the matching reasoning effort and none turns it off through the chat template.
+# The generation, review and classification agents run inside the Test Case Design service, which reads their levels.
+REQUIREMENTS_REVIEW_THINKING_LEVEL=medium # Default: medium. Recommended on Qwen: none.
+INCIDENT_CREATION_THINKING_LEVEL=medium # Default: medium. Recommended on Qwen: none.
+TEST_CASE_DESIGN_THINKING_LEVEL=low # Default: low. Recommended on Qwen: low.
+TEST_CASE_GENERATION_THINKING_LEVEL=medium # Default: medium. Recommended on Qwen: low.
+TEST_CASE_REVIEW_THINKING_LEVEL=medium # Default: medium. Recommended on Qwen: low.
+TEST_CASE_CLASSIFICATION_THINKING_LEVEL=medium # Default: medium. Recommended on Qwen: low.
 # Version each agent reports in its A2A agent card (visible in the dashboard) and, for execution agents,
 # on every test execution result. Each agent reads its own variable.
-REQUIREMENTS_REVIEW_AGENT_VERSION=1.4.0 # Default: 1.4.0.
-TEST_CASE_DESIGN_AGENT_VERSION=1.1.1 # Default: 1.1.1.
-TEST_CASE_CLASSIFICATION_AGENT_VERSION=1.4.0 # Default: 1.4.0.
-INCIDENT_CREATION_AGENT_VERSION=1.3.0 # Default: 1.3.0.
+REQUIREMENTS_REVIEW_AGENT_VERSION=1.5.0 # Default: 1.5.0.
+TEST_CASE_DESIGN_AGENT_VERSION=1.2.0 # Default: 1.2.0.
+TEST_CASE_CLASSIFICATION_AGENT_VERSION=1.5.0 # Default: 1.5.0.
+INCIDENT_CREATION_AGENT_VERSION=1.4.0 # Default: 1.4.0.
 
 # Agent Discovery (for remote agents)
 REMOTE_EXECUTION_AGENT_HOSTS=http://localhost # Default: http://localhost. Comma-separated URLs of remote agent hosts.
@@ -634,26 +644,27 @@ Provider-specific request settings (Claude 5 thinking and effort, Qwen reasoning
 
 The agents keep the pydantic-ai 1.x run semantics: `end_strategy="early"` (tools requested alongside the final output are skipped rather than run) and a single retry per MCP tool call. A custom `MODEL_NAME` left to pydantic-ai follows its 2.x prefixes: `openai:` now targets the Responses API (`openai-chat:` for Chat Completions), and `google-vertex:` is `google-cloud:`; the `google-gla:`, `anthropic:` and `qwen:` names are built by the model factory and are unaffected.
 
-#### Qwen3.8-27B: thinking stays off
+#### Qwen3.8-27B: recommended settings
 
-Run `qwen:Qwen/Qwen3.8-27B-FP8` with thinking off, which is the default (`QWEN_THINKING_ENABLED=False`): the chat template's `enable_thinking` is set to `false` and the requests carry the model card's non-thinking sampling (temperature 0.7, top_p 0.8, presence_penalty 1.5, with top_k 20 from the checkpoint's generation config). The model was evaluated, still with the earlier global temperature (0.0) and top_p (1.0), with the hermetic smoke suite and its A/B comparison against the Gemini baseline, over eight runs in three configurations:
+Thinking is configured per agent and is the same for every provider: an agent's thinking level (`<AGENT>_THINKING_LEVEL`, see the *Environment Variables* block) turns thinking on at that effort, and `none` turns it off. On Qwen, no level sets the chat template's `enable_thinking` to `false` with the model card's non-thinking sampling (temperature 0.7, top_p 0.8, presence penalty `QWEN_NON_THINKING_PRESENCE_PENALTY`), and a level sends the matching reasoning effort with the thinking sampling (temperature 1.0, top_p 0.95, presence penalty `QWEN_THINKING_PRESENCE_PENALTY`); top_k 20 comes from the checkpoint's generation config. The defaults in `config.py` keep the levels of the default Gemini model, so a Qwen deployment sets the recommended values below in the `overrides` of its environment in `deploy/manifest.yaml`:
 
-| Configuration | Runs | Outcome |
+| Agent | Variable | Recommended |
 | --- | --- | --- |
-| Thinking off | 4 | Every flow completed; one intermittent instruction slip in four runs; the whole suite in about 9 minutes. Test-case review and incident reports judged on par with Gemini or better, requirements review and test-case generation somewhat below it. |
-| Thinking on, `medium` (`high` mapped to `xhigh` for test-case review) | 2 | About twice as slow; at `xhigh` the test-case review exceeded the orchestrator's 500 s task timeout; one intermittent instruction slip. No quality gain over thinking off. |
-| Thinking on, `low` | 2 | Every flow completed, but no quality gain over thinking off, and one test-case generation judged much worse than the baseline. |
+| Orchestrator | `ORCHESTRATOR_THINKING_LEVEL` | `none` |
+| Requirements review | `REQUIREMENTS_REVIEW_THINKING_LEVEL` | `none` |
+| Incident creation | `INCIDENT_CREATION_THINKING_LEVEL` | `none` |
+| Test case design | `TEST_CASE_DESIGN_THINKING_LEVEL` | `low` |
+| Test case generation | `TEST_CASE_GENERATION_THINKING_LEVEL` | `low` |
+| Test case review | `TEST_CASE_REVIEW_THINKING_LEVEL` | `low` |
+| Test case classification | `TEST_CASE_CLASSIFICATION_THINKING_LEVEL` | `low` |
+| Presence penalty, thinking off | `QWEN_NON_THINKING_PRESENCE_PENALTY` | `0` (the default) |
+| Presence penalty, thinking on | `QWEN_THINKING_PRESENCE_PENALTY` | `0.5` (the default) |
 
-The quality gaps against Gemini did not depend on thinking: test-case generation repeatedly asserted that a single-use link was consumed without the test ever completing the action that consumes it, and the requirements review tended to pad its feedback with generic checklist items and advice addressed to testers rather than to the story author. Thinking only added latency and the risk of timeouts, so it is not worth enabling for this model.
-A second evaluation ran requirements review, test case design and incident creation once per configuration against Gemini 3.8 Flash, on a large synthetic checkout story (10 acceptance criteria with sub-items, a business-rules attachment with 18 rules the acceptance criteria do not state), with unchanged prompts:
+The presence penalty of the model card (1.5) gave a worse result in both modes: it breaks agentic steps (instruction following, tool loops), so both penalties are settings and default to the best value of their mode.
 
-| Configuration | Requirements review | Test case design | Incident creation |
-| --- | --- | --- | --- |
-| Thinking off, `presence_penalty` 1.5 (model card) | On par with Gemini: 12 consolidated points, all 18 rules found | Split the 10 acceptance criteria into 25 against the prompt's rule; 23 shallow test cases, one case with two test type labels | Failed: repeated duplicate searches until the tool call limit, no bug created |
-| Thinking off, `presence_penalty` 0 | All 18 rules found, but 49 barely merged points | Correct 10 acceptance criteria, the widest rule coverage of all runs (12 of 18, Gemini 8 of 18), but duplicated test cases and some invented test data | Complete and accurate bug report |
-| Thinking `low`, model card thinking sampling | 30 well-prioritised points, 16 of 18 rules, slower | Did not finish within the A/B suite's 40-minute webhook timeout | Complete and accurate bug report |
+**Serving**: use vLLM **0.29.0 or newer** (verified on v0.31.0). Builds before v0.29.0 ignore `tool_choice: "required"`, so the structured outputs of the agents are unconstrained (fixed in vLLM by #52830). Builds that enforce the schema grammar (verified on v0.31.0) let the model omit the optional fields of an output model, which is why each routing result of the orchestrator (`AgentSelected`, `SuitableAgentBusy`, `NoSuitableAgent`) is its own output tool with only required fields. These are vLLM behaviours, not Qwen ones.
 
-The best single setting for every workflow is thinking off with `presence_penalty` 0: the penalty of 1.5 breaks agentic steps (instruction following, tool loops), while 0 only makes the merged requirements review wordier. The default remains the model card's 1.5 until a sweep of further values confirms it. Gemini still produced the cleaner test case suite, while Qwen matched it on requirements review.
+Running Qwen3.8 with thinking on is much slower on a single GPU, so raise `TEST_CASE_DESIGN_TASK_TIMEOUT_SECONDS` for it, while keeping it below the orchestrator's request timeout (3500 s on Cloud Run).
 
 #### Context compaction
 
@@ -770,6 +781,8 @@ and an unchanged service is not redeployed. **Bump a service's `version` in the 
 whose configuration is unchanged.** The third-party images take their version from the `_ATLASSIAN_MCP_IMAGE_TAG` and
 `_QDRANT_IMAGE_TAG` substitutions, so a new tag redeploys them.
 
+To deploy Qwen through the pipeline, set `MODEL_NAME`, `QWEN_ENDPOINT`, `QWEN_CONTEXT_WINDOW`, the two `QWEN_*_PRESENCE_PENALTY` keys and the `<AGENT>_THINKING_LEVEL` keys in the `overrides` of the environment (see *Qwen3.8-27B: recommended settings*): the manifest declares them with empty defaults on the orchestrator, `requirements-review-agent`, `test-case-design-agent` (which reads the generation, review and classification levels too) and `incident-creation-agent`, the only workloads that call the LLM, and a key without a value is not deployed. The identity each of these four services runs as needs `roles/run.invoker` on the Qwen Cloud Run service, which lives outside this repository. `QWEN_API_KEY` is not declared, because every secret a service references must exist in Secret Manager; an endpoint that needs it, or a private network, is not deployable through the pipeline.
+
 #### Deployment:
 
 After having all preconditions fulfilled, you can execute the following command:
@@ -839,6 +852,7 @@ The LLM mock (`tests/smoke/mocks/llm_mock.py`) is an OpenAI-compatible Chat Comp
 The suite drives the system through the orchestrator's public webhooks and asserts on what reaches each mocked boundary:
 
 * **Every LLM call** → each model-driven operation of the flows (routing, results extraction, the requirements review with its focused reviews and their merge, every step of the test case design including the duplicate judgement, classification and incident creation) reached the LLM mock, and none went unanswered.
+* **Model request settings** → the mock records each request's `temperature`, `top_p`, `presence_penalty`, `reasoning_effort`, `chat_template_kwargs` and the properties and required fields of every offered tool. The stack sets `ORCHESTRATOR_THINKING_LEVEL: "none"`, so the routing requests carry thinking off (`enable_thinking: false`, temperature 0.7, top_p 0.8, presence penalty 0) and exactly the three routing result tools with every field required, while the test case design requests carry its default level (`reasoning_effort: low`, temperature 1.0, top_p 0.95, presence penalty 0.5).
 * **Requirements review** (`POST /new-requirements-available`) → a non-empty review comment reaches Jira (REST or MCP), and the agent first fetched the source story via the Jira MCP. The prompt override mounted from `tests/smoke/overrides/` reaches the review model's instructions, the story attachment is downloaded over Jira REST, and the review issues a hybrid documents query whose text is non-empty and shorter than the issue content. With `REQUIREMENTS_REVIEW_FOCUS_AREA_COUNT` set to 3, the usage artifact meters the three focused reviews (`review_with_attachments`) and the merge run (`merge_reviews`).
 * **Additional Jira fields** (`JIRA_ADDITIONAL_FIELD_IDS`) → the configured custom field IDs reach the models of the requirements review and the test case design, and the Jira MCP mock records that both flows requested them.
 * **Routing and cards** → routing decisions with justifications reach the dashboard logs, and every agent's card
@@ -1327,6 +1341,8 @@ schedulers before upgrading:
 18. **Review comments are rendered from structured findings.** `TestCaseReviewFeedback.review_feedback` (a list of strings) is replaced by `findings` (severity, action, owner test case, category, description, suggested fix, acceptance criterion, related test cases), and the review comment of a test case now starts with the design's iterations and stop reason. The duplicate check runs once, over the final test cases after the review loop, and nothing is indexed by a review or a design; run `/update-test-case-db` to make saved test cases duplicate candidates.
 19. **Prompt overrides of the Test Case Generation and Review agents must be rebased on the new bundled templates.** An override whose placeholders differ from its bundled template fails startup (e.g. `agents/test_case_review/system_prompts/review_with_attachments_prompt.md` and `test_suite_review_prompt.md` now need `{severity_classifier}`, whose fragment `severity_rubric.md` is renamed to `severity_classifier.md` (rename its override too), and the review prompt, `agents/test_case_generation/system_prompts/steps_generation_prompt.md` and `test_case_fixer_prompt.md` need `{test_step_quality_criteria}`, the test step rules they share), and an old override of either agent's `main_prompt_template.md` would still instruct the upload, review-comment and status steps these agents no longer have. `prompts/additional_fields_instruction_template.md` keeps its path, so its override keeps working.
 20. **The indexed text of a test case separates its sections by blank lines.** Every stored test case therefore has a new content hash, and the next `/update-test-case-db` sync re-embeds all of them once.
+21. **The routing result is three output tools instead of one with an outcome field, and a prompt override of `prompts/routing_instruction_template.md` under `PROMPT_OVERRIDES_DIR` must be rebased on the new bundled template.** The template has no placeholders, so an old override still loads without an error, but it instructs the `outcome` field and the optional agent ID, which no routing output tool has any more (`AgentSelected` with a required `agent_id`, `SuitableAgentBusy` and `NoSuitableAgent`).
+22. **`QWEN_THINKING_ENABLED` is removed.** Thinking is set per agent through `<AGENT>_THINKING_LEVEL` (`none` turns it off), so a Qwen deployment that set nothing now thinks on every agent at the default levels; set the recommended values from *Qwen3.8-27B: recommended settings*. The thinking-off presence penalty is now `QWEN_NON_THINKING_PRESENCE_PENALTY` (default 0, formerly the fixed 1.5).
 
 ### Migrating a vector collection
 

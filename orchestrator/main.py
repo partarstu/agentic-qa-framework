@@ -56,17 +56,19 @@ from common.models import (
     JIRA_ISSUE_KEY_PATTERN,
     AgentExecutionError,
     AgentInfo,
-    AgentRoutingDecision,
+    AgentSelected,
     ConfluenceSyncRequest,
     FileArtifact,
     IncidentCreationInput,
     IncidentCreationResult,
     JiraSyncRequest,
     JsonSerializableModel,
+    NoSuitableAgent,
     ProjectExecutionRequest,
-    RoutingOutcome,
+    RoutingDecision,
     SelectedAgents,
     SharePointSyncRequest,
+    SuitableAgentBusy,
     SyncOutcome,
     SyncRequest,
     SyncStatus,
@@ -618,7 +620,7 @@ async def _cancel_agent_task(agent_card: AgentCard, task_id: str) -> bool:
 # --- For selecting the single best for the task agent ---
 discovery_agent = CustomLlmWrapper.create_agent(
     model_name=config.OrchestratorConfig.MODEL_NAME,
-    output_type=AgentRoutingDecision,
+    output_type=[AgentSelected, SuitableAgentBusy, NoSuitableAgent],
     instructions=ROUTING_INSTRUCTION,
     name="Discovery Agent",
     retries=config.RetryConfig.MAX_RETRIES,
@@ -1839,7 +1841,7 @@ async def reserve_agent_waiting_if_needed(
     max_wait_time = config.OrchestratorConfig.TASK_EXECUTION_TIMEOUT if max_wait_seconds is None else max_wait_seconds
     start_time = time.time()
     last_justification = "no routing decision was made"
-    decision: AgentRoutingDecision | None = None
+    decision: RoutingDecision | None = None
     routed_agents_info = ""
 
     while (time.time() - start_time) < max_wait_time:
@@ -1855,7 +1857,7 @@ async def reserve_agent_waiting_if_needed(
             routed_agents_info = agents_info
             last_justification = decision.justification
 
-            if decision.outcome == RoutingOutcome.NONE_SUITABLE:
+            if isinstance(decision, NoSuitableAgent):
                 # Fail fast: no registered agent can execute the task, so waiting is pointless.
                 _record_error(
                     f"No registered agent can execute task '{task_description}'. "
@@ -2041,13 +2043,10 @@ async def _get_agents_info() -> str:
     return agents_info
 
 
-async def _route_task(task_description: str, agents_info: str, task_id: str | None = None) -> AgentRoutingDecision:
+async def _route_task(task_description: str, agents_info: str, task_id: str | None = None) -> RoutingDecision:
     """Asks the routing model for one three-way decision over the rendered agent registry."""
     if not agents_info:
-        return AgentRoutingDecision(
-            outcome=RoutingOutcome.NONE_SUITABLE,
-            justification="No agents are registered with the orchestrator.",
-        )
+        return NoSuitableAgent(justification="No agents are registered with the orchestrator.")
 
     user_prompt = f"""
 Target task description: "{task_description}".
@@ -2057,15 +2056,14 @@ The list of all registered with you agents:
 """
     result = await _run_agent_with_retry(lambda: discovery_agent.run(user_prompt))
     decision = result.output
-    selected_agent_name = (
-        await agent_registry.get_name(decision.selected_agent_id) if decision.selected_agent_id else "Unknown"
-    )
+    selected_agent_id = decision.agent_id if isinstance(decision, AgentSelected) else None
+    selected_agent_name = await agent_registry.get_name(selected_agent_id) if selected_agent_id else "Unknown"
     logger.info(
         "Routing decision for task '%s': outcome=%s, selected_agent_name=%s, selected_agent_id=%s, justification: %s",
         task_description,
-        decision.outcome.value,
+        type(decision).__name__,
         selected_agent_name,
-        decision.selected_agent_id,
+        selected_agent_id,
         decision.justification,
         extra={"task_id": task_id},
     )
@@ -2073,7 +2071,7 @@ The list of all registered with you agents:
 
 
 def _selected_agent_if_available(
-    decision: AgentRoutingDecision,
+    decision: RoutingDecision,
     available_agent_ids: list[str],
     task_description: str,
     task_id: str | None = None,
@@ -2083,28 +2081,18 @@ def _selected_agent_if_available(
     An invalid or unavailable selected ID counts as an invalid routing result: it is logged with
     the justification and treated like the busy outcome.
     """
-    if decision.outcome != RoutingOutcome.AGENT_SELECTED:
+    if not isinstance(decision, AgentSelected):
         return None
-    selected_agent_id = decision.selected_agent_id
-    if not selected_agent_id:
-        logger.warning(
-            "Routing returned outcome '%s' without an agent ID for task '%s': %s",
-            RoutingOutcome.AGENT_SELECTED.value,
-            task_description,
-            decision.justification,
-            extra={"task_id": task_id},
-        )
-        return None
-    if selected_agent_id not in available_agent_ids:
+    if decision.agent_id not in available_agent_ids:
         logger.warning(
             "Routing selected invalid or unavailable agent ID '%s' for task '%s': %s",
-            selected_agent_id,
+            decision.agent_id,
             task_description,
             decision.justification,
             extra={"task_id": task_id},
         )
         return None
-    return selected_agent_id
+    return decision.agent_id
 
 
 async def _fetch_agent_card(agent_base_url: str) -> AgentCard | None:

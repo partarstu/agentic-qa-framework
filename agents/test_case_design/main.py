@@ -10,7 +10,7 @@ from typing import Any, override
 from fastapi import FastAPI
 from pydantic import BaseModel
 from pydantic_ai import ModelRetry, RunContext
-from pydantic_ai.settings import ThinkingLevel
+from pydantic_ai.settings import ThinkingEffort
 from pydantic_ai.tools import Tool, ToolDefinition
 from pydantic_ai.toolsets import ToolsetTool, WrapperToolset
 from pydantic_ai.usage import RunUsage
@@ -93,7 +93,7 @@ class TestCaseDesignAgent(AgentBase):
         self.agent.instructions(_story_instructions)
         self.agent.output_validator(_complete_result)
 
-    def get_thinking_level(self) -> ThinkingLevel:
+    def get_thinking_level(self) -> ThinkingEffort | None:
         return config.TestCaseDesignAgentConfig.THINKING_LEVEL
 
     def get_max_requests_per_task(self) -> int:

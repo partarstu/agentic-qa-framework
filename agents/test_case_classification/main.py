@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 
 from pydantic_ai import ModelRetry, RunContext
-from pydantic_ai.settings import ThinkingLevel
+from pydantic_ai.settings import ThinkingEffort
 
 import config
 from agents.test_case_classification.prompt import TestCaseClassificationSystemPrompt
@@ -45,7 +45,7 @@ class TestCaseClassificationAgent(AgentBase):
             tools=[self.add_labels_to_test_case],
         )
 
-    def get_thinking_level(self) -> ThinkingLevel:
+    def get_thinking_level(self) -> ThinkingEffort | None:
         return config.TestCaseClassificationAgentConfig.THINKING_LEVEL
 
     def get_max_requests_per_task(self) -> int:

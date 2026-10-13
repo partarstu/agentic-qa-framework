@@ -664,28 +664,26 @@ class AgentSkillDeclaration(JsonSerializableModel):
     tags: list[str] = Field(default_factory=lambda: ["qa"], description="Skill tags")
 
 
-class RoutingOutcome(StrEnum):
-    """Outcome of one routing decision over the full agent registry."""
+class AgentSelected(JsonSerializableModel):
+    """Routing result: a suitable agent is registered and currently available."""
 
-    AGENT_SELECTED = "agent_selected"
-    SUITABLE_BUT_BUSY = "suitable_but_busy"
-    NONE_SUITABLE = "none_suitable"
+    agent_id: str = Field(description="ID of the single most suitable agent, taken from the registry list")
+    justification: str = Field(description="Elaborate justification of the decision")
 
 
-class AgentRoutingDecision(JsonSerializableModel):
-    """Result of one routing call that sees every registered agent, including availability.
+class SuitableAgentBusy(JsonSerializableModel):
+    """Routing result: a suitable agent is registered, but none of the suitable agents is available right now."""
 
-    The justification is mandatory for every outcome, so an unusable decision is never silent.
-    """
+    justification: str = Field(description="Elaborate justification of the decision")
 
-    selected_agent_id: str | None = Field(
-        default=None,
-        description="ID of the single most suitable agent. Must be None unless the outcome is 'agent_selected'.",
-    )
-    outcome: RoutingOutcome = Field(description="One of the three routing outcomes")
-    justification: str = Field(
-        description="Elaborate justification of the decision. Must always be given, whatever the outcome."
-    )
+
+class NoSuitableAgent(JsonSerializableModel):
+    """Routing result: no registered agent can execute the task, whatever its availability."""
+
+    justification: str = Field(description="Elaborate justification of the decision")
+
+
+type RoutingDecision = AgentSelected | SuitableAgentBusy | NoSuitableAgent
 
 
 class SelectedAgents(JsonSerializableModel):

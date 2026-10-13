@@ -188,6 +188,40 @@ def test_every_service_of_the_repository_manifest_renders():
         assert rendered.env["TZ"]
 
 
+QWEN_KEYS = (
+    "MODEL_NAME",
+    "QWEN_ENDPOINT",
+    "QWEN_CONTEXT_WINDOW",
+    "QWEN_NON_THINKING_PRESENCE_PENALTY",
+    "QWEN_THINKING_PRESENCE_PENALTY",
+)
+KEYS_BY_LLM_SERVICE = {
+    "orchestrator": (*QWEN_KEYS, "ORCHESTRATOR_THINKING_LEVEL"),
+    "requirements-review-agent": (*QWEN_KEYS, "REQUIREMENTS_REVIEW_THINKING_LEVEL"),
+    "test-case-design-agent": (
+        *QWEN_KEYS,
+        "TEST_CASE_DESIGN_THINKING_LEVEL",
+        "TEST_CASE_GENERATION_THINKING_LEVEL",
+        "TEST_CASE_REVIEW_THINKING_LEVEL",
+        "TEST_CASE_CLASSIFICATION_THINKING_LEVEL",
+    ),
+    "incident-creation-agent": (*QWEN_KEYS, "INCIDENT_CREATION_THINKING_LEVEL"),
+}
+
+
+def test_the_model_and_thinking_keys_are_deployable_only_on_the_services_that_read_them():
+    manifest = yaml.safe_load((REPOSITORY_ROOT / "deploy" / "manifest.yaml").read_text(encoding="utf-8"))
+    every_key = {key for keys in KEYS_BY_LLM_SERVICE.values() for key in keys}
+    overrides = dict.fromkeys(every_key, "value")
+
+    for service in manifest["services"]:
+        plain = render(manifest, service, "production", version="tag", environ={"PROJECT_ID": "proj"})
+        overridden = render(manifest, service, "production", overrides, version="tag", environ={"PROJECT_ID": "proj"})
+
+        assert not every_key & set(plain.env), service
+        assert every_key & set(overridden.env) == set(KEYS_BY_LLM_SERVICE.get(service, ())), service
+
+
 @pytest.mark.parametrize(
     ("deployed_marker", "expected_decision"),
     [("1_0-abc", "skip"), ("1_0-old", "deploy"), ("", "deploy")],

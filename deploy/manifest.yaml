@@ -76,9 +76,16 @@ services:
       QDRANT__SERVICE__API_KEY: QDRANT_API_KEY
 
   orchestrator:
-    version: "1.0"
+    version: "3.0.0"
     env:
       ORCHESTRATOR_VERSION: "{version}"
+      # Model selection, left empty for the code defaults; a Qwen deployment sets these in its environment overrides.
+      MODEL_NAME: ""
+      QWEN_ENDPOINT: ""
+      QWEN_CONTEXT_WINDOW: ""
+      QWEN_NON_THINKING_PRESENCE_PENALTY: ""
+      QWEN_THINKING_PRESENCE_PENALTY: ""
+      ORCHESTRATOR_THINKING_LEVEL: ""
       GOOGLE_CLOUD_LOGGING_ENABLED: "true"
       REMOTE_EXECUTION_AGENT_HOSTS: ""
       AGENT_DISCOVERY_PORTS: "443-443"
@@ -140,9 +147,15 @@ services:
       SHAREPOINT_CLIENT_SECRET: SHAREPOINT_CLIENT_SECRET
 
   requirements-review-agent:
-    version: "1.0"
+    version: "1.5.0"
     env:
       REQUIREMENTS_REVIEW_AGENT_VERSION: "{version}"
+      MODEL_NAME: ""
+      QWEN_ENDPOINT: ""
+      QWEN_CONTEXT_WINDOW: ""
+      QWEN_NON_THINKING_PRESENCE_PENALTY: ""
+      QWEN_THINKING_PRESENCE_PENALTY: ""
+      REQUIREMENTS_REVIEW_THINKING_LEVEL: ""
       GOOGLE_CLOUD_LOGGING_ENABLED: "true"
       AGENT_BASE_URL: ""
       EXTERNAL_PORT: "443"
@@ -164,9 +177,18 @@ services:
 
   # Runs the test case generation, review and classification agents in-process as its delegates.
   test-case-design-agent:
-    version: "1.0.0"
+    version: "1.2.0"
     env:
       TEST_CASE_DESIGN_AGENT_VERSION: "{version}"
+      MODEL_NAME: ""
+      QWEN_ENDPOINT: ""
+      QWEN_CONTEXT_WINDOW: ""
+      QWEN_NON_THINKING_PRESENCE_PENALTY: ""
+      QWEN_THINKING_PRESENCE_PENALTY: ""
+      TEST_CASE_DESIGN_THINKING_LEVEL: ""
+      TEST_CASE_GENERATION_THINKING_LEVEL: ""
+      TEST_CASE_REVIEW_THINKING_LEVEL: ""
+      TEST_CASE_CLASSIFICATION_THINKING_LEVEL: ""
       GOOGLE_CLOUD_LOGGING_ENABLED: "true"
       AGENT_BASE_URL: ""
       EXTERNAL_PORT: "443"
@@ -189,9 +211,15 @@ services:
       INTERNAL_SERVICE_API_KEY: INTERNAL_SERVICE_API_KEY
 
   incident-creation-agent:
-    version: "1.0"
+    version: "1.4.0"
     env:
       INCIDENT_CREATION_AGENT_VERSION: "{version}"
+      MODEL_NAME: ""
+      QWEN_ENDPOINT: ""
+      QWEN_CONTEXT_WINDOW: ""
+      QWEN_NON_THINKING_PRESENCE_PENALTY: ""
+      QWEN_THINKING_PRESENCE_PENALTY: ""
+      INCIDENT_CREATION_THINKING_LEVEL: ""
       GOOGLE_CLOUD_LOGGING_ENABLED: "true"
       AGENT_BASE_URL: ""
       EXTERNAL_PORT: "443"

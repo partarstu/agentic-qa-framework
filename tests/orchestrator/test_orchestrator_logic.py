@@ -18,10 +18,12 @@ from a2a.types import (
     TaskArtifactUpdateEvent,
 )
 from fastapi import HTTPException
+from pydantic_ai.messages import ModelResponse, ToolCallPart
+from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.usage import RunUsage
 
 import config
-from common.models import RoutingOutcome
+from common.models import AgentSelected, NoSuitableAgent, RoutingDecision, SuitableAgentBusy
 from common.streaming import AgentActivityEvent, LogBatchEvent, TaskDoneEvent
 from orchestrator.main import (
     AgentStatus,
@@ -127,22 +129,11 @@ async def test_discover_agents_success(clear_registry, mock_agent_card):
         assert next(iter(cards.values())).name == "Discovered Agent"
 
 
-def _routing_result(outcome: RoutingOutcome, selected_agent_id: str | None = None) -> MagicMock:
+def _routing_result(decision: RoutingDecision) -> MagicMock:
     """Mocked discovery agent run result for one routing decision."""
     mock_result = MagicMock()
-    mock_result.output.outcome = outcome
-    mock_result.output.selected_agent_id = selected_agent_id
-    mock_result.output.justification = "Test justification."
+    mock_result.output = decision
     return mock_result
-
-
-def _routing_decision(outcome: RoutingOutcome, selected_agent_id: str | None = None) -> MagicMock:
-    """Mocked routing decision as ``_route_task`` returns it (no ``output`` wrapper)."""
-    decision = MagicMock()
-    decision.outcome = outcome
-    decision.selected_agent_id = selected_agent_id
-    decision.justification = "Test justification."
-    return decision
 
 
 @pytest.mark.asyncio
@@ -151,9 +142,10 @@ async def test_route_task_agent_selected(clear_registry, mock_agent_card):
     await agent_registry.register("test-id", mock_agent_card)
 
     with patch.object(discovery_agent, "run", new_callable=AsyncMock) as mock_run:
-        mock_run.return_value = _routing_result(RoutingOutcome.AGENT_SELECTED, "test-id")
+        mock_run.return_value = _routing_result(AgentSelected(agent_id="test-id", justification="Test."))
 
         decision = await _route_task("some task", await _get_agents_info())
+        assert isinstance(decision, AgentSelected)
         assert _selected_agent_if_available(decision, ["test-id"], "some task") == "test-id"
 
 
@@ -162,9 +154,10 @@ async def test_route_task_suitable_but_busy(clear_registry, mock_agent_card):
     await agent_registry.register("test-id", mock_agent_card)
 
     with patch.object(discovery_agent, "run", new_callable=AsyncMock) as mock_run:
-        mock_run.return_value = _routing_result(RoutingOutcome.SUITABLE_BUT_BUSY)
+        mock_run.return_value = _routing_result(SuitableAgentBusy(justification="Test."))
 
         decision = await _route_task("some task", await _get_agents_info())
+        assert isinstance(decision, SuitableAgentBusy)
         assert _selected_agent_if_available(decision, [], "some task") is None
 
 
@@ -173,11 +166,10 @@ async def test_route_task_none_suitable(clear_registry, mock_agent_card):
     await agent_registry.register("test-id", mock_agent_card)
 
     with patch.object(discovery_agent, "run", new_callable=AsyncMock) as mock_run:
-        mock_run.return_value = _routing_result(RoutingOutcome.NONE_SUITABLE)
+        mock_run.return_value = _routing_result(NoSuitableAgent(justification="Test."))
 
         decision = await _route_task("some task", await _get_agents_info())
-        assert decision.outcome == RoutingOutcome.NONE_SUITABLE
-        assert decision.selected_agent_id is None
+        assert isinstance(decision, NoSuitableAgent)
 
 
 @pytest.mark.asyncio
@@ -185,7 +177,7 @@ async def test_route_task_no_agents_registered(clear_registry):
     # No routing model call happens when no agents are registered at all
     with patch.object(discovery_agent, "run", new_callable=AsyncMock) as mock_run:
         decision = await _route_task("some task", await _get_agents_info())
-        assert decision.outcome == RoutingOutcome.NONE_SUITABLE
+        assert isinstance(decision, NoSuitableAgent)
         mock_run.assert_not_called()
 
 
@@ -193,9 +185,29 @@ async def test_route_task_no_agents_registered(clear_registry):
 async def test_selected_agent_is_dropped_when_it_is_not_available(clear_registry, mock_agent_card):
     # The model named an agent that went BUSY between the routing call and the reservation
     await agent_registry.register("test-id", mock_agent_card)
-    decision = _routing_decision(RoutingOutcome.AGENT_SELECTED, "test-id")
+    decision = AgentSelected(agent_id="test-id", justification="Test justification.")
 
     assert _selected_agent_if_available(decision, [], "some task") is None
+
+
+@pytest.mark.asyncio
+async def test_discovery_agent_offers_one_output_tool_per_result_and_requires_every_field():
+    offered: dict[str, dict] = {}
+
+    def capture_tools(_messages, info: AgentInfo) -> ModelResponse:
+        offered.update({tool.name: tool.parameters_json_schema for tool in info.output_tools})
+        return ModelResponse(parts=[ToolCallPart("final_result_NoSuitableAgent", {"justification": "None."})])
+
+    with discovery_agent.override(model=FunctionModel(capture_tools)):
+        result = await discovery_agent.run("task")
+
+    assert isinstance(result.output, NoSuitableAgent)
+    assert {name: set(schema["required"]) for name, schema in offered.items()} == {
+        "final_result_AgentSelected": {"agent_id", "justification"},
+        "final_result_SuitableAgentBusy": {"justification"},
+        "final_result_NoSuitableAgent": {"justification"},
+    }
+    assert all(set(schema["required"]) == set(schema["properties"]) for schema in offered.values())
 
 
 # =============================================================================
@@ -230,7 +242,7 @@ async def test_reserve_none_suitable_fails_fast_with_404_and_dashboard_error(
         patch(
             "orchestrator.main._route_task",
             new_callable=AsyncMock,
-            return_value=_routing_decision(RoutingOutcome.NONE_SUITABLE),
+            return_value=NoSuitableAgent(justification="Test justification."),
         ),
         pytest.raises(HTTPException) as exc_info,
     ):
@@ -252,7 +264,7 @@ async def test_reserve_busy_timeout_names_suitable_but_busy_with_last_justificat
         patch(
             "orchestrator.main._route_task",
             new_callable=AsyncMock,
-            return_value=_routing_decision(RoutingOutcome.SUITABLE_BUT_BUSY),
+            return_value=SuitableAgentBusy(justification="Test justification."),
         ),
         pytest.raises(HTTPException) as exc_info,
     ):
@@ -275,7 +287,7 @@ async def test_reserve_invalid_selected_id_is_treated_like_busy(
         patch(
             "orchestrator.main._route_task",
             new_callable=AsyncMock,
-            return_value=_routing_decision(RoutingOutcome.AGENT_SELECTED, "test-id"),
+            return_value=AgentSelected(agent_id="test-id", justification="Test justification."),
         ),
         pytest.raises(HTTPException) as exc_info,
     ):
@@ -303,7 +315,7 @@ async def test_reserve_waits_for_a_busy_agent_as_long_as_the_given_budget(
         patch(
             "orchestrator.main._route_task",
             new_callable=AsyncMock,
-            return_value=_routing_decision(RoutingOutcome.SUITABLE_BUT_BUSY),
+            return_value=SuitableAgentBusy(justification="Test justification."),
         ),
         pytest.raises(HTTPException) as exc_info,
     ):
@@ -330,7 +342,7 @@ async def test_reserve_routes_once_while_the_registry_is_unchanged(
         patch(
             "orchestrator.main._route_task",
             new_callable=AsyncMock,
-            return_value=_routing_decision(RoutingOutcome.SUITABLE_BUT_BUSY),
+            return_value=SuitableAgentBusy(justification="Test justification."),
         ) as mock_route,
         pytest.raises(HTTPException),
     ):
@@ -359,7 +371,7 @@ async def test_reserve_routes_again_once_the_registry_changed(
         patch(
             "orchestrator.main._route_task",
             new_callable=AsyncMock,
-            return_value=_routing_decision(RoutingOutcome.SUITABLE_BUT_BUSY),
+            return_value=SuitableAgentBusy(justification="Test justification."),
         ) as mock_route,
         pytest.raises(HTTPException),
     ):
