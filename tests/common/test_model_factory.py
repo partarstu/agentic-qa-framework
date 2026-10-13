@@ -110,34 +110,45 @@ def test_qwen_context_window_is_unknown_when_not_configured():
 
 @pytest.mark.parametrize(
     ("thinking_level", "expected_effort"),
-    [("minimal", "low"), ("low", "low"), ("medium", "medium"), ("high", "xhigh"), ("xhigh", "xhigh"), (True, "xhigh")],
+    [("minimal", "low"), ("low", "low"), ("medium", "medium"), ("high", "xhigh"), ("xhigh", "xhigh")],
 )
 def test_agent_thinking_level_is_graded_as_a_reasoning_effort_qwen_accepts(thinking_level, expected_effort):
-    with patch("config.QWEN_ENDPOINT", "http://localhost:8080/v1/"), patch("config.QWEN_THINKING_ENABLED", True):
-        model = build_model("qwen:Qwen/Qwen3.8-27B-FP8", thinking_level)
-
-    assert model.settings == {"temperature": 1.0, "top_p": 0.95, "openai_reasoning_effort": expected_effort}
-
-
-def test_qwen_default_effort_applies_without_a_thinking_level():
-    with patch("config.QWEN_ENDPOINT", "http://localhost:8080/v1/"), patch("config.QWEN_THINKING_ENABLED", True):
-        model = build_model("qwen:Qwen/Qwen3.8-27B-FP8")
-
-    assert model.settings == {"temperature": 1.0, "top_p": 0.95}
-
-
-@pytest.mark.parametrize("thinking_level", ["medium", False, None])
-def test_disabled_thinking_switches_qwen_off_through_its_chat_template(thinking_level):
     with (
         patch("config.QWEN_ENDPOINT", "http://localhost:8080/v1/"),
-        patch("config.QWEN_THINKING_ENABLED", False),
+        patch("config.QWEN_THINKING_PRESENCE_PENALTY", 0.5),
     ):
         model = build_model("qwen:Qwen/Qwen3.8-27B-FP8", thinking_level)
 
     assert model.settings == {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "presence_penalty": 0.5,
+        "openai_reasoning_effort": expected_effort,
+    }
+
+
+def test_qwen_thinking_presence_penalty_is_configurable():
+    with (
+        patch("config.QWEN_ENDPOINT", "http://localhost:8080/v1/"),
+        patch("config.QWEN_THINKING_PRESENCE_PENALTY", 1.2),
+    ):
+        model = build_model("qwen:Qwen/Qwen3.8-27B-FP8", "low")
+
+    assert model.settings["presence_penalty"] == 1.2
+
+
+@pytest.mark.parametrize("presence_penalty", [0.0, 1.5])
+def test_no_thinking_level_switches_qwen_off_through_its_chat_template(presence_penalty):
+    with (
+        patch("config.QWEN_ENDPOINT", "http://localhost:8080/v1/"),
+        patch("config.QWEN_NON_THINKING_PRESENCE_PENALTY", presence_penalty),
+    ):
+        model = build_model("qwen:Qwen/Qwen3.8-27B-FP8", None)
+
+    assert model.settings == {
         "temperature": 0.7,
         "top_p": 0.8,
-        "presence_penalty": 1.5,
+        "presence_penalty": presence_penalty,
         "extra_body": {"chat_template_kwargs": {"enable_thinking": False}},
     }
 
@@ -324,9 +335,7 @@ def test_gemini_retry_logs_the_provider_message(caplog, monkeypatch):
 
 
 def test_claude_5_settings_per_thinking_level():
-    assert build_claude_5_settings(None, None, "claude-opus-5") == {}
-    assert build_claude_5_settings(False, None, "claude-opus-5") == {"anthropic_thinking": {"type": "disabled"}}
-    assert build_claude_5_settings(True, None, "claude-opus-5") == {"anthropic_thinking": {"type": "adaptive"}}
+    assert build_claude_5_settings(None, None, "claude-opus-5") == {"anthropic_thinking": {"type": "disabled"}}
     assert build_claude_5_settings("minimal", None, "claude-opus-5") == {
         "anthropic_thinking": {"type": "adaptive"},
         "anthropic_effort": "low",
@@ -338,15 +347,15 @@ def test_claude_5_settings_per_thinking_level():
 
 
 def test_claude_5_settings_carry_max_tokens_only_when_set():
-    assert build_claude_5_settings(None, None, "claude-opus-5") == {}
-    assert build_claude_5_settings(None, 4096, "claude-opus-5") == {"max_tokens": 4096}
+    assert "max_tokens" not in build_claude_5_settings("low", None, "claude-opus-5")
+    assert build_claude_5_settings("low", 4096, "claude-opus-5")["max_tokens"] == 4096
 
 
 @pytest.mark.parametrize(
     "settings",
     [
         build_claude_5_settings(level, 2048, "claude-opus-5")
-        for level in (None, False, True, "minimal", "low", "medium", "high", "xhigh")
+        for level in (None, "minimal", "low", "medium", "high", "xhigh")
     ],
 )
 def test_claude_5_settings_never_carry_forbidden_fields(settings):
@@ -356,7 +365,7 @@ def test_claude_5_settings_never_carry_forbidden_fields(settings):
 
 def test_claude_5_models_rejecting_disabled_thinking_fall_back_to_adaptive_low(caplog):
     with caplog.at_level(logging.WARNING, logger="model_factory"):
-        settings = build_claude_5_settings(False, None, "claude-fable-5")
+        settings = build_claude_5_settings(None, None, "claude-fable-5")
 
     assert settings == {"anthropic_thinking": {"type": "adaptive"}, "anthropic_effort": "low"}
     assert any("claude-fable-5" in record.message for record in caplog.records)

@@ -29,7 +29,7 @@ from pydantic_ai.models import (
     StreamedResponse,
 )
 from pydantic_ai.models.wrapper import WrapperModel
-from pydantic_ai.settings import ThinkingLevel, merge_model_settings
+from pydantic_ai.settings import ThinkingEffort, merge_model_settings
 from pydantic_ai.usage import RunUsage
 
 import config
@@ -48,7 +48,7 @@ class CustomLlmWrapper(WrapperModel):
     def __init__(
         self,
         model_name: str,
-        thinking_level: ThinkingLevel | None = None,
+        thinking_level: ThinkingEffort | None = None,
         max_output_tokens: int | None = None,
         operation_name: str | None = None,
     ):
@@ -65,11 +65,11 @@ class CustomLlmWrapper(WrapperModel):
     def create_agent(
         cls,
         model_name: str,
-        output_type: type,
+        output_type: type | Sequence[type],
         instructions: str | None = None,
         system_prompt: str | None = None,
         name: str = "",
-        thinking_level: ThinkingLevel | None = None,
+        thinking_level: ThinkingEffort | None = None,
         tools: Sequence = (),
         toolsets: Sequence = (),
         capabilities: Sequence = (),
@@ -107,9 +107,7 @@ class CustomLlmWrapper(WrapperModel):
     def _default_model_settings(self) -> ModelSettings:
         if is_claude_5(self.wrapped_model_name):
             return build_claude_5_settings(self.thinking_level, self.max_output_tokens, self.wrapped_model_name)
-        settings = ModelSettings()
-        if self.thinking_level is not None:
-            settings["thinking"] = self.thinking_level
+        settings = ModelSettings(thinking=self.thinking_level or False)
         if self.max_output_tokens is not None:
             settings["max_tokens"] = self.max_output_tokens
         return settings

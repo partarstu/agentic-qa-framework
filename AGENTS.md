@@ -41,7 +41,7 @@ Run from the repository root unless noted; if imports of third-party packages fa
 
 ## Versioning
 
-Every agent and the orchestrator carries a `VERSION` in `config.py`, the default of its `<NAME>_VERSION` environment variable, in the form `MAJOR.MINOR.PATCH`. A change that alters the logic of an agent or of the orchestrator (its prompts, tools, workflow, routing, output content or integration behaviour) bumps that default in the same change, together with the default shown in the README *Environment Variables* block:
+Every agent and the orchestrator carries a `VERSION` in `config.py`, the default of its `<NAME>_VERSION` environment variable, in the form `MAJOR.MINOR.PATCH`. A change that alters the logic of an agent or of the orchestrator (its prompts, tools, workflow, routing, output content or integration behaviour) bumps that default in the same change, together with the default shown in the README *Environment Variables* block and the `version` of its service in `deploy/manifest.yaml`, which a deployment reports instead of that default (an agent run in-process by another one bumps the service of that one too):
 
 * **PATCH** for a fix or an internal change that keeps the observable behaviour and the contract.
 * **MINOR** for a backwards-compatible change of behaviour or a new capability (a new tool, a changed prompt, a new workflow step or endpoint, changed output content).
@@ -102,7 +102,7 @@ The A/B suite in `tests/ab/` runs the smoke topology with the model-driven servi
 ## Working with the user
 
 * Before implementing a task, present a short plan: what will be implemented and how, as numbered steps with their checks (`1. <step> → verify: <check>`), not every individual change. Wait for the user's confirmation, then carry out the plan without asking them to confirm individual changes.
-* When the user or an instruction asks for a plan (an implementation plan, a TO-DO list or similar), write it straight to an .MD file in the `plans` folder and reply with only its path and a short summary; never print the plan in the conversation.
+* When the user or an instruction asks for a plan (an implementation plan, a TO-DO list or similar), write it straight to an .MD file in the `plans` folder and reply with only its path and a short summary; never print the plan in the conversation. An implementation plan follows `.agents/skills/architecting-features/resources/implementation_plan_template.md` and the presentation rules in step 6 of that skill: comprehensive, visually well structured and easy to read.
 * When a change touches several modules, keep its TO-DO list in an .MD file in the `plans` folder, tick items as you finish them and add what you discover. After a context compaction, re-read that file instead of relying on the conversation.
 * Once the plan is confirmed, work until the *Definition of done* is met. Put status notes in the same message as your next action. Never end a turn with a summary that announces the next step without taking it, an offer to continue, or a list of decisions that don't block the work.
 * Stop and ask the user only when you can't continue without them, when two readings of the request would lead to materially different work, when an architecture change needs their approval (*Architecture first (CALM)*), before spawning a subagent (*Subagents*), or before anything destructive or outward-facing: deleting files you didn't create, pushing, creating or changing cloud resources, or changing anything outside this repository. Make routine judgement calls yourself.

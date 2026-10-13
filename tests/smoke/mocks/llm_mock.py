@@ -24,17 +24,18 @@ from common import utils
 from common.models import (
     AcceptanceCriteriaItem,
     AcceptanceCriteriaList,
-    AgentRoutingDecision,
+    AgentSelected,
     DesignedTestCase,
     DuplicateCandidate,
     DuplicateDetectionResult,
     GeneratedTestCases,
     IncidentCreationInput,
     IncidentCreationResult,
+    NoSuitableAgent,
     OverlappingTestCase,
     RequirementsReviewFeedback,
-    RoutingOutcome,
     SelectedAgents,
+    SuitableAgentBusy,
     TestCaseDesignResult,
     TestCaseDuplicateJudgement,
     TestCaseReviewFeedback,
@@ -54,6 +55,7 @@ app = FastAPI()
 logger = utils.get_logger("llm_mock")
 
 OUTPUT_TOOL_NAME = "final_result"
+ROUTING_SELECTED_TOOL_NAME = f"{OUTPUT_TOOL_NAME}_AgentSelected"
 # pydantic-ai ends every retry prompt with this sentence, so a tool result ending with it is a failed call.
 RETRY_PROMPT_SUFFIX = "Fix the errors and try again."
 CHARS_PER_TOKEN = 4
@@ -246,8 +248,8 @@ def _parse(body: dict) -> _Conversation:
     return _Conversation("\n\n".join(system_texts), user_texts, tool_schemas, tool_results)
 
 
-def _final(output: BaseModel) -> _Answer:
-    return [_ToolCall(OUTPUT_TOOL_NAME, output.model_dump(mode="json"))]
+def _final(output: BaseModel, tool_name: str = OUTPUT_TOOL_NAME) -> _Answer:
+    return [_ToolCall(tool_name, output.model_dump(mode="json"))]
 
 
 def _first_issue_key(text: str) -> str:
@@ -302,23 +304,20 @@ def _route(conversation: _Conversation) -> _Answer:
     available = [agent for agent in suitable if agent.is_available]
     if available:
         return _final(
-            AgentRoutingDecision(
-                selected_agent_id=available[0].id,
-                outcome=RoutingOutcome.AGENT_SELECTED,
+            AgentSelected(
+                agent_id=available[0].id,
                 justification=f"'{available[0].name}' declares the skill the task '{task}' needs and is available.",
-            )
+            ),
+            ROUTING_SELECTED_TOOL_NAME,
         )
     if suitable:
         return _final(
-            AgentRoutingDecision(
-                outcome=RoutingOutcome.SUITABLE_BUT_BUSY,
-                justification=f"Every agent able to handle the task '{task}' is busy.",
-            )
+            SuitableAgentBusy(justification=f"Every agent able to handle the task '{task}' is busy."),
+            f"{OUTPUT_TOOL_NAME}_SuitableAgentBusy",
         )
     return _final(
-        AgentRoutingDecision(
-            outcome=RoutingOutcome.NONE_SUITABLE, justification=f"No registered agent declares a skill for '{task}'."
-        )
+        NoSuitableAgent(justification=f"No registered agent declares a skill for '{task}'."),
+        f"{OUTPUT_TOOL_NAME}_NoSuitableAgent",
     )
 
 
@@ -591,13 +590,13 @@ def _detect_duplicates(_conversation: _Conversation) -> _Answer:
 # --- Dispatch -----------------------------------------------------------------------------------------------------
 
 _OPERATION_BY_TOOL = {
+    ROUTING_SELECTED_TOOL_NAME: "routing",
     "add_jira_comment": "requirements_review",
     "generate_test_cases": "test_case_design",
     "add_labels_to_test_case": "test_case_classification",
     "_search_duplicate_candidates_in_rag": "incident_creation",
 }
 _OPERATION_BY_OUTPUT_FIELD = {
-    "selected_agent_id": "routing",
     "ids": "multi_routing",
     "stepResults": "results_extraction",
     "overlapping_test_cases": "test_case_duplicate_judgement",
@@ -692,6 +691,18 @@ async def chat_completions(request: Request) -> JSONResponse:
             "system": conversation.system,
             "user": conversation.user_texts,
             "tools": sorted(conversation.tool_schemas),
+            "tool_fields": {
+                name: {
+                    "properties": sorted(schema.get("properties", {})),
+                    "required": sorted(schema.get("required", [])),
+                }
+                for name, schema in conversation.tool_schemas.items()
+            },
+            **{
+                key: body[key]
+                for key in ("temperature", "top_p", "presence_penalty", "reasoning_effort", "chat_template_kwargs")
+                if key in body
+            },
         }
     )
     if any(message.get("role") == "system" for message in body.get("messages", [])[1:]):

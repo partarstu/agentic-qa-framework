@@ -31,7 +31,7 @@ from pydantic_ai.providers.anthropic import AnthropicProvider
 from pydantic_ai.providers.google import GoogleProvider
 from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.retries import AsyncHTTPX2TenacityTransport, RetryConfig, wait_retry_after
-from pydantic_ai.settings import ThinkingLevel
+from pydantic_ai.settings import ThinkingEffort
 from tenacity import RetryCallState, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 import config
@@ -48,8 +48,7 @@ CLOUD_RUN_HOST_SUFFIX = ".run.app"
 API_KEY_PLACEHOLDER = "not-used"
 # Qwen grades thinking as low, medium or xhigh (its default) and rejects any other effort, so the thinking
 # levels the agents are configured with map onto those three.
-QWEN_REASONING_EFFORT_MAP: dict[ThinkingLevel, ReasoningEffort] = {
-    True: "xhigh",
+QWEN_REASONING_EFFORT_MAP: dict[ThinkingEffort, ReasoningEffort] = {
     "minimal": "low",
     "low": "low",
     "medium": "medium",
@@ -60,7 +59,7 @@ THINKING_DISABLED_BODY = {"chat_template_kwargs": {"enable_thinking": False}}
 # Qwen3.8's model card sampling for each mode; their top_k of 20 comes from the checkpoint's generation config,
 # which the server applies when a request omits it.
 QWEN_THINKING_SAMPLING = OpenAIChatModelSettings(temperature=1.0, top_p=0.95)
-QWEN_NON_THINKING_SAMPLING = OpenAIChatModelSettings(temperature=0.7, top_p=0.8, presence_penalty=1.5)
+QWEN_NON_THINKING_SAMPLING = OpenAIChatModelSettings(temperature=0.7, top_p=0.8)
 CLAUDE_5_PREFIXES = ("claude-opus-5", "claude-sonnet-5", "claude-fable-5", "claude-mythos-5")
 # Models whose API rejects explicitly disabled thinking: they run adaptive at effort low instead.
 DISABLED_THINKING_UNSUPPORTED_PREFIXES = ("claude-fable-5", "claude-mythos-5")
@@ -76,7 +75,7 @@ def is_claude_5(model_name: object) -> bool:
 
 
 def build_claude_5_settings(
-    thinking_level: ThinkingLevel | None, max_output_tokens: int | None, model_name: str = ""
+    thinking_level: ThinkingEffort | None, max_output_tokens: int | None, model_name: str = ""
 ) -> AnthropicModelSettings:
     """Build Claude 5 settings without unsupported sampling fields or token budgets.
 
@@ -87,8 +86,6 @@ def build_claude_5_settings(
     if max_output_tokens is not None:
         settings["max_tokens"] = max_output_tokens
     if thinking_level is None:
-        return settings
-    if thinking_level is False:
         if model_name.split(":")[-1].startswith(DISABLED_THINKING_UNSUPPORTED_PREFIXES):
             if model_name not in _logged_thinking_fallbacks:
                 _logged_thinking_fallbacks.add(model_name)
@@ -100,8 +97,6 @@ def build_claude_5_settings(
             settings["anthropic_effort"] = "low"
         else:
             settings["anthropic_thinking"] = {"type": "disabled"}
-    elif thinking_level is True:
-        settings["anthropic_thinking"] = {"type": "adaptive"}
     else:
         effort = "low" if thinking_level == "minimal" else str(thinking_level)
         settings["anthropic_thinking"] = {"type": "adaptive"}
@@ -109,7 +104,7 @@ def build_claude_5_settings(
     return settings
 
 
-def build_model(model_name: str | Model, thinking_level: ThinkingLevel | None = None) -> str | Model:
+def build_model(model_name: str | Model, thinking_level: ThinkingEffort | None = None) -> str | Model:
     """Return the model to wrap: the provider model built for a known provider, the input otherwise.
 
     Qwen is served by a self-hosted OpenAI-compatible endpoint; Claude and Gemini are built
@@ -269,14 +264,19 @@ def _log_retry_attempt(model_name: str) -> Callable[[RetryCallState], None]:
     return log_attempt
 
 
-def _build_qwen_settings(thinking_level: ThinkingLevel | None) -> OpenAIChatModelSettings:
-    """Return Qwen's model-card sampling for its mode: thinking off via its chat template, or on with any effort."""
-    if not config.QWEN_THINKING_ENABLED or thinking_level is False:
-        return OpenAIChatModelSettings(**QWEN_NON_THINKING_SAMPLING, extra_body=THINKING_DISABLED_BODY)
-    settings = OpenAIChatModelSettings(**QWEN_THINKING_SAMPLING)
-    if thinking_level is not None:
-        settings["openai_reasoning_effort"] = QWEN_REASONING_EFFORT_MAP[thinking_level]
-    return settings
+def _build_qwen_settings(thinking_level: ThinkingEffort | None) -> OpenAIChatModelSettings:
+    """Return Qwen's sampling for its mode: thinking off via its chat template without a level, on at the level's effort."""
+    if thinking_level is None:
+        return OpenAIChatModelSettings(
+            **QWEN_NON_THINKING_SAMPLING,
+            presence_penalty=config.QWEN_NON_THINKING_PRESENCE_PENALTY,
+            extra_body=THINKING_DISABLED_BODY,
+        )
+    return OpenAIChatModelSettings(
+        **QWEN_THINKING_SAMPLING,
+        presence_penalty=config.QWEN_THINKING_PRESENCE_PENALTY,
+        openai_reasoning_effort=QWEN_REASONING_EFFORT_MAP[thinking_level],
+    )
 
 
 def _build_qwen_provider(endpoint: str, model_name: str) -> OpenAIProvider:

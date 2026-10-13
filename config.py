@@ -9,9 +9,10 @@ Centralized configuration for the application.
 import os
 import re
 from pathlib import Path
+from typing import get_args
 
 from dotenv import load_dotenv
-from pydantic_ai.settings import ThinkingLevel
+from pydantic_ai.settings import ThinkingEffort
 
 load_dotenv()
 
@@ -25,6 +26,28 @@ def _optional_positive_int(name: str) -> int | None:
     if value <= 0:
         raise ValueError(f"{name} must be a positive integer.")
     return value
+
+
+def _float_setting(name: str, default: float) -> float:
+    """Read a float setting whose unset or blank value gives the default."""
+    raw = os.environ.get(name, "").strip()
+    return float(raw) if raw else default
+
+
+_THINKING_EFFORTS: dict[str, ThinkingEffort] = {effort: effort for effort in get_args(ThinkingEffort)}
+
+
+def _thinking_level(agent: str, default: ThinkingEffort | None) -> ThinkingEffort | None:
+    """Read <agent>_THINKING_LEVEL: unset or blank gives the default, "none" turns thinking off."""
+    name = f"{agent}_THINKING_LEVEL"
+    raw = os.environ.get(name, "").strip().lower()
+    if not raw:
+        return default
+    if raw == "none":
+        return None
+    if raw not in _THINKING_EFFORTS:
+        raise ValueError(f"{name} must be one of none, {', '.join(_THINKING_EFFORTS)}, got {raw!r}.")
+    return _THINKING_EFFORTS[raw]
 
 
 # Logging
@@ -168,9 +191,9 @@ ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 # credentials, so QWEN_API_KEY only applies to any other host.
 QWEN_ENDPOINT = os.environ.get("QWEN_ENDPOINT", "")
 QWEN_API_KEY = os.environ.get("QWEN_API_KEY", "")
-# Master switch for Qwen's thinking. When on, each agent's THINKING_LEVEL grades it; when off, thinking is
-# disabled through Qwen's chat template, which is the only way to switch it off entirely.
-QWEN_THINKING_ENABLED = os.environ.get("QWEN_THINKING_ENABLED", "False").lower() in ("true", "1", "t")
+# Qwen's presence penalty for a request of an agent without a thinking level and for one with a level.
+QWEN_NON_THINKING_PRESENCE_PENALTY = _float_setting("QWEN_NON_THINKING_PRESENCE_PENALTY", 0.0)
+QWEN_THINKING_PRESENCE_PENALTY = _float_setting("QWEN_THINKING_PRESENCE_PENALTY", 0.5)
 # The served --max-model-len; unset, context compaction assumes its conservative 200K fallback window.
 QWEN_CONTEXT_WINDOW = _optional_positive_int("QWEN_CONTEXT_WINDOW")
 
@@ -214,8 +237,8 @@ PROMPT_GUARD_SERVICE_URL = os.environ.get("PROMPT_GUARD_SERVICE_URL")
 
 # Orchestrator
 class OrchestratorConfig:
-    THINKING_LEVEL: ThinkingLevel = "low"
-    VERSION = os.environ.get("ORCHESTRATOR_VERSION", "2.1.0")
+    THINKING_LEVEL = _thinking_level("ORCHESTRATOR", "low")
+    VERSION = os.environ.get("ORCHESTRATOR_VERSION", "3.0.0")
     # Label describing the environment the execution agents run their test cases against; reported
     # alongside every test execution result.
     TEST_ENVIRONMENT_LABEL = os.environ.get("TEST_ENVIRONMENT_LABEL", "Standard Test Environment")
@@ -264,8 +287,8 @@ class DashboardPersistenceConfig:
 
 # Requirements Review Agent
 class RequirementsReviewAgentConfig:
-    THINKING_LEVEL: ThinkingLevel = "medium"
-    VERSION = os.environ.get("REQUIREMENTS_REVIEW_AGENT_VERSION", "1.4.0")
+    THINKING_LEVEL = _thinking_level("REQUIREMENTS_REVIEW", "medium")
+    VERSION = os.environ.get("REQUIREMENTS_REVIEW_AGENT_VERSION", "1.5.0")
     OWN_NAME = "Jira Requirements Reviewer"
     SKILL_ID = "jira-requirements-review"
     SKILL_NAME = "Jira Requirements Review"
@@ -281,8 +304,8 @@ class RequirementsReviewAgentConfig:
 
 # Test Case Classification Agent
 class TestCaseClassificationAgentConfig:
-    THINKING_LEVEL: ThinkingLevel = "medium"
-    VERSION = os.environ.get("TEST_CASE_CLASSIFICATION_AGENT_VERSION", "1.4.0")
+    THINKING_LEVEL = _thinking_level("TEST_CASE_CLASSIFICATION", "medium")
+    VERSION = os.environ.get("TEST_CASE_CLASSIFICATION_AGENT_VERSION", "1.5.0")
     OWN_NAME = "Test Case Classification Agent"
     SKILL_ID = "test-case-classification"
     SKILL_NAME = "Test Case Classification"
@@ -297,15 +320,15 @@ class TestCaseClassificationAgentConfig:
 
 # Test Case Generation Agent
 class TestCaseGenerationAgentConfig:
-    THINKING_LEVEL: ThinkingLevel = "medium"
+    THINKING_LEVEL = _thinking_level("TEST_CASE_GENERATION", "medium")
     MODEL_NAME = DEFAULT_MODEL_NAME
     MAX_OUTPUT_TOKENS = _optional_positive_int("TEST_CASE_GENERATION_MAX_OUTPUT_TOKENS") or MAX_OUTPUT_TOKENS
 
 
 # Test Case Design Agent
 class TestCaseDesignAgentConfig:
-    THINKING_LEVEL: ThinkingLevel = "low"
-    VERSION = os.environ.get("TEST_CASE_DESIGN_AGENT_VERSION", "1.1.1")
+    THINKING_LEVEL = _thinking_level("TEST_CASE_DESIGN", "low")
+    VERSION = os.environ.get("TEST_CASE_DESIGN_AGENT_VERSION", "1.2.0")
     OWN_NAME = "Test Case Design Agent"
     SKILL_ID = "test-case-design"
     SKILL_NAME = "Test Case Design"
@@ -328,7 +351,7 @@ class TestCaseDesignAgentConfig:
 
 # Test Case Review Agent
 class TestCaseReviewAgentConfig:
-    THINKING_LEVEL: ThinkingLevel = "medium"
+    THINKING_LEVEL = _thinking_level("TEST_CASE_REVIEW", "medium")
     REVIEW_COMPLETE_STATUS_NAME = "Review Complete"
     MODEL_NAME = DEFAULT_MODEL_NAME
     MAX_OUTPUT_TOKENS = _optional_positive_int("TEST_CASE_REVIEW_MAX_OUTPUT_TOKENS") or MAX_OUTPUT_TOKENS
@@ -336,8 +359,8 @@ class TestCaseReviewAgentConfig:
 
 # Incident Creation Agent
 class IncidentCreationAgentConfig:
-    THINKING_LEVEL: ThinkingLevel = "medium"
-    VERSION = os.environ.get("INCIDENT_CREATION_AGENT_VERSION", "1.3.0")
+    THINKING_LEVEL = _thinking_level("INCIDENT_CREATION", "medium")
+    VERSION = os.environ.get("INCIDENT_CREATION_AGENT_VERSION", "1.4.0")
     OWN_NAME = "Incident Creation Agent"
     SKILL_ID = "incident-creation"
     SKILL_NAME = "Incident Creation"

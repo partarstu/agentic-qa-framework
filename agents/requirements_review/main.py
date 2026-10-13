@@ -6,7 +6,7 @@ import asyncio
 
 from pydantic_ai.exceptions import ModelRetry
 from pydantic_ai.messages import BinaryContent
-from pydantic_ai.settings import ThinkingLevel
+from pydantic_ai.settings import ThinkingEffort
 from pydantic_ai.usage import UsageLimits
 
 import config
@@ -146,7 +146,7 @@ class RequirementsReviewAgent(AgentBase):
             tools=[review_tool, self.add_jira_comment],
         )
 
-    def get_thinking_level(self) -> ThinkingLevel:
+    def get_thinking_level(self) -> ThinkingEffort | None:
         return config.RequirementsReviewAgentConfig.THINKING_LEVEL
 
     def get_max_requests_per_task(self) -> int:

@@ -19,7 +19,7 @@ from datetime import UTC, datetime, timedelta
 from a2a.helpers import new_text_message
 from a2a.types import Message
 from pydantic import BaseModel
-from pydantic_ai.settings import ThinkingLevel
+from pydantic_ai.settings import ThinkingEffort
 
 import config
 from common.agent_base import AgentBase
@@ -93,7 +93,7 @@ class MockExecutionAgent(AgentBase):
             ),
         )
 
-    def get_thinking_level(self) -> ThinkingLevel:
+    def get_thinking_level(self) -> ThinkingEffort | None:
         return "minimal"
 
     def get_max_requests_per_task(self) -> int:

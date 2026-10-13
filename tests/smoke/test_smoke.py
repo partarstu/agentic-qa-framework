@@ -1204,6 +1204,36 @@ def test_routing_justifications_appear_in_dashboard_logs(
     assert justified, f"The routing decision log entries carry no justification or agent name. Entries: {decisions[:5]}"
 
 
+def test_routing_requests_offer_three_result_tools_and_run_with_thinking_off(
+    webhook_responses: dict[str, httpx.Response], http_client: httpx.Client
+) -> None:
+    """The smoke stack sets ORCHESTRATOR_THINKING_LEVEL to none, so the routing call carries Qwen's non-thinking mode."""
+    requests = _model_requests(http_client, "routing")
+    assert requests, "The LLM mock recorded no routing request."
+    for request in requests:
+        assert request["chat_template_kwargs"] == {"enable_thinking": False}, request
+        assert (request["temperature"], request["top_p"], request["presence_penalty"]) == (0.7, 0.8, 0.0), request
+        assert "reasoning_effort" not in request, request
+        assert {name: fields["required"] for name, fields in request["tool_fields"].items()} == {
+            "final_result_AgentSelected": ["agent_id", "justification"],
+            "final_result_SuitableAgentBusy": ["justification"],
+            "final_result_NoSuitableAgent": ["justification"],
+        }, request
+        assert all(fields["required"] == fields["properties"] for fields in request["tool_fields"].values()), request
+
+
+def test_test_case_design_requests_run_with_thinking_on_at_the_default_level(
+    webhook_responses: dict[str, httpx.Response], http_client: httpx.Client
+) -> None:
+    """The test case design agent keeps its default thinking level, so its calls carry Qwen's thinking mode."""
+    requests = _model_requests(http_client, "test_case_design")
+    assert requests, "The LLM mock recorded no test case design request."
+    for request in requests:
+        assert request["reasoning_effort"] == "low", request
+        assert (request["temperature"], request["top_p"], request["presence_penalty"]) == (1.0, 0.95, 0.5), request
+        assert "chat_template_kwargs" not in request, request
+
+
 # --- SharePoint documents ingestion (local mode via the sync service) ----------------
 
 SHAREPOINT_COLLECTION_NAME = "sharepoint_documents"

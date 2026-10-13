@@ -7,7 +7,7 @@ import os
 import time
 import uuid
 
-from pydantic_ai.settings import ThinkingLevel
+from pydantic_ai.settings import ThinkingEffort
 from qdrant_client import models as qdrant_models
 
 import config
@@ -85,7 +85,7 @@ class IncidentCreationAgent(AgentBase):
             vector_db_collection_name=QDRANT_COLLECTION_NAME,
         )
 
-    def get_thinking_level(self) -> ThinkingLevel:
+    def get_thinking_level(self) -> ThinkingEffort | None:
         return config.IncidentCreationAgentConfig.THINKING_LEVEL
 
     def get_max_requests_per_task(self) -> int:
