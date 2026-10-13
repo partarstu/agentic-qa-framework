@@ -65,3 +65,26 @@ def test_agent_default_thinking_levels():
 def test_qwen_presence_penalty_defaults():
     assert config.QWEN_NON_THINKING_PRESENCE_PENALTY == 0.0
     assert config.QWEN_THINKING_PRESENCE_PENALTY == 0.5
+
+
+@pytest.mark.parametrize("raw", [None, "", "  "])
+def test_unset_or_blank_float_setting_gives_the_default(monkeypatch, raw):
+    if raw is None:
+        monkeypatch.delenv("SOME_FLOAT", raising=False)
+    else:
+        monkeypatch.setenv("SOME_FLOAT", raw)
+
+    assert config._float_setting("SOME_FLOAT", 0.5) == 0.5
+
+
+def test_float_setting_overrides_the_default(monkeypatch):
+    monkeypatch.setenv("SOME_FLOAT", " 1.2 ")
+
+    assert config._float_setting("SOME_FLOAT", 0.5) == 1.2
+
+
+def test_a_non_numeric_float_setting_raises(monkeypatch):
+    monkeypatch.setenv("SOME_FLOAT", "high")
+
+    with pytest.raises(ValueError):
+        config._float_setting("SOME_FLOAT", 0.5)

@@ -15,7 +15,10 @@ x-real-model: &real-model
 
 services:
   orchestrator:
-    environment: *real-model
+    environment:
+      <<: *real-model
+      # Blank restores the code default the baselines were captured with; the smoke stack turns thinking off for Qwen.
+      ORCHESTRATOR_THINKING_LEVEL: ""
 
   requirements_review:
     environment: *real-model

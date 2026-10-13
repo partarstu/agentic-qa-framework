@@ -28,6 +28,15 @@ def _optional_positive_int(name: str) -> int | None:
     return value
 
 
+def _float_setting(name: str, default: float) -> float:
+    """Read a float setting whose unset or blank value gives the default."""
+    raw = os.environ.get(name, "").strip()
+    return float(raw) if raw else default
+
+
+_THINKING_EFFORTS: dict[str, ThinkingEffort] = {effort: effort for effort in get_args(ThinkingEffort)}
+
+
 def _thinking_level(agent: str, default: ThinkingEffort | None) -> ThinkingEffort | None:
     """Read <agent>_THINKING_LEVEL: unset or blank gives the default, "none" turns thinking off."""
     name = f"{agent}_THINKING_LEVEL"
@@ -36,9 +45,9 @@ def _thinking_level(agent: str, default: ThinkingEffort | None) -> ThinkingEffor
         return default
     if raw == "none":
         return None
-    if raw not in get_args(ThinkingEffort):
-        raise ValueError(f"{name} must be one of none, {', '.join(get_args(ThinkingEffort))}, got {raw!r}.")
-    return raw
+    if raw not in _THINKING_EFFORTS:
+        raise ValueError(f"{name} must be one of none, {', '.join(_THINKING_EFFORTS)}, got {raw!r}.")
+    return _THINKING_EFFORTS[raw]
 
 
 # Logging
@@ -183,8 +192,8 @@ ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 QWEN_ENDPOINT = os.environ.get("QWEN_ENDPOINT", "")
 QWEN_API_KEY = os.environ.get("QWEN_API_KEY", "")
 # Qwen's presence penalty for a request of an agent without a thinking level and for one with a level.
-QWEN_NON_THINKING_PRESENCE_PENALTY = float(os.environ.get("QWEN_NON_THINKING_PRESENCE_PENALTY", "0"))
-QWEN_THINKING_PRESENCE_PENALTY = float(os.environ.get("QWEN_THINKING_PRESENCE_PENALTY", "0.5"))
+QWEN_NON_THINKING_PRESENCE_PENALTY = _float_setting("QWEN_NON_THINKING_PRESENCE_PENALTY", 0.0)
+QWEN_THINKING_PRESENCE_PENALTY = _float_setting("QWEN_THINKING_PRESENCE_PENALTY", 0.5)
 # The served --max-model-len; unset, context compaction assumes its conservative 200K fallback window.
 QWEN_CONTEXT_WINDOW = _optional_positive_int("QWEN_CONTEXT_WINDOW")
 

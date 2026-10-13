@@ -41,7 +41,7 @@ Run from the repository root unless noted; if imports of third-party packages fa
 
 ## Versioning
 
-Every agent and the orchestrator carries a `VERSION` in `config.py`, the default of its `<NAME>_VERSION` environment variable, in the form `MAJOR.MINOR.PATCH`. A change that alters the logic of an agent or of the orchestrator (its prompts, tools, workflow, routing, output content or integration behaviour) bumps that default in the same change, together with the default shown in the README *Environment Variables* block:
+Every agent and the orchestrator carries a `VERSION` in `config.py`, the default of its `<NAME>_VERSION` environment variable, in the form `MAJOR.MINOR.PATCH`. A change that alters the logic of an agent or of the orchestrator (its prompts, tools, workflow, routing, output content or integration behaviour) bumps that default in the same change, together with the default shown in the README *Environment Variables* block and the `version` of its service in `deploy/manifest.yaml`, which a deployment reports instead of that default (an agent run in-process by another one bumps the service of that one too):
 
 * **PATCH** for a fix or an internal change that keeps the observable behaviour and the contract.
 * **MINOR** for a backwards-compatible change of behaviour or a new capability (a new tool, a changed prompt, a new workflow step or endpoint, changed output content).

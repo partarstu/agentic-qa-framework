@@ -890,7 +890,7 @@ docker compose -f docker-compose.smoke.yml down -v
 
 ### A/B tests against a baseline
 
-The smoke suite proves that the flows work on a scripted model; it says nothing about the quality of what a real model writes, so a change to the model, its settings or an agent's prompt can degrade every output while the suite stays green. The A/B suite under `tests/ab/` (marker `ab`) closes that gap. It runs the same topology with the model-driven services on a real model - `docker-compose.ab.yml` sets `MODEL_NAME` and `GOOGLE_API_KEY` for the orchestrator, requirements review, test case design and incident creation - and gives every LLM-driven workflow its own A/B test, which runs that workflow once and compares what it produced against the workflow's snapshot committed under `tests/ab/baselines/<name>/`:
+The smoke suite proves that the flows work on a scripted model; it says nothing about the quality of what a real model writes, so a change to the model, its settings or an agent's prompt can degrade every output while the suite stays green. The A/B suite under `tests/ab/` (marker `ab`) closes that gap. It runs the same topology with the model-driven services on a real model - `docker-compose.ab.yml` sets `MODEL_NAME` and `GOOGLE_API_KEY` for the orchestrator, requirements review, test case design and incident creation, and restores the orchestrator's default thinking level that the smoke stack turns off - and gives every LLM-driven workflow its own A/B test, which runs that workflow once and compares what it produced against the workflow's snapshot committed under `tests/ab/baselines/<name>/`:
 
 | Workflow (`-k`) | Webhook | Compared outputs (dimensions) |
 | --- | --- | --- |
