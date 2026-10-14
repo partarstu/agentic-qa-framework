@@ -483,6 +483,89 @@ class PreviousReview(JsonSerializableModel):
     findings: list[TestCaseReviewFinding]
 
 
+class ProcedureUiElement(JsonSerializableModel):
+    """The descriptive data of the UI element a recorded atomic procedure targets."""
+
+    name: str = ""
+    own_description: str = ""
+    anchors_description: str = ""
+    parent_summary: str = ""
+
+
+class ProcedureNode(JsonSerializableModel):
+    """A recorded procedure as the procedure knowledge agent returns it, with its children in their recorded order."""
+
+    id: str = Field(min_length=1)
+    description: str = Field(min_length=1)
+    atomic: bool = False
+    is_precondition: bool = False
+    optional: bool = False
+    test_data: list[str] = Field(default_factory=list)
+    expected_results: str = ""
+    prerequisites: list[str] = Field(default_factory=list)
+    effects: list[str] = Field(default_factory=list)
+    negated_effects: list[str] = Field(default_factory=list)
+    additional_info: str | None = None
+    success_count: int = 0
+    ui_element: ProcedureUiElement | None = None
+    children: list["ProcedureNode"] = Field(default_factory=list)
+    children_truncated: bool = False
+
+
+class ItemProcedures(JsonSerializableModel):
+    """The recorded procedures selected for one precondition (P1, P2, …) or test step (S1, S2, …), best first."""
+
+    item_id: str
+    procedures: list[ProcedureNode]
+
+
+class AggregationProcedures(JsonSerializableModel):
+    """The recorded procedures selected for a run of consecutive items that one recorded workflow covers, best first."""
+
+    item_ids: list[str] = Field(min_length=2)
+    procedures: list[ProcedureNode]
+
+
+class ProcedureSelectionResult(JsonSerializableModel):
+    """The recorded procedures the procedure knowledge agent selected for the items of one test case."""
+
+    items: list[ItemProcedures] = Field(default_factory=list)
+    aggregations: list[AggregationProcedures] = Field(default_factory=list)
+
+
+class KnowledgeAwareItem(JsonSerializableModel):
+    """A precondition or test step of a test case rebuilt from the recorded procedures."""
+
+    procedure_id: str | None = Field(
+        default=None,
+        description="The ID of the selected recorded procedure this item reuses, exactly as given, or null when it "
+        "reuses none; the item then gets the procedure's description as its text",
+    )
+    text: str = Field(
+        description="The precondition text or the test step action; ignored when `procedure_id` is set, because the "
+        "item then takes the procedure's description verbatim"
+    )
+    test_data: list[str] = Field(
+        default_factory=list,
+        description="The test data of a test step, labeled with the procedure's test data names when it reuses one;"
+        "always empty for a precondition",
+    )
+    expected_results: str = Field(
+        default="", description="The expected results of a test step; always empty for a precondition"
+    )
+    covers: list[str] = Field(
+        description="The IDs of the draft items (P1, P2, … or S1, S2, …) this item replaces, in their order: one ID "
+        "for a reused or kept item, several consecutive ones for a merged run, none for an added precondition"
+    )
+
+
+class KnowledgeAwareTestCase(JsonSerializableModel):
+    """The preconditions and test steps of a draft test case rebuilt from the recorded procedures selected for it."""
+
+    preconditions: list[KnowledgeAwareItem] = Field(description="The preconditions in their order, one per item")
+    steps: list[KnowledgeAwareItem] = Field(description="The test steps in their execution order")
+
+
 DRAFT_ID_PREFIX = "DRAFT-"
 # Jira issue keys are a project key, a hyphen and the issue number, e.g. PROJ-123.
 JIRA_ISSUE_KEY_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]*-\d+$")

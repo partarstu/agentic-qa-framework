@@ -13,8 +13,9 @@ import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from a2a.types import Artifact, Part
+from a2a.types import Artifact, Part, Task
 
+from common.a2a_contract import ArtifactName
 from common.models import (
     AgentExecutionError,
     GeneratedTestCases,
@@ -22,10 +23,12 @@ from common.models import (
     JsonSerializableModel,
     TestCase,
 )
+from common.token_usage import TokenUsage
 from orchestrator.main import (
     _extract_with_retry,
     _get_model_from_artifacts,
     _get_text_content_from_artifacts,
+    _save_agent_usage_from_task,
 )
 from tests.orchestrator.conftest import agent_card
 
@@ -119,6 +122,16 @@ class TestGetTextContentFromArtifacts:
         result = _get_text_content_from_artifacts(artifacts, "test task")
 
         assert result == ["A1P1", "A1P2", "A2P1", "A2P2", "A2P3"]
+
+    def test_execution_agent_usage_artifact_is_not_a_result(self):
+        artifacts = [
+            _create_text_artifact(["Execution result"]),
+            Artifact(name=ArtifactName.EXECUTION_AGENT_USAGE, parts=[Part(text='[{"operationName": "x"}]')]),
+        ]
+
+        result = _get_text_content_from_artifacts(artifacts, "test task")
+
+        assert result == ["Execution result"]
 
     @pytest.mark.asyncio
     async def test_empty_artifacts_list_content_expected(self, mock_error_history):
@@ -854,3 +867,84 @@ async def test_orchestrator_timestamps_are_utc():
 
     for timestamp in (result.start_timestamp, result.end_timestamp):
         assert datetime.fromisoformat(timestamp).utcoffset() == timedelta(0)
+
+
+# =============================================================================
+# Tests for _save_agent_usage_from_task
+# =============================================================================
+
+
+def _usage_record(operation: str, input_tokens: int, output_tokens: int) -> dict:
+    return {
+        "operationName": operation,
+        "providerName": "google",
+        "requestModel": "gemini-3.5-flash",
+        "responseModel": "gemini-3.5-flash",
+        "inputTokens": input_tokens,
+        "outputTokens": output_tokens,
+        "cachedTokens": 0,
+        "durationMillis": 10,
+    }
+
+
+@pytest.mark.asyncio
+async def test_save_agent_usage_records_the_usage_artifact_of_an_execution_agent():
+    usage_text = json.dumps(
+        [_usage_record("procedure_item_selection", 35, 15), _usage_record("procedure_aggregation_selection", 7, 3)]
+    )
+    task = Task(
+        id="remote-task",
+        artifacts=[
+            Artifact(name="procedure_selection", parts=[Part(text="result")]),
+            Artifact(name=ArtifactName.EXECUTION_AGENT_USAGE, parts=[Part(text=usage_text)]),
+        ],
+    )
+
+    with patch("orchestrator.main.task_history") as history:
+        history.update_usage = AsyncMock()
+        await _save_agent_usage_from_task(task, "task-1")
+
+    task_id, usage = history.update_usage.await_args.args
+    assert task_id == "task-1"
+    assert (usage["input_tokens"], usage["output_tokens"], usage["total_tokens"]) == (42, 18, 60)
+    assert [operation["operation"] for operation in usage["operations"]] == [
+        "procedure_item_selection",
+        "procedure_aggregation_selection",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_save_agent_usage_records_the_usage_file_of_a_project_agent():
+    usage = TokenUsage(
+        model_name="m",
+        input_tokens=1,
+        output_tokens=2,
+        total_tokens=3,
+        cache_read_tokens=0,
+        requests=1,
+        tool_calls=0,
+        cost_usd=None,
+    )
+    task = Task(
+        id="remote-task",
+        artifacts=[Artifact(name=ArtifactName.USAGE, parts=[Part(raw=usage.model_dump_json().encode())])],
+    )
+
+    with patch("orchestrator.main.task_history") as history:
+        history.update_usage = AsyncMock()
+        await _save_agent_usage_from_task(task, "task-1")
+
+    assert history.update_usage.await_args.args[1]["total_tokens"] == 3
+
+
+@pytest.mark.asyncio
+async def test_save_agent_usage_skips_an_invalid_execution_agent_usage_artifact():
+    task = Task(
+        id="remote-task", artifacts=[Artifact(name=ArtifactName.EXECUTION_AGENT_USAGE, parts=[Part(text="not json")])]
+    )
+
+    with patch("orchestrator.main.task_history") as history:
+        history.update_usage = AsyncMock()
+        await _save_agent_usage_from_task(task, "task-1")
+
+    history.update_usage.assert_not_awaited()

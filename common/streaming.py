@@ -9,7 +9,7 @@ Streaming primitives for SSE event payloads and log handler ContextVar.
 from contextvars import ContextVar, Token
 from typing import TYPE_CHECKING
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 if TYPE_CHECKING:
     from common.agent_log_capture import AgentLogCaptureHandler
@@ -88,7 +88,7 @@ class AgentSnapshot(BaseModel):
     id: str
     name: str
     status: str
-    current_task_id: str | None = None
+    running_task_ids: list[str] = Field(default_factory=list)
 
 
 class RunningTaskSnapshot(BaseModel):

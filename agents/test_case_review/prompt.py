@@ -34,6 +34,7 @@ class TestCaseReviewWithAttachmentsPrompt(PromptBase):
         return self.template.format(
             severity_classifier=SeverityClassifierFragment().get_prompt(),
             test_step_quality_criteria=TestStepQualityCriteriaFragment().get_prompt(),
+            procedure_knowledge_review=ProcedureKnowledgeReviewFragment().get_prompt(),
         )
 
 
@@ -60,6 +61,19 @@ class SeverityClassifierFragment(PromptBase):
         return _get_prompts_root()
 
     def __init__(self, template_file_name: str = "severity_classifier.md") -> None:
+        super().__init__(template_file_name)
+
+    def get_prompt(self) -> str:
+        return self.template
+
+
+class ProcedureKnowledgeReviewFragment(PromptBase):
+    """The rules for checking a test case against the recorded procedures selected for its items."""
+
+    def get_script_dir(self) -> Path:
+        return _get_prompts_root()
+
+    def __init__(self, template_file_name: str = "procedure_knowledge_review.md") -> None:
         super().__init__(template_file_name)
 
     def get_prompt(self) -> str:

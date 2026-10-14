@@ -13,3 +13,5 @@ class ArtifactName:
     LOGS = "logs"
     EXECUTION_RESULT = "agent_execution_result"
     USAGE = "agent_usage"
+    # The execution agents of the test-execution-agents repository report their usage under this name, as JSON text.
+    EXECUTION_AGENT_USAGE = "token_usage"

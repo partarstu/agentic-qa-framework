@@ -243,6 +243,9 @@ services:
       EMBEDDING_SERVICE_URL: "http://qdrant_mock:6333"
       # the design agent's model fetches the story with these fields.
       JIRA_ADDITIONAL_FIELD_IDS: "customfield_10101,customfield_10202"
+      # the design delegates the procedure knowledge requests to the orchestrator's A2A endpoint.
+      ORCHESTRATOR_URL: "http://orchestrator:8000"
+      INTERNAL_SERVICE_API_KEY: "smoke-internal-key"
       # the LLM mock - and, on a real model, the severity classifier override under tests/smoke/overrides/ - reports a high
       # finding per test case in every review, so the loop runs exactly one fix cycle up to this limit, then stops as
       # iteration_limit.
@@ -288,6 +291,16 @@ services:
     depends_on: *mock-dependencies
     healthcheck: *agent-healthcheck
 
+  # Mock procedure knowledge agent (the real one runs on Cloud Run, out of this repo). Declares a task capacity in its
+  # card and returns a canned selection, so the design's rebuild and review run against recorded procedures.
+  procedure_knowledge_agent:
+    image: smoke-framework-mocks:latest
+    pull_policy: never
+    command: ["uvicorn", "mocks.procedure_knowledge_agent:app", "--host", "0.0.0.0", "--port", "8001"]
+    ports:
+      - "8007:8001"
+    healthcheck: *agent-healthcheck
+
   orchestrator:
     build:
       context: .
@@ -302,7 +315,9 @@ services:
       # the version through the dashboard, the environment label through the created incident.
       ORCHESTRATOR_VERSION: "8.8-smoke"
       TEST_ENVIRONMENT_LABEL: "Smoke Test Environment"
-      REMOTE_EXECUTION_AGENT_HOSTS: "http://requirements_review,http://test_case_design,http://incident_creation,http://execution_agent"
+      REMOTE_EXECUTION_AGENT_HOSTS: "http://requirements_review,http://test_case_design,http://incident_creation,http://execution_agent,http://procedure_knowledge_agent"
+      # The URL its own A2A card advertises, through which the design agent delegates the procedure knowledge requests.
+      ORCHESTRATOR_URL: "http://orchestrator:8000"
       AGENT_DISCOVERY_PORTS: "8001-8001"
       ORCHESTRATOR_API_KEY: "smoke-api-key"
       DASHBOARD_USERNAME: "smoke"
@@ -349,6 +364,8 @@ services:
       incident_creation:
         condition: service_healthy
       execution_agent:
+        condition: service_healthy
+      procedure_knowledge_agent:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/openapi.json')"]

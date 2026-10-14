@@ -2,9 +2,11 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
+import json
 from unittest.mock import patch
 
 import pytest
+from pydantic import ValidationError
 from pydantic_ai.usage import RunUsage
 
 import config
@@ -144,3 +146,72 @@ def test_from_operations_cost_is_none_when_any_operation_is_unpriced():
     ]
 
     assert TokenUsage.from_operations(entries, _PRICED_MODEL).cost_usd is None
+
+
+def _execution_agent_record(
+    operation: str, model: str, input_tokens: int, output_tokens: int, cached_tokens: int
+) -> dict:
+    return {
+        "operationName": operation,
+        "providerName": "google",
+        "requestModel": model,
+        "responseModel": model,
+        "serverAddress": None,
+        "inputTokens": input_tokens,
+        "outputTokens": output_tokens,
+        "cachedTokens": cached_tokens,
+        "durationMillis": 120,
+    }
+
+
+def test_from_execution_agent_usage_sums_the_operations_with_the_cached_tokens_inside_the_input():
+    usage_json = json.dumps(
+        [
+            _execution_agent_record("procedure_item_selection", _PRICED_MODEL, 1000, 100, 400),
+            _execution_agent_record("procedure_aggregation_selection", _PRICED_MODEL, 500, 50, 0),
+        ]
+    )
+
+    with patch("config.BudgetConfig.MODEL_PRICING", _PRICING):
+        token_usage = TokenUsage.from_execution_agent_usage(usage_json)
+
+    assert token_usage.model_name == _PRICED_MODEL
+    assert (token_usage.input_tokens, token_usage.output_tokens, token_usage.total_tokens) == (1500, 150, 1650)
+    assert token_usage.cache_read_tokens == 400
+    assert [operation.operation for operation in token_usage.operations] == [
+        "procedure_item_selection",
+        "procedure_aggregation_selection",
+    ]
+    assert token_usage.operations[0].uncached_input_tokens == 600
+    # (1100 uncached input + 400 cached input) * $1/1e6 + 150 output * $2/1e6
+    assert token_usage.cost_usd == pytest.approx(0.0018)
+
+
+def test_from_execution_agent_usage_has_no_cost_when_a_model_is_unpriced():
+    usage_json = json.dumps(
+        [
+            _execution_agent_record("test_step_action", _PRICED_MODEL, 10, 5, 0),
+            _execution_agent_record("element_grounding", "unpriced-model", 10, 5, 0),
+        ]
+    )
+
+    with patch("config.BudgetConfig.MODEL_PRICING", _PRICING):
+        token_usage = TokenUsage.from_execution_agent_usage(usage_json)
+
+    assert token_usage.cost_usd is None
+    assert token_usage.model_name == f"{_PRICED_MODEL}, unpriced-model"
+
+
+@pytest.mark.parametrize(
+    "usage_json",
+    [
+        '{"operationName": "x"}',
+        '[{"operationName": "x"}]',
+        '[{"operationName": "x", "responseModel": "m", "inputTokens": -1, "outputTokens": 0, "cachedTokens": 0}]',
+        "not json",
+    ],
+    ids=["not-a-list", "missing-counts", "negative-count", "malformed"],
+)
+def test_from_execution_agent_usage_rejects_an_invalid_artifact(usage_json):
+    with pytest.raises(ValidationError):
+        TokenUsage.from_execution_agent_usage(usage_json)

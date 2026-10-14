@@ -16,6 +16,8 @@ from uuid import uuid4
 
 from a2a.types import AgentCard
 
+from common import utils
+
 
 class AgentStatus(StrEnum):
     """Status of an agent in the registry."""
@@ -234,15 +236,40 @@ class ErrorHistory:
             return list(reversed(list(self._errors)[-limit:]))
 
 
+TASK_CAPACITY_EXTENSION_URI = "urn:quaia:extensions:task-capacity:v1"
+_TASK_CAPACITY_PARAM = "capacity"
+_DEFAULT_TASK_CAPACITY = 1
+# An agent's card is external input, so the capacity it declares is capped.
+_MAX_TASK_CAPACITY = 32
+
+logger = utils.get_logger("orchestrator_registry")
+
+
+def task_capacity(card: AgentCard) -> int:
+    """Return the number of tasks the card's capacity extension declares, or 1 when it declares no valid one."""
+    for extension in card.capabilities.extensions:
+        if extension.uri != TASK_CAPACITY_EXTENSION_URI:
+            continue
+        value = extension.params.fields.get(_TASK_CAPACITY_PARAM)
+        capacity = value.number_value if value is not None and value.WhichOneof("kind") == "number_value" else None
+        if capacity is not None and capacity.is_integer() and _DEFAULT_TASK_CAPACITY <= capacity <= _MAX_TASK_CAPACITY:
+            return int(capacity)
+        logger.warning("Agent '%s' declares an invalid task capacity; it runs one task at a time.", card.name)
+    return _DEFAULT_TASK_CAPACITY
+
+
 class AgentRegistry:
-    """Registry for managing agent cards and their statuses."""
+    """Registry of the agent cards, their statuses and their running tasks; an agent is BUSY when its running tasks reach
+    the capacity its card declares.
+    """
 
     def __init__(self):
         self._cards: dict[str, AgentCard] = {}
         self._statuses: dict[str, AgentStatus] = {}
         self._broken_reasons: dict[str, BrokenReason] = {}
-        self._stuck_task_ids: dict[str, str] = {}  # agent_id -> last stuck task_id
-        self._current_tasks: dict[str, str] = {}  # agent_id -> current task_id
+        self._stuck_task_ids: dict[str, list[str]] = {}
+        self._running_tasks: dict[str, list[str]] = {}
+        self._capacities: dict[str, int] = {}
         self._discovery_urls: dict[str, str] = {}
         self._lock = asyncio.Lock()
 
@@ -257,22 +284,62 @@ class AgentRegistry:
 
     async def register(self, agent_id: str, card: AgentCard):
         async with self._lock:
-            self._cards[agent_id] = card
-            if agent_id not in self._statuses:
-                self._statuses[agent_id] = AgentStatus.AVAILABLE
+            self._set_card_locked(agent_id, card)
 
     async def register_or_refresh(self, discovery_url: str, card: AgentCard) -> str:
         """Register a card by the reachable discovery URL without losing its state."""
         async with self._lock:
             for agent_id, url in self._discovery_urls.items():
                 if url == discovery_url:
-                    self._cards[agent_id] = card
+                    self._set_card_locked(agent_id, card)
                     return agent_id
             agent_id = str(uuid4())
-            self._cards[agent_id] = card
             self._discovery_urls[agent_id] = discovery_url
-            self._statuses[agent_id] = AgentStatus.AVAILABLE
+            self._set_card_locked(agent_id, card)
             return agent_id
+
+    def _set_card_locked(self, agent_id: str, card: AgentCard) -> None:
+        """Store the card and its capacity, keeping a BROKEN status; the caller holds the registry lock."""
+        self._cards[agent_id] = card
+        self._capacities[agent_id] = task_capacity(card)
+        if self._statuses.get(agent_id) != AgentStatus.BROKEN:
+            self._statuses[agent_id] = self._load_status_locked(agent_id)
+
+    def _load_status_locked(self, agent_id: str) -> AgentStatus:
+        """Return BUSY when the agent runs as many tasks as its capacity allows, AVAILABLE otherwise."""
+        running = len(self._running_tasks.get(agent_id, []))
+        return (
+            AgentStatus.BUSY
+            if running >= self._capacities.get(agent_id, _DEFAULT_TASK_CAPACITY)
+            else AgentStatus.AVAILABLE
+        )
+
+    async def reserve_task(self, agent_id: str, task_id: str) -> AgentCard | None:
+        """Add the task to an AVAILABLE agent's running tasks and return its card, or None when the agent has no free slot."""
+        async with self._lock:
+            card = self._cards.get(agent_id)
+            if card is None or self._statuses.get(agent_id) != AgentStatus.AVAILABLE:
+                return None
+            self._running_tasks.setdefault(agent_id, []).append(task_id)
+            self._statuses[agent_id] = self._load_status_locked(agent_id)
+            return card
+
+    async def release_task(self, agent_id: str, task_id: str) -> None:
+        """Remove the task from the agent's running tasks, freeing its slot unless the agent is BROKEN."""
+        async with self._lock:
+            running = self._running_tasks.get(agent_id, [])
+            if task_id in running:
+                running.remove(task_id)
+            if agent_id in self._cards and self._statuses.get(agent_id) != AgentStatus.BROKEN:
+                self._statuses[agent_id] = self._load_status_locked(agent_id)
+
+    async def get_running_tasks(self, agent_id: str) -> list[str]:
+        async with self._lock:
+            return list(self._running_tasks.get(agent_id, []))
+
+    async def get_capacity(self, agent_id: str) -> int:
+        async with self._lock:
+            return self._capacities.get(agent_id, _DEFAULT_TASK_CAPACITY)
 
     async def get_discovery_url(self, agent_id: str) -> str | None:
         """Return the URL used to reach an agent during discovery."""
@@ -291,26 +358,14 @@ class AgentRegistry:
                 self._statuses[agent_id] = status
                 if status == AgentStatus.BROKEN and broken_reason:
                     self._broken_reasons[agent_id] = broken_reason
-                    if stuck_task_id:
-                        self._stuck_task_ids[agent_id] = stuck_task_id
+                    # Several tasks of an agent with a capacity above one can get stuck before its recovery.
+                    if stuck_task_id and stuck_task_id not in self._stuck_task_ids.setdefault(agent_id, []):
+                        self._stuck_task_ids[agent_id].append(stuck_task_id)
                 elif status == AgentStatus.AVAILABLE:
-                    # Clear broken context when agent becomes available
+                    # A recovered agent may still run other tasks, which keep their slots.
                     self._broken_reasons.pop(agent_id, None)
                     self._stuck_task_ids.pop(agent_id, None)
-                    self._current_tasks.pop(agent_id, None)
-
-    async def set_current_task(self, agent_id: str, task_id: str | None):
-        """Set the current task for an agent."""
-        async with self._lock:
-            if task_id:
-                self._current_tasks[agent_id] = task_id
-            else:
-                self._current_tasks.pop(agent_id, None)
-
-    async def get_current_task(self, agent_id: str) -> str | None:
-        """Get the current task for an agent."""
-        async with self._lock:
-            return self._current_tasks.get(agent_id)
+                    self._statuses[agent_id] = self._load_status_locked(agent_id)
 
     async def get_status(self, agent_id: str) -> AgentStatus:
         async with self._lock:
@@ -320,17 +375,24 @@ class AgentRegistry:
         """Get the reason and stuck task ID for a broken agent."""
         async with self._lock:
             reason = self._broken_reasons.get(agent_id)
-            task_id = self._stuck_task_ids.get(agent_id)
-            return reason, task_id
+            return reason, self._last_stuck_task_id_locked(agent_id)
+
+    async def get_stuck_task_ids(self, agent_id: str) -> list[str]:
+        async with self._lock:
+            return list(self._stuck_task_ids.get(agent_id, []))
+
+    def _last_stuck_task_id_locked(self, agent_id: str) -> str | None:
+        stuck_task_ids = self._stuck_task_ids.get(agent_id)
+        return stuck_task_ids[-1] if stuck_task_ids else None
 
     async def remove(self, agent_id: str):
         async with self._lock:
             self._remove_locked(agent_id)
 
     async def remove_unless_busy(self, agent_id: str) -> bool:
-        """Remove an agent unless it is BUSY, True when it was removed, with the check under the removal's lock."""
+        """Remove an agent unless it runs a task, True when it was removed, with the check under the removal's lock."""
         async with self._lock:
-            if agent_id not in self._cards or self._statuses.get(agent_id) == AgentStatus.BUSY:
+            if agent_id not in self._cards or self._running_tasks.get(agent_id):
                 return False
             self._remove_locked(agent_id)
             return True
@@ -341,7 +403,8 @@ class AgentRegistry:
         self._statuses.pop(agent_id, None)
         self._broken_reasons.pop(agent_id, None)
         self._stuck_task_ids.pop(agent_id, None)
-        self._current_tasks.pop(agent_id, None)
+        self._running_tasks.pop(agent_id, None)
+        self._capacities.pop(agent_id, None)
         self._discovery_urls.pop(agent_id, None)
 
     async def get_all_cards(self) -> dict[str, AgentCard]:
@@ -382,7 +445,7 @@ class AgentRegistry:
             for agent_id, status in self._statuses.items():
                 if status == AgentStatus.BROKEN:
                     reason = self._broken_reasons.get(agent_id)
-                    task_id = self._stuck_task_ids.get(agent_id)
+                    task_id = self._last_stuck_task_id_locked(agent_id)
                     result[agent_id] = (reason, task_id)
             return result
 

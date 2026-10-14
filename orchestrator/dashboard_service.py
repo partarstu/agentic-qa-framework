@@ -124,18 +124,17 @@ class OrchestratorDashboardService:
         for agent_id, card in cards.items():
             status = await self.registry.get_status(agent_id)
             broken_reason, stuck_task_id = await self.registry.get_broken_context(agent_id)
-            current_task_id = await self.registry.get_current_task(agent_id)
-
-            # Get current task details if available
-            current_task_info = None
-            if current_task_id:
-                task = await self.tasks.get_by_id(current_task_id)
+            running_tasks = []
+            for task_id in await self.registry.get_running_tasks(agent_id):
+                task = await self.tasks.get_by_id(task_id)
                 if task:
-                    current_task_info = {
-                        "task_id": task.task_id,
-                        "description": task.description,
-                        "start_time": task.start_time.isoformat(),
-                    }
+                    running_tasks.append(
+                        {
+                            "task_id": task.task_id,
+                            "description": task.description,
+                            "start_time": task.start_time.isoformat(),
+                        }
+                    )
 
             result.append(
                 {
@@ -146,7 +145,8 @@ class OrchestratorDashboardService:
                     "url": card.supported_interfaces[0].url if card.supported_interfaces else None,
                     "status": status.value,
                     "capabilities": MessageToDict(card.capabilities) if card.HasField("capabilities") else None,
-                    "current_task": current_task_info,
+                    "running_tasks": running_tasks,
+                    "task_capacity": await self.registry.get_capacity(agent_id),
                     "broken_reason": broken_reason.value if broken_reason else None,
                     "stuck_task_id": stuck_task_id,
                 }

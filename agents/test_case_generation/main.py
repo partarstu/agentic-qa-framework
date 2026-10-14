@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 
 import asyncio
+from dataclasses import dataclass
 from functools import partial
 
 from pydantic_ai import ModelRetry, RunContext
@@ -13,6 +14,7 @@ import config
 from agents.test_case_design.story_context import fetch_session_attachments, story_context_parts
 from agents.test_case_generation.prompt import (
     AcExtractionPrompt,
+    KnowledgeAwareTestCaseGeneratorPrompt,
     StepsGenerationPrompt,
     TestCaseCreationPrompt,
     TestCaseFixerPrompt,
@@ -24,17 +26,45 @@ from common.models import (
     DeletedTestCase,
     DesignedTestCase,
     GeneratedTestCases,
+    KnowledgeAwareItem,
+    KnowledgeAwareTestCase,
     PreviousReview,
+    ProcedureNode,
+    ProcedureSelectionResult,
     TestCaseDesignSession,
     TestCaseReviewFinding,
     TestCaseReviewFindingAction,
     TestCaseReviewFindingSeverity,
+    TestStep,
     TestStepsSequenceList,
 )
 from common.services.jira_attachments import attachment_parts
+from common.services.procedure_knowledge import (
+    precondition_ids,
+    procedure_nodes_by_id,
+    render_procedure_knowledge,
+    step_ids,
+    try_select_procedures,
+)
 from common.services.test_case_index import render_designed_test_case_block
 
 logger = utils.get_logger("test_case_generation_agent")
+
+
+@dataclass(frozen=True, slots=True)
+class _KnowledgeRebuild:
+    """The draft test case a knowledge-aware rebuild works on and every recorded procedure selected for it by ID."""
+
+    draft: DesignedTestCase
+    procedures: dict[str, ProcedureNode]
+
+
+@dataclass(frozen=True, slots=True)
+class _RebuildOutcome:
+    """The test cases after the knowledge-aware rebuild, in their order, and the positions of those without a selection."""
+
+    test_cases: list[DesignedTestCase]
+    unavailable: list[int]
 
 
 class TestCaseGenerator:
@@ -87,6 +117,20 @@ class TestCaseGenerator:
             thinking_level=config.TestCaseGenerationAgentConfig.THINKING_LEVEL,
         )
         self.test_case_fixer_agent.output_validator(_require_known_ac_ids)
+
+        self.knowledge_aware_generator_agent = CustomLlmWrapper.create_agent(
+            model_name=model_name,
+            output_type=KnowledgeAwareTestCase,
+            system_prompt=KnowledgeAwareTestCaseGeneratorPrompt().get_prompt(),
+            name="knowledge_aware_test_case_generator",
+            deps_type=_KnowledgeRebuild,
+            max_output_tokens=config.TestCaseGenerationAgentConfig.MAX_OUTPUT_TOKENS,
+            thinking_level=config.TestCaseGenerationAgentConfig.THINKING_LEVEL,
+        )
+        self.knowledge_aware_generator_agent.output_validator(_require_valid_rebuild)
+        self.procedure_knowledge_enabled = config.TestCaseDesignAgentConfig.PROCEDURE_KNOWLEDGE_ENABLED
+        if not self.procedure_knowledge_enabled:
+            logger.info("Procedure knowledge is disabled: test cases are neither rebuilt from nor reviewed against it.")
         self.fix_min_severity = TestCaseReviewFindingSeverity(config.TestCaseDesignAgentConfig.FIX_MIN_SEVERITY)
 
     async def generate(self, session: TestCaseDesignSession, usage: RunUsage, usage_limits: UsageLimits) -> str:
@@ -99,15 +143,18 @@ class TestCaseGenerator:
         generated = await self.create_test_cases_from_steps(
             session, context_parts, test_steps_sequences, usage, usage_limits
         )
-        drafts = {session.add_draft(test_case): test_case for test_case in generated.test_cases}
+        rebuilt = await self._rebuild_with_procedures(session, context_parts, generated.test_cases, usage, usage_limits)
+        drafts = {session.add_draft(test_case): test_case for test_case in rebuilt.test_cases}
         covered = {ac_id for test_case in drafts.values() for ac_id in test_case.ac_ids}
         uncovered = [criterion.id for criterion in session.acceptance_criteria if criterion.id not in covered]
         generated_summary = ", ".join(
             f"{draft_id} ({', '.join(test_case.ac_ids)})" for draft_id, test_case in drafts.items()
         )
+        draft_ids = list(drafts)
         return (
             f"Extracted {len(session.acceptance_criteria)} acceptance criteria; generated test cases: "
             f"{generated_summary or 'none'}; acceptance criteria without a test case: {', '.join(uncovered) or 'none'}."
+            f"{_unavailable_note([draft_ids[index] for index in rebuilt.unavailable])}"
         )
 
     async def fix(self, session: TestCaseDesignSession, usage: RunUsage, usage_limits: UsageLimits) -> str:
@@ -134,7 +181,12 @@ class TestCaseGenerator:
         async with asyncio.TaskGroup() as task_group:
             fixing = task_group.create_task(self._run_fixers(planned, findings_by_owner, usage, usage_limits))
             adding = task_group.create_task(self._generate_missing(planned, missing, usage, usage_limits))
-        fixed, new_test_cases = fixing.result(), adding.result()
+        fixes, additions = fixing.result(), adding.result()
+        rebuilt = await self._rebuild_with_procedures(
+            planned, await story_context_parts(planned), [*fixes.values(), *additions], usage, usage_limits
+        )
+        fixed = dict(zip(fixes, rebuilt.test_cases[: len(fixes)], strict=True))
+        new_test_cases = rebuilt.test_cases[len(fixes) :]
 
         session.restore_named_by(gaps)
         _delete_test_cases(session, blocking)
@@ -148,10 +200,73 @@ class TestCaseGenerator:
         added = [session.add_draft(test_case) for test_case in new_test_cases]
         # The fixes resolved every blocking finding, so a repeated call cannot fix or add the same thing twice.
         session.drop_blocking_findings(self.fix_min_severity)
+        changed_ids = [*fixed, *added]
         return (
             f"Modified test cases: {', '.join(fixed) or 'none'}; added: {', '.join(added) or 'none'}; "
             f"deleted: {', '.join(sorted(deleted)) or 'none'}; restored: {', '.join(restored) or 'none'}."
+            f"{_unavailable_note([changed_ids[index] for index in rebuilt.unavailable])}"
         )
+
+    async def _rebuild_with_procedures(
+        self,
+        session: TestCaseDesignSession,
+        context_parts: list[str | BinaryContent],
+        test_cases: list[DesignedTestCase],
+        usage: RunUsage,
+        usage_limits: UsageLimits,
+    ) -> _RebuildOutcome:
+        """Rebuilds each test case from the recorded procedures selected for it; one without a selection stays as is."""
+        if not self.procedure_knowledge_enabled or not test_cases:
+            return _RebuildOutcome(test_cases=list(test_cases), unavailable=[])
+        # The selections take minutes each, so they all run at once; the rebuilds then share the story context prefix.
+        async with asyncio.TaskGroup() as task_group:
+            selecting = [
+                task_group.create_task(
+                    try_select_procedures(test_case, f"test case '{test_case.name}' of {session.story_key}")
+                )
+                for test_case in test_cases
+            ]
+        selections = [task.result() for task in selecting]
+        to_rebuild = {
+            index: selection
+            for index, selection in enumerate(selections)
+            if selection is not None and procedure_nodes_by_id(selection)
+        }
+        rebuilds = await utils.run_first_then_concurrently(
+            [
+                partial(self._rebuild, context_parts, test_cases[index], selection, usage, usage_limits)
+                for index, selection in to_rebuild.items()
+            ]
+        )
+        rebuilt = list(test_cases)
+        for index, test_case in zip(to_rebuild, rebuilds, strict=True):
+            rebuilt[index] = test_case
+        logger.info("Rebuilt %d of %d test case(s) from recorded procedures.", len(to_rebuild), len(test_cases))
+        return _RebuildOutcome(
+            test_cases=rebuilt, unavailable=[index for index, selection in enumerate(selections) if selection is None]
+        )
+
+    async def _rebuild(
+        self,
+        context_parts: list[str | BinaryContent],
+        draft: DesignedTestCase,
+        selection: ProcedureSelectionResult,
+        usage: RunUsage,
+        usage_limits: UsageLimits,
+    ) -> DesignedTestCase:
+        procedures = procedure_nodes_by_id(selection)
+        result = await self.knowledge_aware_generator_agent.run(
+            [
+                *context_parts,
+                render_designed_test_case_block("Draft test case", draft),
+                f"Recorded procedures selected for the items of the draft test case:\n"
+                f"```\n{render_procedure_knowledge(draft, selection)}\n```",
+            ],
+            deps=_KnowledgeRebuild(draft=draft, procedures=procedures),
+            usage=usage,
+            usage_limits=usage_limits,
+        )
+        return _rebuilt_test_case(draft, result.output, procedures)
 
     async def _run_fixers(
         self,
@@ -254,6 +369,54 @@ def _require_known_ac_ids[T: (GeneratedTestCases, DesignedTestCase)](
     if unknown := sorted({ac_id for test_case in test_cases for ac_id in test_case.ac_ids} - known):
         raise ModelRetry(f"Unknown acceptance criteria IDs {unknown}; use only {sorted(known)}.")
     return output
+
+
+def _require_valid_rebuild(
+    ctx: RunContext[_KnowledgeRebuild], output: KnowledgeAwareTestCase
+) -> KnowledgeAwareTestCase:
+    """Asks the model again for an unknown procedure ID, an added test step or draft items not covered once in order."""
+    rebuild = ctx.deps
+    errors: list[str] = []
+    reused = {item.procedure_id for item in [*output.preconditions, *output.steps] if item.procedure_id is not None}
+    if unknown := sorted(reused - set(rebuild.procedures)):
+        errors.append(f"Unknown procedure IDs {unknown}; use only the IDs of the given recorded procedures.")
+    if any(not step.covers for step in output.steps):
+        errors.append("Every test step must cover at least one draft test step; only a precondition may be added.")
+    for kind, items, expected in (
+        ("preconditions", output.preconditions, precondition_ids(rebuild.draft)),
+        ("test steps", output.steps, step_ids(rebuild.draft)),
+    ):
+        if (covered := [item_id for item in items for item_id in item.covers]) != expected:
+            errors.append(
+                f"The {kind} cover {covered}, but must cover the draft's {kind} {expected}, each exactly once and in "
+                "this order."
+            )
+    if errors:
+        raise ModelRetry("\n".join(errors))
+    return output
+
+
+def _rebuilt_test_case(
+    draft: DesignedTestCase, output: KnowledgeAwareTestCase, procedures: dict[str, ProcedureNode]
+) -> DesignedTestCase:
+    """The draft with the rebuilt items, whose reused procedures' descriptions are taken over verbatim."""
+
+    def text(item: KnowledgeAwareItem) -> str:
+        # The recorded wording, not the model's copy of it, lets the execution agent match the procedure exactly.
+        return procedures[item.procedure_id].description if item.procedure_id is not None else item.text
+
+    steps = [
+        TestStep(action=text(item), expected_results=item.expected_results, test_data=item.test_data)
+        for item in output.steps
+    ]
+    preconditions = "\n".join(text(item) for item in output.preconditions)
+    return draft.model_copy(update={"preconditions": preconditions or None, "steps": steps})
+
+
+def _unavailable_note(test_case_ids: list[str]) -> str:
+    if not test_case_ids:
+        return ""
+    return f" Recorded procedures were unavailable for {', '.join(test_case_ids)}, which stay unchanged by them."
 
 
 def _delete_test_cases(session: TestCaseDesignSession, blocking: list[TestCaseReviewFinding]) -> list[str]:

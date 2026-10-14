@@ -23,6 +23,7 @@ from common.models import (
     DesignedTestCase,
     OverlappingTestCase,
     PreviousReview,
+    ProcedureSelectionResult,
     TestCaseDesignSession,
     TestCaseDuplicateCheck,
     TestCaseDuplicateJudgement,
@@ -30,8 +31,10 @@ from common.models import (
     TestCaseReviewFinding,
     TestCaseReviewFindingAction,
     TestCaseReviewFindingSeverity,
+    TestStep,
     TestSuiteReview,
 )
+from common.services.procedure_knowledge import ProcedureKnowledgeError
 
 _USAGE_LIMITS = UsageLimits(request_limit=None, total_tokens_limit=1_000)
 _CRITERIA = [AcceptanceCriteriaItem(id=f"AC-{n}", text=f"Criterion {n}", additional_info="") for n in (1, 2)]
@@ -46,6 +49,7 @@ def mock_config() -> Iterator[MagicMock]:
         mock_conf.QdrantConfig.TEST_CASES_COLLECTION_NAME = "test_cases"
         mock_conf.QdrantConfig.TEST_CASE_DUPLICATE_MAX_CANDIDATES = 5
         mock_conf.QdrantConfig.TEST_CASE_DUPLICATE_MIN_SCORE = 0.8
+        mock_conf.TestCaseDesignAgentConfig.PROCEDURE_KNOWLEDGE_ENABLED = False
         yield mock_conf
 
 
@@ -554,3 +558,92 @@ def test_suite_review_output_with_usable_findings_passes():
     )
 
     assert review_main._validate_test_suite_review(ctx, output) is output
+
+
+_SELECTION = ProcedureSelectionResult.model_validate(
+    {"items": [{"item_id": "S1", "procedures": [{"id": "login", "description": "Log in as the user"}]}]}
+)
+
+
+@pytest.fixture
+def selections(mock_config: MagicMock) -> Iterator[AsyncMock]:
+    mock_config.TestCaseDesignAgentConfig.PROCEDURE_KNOWLEDGE_ENABLED = True
+    with patch("common.services.procedure_knowledge.select_procedures", new_callable=AsyncMock) as select:
+        select.return_value = _SELECTION
+        yield select
+
+
+def _with_steps(session: TestCaseDesignSession) -> TestCaseDesignSession:
+    step = TestStep(action="Log in", expected_results="Logged in", test_data=[])
+    for test_case_id, test_case in session.test_cases.items():
+        session.test_cases[test_case_id] = test_case.model_copy(update={"steps": [step]})
+    return session
+
+
+async def test_the_recorded_procedures_selected_for_a_changed_test_case_follow_it_in_the_review_request(
+    reviewer, download, selections
+):
+    session = _with_steps(_drafts("First", "Second", changed={"DRAFT-2"}))
+    reviewer.review_agent.run = _feedback_runs(1)
+
+    await reviewer.review_changed(session, RunUsage(), _USAGE_LIMITS)
+
+    selections.assert_awaited_once_with(session.test_cases["DRAFT-2"])
+    message = reviewer.review_agent.run.await_args.args[0]
+    assert len(message) == 4
+    assert message[2].startswith("Test case under review (ID DRAFT-2):")
+    assert message[3] == (
+        "Recorded procedures selected for the items of the test case under review:\n"
+        "```\nItems:\nS1: Action: Log in; Data: ; Expected: Logged in\n\n"
+        "Selected for S1:\n  - [login] Log in as the user (composite, executed successfully 0 time(s))\n```"
+    )
+
+
+async def test_a_fixed_test_case_gets_its_recorded_procedures_before_its_previous_version(
+    reviewer, download, selections
+):
+    session = _with_steps(_drafts("First fixed"))
+    session.previous_reviews = {"DRAFT-1": PreviousReview(test_case=_test_case("First"), findings=[])}
+    reviewer.review_agent.run = _feedback_runs(1)
+
+    await reviewer.review_changed(session, RunUsage(), _USAGE_LIMITS)
+
+    message = reviewer.review_agent.run.await_args.args[0]
+    assert message[3].startswith("Recorded procedures selected for the items of the test case under review:")
+    assert message[4].startswith("Previous version of the test case under review:")
+
+
+async def test_unavailable_recorded_procedures_are_noted_in_the_review_request_and_logged(
+    reviewer, download, selections, caplog
+):
+    selections.side_effect = ProcedureKnowledgeError("No agent fits")
+    session = _with_steps(_drafts("First"))
+    reviewer.review_agent.run = _feedback_runs(1)
+
+    with caplog.at_level(logging.ERROR, logger="procedure_knowledge"):
+        await reviewer.review_changed(session, RunUsage(), _USAGE_LIMITS)
+
+    assert reviewer.review_agent.run.await_args.args[0][3] == "Recorded procedures: unavailable for this review."
+    assert "The recorded procedures of test case DRAFT-1 of PROJ-1 are unavailable: No agent fits" in caplog.text
+    assert session.findings == {"DRAFT-1": []}
+
+
+async def test_no_procedures_are_requested_for_a_review_while_procedure_knowledge_is_disabled(reviewer, download):
+    session = _with_steps(_drafts("First"))
+    reviewer.review_agent.run = _feedback_runs(1)
+
+    with patch("common.services.procedure_knowledge.select_procedures", new_callable=AsyncMock) as select:
+        await reviewer.review_changed(session, RunUsage(), _USAGE_LIMITS)
+
+    select.assert_not_awaited()
+    assert len(reviewer.review_agent.run.await_args.args[0]) == 3
+
+
+async def test_the_whole_set_review_requests_no_recorded_procedures(reviewer, download, selections):
+    session = _with_steps(_reviewed("First"))
+    reviewer.test_suite_reviewer.run = AsyncMock(return_value=MagicMock(output=TestSuiteReview(findings=[])))
+
+    await reviewer.review_set(session, RunUsage(), _USAGE_LIMITS)
+
+    selections.assert_not_awaited()
+    assert "Recorded procedures" not in "".join(reviewer.test_suite_reviewer.run.await_args.args[0][2:])

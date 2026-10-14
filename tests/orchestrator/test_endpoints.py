@@ -24,6 +24,7 @@ from orchestrator.main import (
     _validate_stream_token,
     orchestrator_app,
 )
+from orchestrator.models import AgentStatus
 
 client = TestClient(orchestrator_app)
 
@@ -310,3 +311,21 @@ async def test_sse_hub_events_emits_auth_error_even_with_incoming_events():
 
     assert len(events) == 1
     assert events[0].event == "auth_error"
+
+
+@pytest.mark.asyncio
+async def test_build_snapshot_lists_the_running_tasks_of_each_agent():
+    card = MagicMock()
+    card.name = "Knowledge Agent"
+    with (
+        patch("orchestrator.main.agent_registry") as mock_registry,
+        patch("orchestrator.main.task_history") as mock_history,
+    ):
+        mock_registry.get_all_cards = AsyncMock(return_value={"agent-1": card})
+        mock_registry.get_status = AsyncMock(return_value=AgentStatus.AVAILABLE)
+        mock_registry.get_running_tasks = AsyncMock(return_value=["t1", "t2"])
+        mock_history.get_all = AsyncMock(return_value=[])
+
+        snapshot = await _build_snapshot()
+
+    assert [agent.running_task_ids for agent in snapshot.agents] == [["t1", "t2"]]
