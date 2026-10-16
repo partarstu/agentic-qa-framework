@@ -219,6 +219,7 @@ class BudgetConfig:
         "gemini-3.8-flash": {"input": 0.75, "output": 3.75, "cache_read": 0.075},
         "claude-opus-5": {"input": 5.0, "output": 25.0, "cache_read": 0.5, "cache_write": 6.25},
         "claude-sonnet-5": {"input": 2.0, "output": 10.0, "cache_read": 0.2, "cache_write": 2.5},
+        "claude-haiku-5-5": {"input": 0.10, "output": 0.50, "cache_read": 0.01, "cache_write": 0.125},
     }
 
 
@@ -241,7 +242,7 @@ PROMPT_GUARD_SERVICE_URL = os.environ.get("PROMPT_GUARD_SERVICE_URL")
 # Orchestrator
 class OrchestratorConfig:
     THINKING_LEVEL = _thinking_level("ORCHESTRATOR", "low")
-    VERSION = os.environ.get("ORCHESTRATOR_VERSION", "3.0.0")
+    VERSION = os.environ.get("ORCHESTRATOR_VERSION", "3.1.0")
     # Label describing the environment the execution agents run their test cases against; reported
     # alongside every test execution result.
     TEST_ENVIRONMENT_LABEL = os.environ.get("TEST_ENVIRONMENT_LABEL", "Standard Test Environment")
@@ -332,8 +333,8 @@ class TestCaseGenerationAgentConfig:
 
 # Test Case Design Agent
 class TestCaseDesignAgentConfig:
-    THINKING_LEVEL = _thinking_level("TEST_CASE_DESIGN", "low")
-    VERSION = os.environ.get("TEST_CASE_DESIGN_AGENT_VERSION", "1.2.0")
+    THINKING_LEVEL = _thinking_level("TEST_CASE_DESIGN", "medium")
+    VERSION = os.environ.get("TEST_CASE_DESIGN_AGENT_VERSION", "1.3.0")
     OWN_NAME = "Test Case Design Agent"
     SKILL_ID = "test-case-design"
     SKILL_NAME = "Test Case Design"

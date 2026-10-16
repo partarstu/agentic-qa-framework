@@ -18,8 +18,9 @@ Watch a demo of QuAIA™ in action:
 
 * **Modular Agent Architecture:** Includes specialized agents for:
     * Requirements Review
-    * Test Case Design: generates the test cases of a user story, reviews and fixes them in a loop, then saves, classifies and publishes them, running the Test Case Generation, Review and Classification agents in-process as its delegates
+    * Test Case Design: generates the test cases of a user story, reviews and fixes them in a loop, then saves, classifies and publishes them, running the Test Case Generation, Review and Classification agents in-process as its delegates; it rebuilds the test cases from, and reviews them against, the procedures the UI test execution agents recorded
     * UI & API Test Execution (separate project)    
+    * Procedure Knowledge (separate project): selects the recorded procedures that match the preconditions and steps of a test case
     * Incident Report Creation
 * **Jira RAG Sync:** Keeps the Qdrant vector store in sync with a project's Jira issues programmatically (triggered via the orchestrator's `/update-jira-db` endpoint, executed by the sync job or the local sync service), without invoking an LLM agent.
 * **Confluence Document RAG:** Ingests Confluence page bodies into a dedicated documents collection (triggered via `/update-confluence-db`): version/hash-based change detection skips unchanged pages, storage-format bodies are normalized to markdown and chunked along headings with breadcrumbs, and removed pages are reconciled out of the vector store. Attachments (PDF, images, office documents, spreadsheets, text) are extracted page by page with a rendered page image, offline OCR for scanned content and headless LibreOffice conversion for office formats.
@@ -75,6 +76,17 @@ The Test Case Design agent designs the test cases of one user story in a single 
 4. **`publish_test_cases`**, offered only after the stop, first checks every final test case once for duplicates among the existing test cases of the project (see *Duplicate Check in Test Case Reviews*); a failed check asks the model to publish again, which repeats only the failed checks. It then saves the final test cases one at a time in the test management system, linked to the story, **classifies** them through the Test Case Classification agent, then adds to each test case a **review comment** (the iterations run, the stop reason, its remaining findings by severity, the open findings of the whole set and its duplicate check) and sets its status to "Review Complete". It runs alone even when the model calls it twice at once, and it records per test case what it has saved, commented and set, so a repeated call resumes without writing anything twice: a failed duplicate check or write asks the model to publish again (within the agent's tool retry budget), and a provider error in the classification reruns the design. The classification agent may label only the test cases of this design. Nothing is indexed: the saved test cases become duplicate candidates for later designs with the next `/update-test-case-db` sync.
 Nothing is written before the loop has stopped and the duplicate check is done: a failure up to then fails the task without touching the test management system. A failed write is retried by publishing again, which resumes after the last completed write; when the retries are used up, what was already written stays, since the test management client cannot delete, and the task fails and the dashboard shows it. When a step fails with an error the agent cannot resolve, it aborts the design at once with the reason instead of retrying, so the task fails without further model requests. The whole design, delegates included, shares one budget (`TEST_CASE_DESIGN_TOTAL_TOKENS_LIMIT`) and appears on the dashboard as one task.
 
+### Procedure Knowledge
+
+The UI test execution agents of the `test-execution-agents` repository record every procedure they execute in a shared Neo4j graph. The **procedure knowledge agent** of that repository explores this graph with read-only tools and selects, for each precondition (`P1`, `P2`, ...) and test step (`S1`, `S2`, ...) of a test case, up to 3 recorded procedures that really match it, and up to 3 for each run of consecutive items that one recorded workflow covers. It returns them in their original form, as trees down to the atomic procedures.
+
+The Test Case Design agent uses these selections in two independent assessments:
+
+* **Rebuild** after `generate_test_cases` (every draft) and after `fix_test_cases` (every fixed or added test case): the selections of all test cases are requested at once, then the knowledge-aware test case generator rebuilds each test case that got at least one procedure. It **reuses** a fitting procedure (its description, test data names and expected results for unchanged behaviour), **merges** a run of steps selected together into one step, **adds** a precondition for an unmet prerequisite of a reused procedure, and **keeps** an item no selection fits; the story wins for the behaviour it introduces or changes. A reused item takes the procedure's description verbatim, filled in by code, so the execution agent matches it exactly. Name, summary, comment and acceptance criteria stay those of the draft, and every draft item is covered exactly once and in order. Generation and fixing prompts write one precondition per line.
+* **Review**: each per-test-case review gets a fresh selection for the test case as it is now and checks it for fitting procedures or workflows that were not reused, unmet prerequisites, and test data and expected results that deviate from a recorded workflow of unchanged behaviour (at least high severity). An item without a selected procedure is no finding, since the graph knows only what was executed before. The whole-set review asks for nothing.
+
+The design agent does not know the knowledge agent: it sends each request to the **orchestrator's own A2A endpoint** (`ORCHESTRATOR_URL` + `/a2a`, card at `/a2a/.well-known/agent-card.json`), which requires `X-API-Key: INTERNAL_SERVICE_API_KEY` and fails closed (503) without it. The request is one data part `{capability, payload, timeout_seconds}`: the routing selects the registered agent whose capability fits the configured capability text, the orchestrator forwards the payload as one data part and returns that agent's artifacts unchanged, and the task appears on the dashboard with its logs, errors and the token usage the agent reports. The timeout is capped at 1800 s. Any failure (no fitting agent, timeout, agent error, an invalid selection) is logged as an error and named in the step's summary, and the test case goes on unchanged; `PROCEDURE_KNOWLEDGE_ENABLED=false` skips the requests altogether.
+
 ### Agent State Management
 
 The orchestrator maintains detailed state information for each registered agent:
@@ -82,7 +94,7 @@ The orchestrator maintains detailed state information for each registered agent:
 | Status | Description |
 |--------|-------------|
 | **AVAILABLE** | Agent is ready to accept new tasks. |
-| **BUSY** | Agent is currently executing a task. |
+| **BUSY** | Agent is running as many tasks as its capacity allows (one, unless its card declares more). |
 | **BROKEN** | Agent is unavailable due to being OFFLINE or having a TASK_STUCK. |
 
 **Broken Agent Classification:**
@@ -95,6 +107,7 @@ The orchestrator uses atomic agent selection with a lock-based mechanism to prev
 compete for the same available agents. Key features include:
 
 * **Atomic Reservation:** Agent selection and status update happen within a single lock to prevent double-booking.
+* **Task Capacity:** An agent that declares the Agent Card extension `urn:quaia:extensions:task-capacity:v1` with the parameter `capacity` (an integer from 1 to 32) runs that many tasks at once and becomes BUSY only when all of them are taken; any other agent runs one task at a time. The dashboard lists the running tasks of every agent.
 * **Wait-and-Retry:** If no suitable agent is available, the orchestrator waits with exponential backoff.
 * **LLM-Based Selection Caching:** The orchestrator caches LLM decisions for agent sets to avoid redundant API calls.
 
@@ -173,8 +186,8 @@ The model captures every service and external system as `nodes`, the integration
 | Dashboard JWT | Orchestrator | JWT on dashboard endpoints (`DASHBOARD_JWT_SECRET`) |
 | Jira webhook HMAC | Jira → Orchestrator | `X-Hub-Signature` HMAC-SHA256 (`JIRA_WEBHOOK_SECRET`) |
 | Prompt-injection guard | Every agent | Prompt-injection screening (`PROMPT_INJECTION_CHECK_ENABLED`) |
-| Internal service API key | Embedding & Prompt Guard services | Shared `X-API-Key` (`INTERNAL_SERVICE_API_KEY`) |
-| Execution agent bearer token | Orchestrator → execution agents | `Authorization: Bearer` on the execution agents' main A2A endpoint (`REMOTE_EXECUTION_AGENT_AUTH_TOKEN`) |
+| Internal service API key | Embedding & Prompt Guard services; Test Case Design agent → orchestrator delegation endpoint | Shared `X-API-Key` (`INTERNAL_SERVICE_API_KEY`) |
+| Execution agent bearer token | Orchestrator → execution agents and procedure knowledge agent | `Authorization: Bearer` on their main A2A endpoint (`REMOTE_EXECUTION_AGENT_AUTH_TOKEN`) |
 
 A governance **pattern** (`calm/patterns/quaia.pattern.json`) asserts that every required node, relationship and control
 is present. The CI pipeline runs this validation as a **blocking** `Architecture (CALM)` job, so removing an agent or
@@ -278,7 +291,9 @@ PROMPT_OVERRIDES_DIR= # Optional. Directory holding prompt template overrides. W
 # Orchestrator
 ORCHESTRATOR_HOST=localhost # Default: localhost. The host where the orchestrator runs.
 ORCHESTRATOR_PORT=8000 # Default: 8000. The port the orchestrator listens on.
-ORCHESTRATOR_URL=http://localhost:8000 # Default: http://localhost:8000. The full URL of the orchestrator.
+ORCHESTRATOR_URL=http://localhost:8000 # Default: http://localhost:8000. The full URL of the orchestrator, reachable by the agents:
+                                 # the orchestrator advertises it in the card of its A2A delegation endpoint, and the Test Case
+                                 # Design agent sends its procedure knowledge requests there (Cloud Run: `_ORCHESTRATOR_URL`).
 ORCHESTRATOR_API_KEY=YOUR_ORCHESTRATOR_API_KEY # Required. Authenticates the orchestrator's control/webhook endpoints.
                                  # Requests must include an 'X-API-Key' header with this value. If it is left unset, those
                                  # endpoints fail closed and return HTTP 503 (authentication not configured).
@@ -299,7 +314,7 @@ JIRA_URL=YOUR_JIRA_INSTANCE_URL # Required for Xray, the RAG sync runtime and th
                                  # MCP server (see "Jira MCP Server Setup" below), which has its own .env file.
 JIRA_USERNAME=YOUR_JIRA_USERNAME # Required alongside JIRA_URL. The email address associated with your Jira account.
 JIRA_API_TOKEN=YOUR_JIRA_API_TOKEN # Required alongside JIRA_URL. A Jira API token for authentication.
-ORCHESTRATOR_VERSION=3.0.0 # Default: 3.0.0. Version of the orchestrator, reported for traceability.
+ORCHESTRATOR_VERSION=3.1.0 # Default: 3.1.0. Version of the orchestrator, reported for traceability.
 ORCHESTRATOR_THINKING_LEVEL=low # Default: low. Thinking level of the orchestrator's model calls (routing, multi-agent routing and results extraction): none (thinking off), minimal, low, medium, high or xhigh. On Qwen, a level turns thinking on at the matching reasoning effort and none turns it off through the chat template (recommended on Qwen: none).
 TEST_CASE_DESIGN_TASK_TIMEOUT_SECONDS=3300 # Default: 3300. How long the orchestrator waits for one test case design, the wait for a free Test Case Design agent included; keep it below the orchestrator's request timeout (3500 s on Cloud Run).
 TEST_ENVIRONMENT_LABEL=Standard Test Environment # Default: Standard Test Environment. Label describing the
@@ -310,7 +325,7 @@ TEST_ENVIRONMENT_LABEL=Standard Test Environment # Default: Standard Test Enviro
 # These settings control access to the UI monitoring dashboard at /api/dashboard/*
 DASHBOARD_USERNAME=admin # Required. Username for dashboard login. Dashboard auth fails closed if this is unset.
 DASHBOARD_PASSWORD_HASH= # Required bcrypt hash for dashboard login. Generate with: python -c "import bcrypt; print(bcrypt.hashpw(b'password', bcrypt.gensalt()).decode())". Escape $ as $$ in compose files.
-MAX_OUTPUT_TOKENS= # Optional global LLM output cap; agent-specific caps override it. Claude deployments should set this explicitly.
+MAX_OUTPUT_TOKENS= # Optional global LLM output cap; agent-specific caps override it. Unset on Claude means the model's maximum output (thinking included), streamed when it exceeds the SDK's non-streaming limit.
 QDRANT_TEST_CASES_COLLECTION_NAME=test_cases
 CONFLUENCE_RETRIEVAL_ENABLED=false
 SHAREPOINT_RETRIEVAL_ENABLED=false
@@ -364,26 +379,28 @@ TEST_CASE_DESIGN_FIX_MIN_SEVERITY=medium # Default: medium. One of low, medium, 
 TEST_CASE_DESIGN_MAX_ITERATIONS=4 # Default: 4. Maximum number of reviews in a test case design: the first follows the generation, every further one a fix.
 TEST_CASE_DESIGN_TOTAL_TOKENS_LIMIT=4000000 # Default: 4000000. Token budget of one test case design, shared with the generation, review and classification agents it runs in-process.
 TEST_CASE_DESIGN_MAX_OUTPUT_TOKENS= # Optional. Maximum output tokens per model response of the Test Case Design agent; defaults to MAX_OUTPUT_TOKENS.
+PROCEDURE_KNOWLEDGE_ENABLED=true # Default: true. Whether the Test Case Design agent rebuilds its test cases from the recorded procedures the procedure knowledge agent selects and reviews them against these; false skips every request (see "Procedure Knowledge").
+PROCEDURE_KNOWLEDGE_TIMEOUT_SECONDS=900 # Default: 900. How long the Test Case Design agent waits for the recorded procedures of one test case, the orchestrator's routing included; also the timeout of the delegated task (capped at 1800 s by the orchestrator).
 # Thinking level of each agent's model calls: none (thinking off), minimal, low, medium, high or xhigh. Unset keeps the default
 # shown; on Qwen a level turns thinking on at the matching reasoning effort and none turns it off through the chat template.
 # The generation, review and classification agents run inside the Test Case Design service, which reads their levels.
 REQUIREMENTS_REVIEW_THINKING_LEVEL=medium # Default: medium. Recommended on Qwen: none.
 INCIDENT_CREATION_THINKING_LEVEL=medium # Default: medium. Recommended on Qwen: none.
-TEST_CASE_DESIGN_THINKING_LEVEL=low # Default: low. Recommended on Qwen: low.
+TEST_CASE_DESIGN_THINKING_LEVEL=medium # Default: medium. Recommended on Qwen: low.
 TEST_CASE_GENERATION_THINKING_LEVEL=medium # Default: medium. Recommended on Qwen: low.
 TEST_CASE_REVIEW_THINKING_LEVEL=medium # Default: medium. Recommended on Qwen: low.
 TEST_CASE_CLASSIFICATION_THINKING_LEVEL=medium # Default: medium. Recommended on Qwen: low.
 # Version each agent reports in its A2A agent card (visible in the dashboard) and, for execution agents,
 # on every test execution result. Each agent reads its own variable.
 REQUIREMENTS_REVIEW_AGENT_VERSION=1.5.0 # Default: 1.5.0.
-TEST_CASE_DESIGN_AGENT_VERSION=1.2.0 # Default: 1.2.0.
+TEST_CASE_DESIGN_AGENT_VERSION=1.3.0 # Default: 1.3.0.
 TEST_CASE_CLASSIFICATION_AGENT_VERSION=1.5.0 # Default: 1.5.0.
 INCIDENT_CREATION_AGENT_VERSION=1.4.0 # Default: 1.4.0.
 
 # Agent Discovery (for remote agents)
-REMOTE_EXECUTION_AGENT_HOSTS=http://localhost # Default: http://localhost. Comma-separated URLs of remote agent hosts.
+REMOTE_EXECUTION_AGENT_HOSTS=http://localhost # Default: http://localhost. Comma-separated URLs of remote agent hosts, the procedure knowledge agent included.
 AGENT_DISCOVERY_PORTS=8001-8007 # Default: 8001-8007. Port range for agent discovery.
-REMOTE_EXECUTION_AGENT_AUTH_TOKEN= # Optional. Shared bearer token sent to the execution agents' main A2A endpoint. Leave empty for local agents started without auth.
+REMOTE_EXECUTION_AGENT_AUTH_TOKEN= # Optional. Shared bearer token sent to the main A2A endpoint of the execution agents and the procedure knowledge agent. Leave empty for local agents started without auth.
 
 # Google Cloud Storage (via Volume Mounts)
 # In cloud deployments, GCS buckets are mounted as local folders via Cloud Run volume mounts.
@@ -471,7 +488,7 @@ INCIDENT_AGENT_TERMINAL_STATUSES=Closed,Done,Duplicate,Rejected,Won't Fix,Cannot
 PROMPT_INJECTION_CHECK_ENABLED=False # Default: False. Set to "True" to enable prompt injection detection. When enabled, PROMPT_GUARD_SERVICE_URL must point to a running prompt guard service.
 PROMPT_GUARD_PROVIDER=protect_ai # Default: protect_ai. The provider for prompt injection detection.
 PROMPT_GUARD_SERVICE_URL= # Required if PROMPT_INJECTION_CHECK_ENABLED is True. URL of the prompt guard service.
-INTERNAL_SERVICE_API_KEY= # Optional shared secret. When set, the embedding and prompt-guard services require a matching X-API-Key header (and their clients send it). Recommended whenever those services are not strictly network-isolated.
+INTERNAL_SERVICE_API_KEY= # Shared secret. When set, the embedding and prompt-guard services require a matching X-API-Key header (and their clients send it); recommended whenever those services are not strictly network-isolated. Required by the orchestrator's A2A delegation endpoint, which fails closed (503) without it, and by the Test Case Design agent, which sends it there with its procedure knowledge requests.
 PROMPT_INJECTION_MIN_SCORE=0.8 # Default: 0.8. The minimum score for a prompt to be considered an injection.
 PROMPT_INJECTION_MODEL_NAME=ProtectAI/deberta-v3-base-prompt-injection-v2 # Default: ProtectAI/deberta-v3-base-prompt-injection-v2. The name of the model used for prompt injection detection.
 PROMPT_INJECTION_MODEL_REVISION=90c9989b1a342275dd0d1a95aad283c04e075671 # Default: 90c9989b1a342275dd0d1a95aad283c04e075671. Hugging Face commit of PROMPT_INJECTION_MODEL_NAME downloaded at image build time; set it together with PROMPT_INJECTION_MODEL_NAME.
@@ -640,7 +657,7 @@ orchestrator, and then start the dev server on top of that build.
 
 ### Model Settings and the pydantic-ai Version
 
-Provider-specific request settings (Claude 5 thinking and effort, Qwen reasoning and sampling, the maximum output tokens and the transport-level retries) are resolved in one place, `common/model_factory.py`, on **pydantic-ai 2.46.0**. No global temperature or top_p is sent: Gemini and Claude run on their provider defaults, and Qwen on its model card's sampling for the active mode. Every model client (Gemini, Claude and the OpenAI-compatible Qwen endpoint) runs on `httpx2`, with pydantic-ai's `AsyncHTTPX2TenacityTransport` as the retry transport, and the Atlassian MCP server is reached through pydantic-ai's `MCPToolset`. Qwen's chat template accepts a system message only at the start of the conversation, so the Qwen model profile merges all instruction parts of an agent (e.g. the test case design's main prompt and its per-story instruction) into one leading system message; the smoke suite's LLM mock rejects a later system message the same way.
+Provider-specific request settings (Claude 5 thinking and effort, Qwen reasoning and sampling, the maximum output tokens and the transport-level retries) are resolved in one place, `common/model_factory.py`, on **pydantic-ai 2.57.0**. A Claude agent that thinks returns a structured result as Native Output (the answer constrained to its JSON schema) instead of through a forced output tool, which would make Claude answer without thinking. No global temperature or top_p is sent: Gemini and Claude run on their provider defaults, and Qwen on its model card's sampling for the active mode. Every model client (Gemini, Claude and the OpenAI-compatible Qwen endpoint) runs on `httpx2`, with pydantic-ai's `AsyncHTTPX2TenacityTransport` as the retry transport, and the Atlassian MCP server is reached through pydantic-ai's `MCPToolset`. Qwen's chat template accepts a system message only at the start of the conversation, so the Qwen model profile merges all instruction parts of an agent (e.g. the test case design's main prompt and its per-story instruction) into one leading system message; the smoke suite's LLM mock rejects a later system message the same way.
 
 The agents keep the pydantic-ai 1.x run semantics: `end_strategy="early"` (tools requested alongside the final output are skipped rather than run) and a single retry per MCP tool call. A custom `MODEL_NAME` left to pydantic-ai follows its 2.x prefixes: `openai:` now targets the Responses API (`openai-chat:` for Chat Completions), and `google-vertex:` is `google-cloud:`; the `google-gla:`, `anthropic:` and `qwen:` names are built by the model factory and are unaffected.
 
@@ -730,6 +747,7 @@ you run any of the commands below.
 4. The following **secrets in the Google Secrets Manager** with corresponding values need to be added (the full list
    is the `secrets` section of `deploy/manifest.yaml`):
     * `GOOGLE_API_KEY`
+    * `ANTHROPIC_API_KEY` (orchestrator and agents, read when `MODEL_NAME` names a Claude model; a placeholder value is enough otherwise)
     * `JIRA_API_TOKEN`
     * `JIRA_USERNAME`
     * `JIRA_URL`
@@ -743,7 +761,7 @@ you run any of the commands below.
     * `DASHBOARD_JWT_SECRET`
     * `AGENT_AUTH_TOKEN` (mapped to the orchestrator's `REMOTE_EXECUTION_AGENT_AUTH_TOKEN`)
     * `CONFLUENCE_URL`, `CONFLUENCE_USERNAME`, `CONFLUENCE_API_TOKEN` (RAG sync job and Atlassian MCP server)
-    * `INTERNAL_SERVICE_API_KEY` (RAG sync job and Test Case Design agent, for the embedding service)
+    * `INTERNAL_SERVICE_API_KEY` (RAG sync job and Test Case Design agent, for the embedding service; orchestrator and Test Case Design agent, for the orchestrator's A2A delegation endpoint)
     * `SHAREPOINT_TENANT_ID`, `SHAREPOINT_CLIENT_ID`, `SHAREPOINT_CLIENT_SECRET` (RAG sync job; placeholder values
       are enough while no SharePoint drive is synced)
 5. Cloud Storage bucket for general operations (with all needed folders created, see "Substitution Variables").
@@ -805,7 +823,10 @@ gcloud builds submit --config 'path/to/your/cloudbuild.yaml' --substitutions "`^
 * `_TEST_CASE_DESIGN_AGENT_BASE_URL`: The URL of the deployed Test Case Design Agent. It is the only deployed test case agent: the generation, review and classification agents run inside it, and its Cloud Run request timeout is 3600 s, so a whole design fits into one request.
 * `_INCIDENT_CREATION_AGENT_BASE_URL`: The URL of the deployed Incident Creation Agent.
 * `_REMOTE_EXECUTION_AGENT_HOSTS`: A comma-separated list of URLs for all deployed agents that the orchestrator will
-  interact with.
+  interact with, the procedure knowledge agent of the `test-execution-agents` repository included.
+* `_ORCHESTRATOR_URL`: The URL of the deployed orchestrator, set as `ORCHESTRATOR_URL` on the orchestrator (the URL its
+  A2A delegation card advertises) and on the Test Case Design agent (where it sends its procedure knowledge requests).
+  Default: empty, which leaves the procedure knowledge requests failing until it is set.
 * `_PROMPT_GUARD_SERVICE_URL`: The URL of the deployed Prompt Guard Service.
 * `_JIRA_ADDITIONAL_FIELD_IDS`: The `JIRA_ADDITIONAL_FIELD_IDS` of the Test Case Design agent (see *Environment Variables*). Default: empty.
 * `_EMBEDDING_SERVICE_URL`: The URL of the deployed Embedding Service.
@@ -845,19 +866,20 @@ once, then identify the assigned URL of each service, update the substitution va
 
 ### Hermetic smoke tests
 
-The smoke suite is a self-contained integration test, independent of any Cloud Run deployment and of any LLM provider. It runs the real orchestrator and the QA agents (requirements review, test case design and incident creation) under `docker-compose.smoke.yml`, with every external boundary replaced by a mock under `tests/smoke/mocks/` (the LLM, Jira MCP, Jira REST, Zephyr, Qdrant + embedding, Confluence REST and Microsoft Graph). A mock test-execution agent stands in for the VM-hosted real executors.
+The smoke suite is a self-contained integration test, independent of any Cloud Run deployment and of any LLM provider. It runs the real orchestrator and the QA agents (requirements review, test case design and incident creation) under `docker-compose.smoke.yml`, with every external boundary replaced by a mock under `tests/smoke/mocks/` (the LLM, Jira MCP, Jira REST, Zephyr, Qdrant + embedding, Confluence REST and Microsoft Graph). A mock test-execution agent stands in for the VM-hosted real executors, and a mock procedure knowledge agent (`tests/smoke/mocks/procedure_knowledge_agent.py`) for the real one: like it, it declares its task capacity in its card and answers with the Java agents' `token_usage` text artifact and a canned `procedure_selection` (a registration procedure for the first precondition, a reset workflow for the first two steps together, and that workflow for a step that already is it).
 
 The LLM mock (`tests/smoke/mocks/llm_mock.py`) is an OpenAI-compatible Chat Completions server that every agent and the orchestrator reach through the existing `qwen:` route (`MODEL_NAME: "qwen:smoke-mock"` and `QWEN_ENDPOINT` in the compose file), so no production code knows about it and the real model client, its retries, the tool loop, output validation and usage metering stay under test. It recognises the calling operation by the tools a request offers and the shape of its output tool, and answers deterministically from the conversation: the next tool call of that operation's workflow, or its final output built from the framework's own models. Every request is recorded at `/__recorded`; a request that matches no operation is answered with HTTP 400 and recorded as unhandled, which fails the suite, so a new LLM call needs a scripted answer in the mock. The stack carries no provider key, and the suite refuses to run when an agent card reports any other model.
 
 The suite drives the system through the orchestrator's public webhooks and asserts on what reaches each mocked boundary:
 
 * **Every LLM call** → each model-driven operation of the flows (routing, results extraction, the requirements review with its focused reviews and their merge, every step of the test case design including the duplicate judgement, classification and incident creation) reached the LLM mock, and none went unanswered.
-* **Model request settings** → the mock records each request's `temperature`, `top_p`, `presence_penalty`, `reasoning_effort`, `chat_template_kwargs` and the properties and required fields of every offered tool. The stack sets `ORCHESTRATOR_THINKING_LEVEL: "none"`, so the routing requests carry thinking off (`enable_thinking: false`, temperature 0.7, top_p 0.8, presence penalty 0) and exactly the three routing result tools with every field required, while the test case design requests carry its default level (`reasoning_effort: low`, temperature 1.0, top_p 0.95, presence penalty 0.5).
+* **Model request settings** → the mock records each request's `temperature`, `top_p`, `presence_penalty`, `reasoning_effort`, `chat_template_kwargs` and the properties and required fields of every offered tool. The stack sets `ORCHESTRATOR_THINKING_LEVEL: "none"`, so the routing requests carry thinking off (`enable_thinking: false`, temperature 0.7, top_p 0.8, presence penalty 0) and exactly the three routing result tools with every field required, while the test case design requests carry its default level (`reasoning_effort: medium`, temperature 1.0, top_p 0.95, presence penalty 0.5).
 * **Requirements review** (`POST /new-requirements-available`) → a non-empty review comment reaches Jira (REST or MCP), and the agent first fetched the source story via the Jira MCP. The prompt override mounted from `tests/smoke/overrides/` reaches the review model's instructions, the story attachment is downloaded over Jira REST, and the review issues a hybrid documents query whose text is non-empty and shorter than the issue content. With `REQUIREMENTS_REVIEW_FOCUS_AREA_COUNT` set to 3, the usage artifact meters the three focused reviews (`review_with_attachments`) and the merge run (`merge_reviews`).
 * **Additional Jira fields** (`JIRA_ADDITIONAL_FIELD_IDS`) → the configured custom field IDs reach the models of the requirements review and the test case design, and the Jira MCP mock records that both flows requested them.
 * **Routing and cards** → routing decisions with justifications reach the dashboard logs, and every agent's card
   description carries its model, version and skill name.
-* **Test case design** (`POST /story-ready-for-test-case-generation`) → the Test Case Design agent generates, reviews and fixes the test cases through the whole loop: the LLM mock reports a high finding per test case in every review (on a real model, the severity-classifier override mounted from `tests/smoke/overrides/` does), so the design runs exactly one fix cycle and stops as `iteration_limit` after the second review (`TEST_CASE_DESIGN_MAX_ITERATIONS: "2"` in the compose file), and every final comment reports that; a design that converges on its own is covered by the unit tests. Then the scripted test cases (name + steps, one per acceptance criterion) reach Zephyr exactly once, each linked once to the originating story; the classification labels reach every test case; every test case gets the "Review Complete" status and a final review comment with the header naming the iterations and the stop reason, its severity-tagged findings, and the "Duplicate check" section, which renders the judge's partial overlap with a seeded test case. The design's LLM fetched the story exactly once through the Jira MCP, without comments (`comment_limit` 0) and with the content and the configured fields. When publishing, each final test case was searched for duplicates exactly once, within its project (the Qdrant mock answers test-case queries with the stored points, so the judge runs end to end); the usage artifact carries per-operation counters of the design agent and the sub-agents of its generation and review delegates, the test case fixer included.
+* **Test case design** (`POST /story-ready-for-test-case-generation`) → the Test Case Design agent generates, reviews and fixes the test cases through the whole loop: the LLM mock reports a high finding per test case in every review (on a real model, the severity-classifier override mounted from `tests/smoke/overrides/` does), so the design runs exactly one fix cycle and stops as `iteration_limit` after the second review (`TEST_CASE_DESIGN_MAX_ITERATIONS: "2"` in the compose file), and every final comment reports that; a design that converges on its own is covered by the unit tests. Then the scripted test cases (name + steps, one per acceptance criterion) reach Zephyr exactly once, each linked once to the originating story; the classification labels reach every test case; every test case gets the "Review Complete" status and a final review comment with the header naming the iterations and the stop reason, its severity-tagged findings, and the "Duplicate check" section, which renders the judge's partial overlap with a seeded test case. The design's LLM fetched the story exactly once through the Jira MCP, without comments (`comment_limit` 0) and with the content and the configured fields. When publishing, each final test case was searched for duplicates exactly once, within its project (the Qdrant mock answers test-case queries with the stored points, so the judge runs end to end); the usage artifact carries per-operation counters of the design agent and the sub-agents of its generation and review delegates, the test case fixer and the knowledge-aware test case generator included.
+* **Procedure knowledge** → the design delegates one knowledge request per test case to the orchestrator's A2A endpoint (`ORCHESTRATOR_URL` and `INTERNAL_SERVICE_API_KEY` in the compose file) after the generation, before each review and after the fix: the mock knowledge agent receives every draft once and the rebuilt test cases in both reviews and the fix, each as a completed task of that agent in the orchestrator's task history with the usage of its `token_usage` artifact, and the dashboard reports the capacity its card declares. Every per-test-case review request carries the selected procedures, and every saved test case reuses their descriptions verbatim, with its two steps merged into the one recorded workflow.
 * **Test execution / incident creation** (`POST /execute-tests`) → a failed automated test drives a real Bug issue into the seeded Jira project, the failed execution is reported to Zephyr inside a fresh test cycle, the bug is linked to that execution, and the duplicate search consulted the vector DB with the project filter. The executing agent's name and version and the environment label reach the incident model and the bug. The typed (`api`) test case reaches the execution agent while the seeded untyped one is skipped with a warning.
 * **Manual execution** (`POST /execute-test`) → one result for the chosen mock agent reaches Zephyr and no bug is
   created.
@@ -1252,6 +1274,8 @@ dashboard. Missing it is not an error.
 }
 ```
 
+The Java agents of the `test-execution-agents` repository (the execution agents and the procedure knowledge agent) report their usage instead as a text artifact named `token_usage`: a JSON list with one record per operation (`operationName`, `responseModel`, `inputTokens` including the cached ones, `outputTokens`, `cachedTokens`). The orchestrator records it on the task the same way and leaves both usage artifacts out of the results it extracts.
+
 ### Dashboard SSE Streams
 
 The dashboard receives streaming updates via two Server-Sent Event (SSE) endpoints.
@@ -1331,8 +1355,8 @@ schedulers before upgrading:
     updated.
 14. **The pydantic-ai model layer resolves provider-specific settings.** Gemini and Claude calls now go through
     explicitly built provider models with transport-level retries; `GOOGLE_API_KEY`/`ANTHROPIC_API_KEY` are read
-    from the environment. Claude deployments should set `MAX_OUTPUT_TOKENS` explicitly (unset means
-    pydantic-ai's own 4096 default for Anthropic).
+    from the environment. A Claude call without a configured `MAX_OUTPUT_TOKENS` may produce the model's maximum
+    output (pydantic-ai 2.52.0 and later).
 15. **Test-case point ids are derived from the test case key alone, and the payload keeps only `source`,
     `project_key`, `test_case_key`, `text`, `content_hash` and `indexed_at`.** Run `/update-test-case-db` once per
     project: the full resync writes the new points and deletes the old ones.
@@ -1343,6 +1367,7 @@ schedulers before upgrading:
 20. **The indexed text of a test case separates its sections by blank lines.** Every stored test case therefore has a new content hash, and the next `/update-test-case-db` sync re-embeds all of them once.
 21. **The routing result is three output tools instead of one with an outcome field, and a prompt override of `prompts/routing_instruction_template.md` under `PROMPT_OVERRIDES_DIR` must be rebased on the new bundled template.** The template has no placeholders, so an old override still loads without an error, but it instructs the `outcome` field and the optional agent ID, which no routing output tool has any more (`AgentSelected` with a required `agent_id`, `SuitableAgentBusy` and `NoSuitableAgent`).
 22. **`QWEN_THINKING_ENABLED` is removed.** Thinking is set per agent through `<AGENT>_THINKING_LEVEL` (`none` turns it off), so a Qwen deployment that set nothing now thinks on every agent at the default levels; set the recommended values from *Qwen3.8-27B: recommended settings*. The thinking-off presence penalty is now `QWEN_NON_THINKING_PRESENCE_PENALTY` (default 0, formerly the fixed 1.5).
+23. **The Test Case Design agent rebuilds and reviews its test cases with the recorded procedures** (see *Procedure Knowledge*), requested through the orchestrator's new A2A delegation endpoint. Deploy the procedure knowledge agent of the `test-execution-agents` repository and add its URL to `_REMOTE_EXECUTION_AGENT_HOSTS`, set `_ORCHESTRATOR_URL` to the orchestrator's URL, and give the orchestrator the `INTERNAL_SERVICE_API_KEY` secret (the manifest now references it). Without them every request fails and is logged as an error, and the test cases stay as generated; `PROCEDURE_KNOWLEDGE_ENABLED=false` turns the requests off. An override of `agents/test_case_review/system_prompts/review_with_attachments_prompt.md` fails startup until it carries the new `{procedure_knowledge_review}` placeholder; overrides of `severity_classifier.md`, `test_case_creation_prompt.md` and `test_case_fixer_prompt.md` still load but lack the new severity line and the one-precondition-per-line rule, so rebase them too.
 
 ### Migrating a vector collection
 

@@ -23,6 +23,7 @@ steps:
       - 'QUAIA_DEPLOY_OVERRIDE_PROMPT_OVERRIDES_DIR=$_PROMPT_OVERRIDES_DIR'
       - 'QUAIA_DEPLOY_OVERRIDE_JIRA_ADDITIONAL_FIELD_IDS=$_JIRA_ADDITIONAL_FIELD_IDS'
       - 'QUAIA_DEPLOY_OVERRIDE_REMOTE_EXECUTION_AGENT_HOSTS=$_REMOTE_EXECUTION_AGENT_HOSTS'
+      - 'QUAIA_DEPLOY_OVERRIDE_ORCHESTRATOR_URL=$_ORCHESTRATOR_URL'
       - 'QUAIA_DEPLOY_OVERRIDE_EMBEDDING_BACKENDS=$_EMBEDDING_BACKENDS'
       - 'QUAIA_DEPLOY_OVERRIDE_EMBEDDING_TEXT_MODEL=$_EMBEDDING_TEXT_MODEL'
       - 'QUAIA_DEPLOY_OVERRIDE_RAG_SYNC_JOB_TASK_TIMEOUT_SECONDS=$_RAG_SYNC_TASK_TIMEOUT_SECONDS'
@@ -159,7 +160,8 @@ steps:
           echo "Skipping embedding-service build/push (variable _DEPLOY_EMBEDDING_SERVICE and _DEPLOY_ALL_SERVICES are not true)"
         fi
 
-  # Deploy embedding-service to Cloud Run (conditional)
+  # Deploy embedding-service to Cloud Run (conditional). /ready answers 503 until the model is
+  # loaded, which takes longer than the default probe's 30 seconds, so it allows 240.
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:586.0.0'
     entrypoint: 'bash'
     args:
@@ -188,7 +190,7 @@ steps:
             --env-vars-file=deploy/rendered/embedding-service.env.yaml \
             --set-secrets="$$(cat deploy/rendered/embedding-service.secrets.txt)" \
             --update-labels=quaia_deploy_marker=$$MARKER \
-            --startup-probe=httpGet.path=/ready \
+            --startup-probe=httpGet.path=/ready,periodSeconds=10,failureThreshold=24,timeoutSeconds=5 \
             --concurrency=5
         else
           echo "Skipping embedding-service deploy (variable _DEPLOY_EMBEDDING_SERVICE and _DEPLOY_ALL_SERVICES are not true)"
@@ -242,7 +244,8 @@ steps:
         fi
 
 
-  # Deploy Qdrant Vector DB to Cloud Run (conditional)
+  # Deploy Qdrant Vector DB to Cloud Run (conditional). Its single instance takes the parallel searches
+  # of a design's duplicate check, which a low concurrency rejects with "no available instance".
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:586.0.0'
     entrypoint: 'bash'
     args:
@@ -272,7 +275,7 @@ steps:
             --env-vars-file=deploy/rendered/qdrant-vector-db.env.yaml \
             --set-secrets="$$(cat deploy/rendered/qdrant-vector-db.secrets.txt)" \
             --update-labels=quaia_deploy_marker=$$MARKER \
-            --concurrency=5
+            --concurrency=80
         else
           echo "Skipping qdrant-vector-db deployment (variable _DEPLOY_QDRANT and _DEPLOY_ALL_SERVICES are not true)"
         fi
@@ -280,6 +283,9 @@ steps:
   # Deploy to Cloud Run orchestrator. The prompt-override directory is mounted only
   # when the _PROMPT_OVERRIDES_DIR substitution is set (a Cloud Run volume mount from the
   # overrides bucket); the rendered env file then carries PROMPT_OVERRIDES_DIR.
+  # Its single instance holds a workflow request open while the agents' delegation requests
+  # (one per test case of a design), discovery and the dashboard streams arrive, so a low
+  # concurrency makes Cloud Run reject them with 429 "no available instance".
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:586.0.0'
     entrypoint: 'bash'
     args:
@@ -303,7 +309,7 @@ steps:
           --allow-unauthenticated \
           --memory=4Gi \
           --max-instances=1 \
-          --concurrency=5 \
+          --concurrency=80 \
           --env-vars-file=deploy/rendered/orchestrator.env.yaml \
           --set-secrets="$$(cat deploy/rendered/orchestrator.secrets.txt)" \
           --update-labels=quaia_deploy_marker=$$MARKER \
@@ -466,6 +472,7 @@ substitutions:
   _ALLURE_REPORTS_CONTAINER_PATH: '/app/allure-report'
   _ALLURE_REPORTS_BUCKET: ''
   _REMOTE_EXECUTION_AGENT_HOSTS: ''
+  _ORCHESTRATOR_URL: ''
   _REQUIREMENTS_REVIEW_AGENT_BASE_URL: ''
   _TEST_CASE_DESIGN_AGENT_BASE_URL: ''
   _JIRA_ADDITIONAL_FIELD_IDS: ''

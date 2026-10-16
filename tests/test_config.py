@@ -54,7 +54,7 @@ def test_agent_default_thinking_levels():
     } == {
         "orchestrator": "low",
         "requirements_review": "medium",
-        "test_case_design": "low",
+        "test_case_design": "medium",
         "test_case_generation": "medium",
         "test_case_review": "medium",
         "test_case_classification": "medium",

@@ -17,6 +17,7 @@
 # Every secret name a service may reference; only names travel through the pipeline.
 secrets:
   - AGENT_AUTH_TOKEN
+  - ANTHROPIC_API_KEY
   - ATLASSIAN_MCP_SERVER_URL
   - CONFLUENCE_API_TOKEN
   - CONFLUENCE_URL
@@ -76,7 +77,7 @@ services:
       QDRANT__SERVICE__API_KEY: QDRANT_API_KEY
 
   orchestrator:
-    version: "3.0.0"
+    version: "3.1.0"
     env:
       ORCHESTRATOR_VERSION: "{version}"
       # Model selection, left empty for the code defaults; a Qwen deployment sets these in its environment overrides.
@@ -88,6 +89,8 @@ services:
       ORCHESTRATOR_THINKING_LEVEL: ""
       GOOGLE_CLOUD_LOGGING_ENABLED: "true"
       REMOTE_EXECUTION_AGENT_HOSTS: ""
+      # Its own Cloud Run URL, which its A2A card advertises to the agents that delegate tasks through it.
+      ORCHESTRATOR_URL: ""
       AGENT_DISCOVERY_PORTS: "443-443"
       QDRANT_URL: ""
       DASHBOARD_JWT_EXPIRE_HOURS: "24"
@@ -103,6 +106,8 @@ services:
       PROMPT_OVERRIDES_DIR: ""
     secrets:
       GOOGLE_API_KEY: GOOGLE_API_KEY
+      # Read only when MODEL_NAME names a Claude model.
+      ANTHROPIC_API_KEY: ANTHROPIC_API_KEY
       JIRA_API_TOKEN: JIRA_API_TOKEN
       JIRA_USERNAME: JIRA_USERNAME
       JIRA_URL: JIRA_URL
@@ -114,6 +119,8 @@ services:
       DASHBOARD_PASSWORD_HASH: DASHBOARD_PASSWORD_HASH
       DASHBOARD_JWT_SECRET: DASHBOARD_JWT_SECRET
       REMOTE_EXECUTION_AGENT_AUTH_TOKEN: AGENT_AUTH_TOKEN
+      # The A2A delegation endpoint fails closed without it.
+      INTERNAL_SERVICE_API_KEY: INTERNAL_SERVICE_API_KEY
 
   rag-sync-job:
     version: "1.0"
@@ -167,6 +174,8 @@ services:
       PROMPT_OVERRIDES_DIR: ""
     secrets:
       GOOGLE_API_KEY: GOOGLE_API_KEY
+      # Read only when MODEL_NAME names a Claude model.
+      ANTHROPIC_API_KEY: ANTHROPIC_API_KEY
       JIRA_API_TOKEN: JIRA_API_TOKEN
       JIRA_USERNAME: JIRA_USERNAME
       JIRA_URL: JIRA_URL
@@ -177,7 +186,7 @@ services:
 
   # Runs the test case generation, review and classification agents in-process as its delegates.
   test-case-design-agent:
-    version: "1.2.0"
+    version: "1.3.0"
     env:
       TEST_CASE_DESIGN_AGENT_VERSION: "{version}"
       MODEL_NAME: ""
@@ -199,8 +208,14 @@ services:
       PROMPT_OVERRIDES_DIR: ""
       # The design agent's model fetches the user story with these additional Jira fields.
       JIRA_ADDITIONAL_FIELD_IDS: ""
+      # The procedure knowledge requests go to the orchestrator's A2A endpoint at this URL.
+      ORCHESTRATOR_URL: ""
+      PROCEDURE_KNOWLEDGE_ENABLED: ""
+      PROCEDURE_KNOWLEDGE_TIMEOUT_SECONDS: ""
     secrets:
       GOOGLE_API_KEY: GOOGLE_API_KEY
+      # Read only when MODEL_NAME names a Claude model.
+      ANTHROPIC_API_KEY: ANTHROPIC_API_KEY
       JIRA_API_TOKEN: JIRA_API_TOKEN
       JIRA_USERNAME: JIRA_USERNAME
       JIRA_URL: JIRA_URL
@@ -231,6 +246,8 @@ services:
       PROMPT_OVERRIDES_DIR: ""
     secrets:
       GOOGLE_API_KEY: GOOGLE_API_KEY
+      # Read only when MODEL_NAME names a Claude model.
+      ANTHROPIC_API_KEY: ANTHROPIC_API_KEY
       JIRA_API_TOKEN: JIRA_API_TOKEN
       JIRA_USERNAME: JIRA_USERNAME
       JIRA_URL: JIRA_URL

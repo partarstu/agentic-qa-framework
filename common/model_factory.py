@@ -5,6 +5,7 @@
 """Resolution of a configured model name into the model the agents talk to."""
 
 import asyncio
+import re
 from collections.abc import AsyncIterator, Callable
 from urllib.parse import urlparse
 
@@ -60,9 +61,13 @@ THINKING_DISABLED_BODY = {"chat_template_kwargs": {"enable_thinking": False}}
 # which the server applies when a request omits it.
 QWEN_THINKING_SAMPLING = OpenAIChatModelSettings(temperature=1.0, top_p=0.95)
 QWEN_NON_THINKING_SAMPLING = OpenAIChatModelSettings(temperature=0.7, top_p=0.8)
-CLAUDE_5_PREFIXES = ("claude-opus-5", "claude-sonnet-5", "claude-fable-5", "claude-mythos-5")
-# Models whose API rejects explicitly disabled thinking: they run adaptive at effort low instead.
+CLAUDE_5_PREFIXES = ("claude-opus-5", "claude-sonnet-5", "claude-haiku-5", "claude-fable-5", "claude-mythos-5")
+# Models whose API rejects explicitly disabled thinking run adaptive at effort low instead: Fable and Mythos, and
+# Opus and Sonnet from 5.5 on. Haiku 5.5 accepts it at effort high or below.
 DISABLED_THINKING_UNSUPPORTED_PREFIXES = ("claude-fable-5", "claude-mythos-5")
+# The minor version has at most two digits, so a dated snapshot ID such as claude-opus-5-20260101 is not read as one.
+DISABLED_THINKING_UNSUPPORTED_FAMILY_VERSION = re.compile(r"claude-(?:opus|sonnet)-(\d+)(?:-(\d{1,2})(?!\d))?")
+DISABLED_THINKING_UNSUPPORTED_SINCE = (5, 5)
 # HTTP statuses retried at the transport boundary (the model endpoints sit behind serverless front ends).
 RETRYABLE_STATUS_CODES = frozenset({429, 502, 503, 504})
 # Models whose disabled-thinking fallback has already been logged, so construction logs one WARNING only.
@@ -86,7 +91,7 @@ def build_claude_5_settings(
     if max_output_tokens is not None:
         settings["max_tokens"] = max_output_tokens
     if thinking_level is None:
-        if model_name.split(":")[-1].startswith(DISABLED_THINKING_UNSUPPORTED_PREFIXES):
+        if _rejects_disabled_thinking(model_name.split(":")[-1]):
             if model_name not in _logged_thinking_fallbacks:
                 _logged_thinking_fallbacks.add(model_name)
                 logger.warning(
@@ -102,6 +107,14 @@ def build_claude_5_settings(
         settings["anthropic_thinking"] = {"type": "adaptive"}
         settings["anthropic_effort"] = effort
     return settings
+
+
+def _rejects_disabled_thinking(model_id: str) -> bool:
+    if model_id.startswith(DISABLED_THINKING_UNSUPPORTED_PREFIXES):
+        return True
+    if match := DISABLED_THINKING_UNSUPPORTED_FAMILY_VERSION.match(model_id):
+        return (int(match.group(1)), int(match.group(2) or 0)) >= DISABLED_THINKING_UNSUPPORTED_SINCE
+    return False
 
 
 def build_model(model_name: str | Model, thinking_level: ThinkingEffort | None = None) -> str | Model:
