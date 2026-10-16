@@ -508,14 +508,16 @@ async def _retry_cancellation_task():
                     for stuck_task_id in stuck_task_ids:
                         cancel_success = await _cancel_agent_task(agent_card, stuck_task_id) and cancel_success
                     if cancel_success:
-                        logger.info(f"Successfully cancelled stuck tasks {stuck_task_ids} on agent {agent_id}.")
+                        logger.info("Successfully cancelled stuck tasks %s on agent %s.", stuck_task_ids, agent_id)
                         is_recovered = True
                     else:
                         # Cancellation failed - check if agent is at least responsive
                         if await _fetch_agent_card(agent_card.supported_interfaces[0].url):
                             logger.warning(
-                                f"Could not cancel all of the tasks {stuck_task_ids} on agent {agent_id}, "
-                                f"but agent is responsive. Marking as available anyway."
+                                "Could not cancel all of the tasks %s on agent %s, "
+                                "but agent is responsive. Marking as available anyway.",
+                                stuck_task_ids,
+                                agent_id,
                             )
                             is_recovered = True
                         else:
@@ -1855,6 +1857,7 @@ async def reserve_agent_waiting_if_needed(
     start_time = time.time()
     last_justification = "no routing decision was made"
     decision: RoutingDecision | None = None
+    earlier_selection: AgentSelected | None = None
     routed_agents_info = ""
 
     while (time.time() - start_time) < max_wait_time:
@@ -1869,6 +1872,25 @@ async def reserve_agent_waiting_if_needed(
             decision = await _route_task(task_description, agents_info, task_id)
             routed_agents_info = agents_info
             last_justification = decision.justification
+
+            if isinstance(decision, AgentSelected):
+                earlier_selection = decision
+            elif (
+                isinstance(decision, NoSuitableAgent)
+                and earlier_selection
+                and await agent_registry.contains(earlier_selection.agent_id)
+            ):
+                # The routing model has answered "none suitable" for the agent it had just selected once that
+                # agent showed as busy, although an agent's capability does not change while a task waits for it.
+                logger.warning(
+                    "Routing found no suitable agent for task '%s' after selecting agent ID '%s', "
+                    "which is still registered, so the task keeps waiting for it: %s",
+                    task_description,
+                    earlier_selection.agent_id,
+                    decision.justification,
+                    extra={"task_id": task_id},
+                )
+                decision = earlier_selection
 
             if isinstance(decision, NoSuitableAgent):
                 # Fail fast: no registered agent can execute the task, so waiting is pointless.

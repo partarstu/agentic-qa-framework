@@ -215,7 +215,7 @@ class TestCaseGenerator:
         usage: RunUsage,
         usage_limits: UsageLimits,
     ) -> _RebuildOutcome:
-        """Rebuilds each test case from the recorded procedures selected for it; one without a selection stays as is."""
+        """Rebuild each test case from the recorded procedures selected for it; one without a selection stays as is."""
         if not self.procedure_knowledge_enabled or not test_cases:
             return _RebuildOutcome(test_cases=list(test_cases), unavailable=[])
         # The selections take minutes each, so they all run at once; the rebuilds then share the story context prefix.
@@ -374,7 +374,7 @@ def _require_known_ac_ids[T: (GeneratedTestCases, DesignedTestCase)](
 def _require_valid_rebuild(
     ctx: RunContext[_KnowledgeRebuild], output: KnowledgeAwareTestCase
 ) -> KnowledgeAwareTestCase:
-    """Asks the model again for an unknown procedure ID, an added test step or draft items not covered once in order."""
+    """Ask the model again for an unknown procedure ID, an added test step or draft items not covered once in order."""
     rebuild = ctx.deps
     errors: list[str] = []
     reused = {item.procedure_id for item in [*output.preconditions, *output.steps] if item.procedure_id is not None}
@@ -399,7 +399,7 @@ def _require_valid_rebuild(
 def _rebuilt_test_case(
     draft: DesignedTestCase, output: KnowledgeAwareTestCase, procedures: dict[str, ProcedureNode]
 ) -> DesignedTestCase:
-    """The draft with the rebuilt items, whose reused procedures' descriptions are taken over verbatim."""
+    """Return the draft with the rebuilt items, taking over the reused procedures' descriptions verbatim."""
 
     def text(item: KnowledgeAwareItem) -> str:
         # The recorded wording, not the model's copy of it, lets the execution agent match the procedure exactly.

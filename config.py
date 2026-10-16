@@ -241,7 +241,7 @@ PROMPT_GUARD_SERVICE_URL = os.environ.get("PROMPT_GUARD_SERVICE_URL")
 
 # Orchestrator
 class OrchestratorConfig:
-    THINKING_LEVEL = _thinking_level("ORCHESTRATOR", "low")
+    THINKING_LEVEL = _thinking_level("ORCHESTRATOR", "medium")
     VERSION = os.environ.get("ORCHESTRATOR_VERSION", "3.1.0")
     # Label describing the environment the execution agents run their test cases against; reported
     # alongside every test execution result.

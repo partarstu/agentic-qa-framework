@@ -34,17 +34,17 @@ class ProcedureKnowledgeError(Exception):
 
 
 def precondition_lines(test_case: TestCase) -> list[str]:
-    """The non-blank lines of the test case's preconditions, one precondition each."""
+    """Return the non-blank lines of the test case's preconditions, one precondition each."""
     return [line.strip() for line in (test_case.preconditions or "").splitlines() if line.strip()]
 
 
 def precondition_ids(test_case: TestCase) -> list[str]:
-    """The IDs of the test case's preconditions as the knowledge agent numbers them: P1, P2, …."""
+    """Return the IDs of the test case's preconditions as the knowledge agent numbers them: P1, P2, …."""
     return [f"P{number}" for number in range(1, len(precondition_lines(test_case)) + 1)]
 
 
 def step_ids(test_case: TestCase) -> list[str]:
-    """The IDs of the test case's steps as the knowledge agent numbers them: S1, S2, …."""
+    """Return the IDs of the test case's steps as the knowledge agent numbers them: S1, S2, …."""
     return [f"S{number}" for number in range(1, len(test_case.steps) + 1)]
 
 
@@ -144,7 +144,7 @@ def _selection(artifacts: list[Artifact], known_item_ids: list[str]) -> Procedur
 
 
 def procedure_nodes_by_id(selection: ProcedureSelectionResult) -> dict[str, ProcedureNode]:
-    """Every procedure of the selection's trees, the selected ones and their descendants, by its ID."""
+    """Return every procedure of the selection's trees, the selected ones and their descendants, by its ID."""
     nodes: dict[str, ProcedureNode] = {}
     pending = [node for item in [*selection.items, *selection.aggregations] for node in item.procedures]
     while pending:
@@ -155,7 +155,7 @@ def procedure_nodes_by_id(selection: ProcedureSelectionResult) -> dict[str, Proc
 
 
 def render_procedure_knowledge(test_case: TestCase, selection: ProcedureSelectionResult) -> str:
-    """The test case's numbered items and the recorded procedures selected for them, as indented trees."""
+    """Render the test case's numbered items and the recorded procedures selected for them as indented trees."""
     preconditions = precondition_lines(test_case)
     item_lines = [f"P{number}: {text}" for number, text in enumerate(preconditions, start=1)]
     item_lines += [

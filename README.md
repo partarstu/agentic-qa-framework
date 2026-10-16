@@ -121,7 +121,8 @@ logs). The decision has one of three outcomes:
 * **Suitable but busy:** the orchestrator keeps waiting and retrying; when the wait times out, the error names the
   suitable-but-busy situation and includes the last justification.
 * **None suitable:** the orchestrator stops at once, records a dashboard error and fails the request with the
-  justification instead of waiting for the timeout.
+  justification instead of waiting for the timeout. When an earlier decision of the same wait selected an agent that
+  is still registered, the orchestrator logs a warning and keeps waiting for that agent instead.
 
 The label-based selection of execution agents also returns a justification, which is logged whenever the selected set
 is empty or partial.
@@ -315,7 +316,7 @@ JIRA_URL=YOUR_JIRA_INSTANCE_URL # Required for Xray, the RAG sync runtime and th
 JIRA_USERNAME=YOUR_JIRA_USERNAME # Required alongside JIRA_URL. The email address associated with your Jira account.
 JIRA_API_TOKEN=YOUR_JIRA_API_TOKEN # Required alongside JIRA_URL. A Jira API token for authentication.
 ORCHESTRATOR_VERSION=3.1.0 # Default: 3.1.0. Version of the orchestrator, reported for traceability.
-ORCHESTRATOR_THINKING_LEVEL=low # Default: low. Thinking level of the orchestrator's model calls (routing, multi-agent routing and results extraction): none (thinking off), minimal, low, medium, high or xhigh. On Qwen, a level turns thinking on at the matching reasoning effort and none turns it off through the chat template (recommended on Qwen: none).
+ORCHESTRATOR_THINKING_LEVEL=medium # Default: medium. Thinking level of the orchestrator's model calls (routing, multi-agent routing and results extraction): none (thinking off), minimal, low, medium, high or xhigh. On Qwen, a level turns thinking on at the matching reasoning effort and none turns it off through the chat template (recommended on Qwen: none).
 TEST_CASE_DESIGN_TASK_TIMEOUT_SECONDS=3300 # Default: 3300. How long the orchestrator waits for one test case design, the wait for a free Test Case Design agent included; keep it below the orchestrator's request timeout (3500 s on Cloud Run).
 TEST_ENVIRONMENT_LABEL=Standard Test Environment # Default: Standard Test Environment. Label describing the
                                  # environment tests are executed against. Reported on every test execution

@@ -5,6 +5,7 @@
 """Token usage and estimated cost captured from a single agent run."""
 
 from contextvars import ContextVar
+from typing import Self
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 from pydantic.alias_generators import to_camel
@@ -72,8 +73,8 @@ class TokenUsage(JsonSerializableModel):
         )
 
     @classmethod
-    def from_execution_agent_usage(cls, usage_json: str | bytes) -> "TokenUsage":
-        """Totals of the `token_usage` artifact of an execution agent, whose input token counts include the cached ones.
+    def from_execution_agent_usage(cls, usage_json: str | bytes) -> Self:
+        """Return the totals of the `token_usage` artifact of an execution agent, whose input token counts include the cached ones.
 
         Raises:
             ValidationError: When the artifact is not a list of usage records.

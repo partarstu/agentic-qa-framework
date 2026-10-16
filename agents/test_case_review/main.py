@@ -203,7 +203,7 @@ class TestCaseReviewer:
 
 
 async def _procedure_knowledge(session: TestCaseDesignSession, test_case_ids: list[str]) -> dict[str, str]:
-    """The recorded procedures selected for each test case, rendered for its review, or the note that they are missing."""
+    """Render the recorded procedures selected for each test case for its review, or the note that they are missing."""
     if not config.TestCaseDesignAgentConfig.PROCEDURE_KNOWLEDGE_ENABLED:
         return {}
     async with asyncio.TaskGroup() as task_group:
@@ -231,7 +231,7 @@ def _procedure_knowledge_part(test_case: DesignedTestCase, selection: ProcedureS
 
 
 def _review_request(session: TestCaseDesignSession, test_case_id: str, procedure_knowledge: str | None) -> list[str]:
-    """The test case under review, its recorded procedures and, for a fixed one, its previous version and findings."""
+    """Return the test case under review, its recorded procedures and, when fixed, its previous version and findings."""
     request = [
         render_designed_test_case_block(f"Test case under review (ID {test_case_id})", session.test_cases[test_case_id])
     ]

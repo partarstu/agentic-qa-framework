@@ -386,6 +386,67 @@ async def test_reserve_routes_again_once_the_registry_changed(
 
 
 @pytest.mark.asyncio
+async def test_reserve_keeps_waiting_for_the_selected_agent_when_routing_turns_to_none_suitable(
+    clear_registry, mock_agent_card, mock_error_history, monkeypatch
+):
+    await agent_registry.register("test-id", mock_agent_card)
+    await agent_registry.update_status("test-id", AgentStatus.BUSY)
+    fake_time = MagicMock()
+    fake_time.time.return_value = 0
+    monkeypatch.setattr("orchestrator.main.time", fake_time)
+
+    async def free_the_agent(_seconds):
+        await agent_registry.update_status("test-id", AgentStatus.AVAILABLE)
+
+    monkeypatch.setattr("orchestrator.main.asyncio.sleep", free_the_agent)
+
+    with patch(
+        "orchestrator.main._route_task",
+        new_callable=AsyncMock,
+        side_effect=[
+            AgentSelected(agent_id="test-id", justification="Suitable."),
+            NoSuitableAgent(justification="Suitable but busy."),
+        ],
+    ):
+        agent_id, _ = await reserve_agent_waiting_if_needed("some task", task_id="task-1")
+
+    assert agent_id == "test-id"
+    mock_error_history.add.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_reserve_none_suitable_fails_fast_once_the_selected_agent_left_the_registry(
+    clear_registry, mock_agent_card, mock_error_history, monkeypatch
+):
+    await agent_registry.register("test-id", mock_agent_card)
+    await agent_registry.update_status("test-id", AgentStatus.BUSY)
+    fake_time = MagicMock()
+    fake_time.time.return_value = 0
+    monkeypatch.setattr("orchestrator.main.time", fake_time)
+
+    async def replace_the_agent(_seconds):
+        await agent_registry.remove("test-id")
+        await agent_registry.register("other-id", mock_agent_card)
+
+    monkeypatch.setattr("orchestrator.main.asyncio.sleep", replace_the_agent)
+
+    with (
+        patch(
+            "orchestrator.main._route_task",
+            new_callable=AsyncMock,
+            side_effect=[
+                AgentSelected(agent_id="test-id", justification="Suitable."),
+                NoSuitableAgent(justification="None suitable."),
+            ],
+        ),
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await reserve_agent_waiting_if_needed("some task", task_id="task-1")
+
+    assert exc_info.value.status_code == 404
+
+
+@pytest.mark.asyncio
 async def test_get_agents_info_lists_skills_and_availability_for_every_agent(clear_registry, mock_agent_card):
     reviewer_card = AgentCard(
         name="Reviewer",

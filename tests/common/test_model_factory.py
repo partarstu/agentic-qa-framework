@@ -364,7 +364,9 @@ def test_opus_and_sonnet_from_5_5_on_fall_back_to_adaptive_low_without_a_thinkin
     }
 
 
-@pytest.mark.parametrize("model_name", ["claude-opus-5", "claude-sonnet-5", "claude-haiku-5-5", "claude-opus-5-20260101"])
+@pytest.mark.parametrize(
+    "model_name", ["claude-opus-5", "claude-sonnet-5", "claude-haiku-5-5", "claude-opus-5-20260101"]
+)
 def test_claude_5_models_accepting_disabled_thinking_keep_it_disabled(model_name):
     assert build_claude_5_settings(None, None, model_name) == {"anthropic_thinking": {"type": "disabled"}}
 

@@ -547,7 +547,7 @@ class KnowledgeAwareItem(JsonSerializableModel):
     )
     test_data: list[str] = Field(
         default_factory=list,
-        description="The test data of a test step, labeled with the procedure's test data names when it reuses one;"
+        description="The test data of a test step, labeled with the procedure's test data names when it reuses one; "
         "always empty for a precondition",
     )
     expected_results: str = Field(

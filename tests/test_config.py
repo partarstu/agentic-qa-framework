@@ -52,7 +52,7 @@ def test_agent_default_thinking_levels():
         "test_case_classification": config.TestCaseClassificationAgentConfig.THINKING_LEVEL,
         "incident_creation": config.IncidentCreationAgentConfig.THINKING_LEVEL,
     } == {
-        "orchestrator": "low",
+        "orchestrator": "medium",
         "requirements_review": "medium",
         "test_case_design": "medium",
         "test_case_generation": "medium",
