@@ -5,6 +5,7 @@
 """Dashboard service for aggregating orchestrator state for the Web UI."""
 
 import re
+from collections.abc import Iterable
 from datetime import UTC, datetime
 from typing import Any
 
@@ -23,6 +24,7 @@ from orchestrator.models import (
     TaskHistory,
     agent_registry,
     error_history,
+    iter_log_lines,
     task_history,
 )
 
@@ -34,6 +36,12 @@ logger = utils.get_logger("orchestrator_dashboard")
 # inside a JSON payload is not mistaken for an ERROR-level line.
 _LEVEL_TOKEN_PATTERN = re.compile(r"\b(CRITICAL|FATAL|ERROR|WARNING|WARN|INFO|DEBUG|TRACE)\b")
 _LEVEL_ALIASES = {"WARN": "WARNING", "FATAL": "CRITICAL"}
+_TASK_LOGS_KEY = "agent_logs"
+
+
+def _normalise_level(level: str) -> str:
+    level = level.upper()
+    return _LEVEL_ALIASES.get(level, level)
 
 
 def _detect_log_level(line: str) -> str | None:
@@ -41,8 +49,67 @@ def _detect_log_level(line: str) -> str | None:
     match = _LEVEL_TOKEN_PATTERN.search(line)
     if match is None:
         return None
-    token = match.group(1)
-    return _LEVEL_ALIASES.get(token, token)
+    return _normalise_level(match.group(1))
+
+
+def parse_agent_logs(
+    raw_logs: Iterable[str], task_id: str, agent_id: str, *, preceding_line_count: int = 0
+) -> list[LogEntry]:
+    """Parse raw agent log lines into entries whose id ``<task_id>:<n>`` counts the task's non-empty lines after the preceding ones."""
+    return [
+        _parse_agent_log_line(line, f"{task_id}:{number}", task_id, agent_id)
+        for number, line in enumerate(iter_log_lines(raw_logs), start=preceding_line_count + 1)
+    ]
+
+
+def _parse_agent_log_line(line: str, entry_id: str, task_id: str, agent_id: str) -> LogEntry:
+    """Parse a structured JSON record, a ``timestamp - logger - level - message`` line, or any other line as its own message."""
+    structured = utils.parse_log_record(line)
+    if structured is not None:
+        agent_name = structured.get("agent_name")
+        return LogEntry(
+            timestamp=str(structured.get("timestamp", "")),
+            level=_normalise_level(str(structured.get("level", "INFO"))),
+            logger_name=str(structured.get("logger", f"agent.{agent_id}")),
+            message=utils.render_log_message(structured),
+            task_id=str(structured.get("task_id") or task_id),
+            agent_id=str(structured.get("agent_id") or agent_id),
+            agent_name=None if agent_name is None else str(agent_name),
+            entry_id=entry_id,
+        )
+
+    parts = line.split(" - ", 3)
+    if len(parts) < 4:
+        return LogEntry(
+            timestamp="",
+            level=_detect_log_level(line) or "INFO",
+            logger_name=f"agent.{agent_id}",
+            message=line,
+            task_id=task_id,
+            agent_id=agent_id,
+            entry_id=entry_id,
+        )
+
+    raw_timestamp, parsed_logger, parsed_level, parsed_message = parts
+    return LogEntry(
+        timestamp=_parse_log_timestamp(raw_timestamp.strip()),
+        level=_normalise_level(parsed_level.strip()),
+        logger_name=parsed_logger.strip(),
+        message=parsed_message,
+        task_id=task_id,
+        agent_id=agent_id,
+        entry_id=entry_id,
+    )
+
+
+def _parse_log_timestamp(raw_timestamp: str) -> str:
+    """Return the Python logging timestamp (``2026-01-06 16:20:30,123``, milliseconds optional) in ISO form, else as given."""
+    for timestamp_format in ("%Y-%m-%d %H:%M:%S,%f", "%Y-%m-%d %H:%M:%S"):
+        try:
+            return datetime.strptime(raw_timestamp, timestamp_format).isoformat()
+        except ValueError:
+            continue
+    return raw_timestamp
 
 
 class OrchestratorDashboardService:
@@ -155,9 +222,11 @@ class OrchestratorDashboardService:
         return result
 
     async def get_recent_tasks(self, limit: int = 50) -> list[dict[str, Any]]:
-        """Returns recent tasks with their details."""
+        """Return the recent tasks without their agent logs, which the log endpoint serves."""
         tasks = await self.tasks.get_all()
-        return [task.to_dict() for task in tasks[:limit]]
+        return [
+            {key: value for key, value in task.to_dict().items() if key != _TASK_LOGS_KEY} for task in tasks[:limit]
+        ]
 
     async def get_recent_errors(self, limit: int = 20) -> list[dict[str, Any]]:
         """Returns recent errors with context."""
@@ -205,7 +274,7 @@ class OrchestratorDashboardService:
         if task_id:
             task_record = await self.tasks.get_by_id(task_id)
             if task_record and task_record.agent_logs:
-                result_entries = self._parse_agent_logs(task_record.agent_logs, task_id, task_record.agent_id)
+                result_entries = parse_agent_logs(task_record.agent_logs, task_id, task_record.agent_id)
 
         # If agent_id is provided (and no task_id), return agent logs from all tasks of this agent
         elif agent_id:
@@ -214,7 +283,7 @@ class OrchestratorDashboardService:
             agent_tasks = [t for t in all_tasks if t.agent_id == agent_id]
             for task in agent_tasks:  # Check all tasks for this agent
                 if task.agent_logs:
-                    result_entries.extend(self._parse_agent_logs(task.agent_logs, task.task_id, agent_id))
+                    result_entries.extend(parse_agent_logs(task.agent_logs, task.task_id, agent_id))
 
         # If neither task_id nor agent_id is provided, return orchestrator logs only
         else:
@@ -241,89 +310,6 @@ class OrchestratorDashboardService:
 
         # We need to return them reversed (newest first) to match get_logs behavior
         return [entry.to_dict() for entry in reversed(sliced_logs)]
-
-    @staticmethod
-    def _parse_agent_logs(raw_logs: list[str], task_id: str, agent_id: str) -> list[LogEntry]:
-        """Parse raw agent log strings into LogEntry objects.
-
-        The expected log format from AgentLogCaptureHandler is:
-        '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-        Example: '2026-01-06 16:20:30,123 - my_agent - INFO - Some message'
-        """
-        entries = []
-        for log_chunk in raw_logs:
-            # Agent logs might be one big string or lines
-            lines = log_chunk.splitlines()
-            for line in lines:
-                if not line.strip():
-                    continue
-
-                structured = utils.parse_log_record(line)
-                if structured is not None:
-                    entries.append(
-                        LogEntry(
-                            timestamp=str(structured.get("timestamp", "")),
-                            level=str(structured.get("level", "INFO")).upper(),
-                            logger_name=str(structured.get("logger", f"agent.{agent_id}")),
-                            message=utils.render_log_message(structured),
-                            task_id=str(structured.get("task_id") or task_id),
-                            agent_id=str(structured.get("agent_id") or agent_id),
-                            agent_name=structured.get("agent_name"),
-                        )
-                    )
-                    continue
-
-                # Default values in case parsing fails
-                timestamp = None
-                level = "INFO"
-                logger_name = f"agent.{agent_id}"
-                message = line
-
-                # Parse the log format: "timestamp - logger - level - message"
-                parts = line.split(" - ", 3)
-                if len(parts) >= 4:
-                    # Full format: timestamp - logger - level - message
-                    raw_timestamp, parsed_logger, parsed_level, parsed_message = parts
-
-                    # Try to parse the timestamp
-                    try:
-                        # Format from logging: "2026-01-06 16:20:30,123"
-                        parsed_dt = datetime.strptime(raw_timestamp.strip(), "%Y-%m-%d %H:%M:%S,%f")
-                        timestamp = parsed_dt.isoformat()
-                    except ValueError:
-                        # Fallback: try without milliseconds
-                        try:
-                            parsed_dt = datetime.strptime(raw_timestamp.strip(), "%Y-%m-%d %H:%M:%S")
-                            timestamp = parsed_dt.isoformat()
-                        except ValueError:
-                            # Keep the raw timestamp string if parsing fails
-                            timestamp = raw_timestamp.strip()
-
-                    logger_name = parsed_logger.strip()
-                    level = parsed_level.strip().upper()
-                    message = parsed_message
-                else:
-                    # Formats that don't match the Python logging layout (e.g. the UI agent's
-                    # logback format): fall back to scanning the line for a level token.
-                    detected_level = _detect_log_level(line)
-                    if detected_level is not None:
-                        level = detected_level
-
-                # If timestamp parsing failed completely, use empty string as fallback
-                if timestamp is None:
-                    timestamp = ""
-
-                entries.append(
-                    LogEntry(
-                        timestamp=timestamp,
-                        level=level,
-                        logger_name=logger_name,
-                        message=message,
-                        task_id=task_id,
-                        agent_id=agent_id,
-                    )
-                )
-        return entries
 
 
 # Global service instance

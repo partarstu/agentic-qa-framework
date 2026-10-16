@@ -60,11 +60,24 @@ class AgentActivityEvent(BaseModel):
     text: str
 
 
+class LogEntryPayload(BaseModel):
+    """A parsed log line as the dashboard's log endpoint returns it, with the id that a page of the same log repeats."""
+
+    id: str
+    timestamp: str
+    level: str
+    logger: str
+    message: str
+    task_id: str | None = None
+    agent_id: str | None = None
+    agent_name: str | None = None
+
+
 class LogBatchEvent(BaseModel):
     version: int = 1
     type: str = "log_batch"
     task_id: str
-    lines: list[str]
+    entries: list[LogEntryPayload]
 
 
 class TaskDoneEvent(BaseModel):

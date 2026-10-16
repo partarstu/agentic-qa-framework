@@ -70,7 +70,7 @@ async def test_append_log_batch_initialises_none_logs():
     record = _make_record()
     assert record.agent_logs is None
     await history.add(record)
-    await history.append_log_batch("t1", ["log line 1", "log line 2"])
+    assert await history.append_log_batch("t1", ["log line 1", "log line 2"]) == 0
     retrieved = await history.get_by_id("t1")
     assert retrieved.agent_logs == ["log line 1", "log line 2"]
 
@@ -79,11 +79,12 @@ async def test_append_log_batch_initialises_none_logs():
 async def test_append_log_batch_extends_existing_logs():
     history = TaskHistory()
     record = _make_record()
-    record.agent_logs = ["existing"]
+    record.agent_logs = ["existing\n\nsecond", " "]
     await history.add(record)
-    await history.append_log_batch("t1", ["new 1", "new 2"])
+    preceding_line_count = await history.append_log_batch("t1", ["new 1", "new 2"])
     retrieved = await history.get_by_id("t1")
-    assert retrieved.agent_logs == ["existing", "new 1", "new 2"]
+    assert retrieved.agent_logs == ["existing\n\nsecond", " ", "new 1", "new 2"]
+    assert preceding_line_count == 2
 
 
 @pytest.mark.asyncio
@@ -92,4 +93,4 @@ async def test_mutators_noop_for_unknown_task_id():
     history = TaskHistory()
     await history.set_current_activity("unknown", "text")
     await history.clear_current_activity("unknown")
-    await history.append_log_batch("unknown", ["line"])
+    assert await history.append_log_batch("unknown", ["line"]) == 0

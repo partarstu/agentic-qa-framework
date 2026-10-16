@@ -739,7 +739,7 @@ async def test_handle_stream_chunk_log_batch_updates_history_and_publishes_to_ag
         patch("orchestrator.main.task_history") as mock_history,
         patch("orchestrator.main.streaming_hub") as mock_hub,
     ):
-        mock_history.append_log_batch = AsyncMock()
+        mock_history.append_log_batch = AsyncMock(return_value=3)
         mock_hub.publish_agent = AsyncMock()
 
         await _handle_stream_chunk(event, "task-1", "agent-1", collected, log_state)
@@ -748,7 +748,11 @@ async def test_handle_stream_chunk_log_batch_updates_history_and_publishes_to_ag
     mock_hub.publish_agent.assert_called_once()
     published = mock_hub.publish_agent.call_args[0][1]
     assert published["type"] == "log_batch"
-    assert "line1" in published["lines"]
+    assert [(entry["id"], entry["message"], entry["task_id"], entry["agent_id"]) for entry in published["entries"]] == [
+        ("task-1:4", "line1", "task-1", "agent-1"),
+        ("task-1:5", "line2", "task-1", "agent-1"),
+    ]
+    assert "lines" not in published
     assert log_state.artifact_id == "logs-123"
     assert log_state.lines == ["line1", "line2"]
     assert collected == []
@@ -798,6 +802,24 @@ async def test_handle_stream_chunk_log_last_chunk_consolidates():
     assert len(consolidated.parts) == 1
     assert consolidated.parts[0].filename == "execution_logs.md"
     assert consolidated.parts[0].raw == b"line1\nline2"
+
+
+@pytest.mark.asyncio
+async def test_handle_stream_chunk_publishes_no_batch_for_blank_lines():
+    event = TaskArtifactUpdateEvent(
+        context_id="ctx-1", task_id="task-1", artifact=_raw_artifact("logs", b"\n  \n"), last_chunk=False
+    )
+
+    with (
+        patch("orchestrator.main.task_history") as mock_history,
+        patch("orchestrator.main.streaming_hub") as mock_hub,
+    ):
+        mock_history.append_log_batch = AsyncMock(return_value=0)
+        mock_hub.publish_agent = AsyncMock()
+        await _handle_stream_chunk(event, "task-1", "agent-1", [], _LogStreamState())
+
+    mock_history.append_log_batch.assert_awaited_once()
+    mock_hub.publish_agent.assert_not_called()
 
 
 @pytest.mark.asyncio

@@ -1,0 +1,31 @@
+/*
+ * SPDX-FileCopyrightText: 2025-2026 Taras Paruta (partarstu@gmail.com)
+ *
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
+@layer components {
+  .popover {
+    margin: var(--space-1) 0 0;
+    padding: var(--space-3) var(--space-4);
+    min-inline-size: 14rem;
+    color: var(--ink);
+    background: var(--panel);
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-2);
+    position-area: block-end span-inline-start;
+    position-try-fallbacks: flip-inline;
+
+    @media (prefers-reduced-motion: no-preference) {
+      transition: opacity 120ms, translate 120ms, display 120ms allow-discrete, overlay 120ms allow-discrete;
+
+      @starting-style {
+        &:popover-open {
+          opacity: 0;
+          translate: 0 -4px;
+        }
+      }
+    }
+  }
+}

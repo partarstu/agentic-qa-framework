@@ -8,6 +8,7 @@ circular imports.
 
 import asyncio
 from collections import deque
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -42,6 +43,14 @@ class TaskStatus(StrEnum):
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
     CANCELLED = "CANCELLED"
+
+
+def iter_log_lines(raw_logs: Iterable[str]) -> Iterator[str]:
+    """Yield the non-empty lines of a task's agent logs, whose chunks may hold several lines each."""
+    for chunk in raw_logs:
+        for line in chunk.splitlines():
+            if line.strip():
+                yield line
 
 
 @dataclass
@@ -192,15 +201,18 @@ class TaskHistory:
             if task_id in self._tasks_by_id:
                 self._tasks_by_id[task_id].current_activity = None
 
-    async def append_log_batch(self, task_id: str, lines: list[str]) -> None:
-        """Append a batch of streamed log lines to the task's running log buffer."""
+    async def append_log_batch(self, task_id: str, lines: list[str]) -> int:
+        """Append streamed log lines to the task's log buffer and return the number of its log lines before them."""
         async with self._lock:
-            if task_id in self._tasks_by_id:
-                task = self._tasks_by_id[task_id]
-                if task.agent_logs is None:
-                    task.agent_logs = []
-                task.agent_logs.extend(lines)
-                self._persist("task", task_id, task.to_dict())
+            task = self._tasks_by_id.get(task_id)
+            if task is None:
+                return 0
+            if task.agent_logs is None:
+                task.agent_logs = []
+            preceding_line_count = sum(1 for _ in iter_log_lines(task.agent_logs))
+            task.agent_logs.extend(lines)
+            self._persist("task", task_id, task.to_dict())
+            return preceding_line_count
 
 
 class ErrorHistory:

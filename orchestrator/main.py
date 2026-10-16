@@ -88,13 +88,14 @@ from common.streaming import (
     AgentSnapshot,
     AuthErrorEvent,
     LogBatchEvent,
+    LogEntryPayload,
     RunningTaskSnapshot,
     SnapshotEvent,
     TaskDoneEvent,
 )
 from common.token_usage import TokenUsage
 from orchestrator.auth import LoginRequest, TokenResponse, auth_service, client_ip, dashboard_auth, login_rate_limiter
-from orchestrator.dashboard_service import dashboard_service
+from orchestrator.dashboard_service import dashboard_service, parse_agent_logs
 from orchestrator.dashboard_state import dashboard_state_store
 from orchestrator.delegation import DELEGATION_PATH, DelegationExecutor, create_delegation_app
 from orchestrator.memory_log_handler import setup_memory_logging
@@ -1572,11 +1573,16 @@ async def _handle_stream_chunk(
                 new_lines.extend(part.raw.decode("utf-8", errors="replace").splitlines())
         if new_lines:
             log_state.lines.extend(new_lines)
-            await task_history.append_log_batch(internal_task_id, new_lines)
-            await streaming_hub.publish_agent(
-                agent_id,
-                LogBatchEvent(task_id=internal_task_id, lines=new_lines).model_dump(),
-            )
+            preceding_line_count = await task_history.append_log_batch(internal_task_id, new_lines)
+            entries = parse_agent_logs(new_lines, internal_task_id, agent_id, preceding_line_count=preceding_line_count)
+            if entries:
+                await streaming_hub.publish_agent(
+                    agent_id,
+                    LogBatchEvent(
+                        task_id=internal_task_id,
+                        entries=[LogEntryPayload.model_validate(entry.to_dict()) for entry in entries],
+                    ).model_dump(),
+                )
         if artifact_event.last_chunk and log_state.lines:
             collected_artifacts.append(_build_logs_artifact(log_state.lines))
         return

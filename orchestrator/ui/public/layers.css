@@ -1,0 +1,11 @@
+/*
+ * SPDX-FileCopyrightText: 2025-2026 Taras Paruta (partarstu@gmail.com)
+ *
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
+/*
+ * The page links this sheet before the bundle's, whose split chunks may come in any order: the first sheet that names a layer
+ * fixes its rank, so the order is declared here once.
+ */
+@layer tokens, base, components, utilities;

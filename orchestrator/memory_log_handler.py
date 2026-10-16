@@ -6,13 +6,24 @@
 Custom logging handler that buffers log records in memory for the dashboard.
 """
 
+import itertools
 import logging
 import threading
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from uuid import uuid4
 
 from common.utils import StructuredJsonFormatter
+
+# A prefix of its own per process, so the running numbers of a restarted orchestrator never repeat a persisted id.
+_LOG_ID_PREFIX = uuid4().hex[:12]
+_log_numbers = itertools.count(1)
+
+
+def next_log_id() -> str:
+    """Return the id of a new orchestrator log entry, distinct from every id of this and of earlier processes."""
+    return f"{_LOG_ID_PREFIX}:{next(_log_numbers)}"
 
 
 @dataclass
@@ -26,9 +37,11 @@ class LogEntry:
     task_id: str | None = None
     agent_id: str | None = None
     agent_name: str | None = None
+    entry_id: str = field(default_factory=next_log_id)
 
     def to_dict(self) -> dict:
         return {
+            "id": self.entry_id,
             "timestamp": self.timestamp,
             "level": self.level,
             "logger": self.logger_name,

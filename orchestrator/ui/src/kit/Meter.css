@@ -1,0 +1,42 @@
+/*
+ * SPDX-FileCopyrightText: 2025-2026 Taras Paruta (partarstu@gmail.com)
+ *
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
+@layer components {
+  .meter {
+    display: block;
+    block-size: 0.375rem;
+    min-inline-size: 4rem;
+    overflow: hidden;
+    border-radius: 999px;
+    background: var(--rule);
+  }
+
+  .meter-fill {
+    display: block;
+    block-size: 100%;
+    border-radius: inherit;
+    background: var(--passed);
+
+    .meter-fair > & {
+      background: var(--warning);
+    }
+
+    .meter-poor > & {
+      background: var(--failed);
+    }
+  }
+
+  @media (forced-colors: active) {
+    .meter {
+      border: 1px solid CanvasText;
+    }
+
+    .meter-fill {
+      forced-color-adjust: none;
+      background: CanvasText;
+    }
+  }
+}
