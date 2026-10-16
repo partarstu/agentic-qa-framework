@@ -119,6 +119,23 @@ class TestSecrets:
         with pytest.raises(ValueError, match="undeclared secret 'NOT_DECLARED'"):
             _render(manifest)
 
+    def test_an_optional_secret_is_not_deployed_unless_the_environment_enables_it(self, manifest):
+        manifest["optional_secrets"] = ["DB_PASSWORD"]
+
+        assert _render(manifest).secrets == {"API_KEY": "API_KEY"}
+
+    def test_an_optional_secret_is_deployed_where_the_environment_enables_it(self, manifest):
+        manifest["optional_secrets"] = ["DB_PASSWORD"]
+        manifest["environments"]["dev"]["secrets"] = ["DB_PASSWORD"]
+
+        assert _render(manifest).secrets == {"API_KEY": "API_KEY", "DATABASE_PASSWORD": "DB_PASSWORD"}
+
+    def test_an_environment_enabling_a_secret_that_is_not_optional_fails(self, manifest):
+        manifest["environments"]["dev"]["secrets"] = ["API_KEY"]
+
+        with pytest.raises(ValueError, match="enables 'API_KEY', which is not an optional secret"):
+            _render(manifest)
+
 
 class TestRedeployMarker:
     def test_the_marker_is_stable_for_the_same_configuration(self, manifest):
@@ -220,6 +237,18 @@ def test_the_model_and_thinking_keys_are_deployable_only_on_the_services_that_re
 
         assert not every_key & set(plain.env), service
         assert every_key & set(overridden.env) == set(KEYS_BY_LLM_SERVICE.get(service, ())), service
+
+
+def test_the_anthropic_key_is_deployed_only_to_the_llm_services_of_an_environment_enabling_it():
+    manifest = yaml.safe_load((REPOSITORY_ROOT / "deploy" / "manifest.yaml").read_text(encoding="utf-8"))
+
+    for service in manifest["services"]:
+        plain = render(manifest, service, "production", version="tag", environ={"PROJECT_ID": "proj"})
+        assert "ANTHROPIC_API_KEY" not in plain.secrets, service
+    manifest["environments"]["production"]["secrets"] = ["ANTHROPIC_API_KEY"]
+    for service in manifest["services"]:
+        enabled = render(manifest, service, "production", version="tag", environ={"PROJECT_ID": "proj"})
+        assert ("ANTHROPIC_API_KEY" in enabled.secrets) == (service in KEYS_BY_LLM_SERVICE), service
 
 
 @pytest.mark.parametrize(

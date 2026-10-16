@@ -38,6 +38,10 @@ secrets:
   - ZEPHYR_API_TOKEN
   - ZEPHYR_BASE_URL
 
+# The secrets a service deploys only in the environments that list them under their own secrets.
+optional_secrets:
+  - ANTHROPIC_API_KEY
+
 shared_defaults:
   TZ: Europe/Vienna
 
@@ -106,7 +110,7 @@ services:
       PROMPT_OVERRIDES_DIR: ""
     secrets:
       GOOGLE_API_KEY: GOOGLE_API_KEY
-      # Read only when MODEL_NAME names a Claude model.
+      # Optional: deployed only where the environment lists it under its secrets (MODEL_NAME names a Claude model).
       ANTHROPIC_API_KEY: ANTHROPIC_API_KEY
       JIRA_API_TOKEN: JIRA_API_TOKEN
       JIRA_USERNAME: JIRA_USERNAME
@@ -174,7 +178,7 @@ services:
       PROMPT_OVERRIDES_DIR: ""
     secrets:
       GOOGLE_API_KEY: GOOGLE_API_KEY
-      # Read only when MODEL_NAME names a Claude model.
+      # Optional: deployed only where the environment lists it under its secrets (MODEL_NAME names a Claude model).
       ANTHROPIC_API_KEY: ANTHROPIC_API_KEY
       JIRA_API_TOKEN: JIRA_API_TOKEN
       JIRA_USERNAME: JIRA_USERNAME
@@ -214,7 +218,7 @@ services:
       PROCEDURE_KNOWLEDGE_TIMEOUT_SECONDS: ""
     secrets:
       GOOGLE_API_KEY: GOOGLE_API_KEY
-      # Read only when MODEL_NAME names a Claude model.
+      # Optional: deployed only where the environment lists it under its secrets (MODEL_NAME names a Claude model).
       ANTHROPIC_API_KEY: ANTHROPIC_API_KEY
       JIRA_API_TOKEN: JIRA_API_TOKEN
       JIRA_USERNAME: JIRA_USERNAME
@@ -246,7 +250,7 @@ services:
       PROMPT_OVERRIDES_DIR: ""
     secrets:
       GOOGLE_API_KEY: GOOGLE_API_KEY
-      # Read only when MODEL_NAME names a Claude model.
+      # Optional: deployed only where the environment lists it under its secrets (MODEL_NAME names a Claude model).
       ANTHROPIC_API_KEY: ANTHROPIC_API_KEY
       JIRA_API_TOKEN: JIRA_API_TOKEN
       JIRA_USERNAME: JIRA_USERNAME
@@ -262,3 +266,5 @@ environments:
     project: ${PROJECT_ID}
     region: us-central1
     overrides: {}
+    # A Claude environment sets MODEL_NAME in its overrides and lists ANTHROPIC_API_KEY here.
+    secrets: []

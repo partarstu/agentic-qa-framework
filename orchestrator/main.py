@@ -2273,7 +2273,7 @@ async def _delegate_task(message: Message, task_description: str, timeout_second
 orchestrator_app.mount(
     DELEGATION_PATH,
     create_delegation_app(
-        DelegationExecutor(_delegate_task, _record_error), f"{config.ORCHESTRATOR_URL}{DELEGATION_PATH}/"
+        DelegationExecutor(_delegate_task, _record_error), f"{config.ORCHESTRATOR_DELEGATION_URL}/"
     ),
 )
 

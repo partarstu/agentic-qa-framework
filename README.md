@@ -748,7 +748,7 @@ you run any of the commands below.
 4. The following **secrets in the Google Secrets Manager** with corresponding values need to be added (the full list
    is the `secrets` section of `deploy/manifest.yaml`):
     * `GOOGLE_API_KEY`
-    * `ANTHROPIC_API_KEY` (orchestrator and agents, read when `MODEL_NAME` names a Claude model; a placeholder value is enough otherwise)
+    * `ANTHROPIC_API_KEY` (orchestrator and agents, only for an environment whose `MODEL_NAME` names a Claude model and which lists it under its `secrets` in `deploy/manifest.yaml`; other environments don't deploy it)
     * `JIRA_API_TOKEN`
     * `JIRA_USERNAME`
     * `JIRA_URL`
@@ -782,7 +782,8 @@ winning, is: shared defaults and the service's own defaults -> values derived fr
 (`GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_REGION` and the `{project}`, `{region}`, `{version}` placeholders) -> the
 environment's overrides -> runtime overrides (`QUAIA_DEPLOY_OVERRIDE_<KEY>` variables). An override may only set a
 key the manifest declares, an empty value never beats a default, a key without a value is not deployed, and a secret
-name the manifest doesn't declare fails the rendering. Run the same command locally to see exactly what a deployment
+name the manifest doesn't declare fails the rendering. A secret listed under `optional_secrets` (`ANTHROPIC_API_KEY`)
+is deployed only in the environments that list it under their own `secrets`. Run the same command locally to see exactly what a deployment
 would apply:
 
 ```bash
@@ -1368,7 +1369,7 @@ schedulers before upgrading:
 20. **The indexed text of a test case separates its sections by blank lines.** Every stored test case therefore has a new content hash, and the next `/update-test-case-db` sync re-embeds all of them once.
 21. **The routing result is three output tools instead of one with an outcome field, and a prompt override of `prompts/routing_instruction_template.md` under `PROMPT_OVERRIDES_DIR` must be rebased on the new bundled template.** The template has no placeholders, so an old override still loads without an error, but it instructs the `outcome` field and the optional agent ID, which no routing output tool has any more (`AgentSelected` with a required `agent_id`, `SuitableAgentBusy` and `NoSuitableAgent`).
 22. **`QWEN_THINKING_ENABLED` is removed.** Thinking is set per agent through `<AGENT>_THINKING_LEVEL` (`none` turns it off), so a Qwen deployment that set nothing now thinks on every agent at the default levels; set the recommended values from *Qwen3.8-27B: recommended settings*. The thinking-off presence penalty is now `QWEN_NON_THINKING_PRESENCE_PENALTY` (default 0, formerly the fixed 1.5).
-23. **The Test Case Design agent rebuilds and reviews its test cases with the recorded procedures** (see *Procedure Knowledge*), requested through the orchestrator's new A2A delegation endpoint. Deploy the procedure knowledge agent of the `test-execution-agents` repository and add its URL to `_REMOTE_EXECUTION_AGENT_HOSTS`, set `_ORCHESTRATOR_URL` to the orchestrator's URL, and give the orchestrator the `INTERNAL_SERVICE_API_KEY` secret (the manifest now references it). Without them every request fails and is logged as an error, and the test cases stay as generated; `PROCEDURE_KNOWLEDGE_ENABLED=false` turns the requests off. An override of `agents/test_case_review/system_prompts/review_with_attachments_prompt.md` fails startup until it carries the new `{procedure_knowledge_review}` placeholder; overrides of `severity_classifier.md`, `test_case_creation_prompt.md` and `test_case_fixer_prompt.md` still load but lack the new severity line and the one-precondition-per-line rule, so rebase them too.
+23. **The Test Case Design agent rebuilds and reviews its test cases with the recorded procedures** (see *Procedure Knowledge*), requested through the orchestrator's new A2A delegation endpoint. Deploy the procedure knowledge agent of the `test-execution-agents` repository and add its URL to `_REMOTE_EXECUTION_AGENT_HOSTS`, set `_ORCHESTRATOR_URL` to the orchestrator's URL, and give the orchestrator the `INTERNAL_SERVICE_API_KEY` secret (the manifest now references it). Without them every request fails and is logged as an error, and the test cases stay as generated; `PROCEDURE_KNOWLEDGE_ENABLED=false` turns the requests off. An override of `agents/test_case_review/system_prompts/review_with_attachments_prompt.md` fails startup until it carries the new `{procedure_knowledge_review}` placeholder; overrides of `severity_classifier.md`, `test_case_creation_prompt.md` and `test_case_fixer_prompt.md` still load but lack the new severity line and the one-precondition-per-line rule, so rebase them too. An environment running a Claude model lists `ANTHROPIC_API_KEY` under its `secrets` in `deploy/manifest.yaml`, next to its `MODEL_NAME` override; other environments don't deploy that secret.
 
 ### Migrating a vector collection
 
