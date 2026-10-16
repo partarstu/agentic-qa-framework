@@ -320,18 +320,21 @@ async def test_manual_reservation_rejects_an_unusable_agent(mock_registry, statu
     mock_registry.get_card = AsyncMock(return_value=None if status is None else agent_card())
     mock_registry.get_status = AsyncMock(return_value=status)
     mock_registry.update_status = AsyncMock()
+    # A busy agent has no free task slot, so its reservation fails.
+    mock_registry.reserve_task = AsyncMock(return_value=None)
 
     with pytest.raises(HTTPException) as raised:
         await _send_task_to_agent_with_message(MagicMock(), "manual run", selected_agent_id="agent-1")
 
     assert raised.value.status_code == expected_code
     mock_registry.update_status.assert_not_awaited()
+    assert mock_registry.reserve_task.await_count == (1 if status == AgentStatus.BUSY else 0)
 
 
 @pytest.mark.asyncio
 async def test_send_task_cancellation_releases_the_agent_for_recovery_and_reraises(mock_registry):
     mock_registry.update_status = AsyncMock()
-    mock_registry.set_current_task = AsyncMock()
+    mock_registry.release_task = AsyncMock()
 
     with (
         patch(
@@ -352,6 +355,7 @@ async def test_send_task_cancellation_releases_the_agent_for_recovery_and_rerais
 
     assert mock_finalize.await_args.args[2] == TaskStatus.CANCELLED
     mock_registry.update_status.assert_awaited_with("agent-1", AgentStatus.BROKEN, BrokenReason.TASK_STUCK, None)
+    assert mock_registry.release_task.await_args.args[0] == "agent-1"
     assert mock_cancellation_queue.put.await_args.args[0][0] == "agent-1"
     mock_record_error.assert_called_once()
 

@@ -11,6 +11,7 @@ import pytest
 from a2a.types import (
     AgentCapabilities,
     AgentCard,
+    AgentExtension,
     AgentInterface,
     AgentSkill,
     Artifact,
@@ -45,7 +46,7 @@ from orchestrator.main import (
     discovery_agent,
     reserve_agent_waiting_if_needed,
 )
-from orchestrator.models import TaskStatus
+from orchestrator.models import TASK_CAPACITY_EXTENSION_URI, TaskStatus
 
 
 def _drain_queue(queue):
@@ -60,6 +61,8 @@ async def clear_registry():
     agent_registry._statuses.clear()
     agent_registry._broken_reasons.clear()
     agent_registry._stuck_task_ids.clear()
+    agent_registry._running_tasks.clear()
+    agent_registry._capacities.clear()
     agent_registry._discovery_urls.clear()
     _drain_queue(cancellation_queue)
     yield
@@ -67,6 +70,8 @@ async def clear_registry():
     agent_registry._statuses.clear()
     agent_registry._broken_reasons.clear()
     agent_registry._stuck_task_ids.clear()
+    agent_registry._running_tasks.clear()
+    agent_registry._capacities.clear()
     agent_registry._discovery_urls.clear()
     _drain_queue(cancellation_queue)
 
@@ -268,7 +273,7 @@ async def test_reserve_busy_timeout_names_suitable_but_busy_with_last_justificat
         ),
         pytest.raises(HTTPException) as exc_info,
     ):
-        await reserve_agent_waiting_if_needed("some task")
+        await reserve_agent_waiting_if_needed("some task", task_id="task-1")
 
     assert exc_info.value.status_code == 503
     assert "A suitable agent exists but none of the suitable agents became available" in exc_info.value.detail
@@ -291,7 +296,7 @@ async def test_reserve_invalid_selected_id_is_treated_like_busy(
         ),
         pytest.raises(HTTPException) as exc_info,
     ):
-        await reserve_agent_waiting_if_needed("some task")
+        await reserve_agent_waiting_if_needed("some task", task_id="task-1")
 
     assert exc_info.value.status_code == 503
     assert "A suitable agent exists but none of the suitable agents became available" in exc_info.value.detail
@@ -319,7 +324,7 @@ async def test_reserve_waits_for_a_busy_agent_as_long_as_the_given_budget(
         ),
         pytest.raises(HTTPException) as exc_info,
     ):
-        await reserve_agent_waiting_if_needed("some task", max_wait_seconds=budget)
+        await reserve_agent_waiting_if_needed("some task", task_id="task-1", max_wait_seconds=budget)
 
     assert sleep.await_count == 2, "The wait must outlast the default task execution timeout"
     assert exc_info.value.status_code == 503
@@ -346,7 +351,7 @@ async def test_reserve_routes_once_while_the_registry_is_unchanged(
         ) as mock_route,
         pytest.raises(HTTPException),
     ):
-        await reserve_agent_waiting_if_needed("some task")
+        await reserve_agent_waiting_if_needed("some task", task_id="task-1")
 
     mock_route.assert_awaited_once()
 
@@ -375,9 +380,70 @@ async def test_reserve_routes_again_once_the_registry_changed(
         ) as mock_route,
         pytest.raises(HTTPException),
     ):
-        await reserve_agent_waiting_if_needed("some task")
+        await reserve_agent_waiting_if_needed("some task", task_id="task-1")
 
     assert mock_route.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_reserve_keeps_waiting_for_the_selected_agent_when_routing_turns_to_none_suitable(
+    clear_registry, mock_agent_card, mock_error_history, monkeypatch
+):
+    await agent_registry.register("test-id", mock_agent_card)
+    await agent_registry.update_status("test-id", AgentStatus.BUSY)
+    fake_time = MagicMock()
+    fake_time.time.return_value = 0
+    monkeypatch.setattr("orchestrator.main.time", fake_time)
+
+    async def free_the_agent(_seconds):
+        await agent_registry.update_status("test-id", AgentStatus.AVAILABLE)
+
+    monkeypatch.setattr("orchestrator.main.asyncio.sleep", free_the_agent)
+
+    with patch(
+        "orchestrator.main._route_task",
+        new_callable=AsyncMock,
+        side_effect=[
+            AgentSelected(agent_id="test-id", justification="Suitable."),
+            NoSuitableAgent(justification="Suitable but busy."),
+        ],
+    ):
+        agent_id, _ = await reserve_agent_waiting_if_needed("some task", task_id="task-1")
+
+    assert agent_id == "test-id"
+    mock_error_history.add.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_reserve_none_suitable_fails_fast_once_the_selected_agent_left_the_registry(
+    clear_registry, mock_agent_card, mock_error_history, monkeypatch
+):
+    await agent_registry.register("test-id", mock_agent_card)
+    await agent_registry.update_status("test-id", AgentStatus.BUSY)
+    fake_time = MagicMock()
+    fake_time.time.return_value = 0
+    monkeypatch.setattr("orchestrator.main.time", fake_time)
+
+    async def replace_the_agent(_seconds):
+        await agent_registry.remove("test-id")
+        await agent_registry.register("other-id", mock_agent_card)
+
+    monkeypatch.setattr("orchestrator.main.asyncio.sleep", replace_the_agent)
+
+    with (
+        patch(
+            "orchestrator.main._route_task",
+            new_callable=AsyncMock,
+            side_effect=[
+                AgentSelected(agent_id="test-id", justification="Suitable."),
+                NoSuitableAgent(justification="None suitable."),
+            ],
+        ),
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await reserve_agent_waiting_if_needed("some task", task_id="task-1")
+
+    assert exc_info.value.status_code == 404
 
 
 @pytest.mark.asyncio
@@ -480,6 +546,24 @@ async def test_health_check_skips_non_available(clear_registry, mock_agent_card)
 
 
 @pytest.mark.asyncio
+async def test_health_check_skips_an_agent_running_a_task_below_its_capacity(clear_registry):
+    card = AgentCard(
+        name="Knowledge Agent",
+        capabilities=AgentCapabilities(extensions=[AgentExtension(uri=TASK_CAPACITY_EXTENSION_URI)]),
+        supported_interfaces=[AgentInterface(protocol_binding="JSONRPC", url="http://localhost:8007")],
+    )
+    card.capabilities.extensions[0].params.update({"capacity": 4})
+    await agent_registry.register("knowledge-agent", card)
+    await agent_registry.reserve_task("knowledge-agent", "task-1")
+
+    with patch("orchestrator.main._check_agent_reachability", return_value=False) as mock_check:
+        await _health_check_agents()
+
+    mock_check.assert_not_called()
+    assert await agent_registry.get_status("knowledge-agent") == AgentStatus.AVAILABLE
+
+
+@pytest.mark.asyncio
 async def test_discover_agents_fetches_new(clear_registry, mock_agent_card):
     # Registry empty
 
@@ -547,7 +631,7 @@ async def test_concurrent_discovery_runs_register_an_agent_once(clear_registry):
 @pytest.mark.asyncio
 async def test_register_or_refresh_keeps_the_id_and_status_of_a_known_url(clear_registry):
     agent_id = await agent_registry.register_or_refresh("http://agent-host:8001", _card_at("http://agent-host:8001"))
-    await agent_registry.update_status(agent_id, AgentStatus.BUSY)
+    await agent_registry.reserve_task(agent_id, "task-1")
 
     refreshed_id = await agent_registry.register_or_refresh(
         "http://agent-host:8001", _card_at("http://agent-host:8001", name="Renamed Agent")
@@ -564,7 +648,7 @@ async def test_manual_discovery_revives_reachable_and_removes_unreachable_idle_a
     await agent_registry.update_status("up-broken", AgentStatus.BROKEN, BrokenReason.OFFLINE)
     await agent_registry.register("down-idle", _card_at("http://agent-host:8002"))
     await agent_registry.register("down-busy", _card_at("http://agent-host:8003"))
-    await agent_registry.update_status("down-busy", AgentStatus.BUSY)
+    await agent_registry.reserve_task("down-busy", "task-1")
 
     with (
         patch("orchestrator.main._discover_new_agents", AsyncMock(return_value=True)),
@@ -578,7 +662,7 @@ async def test_manual_discovery_revives_reachable_and_removes_unreachable_idle_a
     assert report == {"message": "1 agents reachable, 1 unreachable agents removed", "reachable": 1, "removed": 1}
     assert await agent_registry.get_status("up-broken") == AgentStatus.AVAILABLE
     assert not await agent_registry.contains("down-idle")
-    # A BUSY agent is never removed, even when it does not answer the probe.
+    # An agent that runs a task is never removed, even when it does not answer the probe.
     assert await agent_registry.get_status("down-busy") == AgentStatus.BUSY
 
 

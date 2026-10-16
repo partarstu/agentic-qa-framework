@@ -1,6 +1,6 @@
 {
   "label": "google-gla:gemini-3.8-flash",
-  "captured_at": "2026-10-01T20:51:58+00:00",
+  "captured_at": "2026-10-14T20:35:17+00:00",
   "story": {
     "key": "SMOKE-1",
     "id": "10001",
@@ -34,90 +34,57 @@
   "test_cases": [
     {
       "key": "SMOKE-T1",
-      "name": "Password reset via single-use link valid for 60 minutes",
-      "objective": "Verify that submitting a registered email address sends a single-use password-reset link valid for 60 minutes, the password can be reset, and the link cannot be reused.",
-      "precondition": "A user account with the email 'user@example.com' is registered in the system, and access to the corresponding email inbox is available.",
+      "name": "Verify password reset with valid single-use link within 60 minutes",
+      "objective": "Verify that submitting a registered email address on the 'Forgot password' form sends a single-use reset link valid within 60 minutes, which successfully resets the password and cannot be reused.",
+      "precondition": "Register a user account for registered.user@example.com through the sign-up form\nAccess to the email inbox for 'registered.user@example.com' is available.\nThe application is accessible.",
       "labels": [
         "automated",
         "ui"
       ],
-      "review_comments": "<h4>Test case review</h4><p>Review iterations: 2, stop reason: iteration_limit.</p><ul><li><b>[HIGH] unactioned expected result</b> (AC-1): In Step 4, the expected result asserts that the user can successfully log in with the new password and that authentication with the previous password fails, but the step&#x27;s action only covers submitting the new password form. Expected results must be directly caused by the action of that step; asserting login outcomes without performing the corresponding login actions leads to inconsistent execution by testers who lack instructions on how and where to verify authentication.<br>Suggested fix: Retain only the reset confirmation message check in Step 4&#x27;s expected result, and add subsequent actions/steps to navigate to the login screen, attempt login with the previous password to verify authentication failure, and log in with the new password to verify successful authentication.</li></ul><h4>Duplicate check</h4><p>No duplicate test cases found.</p>",
+      "review_comments": "<h4>Test case review</h4><p>Review iterations: 2, stop reason: iteration_limit.</p><ul><li><b>[HIGH] weak step and imprecise expected result</b> (AC-1): Step S3 represents the weakest step in the test case: its expected result vaguely states that &#x27;A confirmation message indicating that the password has been reset successfully and that the user can now log in with the new password is displayed&#x27;, which asserts that the user can now log in without actually verifying that the updated credentials work in the system, and fails to specify the concrete confirmation message or subsequent UI state. As a result, a tester could execute the verification inconsistently or fail to detect defects where the backend did not actually update the password.<br>Suggested fix: Update step S3 to make its expected result more precise by specifying the concrete confirmation message and UI state transition (e.g., &#x27;A confirmation message stating that the password has been successfully reset is displayed, and the user is redirected to the login page&#x27;) to ensure unambiguous verification of the reset action.</li><li><b>[HIGH] weak step and missing expected result</b> (AC-1): Step 1 is the weakest step of the test case because it conflates submitting the &#x27;Forgot password&#x27; form with opening the reset email (&#x27;Request a password-reset link for registered.user@example.com and open the reset email&#x27;) and completely omits verifying the web application&#x27;s response upon form submission. AC-1 specifies submitting a registered email address on the &#x27;Forgot password&#x27; form. Without explicitly verifying the immediate feedback on the web page (such as a confirmation notice indicating that a reset email has been sent), a tester could execute the verification inconsistently or fail to detect defects on the Forgot Password confirmation screen before navigating to the email client.<br>Suggested fix: Modify Step 1 to explicitly describe the submission actions on the &#x27;Forgot password&#x27; form (entering the registered email address and clicking the submit button) and verify the expected UI response (displaying a confirmation message confirming that the reset email has been dispatched) prior to opening the received email.</li></ul><h4>Duplicate check</h4><p>No duplicate test cases found.</p>",
       "steps": [
         {
-          "description": "Navigate to the 'Forgot password' page.",
-          "expected_result": "The 'Forgot password' page is displayed with an email address input field and a form submission control.",
-          "test_data": ""
+          "description": "Request a password-reset link for registered.user@example.com and open the reset email",
+          "expected_result": "The password-reset email with a single-use reset link is open",
+          "test_data": "Email: registered.user@example.com"
         },
         {
-          "description": "Enter the registered email address into the email address field and submit the form.",
-          "expected_result": "A confirmation notification is displayed, and an email containing a password-reset link is sent to the provided email address.",
-          "test_data": "email address: user@example.com"
+          "description": "Open the password reset link from the received email after the specified elapsed time.",
+          "expected_result": "The password reset form is displayed.",
+          "test_data": "elapsed time: 59 minutes"
         },
         {
-          "description": "Open the password-reset link from the received email within the specified elapsed time.",
-          "expected_result": "The password reset page is displayed with input fields for entering and confirming a new password.",
-          "test_data": "link validity duration: 60 minutes<br>elapsed time: 59 minutes"
+          "description": "Enter the new password into the password fields and submit the reset form.",
+          "expected_result": "A confirmation message indicating that the password has been reset successfully and that the user can now log in with the new password is displayed.",
+          "test_data": "new password: NewPassword123!<br>confirm password: NewPassword123!"
         },
         {
-          "description": "Enter the new password and confirmation password into the respective fields and submit the form.",
-          "expected_result": "A confirmation message indicating that the password has been reset successfully is displayed, the user can successfully log in using the provided new password, and authentication with the previous password fails.",
-          "test_data": "confirm new password: NewPassword123!<br>new password: NewPassword123!"
-        },
-        {
-          "description": "Open the previously used password-reset link again.",
-          "expected_result": "The password reset page is not displayed, and an error message indicating that the reset link has already been used is shown.",
+          "description": "Reopen the password reset link used in the previous steps.",
+          "expected_result": "An error message indicating that the reset link has already been used is displayed and the password reset form is not accessible.",
           "test_data": ""
         }
       ]
     },
     {
       "key": "SMOKE-T2",
-      "name": "Expired password reset link handling after 60 minutes",
-      "objective": "Verify that opening a password-reset link more than 60 minutes after it was sent displays an expiration message and that clicking 'Request a new link' redirects to the 'Forgot password' form.",
-      "precondition": "A password-reset email has been generated and sent to the user, and more than 60 minutes have elapsed since the link was issued.",
+      "name": "Verify expiration of password reset link after 60 minutes",
+      "objective": "Verify that opening a password reset link more than 60 minutes after it was sent displays an expiration message and a 'Request a new link' button that redirects back to the 'Forgot password' page.",
+      "precondition": "A user account with email 'user@example.com' is registered in the system.\nAccess to the email inbox for 'user@example.com' is available.\nA password-reset email with a reset link has already been sent to 'user@example.com'.",
       "labels": [
         "automated",
         "ui"
       ],
-      "review_comments": "<h4>Test case review</h4><p>Review iterations: 2, stop reason: iteration_limit.</p><ul><li><b>[HIGH] imprecise expected result</b> (AC-2): In step 2, the expected result states that &#x27;the URL path reflects the forgot password page&#x27;, which is vague and lacks an explicit URL path (e.g. &#x27;/forgot-password&#x27;). This ambiguity allows testers to verify redirection inconsistently or overlook routing defects.<br>Suggested fix: Update the expected result of step 2 to specify the concrete expected URL path (e.g. &#x27;/forgot-password&#x27;) rather than using the generic phrase &#x27;the URL path reflects the forgot password page&#x27;.</li></ul><h4>Duplicate check</h4><p>No duplicate test cases found.</p>",
+      "review_comments": "<h4>Test case review</h4><p>Review iterations: 2, stop reason: iteration_limit.</p><ul><li><b>[HIGH] imprecise expected result</b> (AC-2): Step 2 is the weakest step of the test case because its expected result (&#x27;The user is redirected to the \\&#x27;Forgot password\\&#x27; page, displaying the email address input field and the submit button ready for entering an email address.&#x27;) lacks precision and deviates from the recorded procedure [proc-submit-forgot-password] &#x27;Submit the email address on the \\&#x27;Forgot password\\&#x27; form&#x27;. The expected result refers vaguely to &#x27;the submit button ready for entering an email address&#x27;, conflating the input field with the button and omitting the button&#x27;s exact label. According to [proc-submit-forgot-password], the button on the &#x27;Forgot password&#x27; page is labeled &#x27;Send reset link&#x27;. As a consequence, testers may verify the destination page inconsistently or fail to notice an incorrectly labeled submit button.<br>Suggested fix: Modify the expected result of Step 2 to: &#x27;The user is redirected to the \\&#x27;Forgot password\\&#x27; page, displaying an empty email address input field and the \\&#x27;Send reset link\\&#x27; button.&#x27;</li><li><b>[HIGH] imprecise expected result</b> (AC-2): Step 1 is the weakest step of the test case because while its expected result checks for the message &#x27;This reset link has expired&#x27; and the &#x27;Request a new link&#x27; button, it fails to verify that the password reset form and input fields (new password and confirm password) are absent or inaccessible. AC-2 requires link expiration after 60 minutes; omitting the verification that the reset form cannot be accessed or submitted allows a critical defect—where the form remains functional despite the expiration notice—to be overlooked by testers.<br>Suggested fix: Update the expected result of Step 1 to explicitly confirm that the password reset form and its input fields are not displayed or accessible, in addition to verifying the presence of the message &#x27;This reset link has expired&#x27; and the &#x27;Request a new link&#x27; button.</li></ul><h4>Duplicate check</h4><p>No duplicate test cases found.</p>",
       "steps": [
         {
-          "description": "Open the received password-reset link after the specified elapsed time.",
-          "expected_result": "The page displays the message 'This reset link has expired' and a 'Request a new link' button.",
-          "test_data": "elapsed time: 61 minutes<br>link validity duration: 60 minutes"
+          "description": "In the email inbox, wait until the specified elapsed time has passed since the password-reset email was sent, open the email, and click the password-reset link.",
+          "expected_result": "The page displays the message 'This reset link has expired' and the 'Request a new link' button is visible.",
+          "test_data": "Elapsed time since email was sent: 61 minutes"
         },
         {
-          "description": "Click the specified button.",
-          "expected_result": "The user is redirected to the 'Forgot password' form: the URL path reflects the forgot password page, and the page displays the 'Forgot password' heading, email input field, and submit button.",
-          "test_data": "button: Request a new link"
-        }
-      ]
-    },
-    {
-      "key": "SMOKE-T3",
-      "name": "Password reset request rate limit of 3 requests per account per hour",
-      "objective": "Verify that a registered user can submit up to 3 password reset requests per account within an hour, and that attempting a 4th request within the same one-hour window is throttled or rejected with a rate limit message and no email sent.",
-      "precondition": "A user account with the email 'user@example.com' is registered in the system, and access to the corresponding email inbox is available.",
-      "labels": [
-        "security",
-        "automated"
-      ],
-      "review_comments": "<h4>Test case review</h4><p>Review iterations: 2, stop reason: iteration_limit.</p><ul><li><b>[HIGH] ambiguous step</b> (AC-1): Step 3 is the weakest step of the test case: its action states &#x27;Submit another password reset request for the registered email address within the specified time window&#x27;, but it omits the necessary interactions to reach and submit the form again (navigating back to the &#x27;Forgot password&#x27; page and entering the email address) after Step 2 ended on a confirmation notification. In addition, the action refers to &#x27;the specified time window&#x27;, but Step 3&#x27;s test data omits any time constraint parameter relative to the first request. Consequently, testers may execute the step inconsistently or fail to execute the 4th attempt within the 1-hour rate limit window.<br>Suggested fix: Update Step 3 action to: &#x27;Navigate to the &#x27;Forgot password&#x27; page, enter the registered email address into the input field, and submit the 4th password reset request within the specified time window from the first request.&#x27; and add &#x27;time window: within 60 minutes of the first request&#x27; to Step 3 test data.</li><li><b>[HIGH] missing precondition</b> (AC-1): The test case preconditions verify a rate limit of at most 3 requests per account per hour, but do not state that the account has not requested any password resets within the past 60 minutes. If prior reset requests occurred for &#x27;user@example.com&#x27; in the hour before testing, Step 2 will trigger rate limiting prematurely, causing false test failures and inconsistent execution.<br>Suggested fix: Add a precondition stating: &#x27;The registered user account has no password reset requests recorded within the last 60 minutes (rate limit counter is reset).&#x27;</li></ul><h4>Duplicate check</h4><p>No duplicate test cases found.</p>",
-      "steps": [
-        {
-          "description": "Navigate to the 'Forgot password' page.",
-          "expected_result": "The 'Forgot password' page is displayed with an email address input field and a form submission control.",
+          "description": "Click the 'Request a new link' button.",
+          "expected_result": "The user is redirected to the 'Forgot password' page, displaying the email address input field and the submit button ready for entering an email address.",
           "test_data": ""
-        },
-        {
-          "description": "Enter the registered email address into the input field and submit the password reset request for the specified number of times within the specified time window.",
-          "expected_result": "Each submitted request is processed successfully with a confirmation notification displayed, and a password-reset email is dispatched to the specified email address for each submission.",
-          "test_data": "email address: user@example.com<br>number of requests: 3<br>time window: 1 hour"
-        },
-        {
-          "description": "Submit another password reset request for the registered email address within the specified time window.",
-          "expected_result": "The request is rejected with a rate limit error message, and no password-reset email is dispatched to the specified email address.",
-          "test_data": "email address: user@example.com<br>request attempt: 4th"
         }
       ]
     }

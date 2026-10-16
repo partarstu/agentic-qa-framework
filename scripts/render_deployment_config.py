@@ -78,7 +78,7 @@ def render(
 
     placeholders = {"{project}": project, "{region}": region, "{version}": str(resolved_version)}
     rendered_env = {key: _expand(value, placeholders) for key, value in sorted(env.items()) if value}
-    secrets = _secrets(manifest, service, service_config)
+    secrets = _secrets(manifest, service, service_config, environment_config)
     return RenderedService(
         env=rendered_env, secrets=secrets, marker=_marker(str(resolved_version), rendered_env, secrets)
     )
@@ -122,14 +122,24 @@ def _applicable_overrides(
     }
 
 
-def _secrets(manifest: Mapping, service: str, service_config: Mapping) -> dict[str, str]:
-    """The service's secrets by env key; every referenced secret name must be declared."""
+def _secrets(
+    manifest: Mapping, service: str, service_config: Mapping, environment_config: Mapping
+) -> dict[str, str]:
+    """The service's secrets by env key, an optional one only where the environment enables it."""
     declared = set(manifest.get("secrets", []))
+    optional = set(manifest.get("optional_secrets", []))
+    enabled = set(environment_config.get("secrets", []))
+    if not_optional := sorted(enabled - optional):
+        raise ValueError(f"The environment enables {not_optional[0]!r}, which is not an optional secret.")
     secrets = _strings(service_config.get("secrets", {}))
     for secret_name in secrets.values():
         if secret_name not in declared:
             raise ValueError(f"Service {service!r} references the undeclared secret {secret_name!r}.")
-    return secrets
+    return {
+        env_key: secret_name
+        for env_key, secret_name in secrets.items()
+        if secret_name not in optional or secret_name in enabled
+    }
 
 
 def _strings(values: Mapping) -> dict[str, str]:

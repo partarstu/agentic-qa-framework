@@ -21,6 +21,7 @@ you information according to the following rules:
     opened", "user is logged into the application", "the account has been created" etc.), which are not yet a part of
     this test case preconditions, generate such preconditions and add them to this test case.
   - Otherwise this test case doesn't need any preconditions.
+  - Write every precondition on its own line, one precondition per line.
 - The test steps for this test case must be taken over from the provided to you test step sequence, except for the test
   steps which duplicate this test case preconditions (such test steps are redundant).
 - All test steps in this test case must be sequenced in a chronological and workflow-based order so that:

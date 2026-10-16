@@ -5,8 +5,10 @@
 """Token usage and estimated cost captured from a single agent run."""
 
 from contextvars import ContextVar
+from typing import Self
 
-from pydantic import Field
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+from pydantic.alias_generators import to_camel
 from pydantic_ai.usage import RunUsage
 
 import config
@@ -70,6 +72,16 @@ class TokenUsage(JsonSerializableModel):
             operations=entries,
         )
 
+    @classmethod
+    def from_execution_agent_usage(cls, usage_json: str | bytes) -> Self:
+        """Return the totals of the `token_usage` artifact of an execution agent, whose input token counts include the cached ones.
+
+        Raises:
+            ValidationError: When the artifact is not a list of usage records.
+        """
+        entries = [record.to_operation_usage() for record in _EXECUTION_AGENT_USAGE.validate_json(usage_json)]
+        return cls.from_operations(entries, ", ".join(sorted({entry.model_name for entry in entries})))
+
     def summary_line(self) -> str:
         """One-line, log-friendly summary of the consumed tokens and estimated cost."""
         cost = f"${self.cost_usd:.4f}" if self.cost_usd is not None else "n/a"
@@ -91,6 +103,34 @@ class OperationUsage(JsonSerializableModel):
     output_tokens: int = 0
     tool_calls: int = 0
     cost_usd: float | None = None
+
+
+class ExecutionAgentUsageRecord(BaseModel):
+    """The usage of one sub-agent operation in the `token_usage` artifact of an execution agent."""
+
+    model_config = ConfigDict(alias_generator=to_camel)
+
+    operation_name: str
+    response_model: str
+    input_tokens: int = Field(ge=0)
+    output_tokens: int = Field(ge=0)
+    cached_tokens: int = Field(ge=0)
+
+    def to_operation_usage(self) -> OperationUsage:
+        uncached_input_tokens = max(0, self.input_tokens - self.cached_tokens)
+        return OperationUsage(
+            operation=self.operation_name,
+            model_name=self.response_model,
+            uncached_input_tokens=uncached_input_tokens,
+            cache_read_tokens=self.cached_tokens,
+            output_tokens=self.output_tokens,
+            cost_usd=estimate_cost_usd(
+                uncached_input_tokens, self.output_tokens, self.response_model, cache_read_tokens=self.cached_tokens
+            ),
+        )
+
+
+_EXECUTION_AGENT_USAGE = TypeAdapter(list[ExecutionAgentUsageRecord])
 
 
 class OperationMeter:

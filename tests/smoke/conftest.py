@@ -33,6 +33,9 @@ QDRANT_RECORDED_URL = os.environ.get("SMOKE_QDRANT_RECORDED_URL", "http://localh
 CONFLUENCE_RECORDED_URL = os.environ.get("SMOKE_CONFLUENCE_RECORDED_URL", "http://localhost:8095/__recorded")
 SHAREPOINT_RECORDED_URL = os.environ.get("SMOKE_SHAREPOINT_RECORDED_URL", "http://localhost:8097/__recorded")
 LLM_MOCK_RECORDED_URL = os.environ.get("SMOKE_LLM_MOCK_RECORDED_URL", "http://localhost:8099/__recorded")
+PROCEDURE_KNOWLEDGE_RECORDED_URL = os.environ.get(
+    "SMOKE_PROCEDURE_KNOWLEDGE_RECORDED_URL", "http://localhost:8007/__recorded"
+)
 
 # Fixed test credentials, matching docker-compose.smoke.yml.
 ORCHESTRATOR_API_KEY = "smoke-api-key"
@@ -96,6 +99,8 @@ PROMPT_OVERRIDE_MARKER = "OVERRIDE-7f3d-active"
 
 # Agents the /execute-tests + incident-creation flow needs (beyond the core four).
 EXECUTION_FLOW_AGENT_NAMES: set[str] = {EXECUTION_AGENT_NAME, config.IncidentCreationAgentConfig.OWN_NAME}
+# Name the mock knowledge agent registers under; must match mocks/procedure_knowledge_agent.PROCEDURE_KNOWLEDGE_AGENT_NAME.
+PROCEDURE_KNOWLEDGE_AGENT_NAME = "Smoke Procedure Knowledge Agent"
 
 # The orchestrator startup + initial agent discovery can take a while to settle.
 ORCHESTRATOR_READY_TIMEOUT = 120.0
@@ -175,7 +180,9 @@ def agent_models(http_client: httpx.Client, auth_headers: dict[str, str]) -> dic
 @pytest.fixture(scope="session")
 def all_agents_ready(http_client: httpx.Client, auth_headers: dict[str, str]) -> None:
     """Wait once until every agent the flows need is registered and healthy, and runs on the LLM mock."""
-    wait_for_agents_healthy(http_client, auth_headers, EXPECTED_AGENT_NAMES | EXECUTION_FLOW_AGENT_NAMES)
+    wait_for_agents_healthy(
+        http_client, auth_headers, EXPECTED_AGENT_NAMES | EXECUTION_FLOW_AGENT_NAMES | {PROCEDURE_KNOWLEDGE_AGENT_NAME}
+    )
     models = agent_models(http_client, auth_headers)
     if set(models) != MODEL_DRIVEN_AGENT_NAMES or set(models.values()) != {MOCK_MODEL_NAME}:
         pytest.fail(

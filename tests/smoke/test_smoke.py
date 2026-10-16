@@ -23,6 +23,10 @@ reached a mocked boundary, read back from its ``/__recorded`` endpoint:
 * Test-case generation  -> real test cases (name + steps) reached Zephyr.
 * Test-case generation  -> the created test cases were linked to the seeded story's numeric id.
 * Test-case classification -> the classification labels reached Zephyr for every saved test case.
+* Procedure knowledge   -> every draft and rebuilt test case reached the knowledge agent mock through the orchestrator's
+                           delegation endpoint, as a task of that agent with its declared capacity and reported usage;
+                           the reviews carry the selected procedures, and the saved test cases reuse them verbatim,
+                           with the two steps of one recorded workflow merged into one.
 * Requirements review   -> a Confluence-only configuration queries only the Confluence collection, with the
                            source pinned; the agent's log lines carry its name and task id.
 * Requirements review   -> the usage artifact meters the three focused reviews the configured count allows and the merge run.
@@ -78,6 +82,8 @@ from tests.smoke.conftest import (
     LOGIN_RATE_LIMIT_ATTEMPTS,
     ORCHESTRATOR_URL,
     ORCHESTRATOR_VERSION,
+    PROCEDURE_KNOWLEDGE_AGENT_NAME,
+    PROCEDURE_KNOWLEDGE_RECORDED_URL,
     PROMPT_OVERRIDE_MARKER,
     QDRANT_RECORDED_URL,
     REVIEW_COMPLETE_STATUS,
@@ -96,7 +102,13 @@ from tests.smoke.conftest import (
     TICKETS_COLLECTION_NAME,
     ZEPHYR_RECORDED_URL,
 )
-from tests.smoke.mocks.llm_mock import CLASSIFICATION_LABELS, FOCUS_AREA_FINDINGS, TEST_CASE_NAMES
+from tests.smoke.mocks.llm_mock import CLASSIFICATION_LABELS, FOCUS_AREA_FINDINGS, TEST_CASE_NAMES, TEST_STEPS
+from tests.smoke.mocks.procedure_knowledge_agent import (
+    PRECONDITION_PROCEDURE,
+    TASK_CAPACITY,
+    TOKEN_USAGE,
+    WORKFLOW_PROCEDURE,
+)
 from tests.smoke.recordings import wait_for_any_recorded, wait_for_recorded
 
 pytestmark = pytest.mark.smoke
@@ -118,6 +130,7 @@ SCRIPTED_OPERATIONS = {
     "test_steps_generation",
     "test_case_creation",
     "test_case_fixing",
+    "knowledge_aware_test_case_generation",
     "test_case_review",
     "test_suite_review",
     "test_case_duplicate_judgement",
@@ -390,6 +403,7 @@ def test_usage_artifact_carries_per_operation_counters(
         "test_suite_reviewer",
         # the forced findings of the smoke rubric override make every review blocking, so the fixes always run.
         "test_case_fixer",
+        "knowledge_aware_test_case_generator",
     }
     assert {"main", *delegate_operations} <= set(by_name), f"Operations: {operations}"
     for operation in by_name.values():
@@ -598,6 +612,82 @@ def test_design_checked_each_final_test_case_once_for_duplicates_in_its_project(
         f"Expected exactly one duplicate search per saved test case. "
         f"Saved: {generated_keys}, searched drafts: {searched_drafts}"
     )
+
+
+def _step_actions(knowledge_request: dict) -> list[str]:
+    return [step["action"] for step in knowledge_request["steps"]]
+
+
+def test_knowledge_agent_received_the_drafts_and_the_rebuilt_test_cases_through_the_orchestrator(
+    test_case_flow_response: httpx.Response, http_client: httpx.Client
+) -> None:
+    """The design asks for the recorded procedures of every generated draft, and of the test cases rebuilt from them
+    before each review and after each fix: one request per test case in generation, both reviews and the fix."""
+    rebuilt_actions = [WORKFLOW_PROCEDURE.description]
+    requests = wait_for_recorded(
+        http_client, PROCEDURE_KNOWLEDGE_RECORDED_URL, lambda d: len(d.get("requests", [])) >= 4 * len(TEST_STEPS)
+    ).get("requests", [])
+    for ac_id, steps in TEST_STEPS.items():
+        drafts = [
+            r for r in requests if r["name"] == TEST_CASE_NAMES[ac_id] and _step_actions(r) == [s.action for s in steps]
+        ]
+        assert len(drafts) == 1, f"The draft of {ac_id} reached the knowledge agent {len(drafts)} time(s): {requests}"
+    rebuilt = [r for r in requests if _step_actions(r) == rebuilt_actions]
+    assert len(rebuilt) == 3 * len(TEST_STEPS), (
+        f"Expected the rebuilt test cases in both reviews and the fix: {requests}"
+    )
+    for request in rebuilt:
+        assert request["preconditions"] == [PRECONDITION_PROCEDURE.description], request
+    assert len(requests) == 4 * len(TEST_STEPS), requests
+
+
+def test_delegated_knowledge_tasks_are_in_the_task_history_with_their_usage(
+    test_case_flow_response: httpx.Response, http_client: httpx.Client, auth_headers: dict[str, str]
+) -> None:
+    """The orchestrator runs every delegated request as a task of the knowledge agent, up to its declared capacity,
+    and records the usage of the Java agents' token_usage artifact on it."""
+    requests = http_client.get(PROCEDURE_KNOWLEDGE_RECORDED_URL).json()["requests"]
+    tasks = _completed_tasks_of(http_client, auth_headers, PROCEDURE_KNOWLEDGE_AGENT_NAME)
+    assert len(tasks) == len(requests), f"{len(requests)} delegated request(s), but completed tasks: {tasks}"
+    for task in tasks:
+        usage = task.get("token_usage") or {}
+        assert {operation["operation"] for operation in usage.get("operations", [])} == {
+            record["operationName"] for record in TOKEN_USAGE
+        }, usage
+        assert usage["input_tokens"] == sum(record["inputTokens"] for record in TOKEN_USAGE), usage
+        assert usage["cache_read_tokens"] == sum(record["cachedTokens"] for record in TOKEN_USAGE), usage
+        assert usage["output_tokens"] == sum(record["outputTokens"] for record in TOKEN_USAGE), usage
+    response = http_client.get(f"{ORCHESTRATOR_URL}/api/dashboard/agents", headers=auth_headers)
+    assert response.status_code == 200, response.text
+    [agent] = [agent for agent in response.json() if agent.get("name") == PROCEDURE_KNOWLEDGE_AGENT_NAME]
+    assert agent["task_capacity"] == TASK_CAPACITY, agent
+
+
+def test_review_requests_carry_the_selected_procedures(
+    test_case_flow_response: httpx.Response, http_client: httpx.Client
+) -> None:
+    """Every per-test-case review gets the procedures selected for the rebuilt test case, rendered as trees."""
+    reviews = _model_requests(http_client, "test_case_review")
+    assert reviews, "The LLM mock recorded no test case review request."
+    for procedure in (PRECONDITION_PROCEDURE, WORKFLOW_PROCEDURE):
+        rendered = f"- [{procedure.id}] {procedure.description}"
+        without = [review for review in reviews if not any(rendered in text for text in review["user"])]
+        assert not without, f"{len(without)} review request(s) lack the selected procedure '{rendered}'."
+
+
+def test_saved_test_cases_reuse_the_recorded_procedures_verbatim(
+    test_case_flow_response: httpx.Response, http_client: httpx.Client
+) -> None:
+    """The saved test cases take the reused procedures' descriptions verbatim, and the two steps selected together for
+    one recorded workflow became one step."""
+    data = wait_for_recorded(http_client, ZEPHYR_RECORDED_URL, lambda d: bool(d.get("test_cases")))
+    test_cases = data.get("test_cases", [])
+    assert test_cases, f"No generated test case reached Zephyr at all. Recorded: {data}"
+    for test_case in test_cases:
+        assert test_case.get("precondition") == PRECONDITION_PROCEDURE.description, test_case
+        assert [step.get("description") for step in test_case.get("steps", [])] == [WORKFLOW_PROCEDURE.description], (
+            test_case
+        )
 
 
 # --- Test execution / incident-creation flow -------------------------------------------
@@ -1229,7 +1319,7 @@ def test_test_case_design_requests_run_with_thinking_on_at_the_default_level(
     requests = _model_requests(http_client, "test_case_design")
     assert requests, "The LLM mock recorded no test case design request."
     for request in requests:
-        assert request["reasoning_effort"] == "low", request
+        assert request["reasoning_effort"] == "medium", request
         assert (request["temperature"], request["top_p"], request["presence_penalty"]) == (1.0, 0.95, 0.5), request
         assert "chat_template_kwargs" not in request, request
 

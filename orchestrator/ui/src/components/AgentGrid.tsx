@@ -169,10 +169,10 @@ export function AgentGrid({ agents, isLoading, liveTaskStates }: AgentGridProps)
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {agents.map((agent) => {
-            const liveState = agent.current_task
-              ? liveTaskStates[agent.current_task.task_id]
-              : undefined;
-            const currentActivity = liveState?.current_activity ?? null;
+            const currentActivities = agent.running_tasks.flatMap((task) => {
+              const activity = liveTaskStates[task.task_id]?.current_activity;
+              return activity ? [{ taskId: task.task_id, activity }] : [];
+            });
 
             return (
               <div
@@ -200,22 +200,28 @@ export function AgentGrid({ agents, isLoading, liveTaskStates }: AgentGridProps)
 
                 {agent.description && <AgentDescription text={agent.description} />}
 
-                {agent.current_task && (
+                {agent.running_tasks.length > 0 && (
                   <div className="mt-3 p-2 bg-amber-500/10 rounded border border-amber-500/20">
-                    <p className="text-xs text-amber-300 font-medium">Current Task:</p>
-                    <p className="text-xs text-slate-300 truncate">{agent.current_task.description}</p>
+                    <p className="text-xs text-amber-300 font-medium">
+                      {agent.task_capacity > 1
+                        ? `Running Tasks (${agent.running_tasks.length}/${agent.task_capacity}):`
+                        : 'Current Task:'}
+                    </p>
+                    {agent.running_tasks.map((task) => (
+                      <p key={task.task_id} className="text-xs text-slate-300 truncate">{task.description}</p>
+                    ))}
                   </div>
                 )}
 
-                {currentActivity && (
-                  <div className="mt-2 p-2 bg-indigo-500/10 rounded border border-indigo-500/20">
+                {currentActivities.map(({ taskId, activity }) => (
+                  <div key={taskId} className="mt-2 p-2 bg-indigo-500/10 rounded border border-indigo-500/20">
                     <p className="text-xs text-indigo-300 font-medium flex items-center gap-1">
                       <Loader2 className="w-3 h-3 animate-spin" />
                       Activity
                     </p>
-                    <p className="text-xs text-slate-300 mt-0.5 break-words">{currentActivity}</p>
+                    <p className="text-xs text-slate-300 mt-0.5 break-words">{activity}</p>
                   </div>
-                )}
+                ))}
 
                 {agent.status === 'BROKEN' && agent.broken_reason && (
                   <div className="mt-3 p-2 bg-red-500/10 rounded border border-red-500/20">

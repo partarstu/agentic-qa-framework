@@ -57,7 +57,7 @@ export interface AgentCapabilities {
   stateTransitionHistory?: boolean;
 }
 
-export interface CurrentTask {
+export interface RunningTask {
   task_id: string;
   description: string;
   start_time: string;
@@ -71,7 +71,8 @@ export interface AgentInfo {
   url: string;
   status: 'AVAILABLE' | 'BUSY' | 'BROKEN';
   capabilities: AgentCapabilities | null;
-  current_task: CurrentTask | null;
+  running_tasks: RunningTask[];
+  task_capacity: number;
   broken_reason: 'OFFLINE' | 'TASK_STUCK' | null;
   stuck_task_id: string | null;
 }

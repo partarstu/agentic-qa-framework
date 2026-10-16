@@ -120,6 +120,18 @@
           "contains": {
             "properties": {
               "unique-id": {
+                "const": "procedure-knowledge-agent"
+              }
+            },
+            "required": [
+              "unique-id"
+            ]
+          }
+        },
+        {
+          "contains": {
+            "properties": {
+              "unique-id": {
                 "const": "rag-sync-job"
               }
             },
@@ -280,6 +292,40 @@
             "properties": {
               "unique-id": {
                 "const": "rel-orchestrator-routes-execution-tasks"
+              },
+              "controls": {
+                "required": [
+                  "execution-agent-bearer-token"
+                ]
+              }
+            },
+            "required": [
+              "controls"
+            ]
+          }
+        },
+        {
+          "contains": {
+            "properties": {
+              "unique-id": {
+                "const": "rel-test-case-design-orchestrator-delegation"
+              },
+              "controls": {
+                "required": [
+                  "internal-service-api-key"
+                ]
+              }
+            },
+            "required": [
+              "controls"
+            ]
+          }
+        },
+        {
+          "contains": {
+            "properties": {
+              "unique-id": {
+                "const": "rel-orchestrator-delegates-procedure-knowledge"
               },
               "controls": {
                 "required": [

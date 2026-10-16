@@ -2,8 +2,10 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx2
 import pytest
 from fastapi import HTTPException
 from pydantic import BaseModel
@@ -336,6 +338,61 @@ async def test_qwen_request_without_a_thinking_level_carries_the_model_card_samp
         "max_tokens": 4096,
         "extra_body": {"chat_template_kwargs": {"enable_thinking": False}},
     }
+
+
+async def _claude_request_body(thinking_level: ThinkingEffort | None, answer: dict) -> dict:
+    """Run an agent on Haiku 5.5 and return the body its Anthropic client sent."""
+    bodies = []
+
+    def handle(request: httpx2.Request) -> httpx2.Response:
+        bodies.append(json.loads(request.content))
+        return httpx2.Response(
+            200,
+            json={
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-haiku-5-5",
+                "content": [answer],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+
+    client = httpx2.AsyncClient(transport=httpx2.MockTransport(handle))
+    # A cap above the SDK's non-streaming limit would make pydantic-ai stream the request.
+    with (
+        patch("common.model_factory._retry_http_client", return_value=client),
+        patch("config.ANTHROPIC_API_KEY", "test-key"),
+    ):
+        agent = CustomLlmWrapper.create_agent(
+            "anthropic:claude-haiku-5-5", _Verdict, thinking_level=thinking_level, max_output_tokens=4096
+        )
+    with patch("config.PROMPT_INJECTION_CHECK_ENABLED", False):
+        result = await agent.run("go")
+    assert result.output == _Verdict(verdict="done")
+    (body,) = bodies
+    return body
+
+
+@pytest.mark.asyncio
+async def test_thinking_claude_answers_a_structured_output_natively_instead_of_through_a_forced_tool():
+    """A forced tool choice makes Claude answer without thinking."""
+    body = await _claude_request_body("medium", {"type": "text", "text": '{"verdict": "done"}'})
+
+    assert body["thinking"] == {"type": "adaptive"}
+    assert body.get("tool_choice", {}).get("type") not in ("any", "tool")
+    assert body["output_config"]["format"]["type"] == "json_schema"
+
+
+@pytest.mark.asyncio
+async def test_claude_without_thinking_keeps_the_forced_output_tool():
+    body = await _claude_request_body(
+        None, {"type": "tool_use", "id": "toolu_1", "name": "final_result", "input": {"verdict": "done"}}
+    )
+
+    assert body["thinking"] == {"type": "disabled"}
+    assert body["tool_choice"]["type"] == "any"
 
 
 def test_provided_settings_override_the_defaults_key_by_key(mock_wrapped_model):

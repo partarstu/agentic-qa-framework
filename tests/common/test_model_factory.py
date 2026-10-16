@@ -23,6 +23,7 @@ from common.model_factory import (
     _wait_body_retry_delay,
     build_claude_5_settings,
     build_model,
+    is_claude_5,
 )
 
 CLOUD_RUN_ENDPOINT = "https://qwen-3-8-123456.europe-west4.run.app/v1/"
@@ -344,6 +345,30 @@ def test_claude_5_settings_per_thinking_level():
         "anthropic_thinking": {"type": "adaptive"},
         "anthropic_effort": "xhigh",
     }
+
+
+def test_haiku_5_5_gets_claude_5_settings_on_the_anthropic_model():
+    assert is_claude_5("anthropic:claude-haiku-5-5")
+    assert isinstance(build_model("anthropic:claude-haiku-5-5"), AnthropicModel)
+    assert build_claude_5_settings("medium", None, "claude-haiku-5-5") == {
+        "anthropic_thinking": {"type": "adaptive"},
+        "anthropic_effort": "medium",
+    }
+
+
+@pytest.mark.parametrize("model_name", ["claude-opus-5-5", "anthropic:claude-sonnet-5-5", "claude-opus-5-7"])
+def test_opus_and_sonnet_from_5_5_on_fall_back_to_adaptive_low_without_a_thinking_level(model_name):
+    assert build_claude_5_settings(None, None, model_name) == {
+        "anthropic_thinking": {"type": "adaptive"},
+        "anthropic_effort": "low",
+    }
+
+
+@pytest.mark.parametrize(
+    "model_name", ["claude-opus-5", "claude-sonnet-5", "claude-haiku-5-5", "claude-opus-5-20260101"]
+)
+def test_claude_5_models_accepting_disabled_thinking_keep_it_disabled(model_name):
+    assert build_claude_5_settings(None, None, model_name) == {"anthropic_thinking": {"type": "disabled"}}
 
 
 def test_claude_5_settings_carry_max_tokens_only_when_set():

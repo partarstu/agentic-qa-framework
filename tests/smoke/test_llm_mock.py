@@ -10,7 +10,10 @@ import pytest
 from fastapi.testclient import TestClient
 
 import config
+from common.models import DesignedTestCase, KnowledgeAwareItem, KnowledgeAwareTestCase, TestStep
+from common.services.procedure_knowledge import precondition_lines, render_procedure_knowledge
 from tests.smoke.mocks import llm_mock
+from tests.smoke.mocks.procedure_knowledge_agent import PRECONDITION_PROCEDURE, WORKFLOW_PROCEDURE, select_procedures
 
 
 @pytest.fixture
@@ -86,6 +89,85 @@ def test_routing_reports_no_suitable_agent_through_its_own_tool(client: TestClie
 
     assert call["name"] == "final_result_NoSuitableAgent"
     assert set(call["arguments"]) == {"justification"}
+
+
+def test_routing_selects_the_knowledge_agent_for_the_procedure_knowledge_capability(client: TestClient) -> None:
+    schema = {"type": "object", "properties": {"justification": {}}, "required": ["justification"]}
+    registry = (
+        f"- ID: agent-1, Name: {config.RequirementsReviewAgentConfig.OWN_NAME}, Skills: review, Availability: available\n"
+        "- ID: agent-2, Name: Knowledge, Description: Provides the recorded procedures, Availability: available\n"
+    )
+    request = {
+        "model": "smoke-mock",
+        "messages": [
+            {
+                "role": "user",
+                "content": f'Target task description: "{config.TestCaseDesignAgentConfig.PROCEDURE_KNOWLEDGE_CAPABILITY}".'
+                f"\n\nThe list of all agents:\n{registry}",
+            }
+        ],
+        "tools": [
+            {"type": "function", "function": {"name": f"{llm_mock.OUTPUT_TOOL_NAME}_{name}", "parameters": schema}}
+            for name in ROUTING_TOOLS
+        ],
+    }
+
+    call = _answered_call(client, request)
+
+    assert call["name"] == "final_result_AgentSelected"
+    assert call["arguments"]["agent_id"] == "agent-2"
+
+
+def _draft(preconditions: str, steps: list[TestStep]) -> DesignedTestCase:
+    return DesignedTestCase(
+        key=None,
+        labels=[],
+        name="Reset link is emailed",
+        summary="Verifies AC-1.",
+        comment="",
+        preconditions=preconditions,
+        steps=steps,
+        parent_issue_key=None,
+        ac_ids=["AC-1"],
+    )
+
+
+def _rebuild(client: TestClient, draft: DesignedTestCase) -> KnowledgeAwareTestCase:
+    request = {
+        "preconditions": precondition_lines(draft),
+        "steps": [{"action": step.action} for step in draft.steps],
+    }
+    prompt = render_procedure_knowledge(draft, select_procedures(request))
+    call = _answered_call(client, _request(prompt, ["preconditions", "steps"]))
+    return KnowledgeAwareTestCase.model_validate(call["arguments"])
+
+
+def test_the_knowledge_aware_generator_reuses_the_selections_and_merges_the_steps_selected_together(
+    client: TestClient,
+) -> None:
+    draft = _draft("A user account is registered.", llm_mock.TEST_STEPS["AC-1"])
+
+    rebuilt = _rebuild(client, draft)
+
+    assert client.get("/__recorded").json()["requests"][0]["operation"] == "knowledge_aware_test_case_generation"
+    assert rebuilt.preconditions == [
+        KnowledgeAwareItem(procedure_id=PRECONDITION_PROCEDURE.id, text="A user account is registered.", covers=["P1"])
+    ]
+    [step] = rebuilt.steps
+    assert (step.procedure_id, step.covers) == (WORKFLOW_PROCEDURE.id, ["S1", "S2"])
+    assert step.test_data == ["Email: registered.user@example.com"]
+    assert step.expected_results == draft.steps[-1].expected_results
+
+
+def test_the_knowledge_aware_generator_keeps_a_step_without_a_selection(client: TestClient) -> None:
+    draft_step = TestStep(action="Open the profile page", expected_results="The profile is shown", test_data=[])
+
+    rebuilt = _rebuild(client, _draft("", [draft_step]))
+
+    assert rebuilt.preconditions == []
+    assert rebuilt.steps == [
+        KnowledgeAwareItem(text=draft_step.action, expected_results=draft_step.expected_results, covers=["S1"])
+    ]
 
 
 def test_the_sampling_and_thinking_fields_and_the_tool_fields_of_a_call_are_recorded(client: TestClient) -> None:

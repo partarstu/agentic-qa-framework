@@ -62,7 +62,8 @@ def mock_registry():
         mock.contains = AsyncMock()
         mock.get_valid_agents = AsyncMock()
         mock.get_broken_context = AsyncMock(return_value=(None, None))
-        mock.set_current_task = AsyncMock()
+        mock.reserve_task = AsyncMock()
+        mock.release_task = AsyncMock()
         yield mock
 
 
@@ -95,7 +96,8 @@ async def test_send_task_success(mock_registry):
         task = await _send_task_to_agent("input", "desc")
 
         assert task.status.state == TaskState.TASK_STATE_COMPLETED
-        mock_registry.update_status.assert_any_call("agent-1", AgentStatus.AVAILABLE)
+        assert mock_registry.release_task.await_args.args[0] == "agent-1"
+        mock_registry.update_status.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -216,7 +218,8 @@ async def test_no_time_left_after_the_wait_releases_the_agent_without_sending_th
         await _send_task_to_agent_with_message(new_text_message("input"), "desc", timeout_seconds=3300.0)
 
     assert exc.value.status_code == 503
-    mock_registry.update_status.assert_awaited_once_with("agent-1", AgentStatus.AVAILABLE)
+    assert mock_registry.release_task.await_args.args[0] == "agent-1"
+    mock_registry.update_status.assert_not_awaited()
     mock_create_client.assert_not_awaited()
 
 
@@ -277,6 +280,7 @@ async def test_cancellation_task_stuck_with_cancel(mock_registry):
 
     mock_registry.get_card.return_value = MagicMock()
     mock_registry.get_broken_context.return_value = (BrokenReason.TASK_STUCK, "task-123")
+    mock_registry.get_stuck_task_ids = AsyncMock(return_value=["task-123"])
 
     with patch("orchestrator.main._cancel_agent_task", new_callable=AsyncMock) as mock_cancel:
         mock_cancel.return_value = True
@@ -291,3 +295,21 @@ async def test_cancellation_task_stuck_with_cancel(mock_registry):
 
         mock_cancel.assert_called_once()
         mock_registry.update_status.assert_called_with("agent-1", AgentStatus.AVAILABLE)
+
+
+@pytest.mark.asyncio
+async def test_cancellation_task_cancels_every_stuck_task_of_an_agent(mock_registry):
+    await cancellation_queue.put(("agent-1", time.time()))
+    mock_registry.get_card.return_value = MagicMock()
+    mock_registry.get_broken_context.return_value = (BrokenReason.TASK_STUCK, "task-2")
+    mock_registry.get_stuck_task_ids = AsyncMock(return_value=["task-1", "task-2"])
+
+    with patch("orchestrator.main._cancel_agent_task", new_callable=AsyncMock, return_value=True) as mock_cancel:
+        task = asyncio.create_task(_retry_cancellation_task())
+        await asyncio.sleep(0.1)
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+    assert [call.args[1] for call in mock_cancel.await_args_list] == ["task-1", "task-2"]
+    mock_registry.update_status.assert_called_with("agent-1", AgentStatus.AVAILABLE)

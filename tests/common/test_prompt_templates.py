@@ -34,11 +34,13 @@ _PROMPTS = {
     "steps-generation": generation_prompts.StepsGenerationPrompt,
     "test-case-creation": generation_prompts.TestCaseCreationPrompt,
     "test-case-fixer": generation_prompts.TestCaseFixerPrompt,
+    "knowledge-aware-test-case-generator": generation_prompts.KnowledgeAwareTestCaseGeneratorPrompt,
     "test-case-review-with-attachments": review_prompts.TestCaseReviewWithAttachmentsPrompt,
     "test-case-duplicate-judge": review_prompts.TestCaseDuplicateJudgePrompt,
     "test-suite-review": review_prompts.TestSuiteReviewPrompt,
     "severity-classifier": review_prompts.SeverityClassifierFragment,
     "test-step-quality-criteria": review_prompts.TestStepQualityCriteriaFragment,
+    "procedure-knowledge-review": review_prompts.ProcedureKnowledgeReviewFragment,
 }
 
 _ORCHESTRATOR_TEMPLATES = [

@@ -6,10 +6,17 @@ from datetime import datetime
 from unittest.mock import MagicMock
 
 import pytest
-from a2a.types import AgentCard, AgentInterface
+from a2a.types import AgentCapabilities, AgentCard, AgentExtension, AgentInterface
 
 from orchestrator.dashboard_service import OrchestratorDashboardService
-from orchestrator.models import AgentRegistry, ErrorHistory, TaskHistory, TaskRecord, TaskStatus
+from orchestrator.models import (
+    TASK_CAPACITY_EXTENSION_URI,
+    AgentRegistry,
+    ErrorHistory,
+    TaskHistory,
+    TaskRecord,
+    TaskStatus,
+)
 
 
 @pytest.fixture
@@ -184,3 +191,35 @@ def test_parse_agent_logs_reads_structured_fields_through_the_shared_renderer(mo
     assert parsed[0].task_id == "remote-task"
     assert parsed[0].agent_id == "agent-1"
     assert parsed[0].to_dict()["agent_name"] == "UI Agent"
+
+
+@pytest.mark.asyncio
+async def test_get_agents_status_lists_every_running_task_and_the_capacity():
+    registry = AgentRegistry()
+    card = AgentCard(
+        name="Knowledge Agent",
+        capabilities=AgentCapabilities(extensions=[AgentExtension(uri=TASK_CAPACITY_EXTENSION_URI)]),
+        supported_interfaces=[AgentInterface(protocol_binding="JSONRPC", url="http://agent-host:8007")],
+    )
+    card.capabilities.extensions[0].params.update({"capacity": 3})
+    await registry.register("agent-1", card)
+    tasks = TaskHistory()
+    for task_id in ("t1", "t2"):
+        await tasks.add(
+            TaskRecord(
+                task_id=task_id,
+                agent_id="agent-1",
+                agent_name="Knowledge Agent",
+                description=f"select procedures {task_id}",
+                status=TaskStatus.RUNNING,
+                start_time=datetime.now(),
+            )
+        )
+        await registry.reserve_task("agent-1", task_id)
+    service = OrchestratorDashboardService(registry, tasks, ErrorHistory())
+
+    [agent] = await service.get_agents_status()
+
+    assert [task["description"] for task in agent["running_tasks"]] == ["select procedures t1", "select procedures t2"]
+    assert agent["task_capacity"] == 3
+    assert agent["status"] == "AVAILABLE"

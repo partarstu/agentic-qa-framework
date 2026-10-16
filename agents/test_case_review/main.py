@@ -23,6 +23,7 @@ from common.custom_llm_wrapper import CustomLlmWrapper
 from common.models import (
     DesignedTestCase,
     OverlappingTestCase,
+    ProcedureSelectionResult,
     TestCaseDesignSession,
     TestCaseDuplicateCheck,
     TestCaseDuplicateJudgement,
@@ -31,6 +32,7 @@ from common.models import (
     TestCaseReviewFindingAction,
     TestSuiteReview,
 )
+from common.services.procedure_knowledge import render_procedure_knowledge, try_select_procedures
 from common.services.test_case_index import IndexedTestCase, render_designed_test_case_block, render_test_case
 from common.services.vector_db_service import VectorDbService
 
@@ -100,11 +102,12 @@ class TestCaseReviewer:
             test_case_id for test_case_id in session.test_cases if test_case_id in session.changed_test_case_ids
         ]
         context_parts = await story_context_parts(session)
+        procedure_knowledge = await _procedure_knowledge(session, test_case_ids)
         logger.info("Reviewing %d new or changed test case(s).", len(test_case_ids))
 
         async def review(test_case_id: str) -> None:
             result = await self.review_agent.run(
-                [*context_parts, *_review_request(session, test_case_id)],
+                [*context_parts, *_review_request(session, test_case_id, procedure_knowledge.get(test_case_id))],
                 deps=session,
                 usage=usage,
                 usage_limits=usage_limits,
@@ -199,11 +202,41 @@ class TestCaseReviewer:
         return _validated_check(test_case_key, result.output, candidates)
 
 
-def _review_request(session: TestCaseDesignSession, test_case_id: str) -> list[str]:
-    """The test case under review and, for a fixed one, its previous version with the findings of that review."""
+async def _procedure_knowledge(session: TestCaseDesignSession, test_case_ids: list[str]) -> dict[str, str]:
+    """Render the recorded procedures selected for each test case for its review, or the note that they are missing."""
+    if not config.TestCaseDesignAgentConfig.PROCEDURE_KNOWLEDGE_ENABLED:
+        return {}
+    async with asyncio.TaskGroup() as task_group:
+        selecting = {
+            test_case_id: task_group.create_task(
+                try_select_procedures(
+                    session.test_cases[test_case_id], f"test case {test_case_id} of {session.story_key}"
+                )
+            )
+            for test_case_id in test_case_ids
+        }
+    return {
+        test_case_id: _procedure_knowledge_part(session.test_cases[test_case_id], task.result())
+        for test_case_id, task in selecting.items()
+    }
+
+
+def _procedure_knowledge_part(test_case: DesignedTestCase, selection: ProcedureSelectionResult | None) -> str:
+    if selection is None:
+        return "Recorded procedures: unavailable for this review."
+    return (
+        "Recorded procedures selected for the items of the test case under review:\n"
+        f"```\n{render_procedure_knowledge(test_case, selection)}\n```"
+    )
+
+
+def _review_request(session: TestCaseDesignSession, test_case_id: str, procedure_knowledge: str | None) -> list[str]:
+    """Return the test case under review, its recorded procedures and, when fixed, its previous version and findings."""
     request = [
         render_designed_test_case_block(f"Test case under review (ID {test_case_id})", session.test_cases[test_case_id])
     ]
+    if procedure_knowledge is not None:
+        request.append(procedure_knowledge)
     if previous := session.previous_reviews.get(test_case_id):
         request += [
             render_designed_test_case_block("Previous version of the test case under review", previous.test_case),

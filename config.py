@@ -79,6 +79,9 @@ EXECUTE_TESTS_WEBHOOK_URL = f"{ORCHESTRATOR_URL}/execute-tests"
 UPDATE_JIRA_DB_WEBHOOK_URL = f"{ORCHESTRATOR_URL}/update-jira-db"
 UPDATE_TEST_CASE_DB_WEBHOOK_URL = f"{ORCHESTRATOR_URL}/update-test-case-db"
 UPDATE_SHAREPOINT_DB_WEBHOOK_URL = f"{ORCHESTRATOR_URL}/update-sharepoint-db"
+# The orchestrator's own A2A endpoint, through which the agents delegate a task to another registered agent.
+ORCHESTRATOR_DELEGATION_PATH = "/a2a"
+ORCHESTRATOR_DELEGATION_URL = f"{ORCHESTRATOR_URL}{ORCHESTRATOR_DELEGATION_PATH}"
 
 # Secrets
 JIRA_WEBHOOK_SECRET = os.environ.get("JIRA_WEBHOOK_SECRET")
@@ -216,6 +219,7 @@ class BudgetConfig:
         "gemini-3.8-flash": {"input": 0.75, "output": 3.75, "cache_read": 0.075},
         "claude-opus-5": {"input": 5.0, "output": 25.0, "cache_read": 0.5, "cache_write": 6.25},
         "claude-sonnet-5": {"input": 2.0, "output": 10.0, "cache_read": 0.2, "cache_write": 2.5},
+        "claude-haiku-5-5": {"input": 0.10, "output": 0.50, "cache_read": 0.01, "cache_write": 0.125},
     }
 
 
@@ -237,8 +241,8 @@ PROMPT_GUARD_SERVICE_URL = os.environ.get("PROMPT_GUARD_SERVICE_URL")
 
 # Orchestrator
 class OrchestratorConfig:
-    THINKING_LEVEL = _thinking_level("ORCHESTRATOR", "low")
-    VERSION = os.environ.get("ORCHESTRATOR_VERSION", "3.0.0")
+    THINKING_LEVEL = _thinking_level("ORCHESTRATOR", "medium")
+    VERSION = os.environ.get("ORCHESTRATOR_VERSION", "3.1.0")
     # Label describing the environment the execution agents run their test cases against; reported
     # alongside every test execution result.
     TEST_ENVIRONMENT_LABEL = os.environ.get("TEST_ENVIRONMENT_LABEL", "Standard Test Environment")
@@ -247,6 +251,8 @@ class OrchestratorConfig:
     AGENT_HEALTH_CHECK_INTERVAL_SECONDS = 60
     AGENT_HEALTH_CHECK_TIMEOUT_SECONDS = 10
     TASK_EXECUTION_TIMEOUT = 500.0
+    # Caps the timeout an agent asks for when it delegates a task through the orchestrator's A2A endpoint.
+    DELEGATION_MAX_TIMEOUT_SECONDS = 1800.0
     # Kept below the orchestrator's 3500 s request timeout, which the whole workflow call has to fit into.
     TEST_CASE_DESIGN_TASK_TIMEOUT_SECONDS = float(os.environ.get("TEST_CASE_DESIGN_TASK_TIMEOUT_SECONDS", "3300"))
     AGENT_DISCOVERY_TIMEOUT_SECONDS = 120
@@ -327,8 +333,8 @@ class TestCaseGenerationAgentConfig:
 
 # Test Case Design Agent
 class TestCaseDesignAgentConfig:
-    THINKING_LEVEL = _thinking_level("TEST_CASE_DESIGN", "low")
-    VERSION = os.environ.get("TEST_CASE_DESIGN_AGENT_VERSION", "1.2.0")
+    THINKING_LEVEL = _thinking_level("TEST_CASE_DESIGN", "medium")
+    VERSION = os.environ.get("TEST_CASE_DESIGN_AGENT_VERSION", "1.3.0")
     OWN_NAME = "Test Case Design Agent"
     SKILL_ID = "test-case-design"
     SKILL_NAME = "Test Case Design"
@@ -347,6 +353,13 @@ class TestCaseDesignAgentConfig:
     # One of low, medium, high, critical: a review finding at or above it blocks the design and gets fixed.
     FIX_MIN_SEVERITY = os.environ.get("TEST_CASE_DESIGN_FIX_MIN_SEVERITY", "medium").strip().lower()
     TOTAL_TOKENS_LIMIT = _optional_positive_int("TEST_CASE_DESIGN_TOTAL_TOKENS_LIMIT") or 4_000_000
+    PROCEDURE_KNOWLEDGE_ENABLED = os.environ.get("PROCEDURE_KNOWLEDGE_ENABLED", "true").lower() in ("true", "1", "t")
+    # Bounds the whole request, including the orchestrator's routing, so the knowledge agent's own budget stays below it.
+    PROCEDURE_KNOWLEDGE_TIMEOUT_SECONDS = _float_setting("PROCEDURE_KNOWLEDGE_TIMEOUT_SECONDS", 900.0)
+    PROCEDURE_KNOWLEDGE_CAPABILITY = (
+        "Selection of the recorded procedures (knowledge items) that best match each precondition and test step of a "
+        "test case, and of those that combine consecutive ones into one workflow"
+    )
 
 
 # Test Case Review Agent

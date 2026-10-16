@@ -14,3 +14,5 @@ Classify every finding into exactly one severity:
 - Low: a minor issue without an effect on execution or coverage, e.g. an imprecise name or summary.
 
 Duplicate coverage between test cases is always of medium severity.
+
+A deviation from a recorded procedure of behaviour which the Jira issue does not change is at least of high severity.

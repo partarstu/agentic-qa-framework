@@ -49,6 +49,19 @@ class TestCaseFixerPrompt(PromptBase):
         return self.template.format(test_step_quality_criteria=TestStepQualityCriteriaFragment().get_prompt())
 
 
+class KnowledgeAwareTestCaseGeneratorPrompt(PromptBase):
+    """Prompt for the sub-agent which rebuilds a draft test case from the recorded procedures selected for it."""
+
+    def get_script_dir(self) -> Path:
+        return _get_prompts_root()
+
+    def __init__(self, template_file_name: str = "knowledge_aware_test_case_generator_prompt.md") -> None:
+        super().__init__(template_file_name)
+
+    def get_prompt(self) -> str:
+        return self.template.format(test_step_quality_criteria=TestStepQualityCriteriaFragment().get_prompt())
+
+
 class TestCaseCreationPrompt(PromptBase):
     def get_script_dir(self) -> Path:
         return _get_prompts_root()

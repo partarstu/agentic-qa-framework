@@ -31,6 +31,8 @@ from common.models import (
     GeneratedTestCases,
     IncidentCreationInput,
     IncidentCreationResult,
+    KnowledgeAwareItem,
+    KnowledgeAwareTestCase,
     NoSuitableAgent,
     OverlappingTestCase,
     RequirementsReviewFeedback,
@@ -134,6 +136,14 @@ _LABELLED_REVIEW = re.compile(r"Review focused on '[^']+':\n```(?P<review>.*?)``
 _TEST_CASE_UNDER_REVIEW = re.compile(r"Test case under review \(ID (?P<id>[^)]+)\)")
 _TEST_CASE_TO_FIX = re.compile(r"Test case to fix \(ID [^)]+\):\n```(?P<test_case>.*?)```", re.DOTALL)
 _TEST_STEP_SEQUENCES = re.compile(r"Test Step Sequences:\n(?P<sequences>\{.*\})", re.DOTALL)
+# The numbered items and the selections of the recorded procedures as the knowledge-aware generator receives them.
+_DRAFT_PRECONDITION = re.compile(r"^(?P<id>P\d+): (?P<text>.+)$", re.MULTILINE)
+_DRAFT_STEP = re.compile(
+    r"^(?P<id>S\d+): Action: (?P<action>.*?); Data: (?P<data>.*?); Expected: (?P<expected>.*)$", re.MULTILINE
+)
+_SELECTED_PROCEDURE = re.compile(
+    r"^Selected for (?P<items>[PS]\d+(?:, [PS]\d+)*)(?: together)?:\n  - \[(?P<id>[^\]]+)\]", re.MULTILINE
+)
 _DUPLICATE_CANDIDATE = re.compile(r"^Candidate (?P<key>\S+):$", re.MULTILINE)
 _TEST_CASE_KEY_FIELD = re.compile(r'"key":\s*"(?P<key>[^"]+)"')
 _REPORT_STEP = re.compile(
@@ -284,6 +294,8 @@ def _is_suitable(agent: _RegisteredAgent, task: str) -> bool:
     for prefix, agent_name in agent_by_task_prefix.items():
         if task.startswith(prefix):
             return agent.name == agent_name
+    if task == config.TestCaseDesignAgentConfig.PROCEDURE_KNOWLEDGE_CAPABILITY:
+        return "recorded procedures" in agent.card
     if match := _EXECUTION_TASK_TEST_TYPE.search(task):
         test_type = match["type"] or match["label"]
         description = f"{agent.name}, {agent.card}"
@@ -456,6 +468,41 @@ def _fix_test_case(conversation: _Conversation) -> _Answer:
     return _final(test_case.model_copy(update={"steps": [precise_step, *other_steps]}))
 
 
+def _rebuild_test_case(conversation: _Conversation) -> _Answer:
+    """Reuses every procedure selected for a single item and merges every run of steps selected together into one."""
+    prompt = conversation.prompt
+    preconditions = {match["id"]: match["text"] for match in _DRAFT_PRECONDITION.finditer(prompt)}
+    steps = {
+        match["id"]: TestStep(
+            action=match["action"],
+            test_data=match["data"].split(", ") if match["data"] else [],
+            expected_results=match["expected"],
+        )
+        for match in _DRAFT_STEP.finditer(prompt)
+    }
+    selected = {tuple(match["items"].split(", ")): match["id"] for match in _SELECTED_PROCEDURE.finditer(prompt)}
+    rebuilt_preconditions = [
+        KnowledgeAwareItem(procedure_id=selected.get((item_id,)), text=text, covers=[item_id])
+        for item_id, text in preconditions.items()
+    ]
+    rebuilt_steps: list[KnowledgeAwareItem] = []
+    pending = list(steps)
+    while pending:
+        run = next((ids for ids in selected if len(ids) > 1 and tuple(pending[: len(ids)]) == ids), (pending[0],))
+        covered = [steps[item_id] for item_id in run]
+        rebuilt_steps.append(
+            KnowledgeAwareItem(
+                procedure_id=selected.get(run),
+                text=covered[0].action,
+                test_data=[data for step in covered for data in step.test_data],
+                expected_results=covered[-1].expected_results,
+                covers=list(run),
+            )
+        )
+        pending = pending[len(run) :]
+    return _final(KnowledgeAwareTestCase(preconditions=rebuilt_preconditions, steps=rebuilt_steps))
+
+
 def _review_test_case(conversation: _Conversation) -> _Answer:
     """Reports one high finding per review, so the design's review loop always runs up to its iteration limit."""
     test_case_id = _TEST_CASE_UNDER_REVIEW.search(conversation.prompt)["id"]
@@ -601,6 +648,8 @@ _OPERATION_BY_OUTPUT_FIELD = {
     "stepResults": "results_extraction",
     "overlapping_test_cases": "test_case_duplicate_judgement",
     "ac_ids": "test_case_fixing",
+    # Only the knowledge-aware generator's output has preconditions without acceptance criteria IDs.
+    "preconditions": "knowledge_aware_test_case_generation",
     "test_cases": "test_case_creation",
     "duplicates": "duplicate_detection",
 }
@@ -616,6 +665,7 @@ _HANDLERS: dict[str, Callable[[_Conversation], _Answer]] = {
     "test_steps_generation": _generate_test_steps,
     "test_case_creation": _create_test_cases,
     "test_case_fixing": _fix_test_case,
+    "knowledge_aware_test_case_generation": _rebuild_test_case,
     "test_case_review": _review_test_case,
     "test_suite_review": _review_test_suite,
     "test_case_duplicate_judgement": _judge_duplicates,

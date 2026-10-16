@@ -5,7 +5,7 @@
       "unique-id": "orchestrator",
       "node-type": "service",
       "name": "Orchestrator",
-      "description": "Central hub that registers agents, routes A2A tasks, runs workflows and serves the monitoring dashboard.",
+      "description": "Central hub that registers agents, routes A2A tasks, runs workflows and serves the monitoring dashboard. Its own A2A endpoint lets the agents it supervises delegate a task to the registered agent that fits it; an agent declaring a task capacity in its card runs that many tasks at once.",
       "controls": {
         "orchestrator-api-key": {
           "description": "Control/webhook endpoints require an X-API-Key header and fail closed (HTTP 503) when unset.",
@@ -82,7 +82,7 @@
       "unique-id": "test-case-design-agent",
       "node-type": "service",
       "name": "Test Case Design Agent",
-      "description": "Designs the test cases of a user story through four tools its LLM calls in order: generate (the story is fetched in code from the Atlassian MCP server), review, fix, publish. The review-fix loop stops when no finding at or above the configured severity remains, when the iteration limit is reached or when a review shows no progress; publishing saves the final set, classifies it, and posts the review comments and review status. Runs test case generation, review and classification in-process as sub-agents sharing one design session.",
+      "description": "Designs the test cases of a user story through four tools its LLM calls in order: generate (the story is fetched in code from the Atlassian MCP server), review, fix, publish. The review-fix loop stops when no finding at or above the configured severity remains, when the iteration limit is reached or when a review shows no progress; publishing saves the final set, classifies it, and posts the review comments and review status. Runs test case generation, review and classification in-process as sub-agents sharing one design session. After generation and after each fix it rebuilds every new or changed test case from the recorded procedures the procedure knowledge agent selects for it, and each per-test-case review checks the test case against a fresh selection; both requests are delegated through the orchestrator.",
       "controls": {
         "prompt-injection-guard": {
           "description": "Untrusted text is screened for prompt-injection before reaching the LLM (enabled by default).",
@@ -215,6 +215,12 @@
       "description": "External UI and API test execution agents that run test cases and expose an A2A endpoint guarded by a shared bearer token."
     },
     {
+      "unique-id": "procedure-knowledge-agent",
+      "node-type": "system",
+      "name": "Procedure Knowledge Agent",
+      "description": "External LLM-driven agent of the test-execution-agents repository that explores the shared procedure graph the UI test execution agents recorded and selects the recorded procedures matching each precondition and test step of a test case, and those combining consecutive ones into one workflow. Exposes an A2A endpoint guarded by the shared bearer token and declares its task capacity in its Agent Card."
+    },
+    {
       "unique-id": "rag-sync-job",
       "node-type": "service",
       "name": "RAG Sync Job",
@@ -290,6 +296,70 @@
                 "control-id": "quaia-execution-agent-bearer-token",
                 "name": "Execution Agent Bearer Token",
                 "description": "Calls to the execution agents' main A2A endpoint are authenticated with a shared bearer token.",
+                "auth-method": "api-key",
+                "enforced": true
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "unique-id": "rel-test-case-design-orchestrator-delegation",
+      "description": "Test Case Design Agent delegates its procedure knowledge requests to the orchestrator's own A2A endpoint, which routes each to the agent whose capability fits it and returns that agent's artifacts.",
+      "protocol": "HTTPS",
+      "controls": {
+        "internal-service-api-key": {
+          "description": "The orchestrator's A2A endpoint requires the shared internal X-API-Key and fails closed (HTTP 503) while INTERNAL_SERVICE_API_KEY is unset.",
+          "requirements": [
+            {
+              "requirement-url": "https://quaia.finos.calm/controls/authentication.requirement.json",
+              "config": {
+                "control-id": "quaia-internal-api-key-orchestrator-delegation",
+                "name": "Internal Service API Key",
+                "description": "Delegation requests to the orchestrator's A2A endpoint carry the shared X-API-Key (INTERNAL_SERVICE_API_KEY).",
+                "auth-method": "api-key",
+                "enforced": true
+              }
+            }
+          ]
+        }
+      },
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "test-case-design-agent"
+          },
+          "destination": {
+            "node": "orchestrator"
+          }
+        }
+      }
+    },
+    {
+      "unique-id": "rel-orchestrator-delegates-procedure-knowledge",
+      "description": "Orchestrator discovers and health-checks the procedure knowledge agent and sends it the delegated procedure knowledge requests over the A2A protocol, up to the task capacity the agent declares.",
+      "protocol": "HTTPS",
+      "relationship-type": {
+        "connects": {
+          "source": {
+            "node": "orchestrator"
+          },
+          "destination": {
+            "node": "procedure-knowledge-agent"
+          }
+        }
+      },
+      "controls": {
+        "execution-agent-bearer-token": {
+          "description": "When REMOTE_EXECUTION_AGENT_AUTH_TOKEN is set, the orchestrator presents it as an Authorization: Bearer token on the knowledge agent's guarded A2A endpoint; the agent rejects mismatching or missing tokens with HTTP 401.",
+          "requirements": [
+            {
+              "requirement-url": "https://quaia.finos.calm/controls/authentication.requirement.json",
+              "config": {
+                "control-id": "quaia-execution-agent-bearer-token",
+                "name": "Execution Agent Bearer Token",
+                "description": "Calls to the procedure knowledge agent's A2A endpoint are authenticated with the shared bearer token.",
                 "auth-method": "api-key",
                 "enforced": true
               }
