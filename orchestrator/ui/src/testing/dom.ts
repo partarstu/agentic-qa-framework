@@ -6,15 +6,30 @@ import { cleanup } from '@testing-library/react';
 import axe from 'axe-core';
 import { afterEach, beforeEach, vi } from 'vitest';
 
-/** Gives jsdom the dialog and popover methods, scrollIntoView, matchMedia and ResizeObserver the dashboard uses, and unmounts every render after its test. */
+/**
+ * Gives jsdom the dialog and popover methods, scrollIntoView, matchMedia and ResizeObserver the dashboard uses, and unmounts every
+ * render after its test. As in a browser, a modal dialog takes the focus, Escape sends the open dialog a cancelable `cancel` and closes
+ * it unless that is cancelled, and closing an open dialog sends `close`.
+ */
 export function installDom(): void {
   if (typeof HTMLDialogElement.prototype.showModal !== 'function') {
     HTMLDialogElement.prototype.showModal = function showModal(this: HTMLDialogElement) {
       this.open = true;
+      // The browser's focus delegate: jsdom refused React's autoFocus while the dialog was closed
+      this.querySelector<HTMLElement>('input, select, textarea, button, a[href], [tabindex]:not([tabindex="-1"])')?.focus();
     };
     HTMLDialogElement.prototype.close = function close(this: HTMLDialogElement) {
-      this.open = false;
+      if (this.open) {
+        this.open = false;
+        this.dispatchEvent(new Event('close'));
+      }
     };
+    document.addEventListener('keydown', (event) => {
+      const dialog = [...document.querySelectorAll('dialog')].findLast((candidate) => candidate.open);
+      if (event.key === 'Escape' && dialog?.dispatchEvent(new Event('cancel', { cancelable: true }))) {
+        dialog.close();
+      }
+    });
   }
   // The stubs mark a shown popover with data-popover-open, which jsdom cannot match as :popover-open
   if (typeof HTMLElement.prototype.showPopover !== 'function') {
