@@ -55,7 +55,9 @@ def mock_config() -> Iterator[MagicMock]:
 
 @pytest.fixture
 def reviewer(mock_config: MagicMock) -> TestCaseReviewer:
-    test_case_reviewer = TestCaseReviewer()
+    # Patched while constructing too: a real Qdrant client costs most of a second to set up
+    with patch("agents.test_case_review.main.VectorDbService"):
+        test_case_reviewer = TestCaseReviewer()
     test_case_reviewer.vector_db_service = MagicMock()
     test_case_reviewer.vector_db_service.upsert_batch = AsyncMock()
     test_case_reviewer.vector_db_service.hybrid_search = AsyncMock(return_value=[])

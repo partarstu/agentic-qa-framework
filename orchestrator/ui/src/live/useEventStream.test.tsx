@@ -96,6 +96,16 @@ describe('useEventStream', () => {
     expect(onOpen).toHaveBeenCalledTimes(2);
   });
 
+  it('asks for a new stream token after a failed stream, which a restarted orchestrator would reject', async () => {
+    renderStream();
+    await settle();
+
+    act(() => FakeEventSource.latest().fail());
+    await act(() => vi.advanceTimersByTimeAsync(RETRY_DELAYS_MS[0]));
+
+    expect(FakeEventSource.latest().url).toBe('/api/dashboard/stream?stream_token=token-2');
+  });
+
   it('closes the stream in a hidden tab and opens it again when the tab is shown', async () => {
     renderStream();
     await settle();

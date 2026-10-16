@@ -24,8 +24,8 @@ from orchestrator.rag_sync_trigger import SyncStartResult, SyncTriggerError
 @pytest.fixture
 def client():
     orchestrator_app.dependency_overrides[_validate_api_key] = lambda: None
-    with TestClient(orchestrator_app) as test_client:
-        yield test_client
+    # Without the context manager the lifespan stays off, whose agent discovery would reach for every agent URL.
+    yield TestClient(orchestrator_app)
     orchestrator_app.dependency_overrides.pop(_validate_api_key, None)
 
 

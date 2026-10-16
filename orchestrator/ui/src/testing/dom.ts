@@ -6,12 +6,9 @@ import { cleanup } from '@testing-library/react';
 import axe from 'axe-core';
 import { afterEach, beforeEach, vi } from 'vitest';
 
-/**
- * Gives jsdom the dialog and popover methods, scrollIntoView, matchMedia and ResizeObserver the dashboard uses, and unmounts every
- * render after its test. As in a browser, a modal dialog takes the focus, Escape sends the open dialog a cancelable `cancel` and closes
- * it unless that is cancelled, and closing an open dialog sends `close`.
- */
+/** Gives jsdom the dialog and popover methods, scrollIntoView, matchMedia and ResizeObserver the dashboard uses, and unmounts every render after its test. */
 export function installDom(): void {
+  // The dialog behaves as in a browser: it takes the focus, Escape cancels and closes it unless the cancel is prevented, closing sends `close`
   if (typeof HTMLDialogElement.prototype.showModal !== 'function') {
     HTMLDialogElement.prototype.showModal = function showModal(this: HTMLDialogElement) {
       this.open = true;

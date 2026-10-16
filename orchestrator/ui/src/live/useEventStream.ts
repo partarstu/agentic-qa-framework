@@ -26,15 +26,13 @@ interface Handlers {
   onOpen?: () => void;
 }
 
-/**
- * Keeps an SSE stream open while `url` is set and the page is visible: a hidden tab gives its connection back, since a browser opens
- * at most six per origin over HTTP/1.1. A failed stream reconnects with a growing delay; an expired stream token is replaced at once.
- */
+/** Keeps an SSE stream open while `url` is set and the page is visible, reconnecting a failed one with a growing delay. */
 export function useEventStream(url: string | null, { onEvent, onOpen }: Handlers): StreamStatus {
   const visible = usePageVisible();
   const [status, setStatus] = useState<StreamStatus>('connecting');
   const handleEvent = useEffectEvent(onEvent);
   const handleOpen = useEffectEvent(() => onOpen?.());
+  // A hidden tab gives its connection back, since a browser opens at most six per origin over HTTP/1.1
   const active = url !== null && visible;
 
   useEffect(() => {
@@ -81,8 +79,10 @@ export function useEventStream(url: string | null, { onEvent, onOpen }: Handlers
         clearStreamToken();
         void connect();
       });
+      // An error hides whether the orchestrator rejected the token, which a restart forgets, so the retry asks for a new one
       stream.onerror = () => {
         stream.close();
+        clearStreamToken();
         retry();
       };
     };

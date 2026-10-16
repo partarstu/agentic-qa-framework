@@ -64,10 +64,7 @@ export function createAnnouncer(announce: (text: string) => void) {
   };
 }
 
-/**
- * Invalidates the named queries, or all, INVALIDATE_DELAY_MS after the last request (trailing), so a burst of task ends refetches each
- * query once; a refetch in flight runs on. A steady stream of events still refreshes the views every INVALIDATE_MAX_WAIT_MS.
- */
+/** Invalidates the named queries, or all, INVALIDATE_DELAY_MS after the last request, so a burst of task ends refetches each query once. */
 export function createInvalidator(queryClient: QueryClient) {
   let pending = new Set<QueryName>();
   let all = false;
@@ -90,6 +87,7 @@ export function createInvalidator(queryClient: QueryClient) {
       } else {
         names.forEach((name) => pending.add(name));
       }
+      // A steady stream of events still refreshes the views every INVALIDATE_MAX_WAIT_MS
       firstRequestAt ??= Date.now();
       clearTimeout(timer);
       timer = setTimeout(flush, Math.min(INVALIDATE_DELAY_MS, firstRequestAt + INVALIDATE_MAX_WAIT_MS - Date.now()));
