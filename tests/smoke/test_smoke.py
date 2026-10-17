@@ -45,6 +45,8 @@ reached a mocked boundary, read back from its ``/__recorded`` endpoint:
 * RAG DB update         -> the sync pushed the seeded story into the vector DB, and a Closed issue too.
 * Dashboard             -> the login is rate limited (429), and the task history survives an orchestrator
                            restart (the restart check runs last).
+* Dashboard stream      -> the agent stream opens with a heartbeat and streams the task's log lines as
+                           entries with the ids the logs endpoint gives them.
 * Agent traceability    -> the version an agent is started with reaches the dashboard agents view,
                            the orchestrator's own version reaches the dashboard status view, and the
                            executing agent's name, version and environment reach the incident model and the
@@ -101,6 +103,7 @@ from tests.smoke.conftest import (
     TEST_ENVIRONMENT_LABEL,
     TICKETS_COLLECTION_NAME,
     ZEPHYR_RECORDED_URL,
+    AgentStreamRecording,
 )
 from tests.smoke.mocks.llm_mock import CLASSIFICATION_LABELS, FOCUS_AREA_FINDINGS, TEST_CASE_NAMES, TEST_STEPS
 from tests.smoke.mocks.procedure_knowledge_agent import (
@@ -1261,6 +1264,36 @@ def test_agent_log_entries_carry_distinct_line_ids(
     assert len(set(ids)) == len(ids), f"Agent log lines share ids: {ids}"
     malformed = [entry_id for entry_id in ids if not re.fullmatch(rf"{re.escape(task_id)}:\d+", entry_id or "")]
     assert not malformed, f"Agent log ids are not '<task_id>:<n>': {malformed}"
+
+
+def test_agent_stream_delivers_log_entries_with_the_ids_of_the_logs_page(
+    requirements_review_response: httpx.Response,
+    requirements_review_stream: AgentStreamRecording,
+    http_client: httpx.Client,
+    auth_headers: dict[str, str],
+) -> None:
+    """The agent stream opens with a heartbeat and streams the task's log lines with the ids the logs endpoint gives them."""
+    assert requirements_review_stream.finished.wait(timeout=60.0), "The agent stream never delivered task_done."
+    events = requirements_review_stream.events
+    assert events and events[0][0] == "heartbeat", f"The agent stream did not open with a heartbeat: {events[:1]}"
+    task_done = [data for name, data in events if name == "task_done"]
+    assert task_done, f"The agent stream ended before task_done: {[name for name, _ in events]}"
+    task_id = task_done[0]["task_id"]
+    batches = [data for name, data in events if name == "log_batch"]
+    assert batches, "The agent stream delivered no log_batch."
+    assert all("lines" not in batch and batch["task_id"] == task_id for batch in batches), batches
+    streamed_ids = [entry["id"] for batch in batches for entry in batch["entries"]]
+
+    response = http_client.get(
+        f"{ORCHESTRATOR_URL}/api/dashboard/logs", params={"task_id": task_id, "limit": 1000}, headers=auth_headers
+    )
+    assert response.status_code == 200, response.text
+    page_ids = {entry["id"] for entry in response.json()}
+    assert len(set(streamed_ids)) == len(streamed_ids), f"Streamed log entries share ids: {streamed_ids}"
+    assert set(streamed_ids) == page_ids, (
+        f"The streamed ids differ from the logs page: only streamed {set(streamed_ids) - page_ids}, "
+        f"only on the page {page_ids - set(streamed_ids)}"
+    )
 
 
 def test_dashboard_reports_the_configured_agent_version(

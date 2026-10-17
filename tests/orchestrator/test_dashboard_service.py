@@ -186,11 +186,9 @@ async def test_streamed_batches_get_the_ids_of_a_page_of_the_same_task():
     )
     streamed_ids = []
     for batch in (["2026-01-01 12:00:00 - agent - INFO - one", "", "21:10:43.758 INFO Ui - two"], ["three", "four"]):
-        preceding_line_count = await tasks.append_log_batch("t1", batch)
-        streamed_ids += [
-            entry.entry_id
-            for entry in parse_agent_logs(batch, "t1", "agent-1", preceding_line_count=preceding_line_count)
-        ]
+        await tasks.append_log_batch("t1", batch)
+        entries = parse_agent_logs(batch, "t1", "agent-1", preceding_line_count=len(streamed_ids))
+        streamed_ids += [entry.entry_id for entry in entries]
     service = OrchestratorDashboardService(AgentRegistry(), tasks, ErrorHistory())
 
     task_page = await service.get_logs(task_id="t1")

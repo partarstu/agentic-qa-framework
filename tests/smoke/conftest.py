@@ -8,11 +8,14 @@ URLs default to the published compose ports and are overridable via ``SMOKE_*`` 
 credentials are the fixed throwaway values baked into ``docker-compose.smoke.yml``.
 """
 
+import json
 import os
 import re
+import threading
 import time
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import httpx
@@ -226,8 +229,66 @@ def post_webhooks_concurrently(names: Iterable[str], headers: dict[str, str]) ->
         return {name: future.result() for name, future in futures.items()}
 
 
+@dataclass
+class AgentStreamRecording:
+    """The events of an agent's dashboard stream as ``(event, data)`` pairs, up to and with its first ``task_done``."""
+
+    events: list[tuple[str, dict]] = field(default_factory=list)
+    finished: threading.Event = field(default_factory=threading.Event)
+    stopped: threading.Event = field(default_factory=threading.Event)
+
+
+def _record_agent_stream(url: str, stream_token: str, recording: AgentStreamRecording, opened: threading.Event) -> None:
+    event_name, data_lines = "message", []
+    try:
+        # The stream's heartbeat every 15 s keeps a read within the timeout and lets the loop see a stop
+        with httpx.stream("GET", url, params={"stream_token": stream_token}, timeout=httpx.Timeout(30.0)) as response:
+            for line in response.iter_lines():
+                if line.startswith("event:"):
+                    event_name = line.removeprefix("event:").strip()
+                elif line.startswith("data:"):
+                    data_lines.append(line.removeprefix("data:").strip())
+                elif not line and data_lines:
+                    recording.events.append((event_name, json.loads("\n".join(data_lines))))
+                    # The server subscribes before its first frame, so no event of the webhooks fired after it is lost
+                    opened.set()
+                    if event_name == "task_done":
+                        return
+                    event_name, data_lines = "message", []
+                if recording.stopped.is_set():
+                    return
+    except httpx.HTTPError as exc:
+        logger.warning("The agent stream %s ended: %s", url, exc)
+    finally:
+        opened.set()
+        recording.finished.set()
+
+
 @pytest.fixture(scope="session")
-def webhook_responses(all_agents_ready: None, webhook_headers: dict[str, str]) -> dict[str, httpx.Response]:
+def requirements_review_stream(
+    all_agents_ready: None, http_client: httpx.Client, auth_headers: dict[str, str]
+) -> Iterator[AgentStreamRecording]:
+    """Record the requirements review agent's dashboard stream, opened before the webhooks fire, until its task ends."""
+    agents = http_client.get(f"{ORCHESTRATOR_URL}/api/dashboard/agents", headers=auth_headers).json()
+    agent_id = next(agent["id"] for agent in agents if agent["name"] == config.RequirementsReviewAgentConfig.OWN_NAME)
+    token = http_client.post(f"{ORCHESTRATOR_URL}/api/dashboard/stream-token", headers=auth_headers)
+    token.raise_for_status()
+    recording, opened = AgentStreamRecording(), threading.Event()
+    url = f"{ORCHESTRATOR_URL}/api/dashboard/agents/{agent_id}/stream"
+    reader = threading.Thread(
+        target=_record_agent_stream, args=(url, token.json()["stream_token"], recording, opened), daemon=True
+    )
+    reader.start()
+    opened.wait(timeout=30.0)
+    yield recording
+    recording.stopped.set()
+    reader.join(timeout=60.0)
+
+
+@pytest.fixture(scope="session")
+def webhook_responses(
+    all_agents_ready: None, webhook_headers: dict[str, str], requirements_review_stream: AgentStreamRecording
+) -> dict[str, httpx.Response]:
     """Fire every webhook once, the syncs first, and share the responses."""
     # The mocked model answers at once, so a model-driven flow would otherwise query the vector DB before the
     # syncs have created the collections it retrieves from.

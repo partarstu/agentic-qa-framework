@@ -24,6 +24,7 @@ from orchestrator.main import (
     _send_task_to_agent_with_message,
     cancellation_queue,
 )
+from orchestrator.models import TaskStatus
 from tests.orchestrator.conftest import agent_card
 
 
@@ -98,6 +99,59 @@ async def test_send_task_success(mock_registry):
         assert task.status.state == TaskState.TASK_STATE_COMPLETED
         assert mock_registry.release_task.await_args.args[0] == "agent-1"
         mock_registry.update_status.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_send_task_stores_logs_and_usage_before_publishing_task_done(mock_registry):
+    completed = MagicMock(status_update=MagicMock(task_id="task-1"))
+    completed.HasField.side_effect = lambda field: field == "status_update"
+    completed.status_update.status = A2ATaskStatus(state=TaskState.TASK_STATE_COMPLETED)
+
+    async def response_generator():
+        yield completed
+
+    steps = MagicMock(save_logs=AsyncMock(), save_usage=AsyncMock(), finalize=AsyncMock())
+    with (
+        patch("orchestrator.main.reserve_agent_waiting_if_needed", new_callable=AsyncMock) as mock_reserve,
+        patch("orchestrator.main.create_client", new_callable=AsyncMock) as mock_create_client,
+        patch("orchestrator.main._save_agent_logs_from_task", steps.save_logs),
+        patch("orchestrator.main._save_agent_usage_from_task", steps.save_usage),
+        patch("orchestrator.main._finalize_task", steps.finalize),
+    ):
+        mock_reserve.return_value = ("agent-1", agent_card())
+        mock_create_client.return_value = MagicMock()
+        mock_create_client.return_value.send_message.return_value = response_generator()
+        await _send_task_to_agent("input", "desc")
+
+    assert [name for name, _, _ in steps.mock_calls] == ["save_logs", "save_usage", "finalize"]
+
+
+@pytest.mark.asyncio
+async def test_a_stream_ending_before_a_terminal_status_fails_the_task(mock_registry):
+    working = MagicMock(status_update=MagicMock(task_id="task-1"))
+    working.HasField.side_effect = lambda field: field == "status_update"
+    working.status_update.status = A2ATaskStatus(state=TaskState.TASK_STATE_WORKING)
+
+    async def response_generator():
+        yield working
+
+    from fastapi import HTTPException
+
+    with (
+        patch("orchestrator.main.reserve_agent_waiting_if_needed", new_callable=AsyncMock) as mock_reserve,
+        patch("orchestrator.main.create_client", new_callable=AsyncMock) as mock_create_client,
+        patch("orchestrator.main._finalize_task", new_callable=AsyncMock) as mock_finalize,
+        patch("orchestrator.main._record_error"),
+        pytest.raises(HTTPException) as exc,
+    ):
+        mock_reserve.return_value = ("agent-1", agent_card())
+        mock_create_client.return_value = MagicMock()
+        mock_create_client.return_value.send_message.return_value = response_generator()
+        await _send_task_to_agent("input", "desc")
+
+    assert exc.value.status_code == 500
+    assert mock_finalize.await_args.args[2] == TaskStatus.FAILED
+    assert mock_registry.release_task.await_args.args[0] == "agent-1"
 
 
 @pytest.mark.asyncio

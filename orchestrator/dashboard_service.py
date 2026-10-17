@@ -5,7 +5,7 @@
 """Dashboard service for aggregating orchestrator state for the Web UI."""
 
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from datetime import UTC, datetime
 from typing import Any
 
@@ -24,7 +24,6 @@ from orchestrator.models import (
     TaskHistory,
     agent_registry,
     error_history,
-    iter_log_lines,
     task_history,
 )
 
@@ -52,13 +51,21 @@ def _detect_log_level(line: str) -> str | None:
     return _normalise_level(match.group(1))
 
 
+def _iter_log_lines(raw_logs: Iterable[str]) -> Iterator[str]:
+    """Yield the non-empty lines of a task's agent logs, whose chunks may hold several lines each."""
+    for chunk in raw_logs:
+        for line in chunk.splitlines():
+            if line.strip():
+                yield line
+
+
 def parse_agent_logs(
     raw_logs: Iterable[str], task_id: str, agent_id: str, *, preceding_line_count: int = 0
 ) -> list[LogEntry]:
     """Parse raw agent log lines into entries whose id ``<task_id>:<n>`` counts the task's non-empty lines after the preceding ones."""
     return [
         _parse_agent_log_line(line, f"{task_id}:{number}", task_id, agent_id)
-        for number, line in enumerate(iter_log_lines(raw_logs), start=preceding_line_count + 1)
+        for number, line in enumerate(_iter_log_lines(raw_logs), start=preceding_line_count + 1)
     ]
 
 

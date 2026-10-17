@@ -147,7 +147,7 @@ class Tail {
     this.update({ items });
   }
 
-  /** A finished task ends the tail of a task source; an agent's tail reloads, as the orchestrator keeps the task's logs only when it ends. */
+  /** A finished task ends the tail of a task source; an agent's tail reloads, as an agent that streams no logs hands them over only when the task ends. */
   onTaskDone({ task_id }: TaskDonePayload) {
     if (this.source.kind === 'task') {
       if (task_id === this.source.taskId) {

@@ -1520,6 +1520,7 @@ class _LogStreamState:
 
     artifact_id: str | None = None
     lines: list[str] = field(default_factory=list)
+    entry_count: int = 0
 
 
 def _build_logs_artifact(log_lines: list[str]) -> Artifact:
@@ -1575,8 +1576,11 @@ async def _handle_stream_chunk(
                 new_lines.extend(part.raw.decode("utf-8", errors="replace").splitlines())
         if new_lines:
             log_state.lines.extend(new_lines)
-            preceding_line_count = await task_history.append_log_batch(internal_task_id, new_lines)
-            entries = parse_agent_logs(new_lines, internal_task_id, agent_id, preceding_line_count=preceding_line_count)
+            await task_history.append_log_batch(internal_task_id, new_lines)
+            entries = parse_agent_logs(
+                new_lines, internal_task_id, agent_id, preceding_line_count=log_state.entry_count
+            )
+            log_state.entry_count += len(entries)
             if entries:
                 await streaming_hub.publish_agent(
                     agent_id,
@@ -1696,29 +1700,12 @@ async def _send_task_to_agent_with_message(
         )
         response_iterator = a2a_client.send_message(SendMessageRequest(message=message))
         start_time = time.time()
-        last_status = None
         collected_artifacts: list[Artifact] = []
         log_state = _LogStreamState()
         while (time_left := _get_time_left_for_task_completion_waiting(start_time, task_timeout_seconds)) > 0:
             try:
                 chunk = await asyncio.wait_for(response_iterator.__anext__(), timeout=time_left)
             except StopAsyncIteration:
-                if last_status and last_status.state in (
-                    TaskState.TASK_STATE_COMPLETED,
-                    TaskState.TASK_STATE_FAILED,
-                    TaskState.TASK_STATE_REJECTED,
-                ):
-                    final_status = (
-                        TaskStatus.COMPLETED
-                        if last_status.state == TaskState.TASK_STATE_COMPLETED
-                        else TaskStatus.FAILED
-                    )
-                    completed_task = Task(id=last_task_id or "", status=last_status, artifacts=collected_artifacts)
-                    await _finalize_task(internal_task_id, agent_id, final_status)
-                    await _save_agent_logs_from_task(completed_task, internal_task_id)
-                    await _save_agent_usage_from_task(completed_task, internal_task_id)
-                    await agent_registry.release_task(agent_id, internal_task_id)
-                    return completed_task
                 await _finalize_task(
                     internal_task_id, agent_id, TaskStatus.FAILED, "Iterator finished before completion"
                 )
@@ -1766,9 +1753,10 @@ async def _send_task_to_agent_with_message(
                         else None
                     )
                     completed_task = Task(id=last_task_id, status=last_status, artifacts=collected_artifacts)
-                    await _finalize_task(internal_task_id, agent_id, final_status, error_msg)
+                    # Before task_done, on which the dashboard reloads the task's logs and usage
                     await _save_agent_logs_from_task(completed_task, internal_task_id)
                     await _save_agent_usage_from_task(completed_task, internal_task_id)
+                    await _finalize_task(internal_task_id, agent_id, final_status, error_msg)
                     await agent_registry.release_task(agent_id, internal_task_id)
                     return completed_task
                 elif last_status.state == TaskState.TASK_STATE_WORKING:

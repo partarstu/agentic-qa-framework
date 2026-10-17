@@ -26,6 +26,7 @@ from pydantic_ai.usage import RunUsage
 import config
 from common.models import AgentSelected, NoSuitableAgent, RoutingDecision, SuitableAgentBusy
 from common.streaming import AgentActivityEvent, LogBatchEvent, TaskDoneEvent
+from orchestrator.dashboard_service import parse_agent_logs
 from orchestrator.main import (
     AgentStatus,
     BrokenReason,
@@ -727,7 +728,7 @@ def _raw_artifact(name: str, raw_data: bytes, artifact_id: str = "logs-123") -> 
 async def test_handle_stream_chunk_log_batch_updates_history_and_publishes_to_agent():
     artifact = _raw_artifact("logs", b"line1\nline2", "logs-123")
     collected: list[Artifact] = []
-    log_state = _LogStreamState()
+    log_state = _LogStreamState(entry_count=3)
     event = TaskArtifactUpdateEvent(
         context_id="ctx-1",
         task_id="task-1",
@@ -739,7 +740,7 @@ async def test_handle_stream_chunk_log_batch_updates_history_and_publishes_to_ag
         patch("orchestrator.main.task_history") as mock_history,
         patch("orchestrator.main.streaming_hub") as mock_hub,
     ):
-        mock_history.append_log_batch = AsyncMock(return_value=3)
+        mock_history.append_log_batch = AsyncMock()
         mock_hub.publish_agent = AsyncMock()
 
         await _handle_stream_chunk(event, "task-1", "agent-1", collected, log_state)
@@ -814,12 +815,34 @@ async def test_handle_stream_chunk_publishes_no_batch_for_blank_lines():
         patch("orchestrator.main.task_history") as mock_history,
         patch("orchestrator.main.streaming_hub") as mock_hub,
     ):
-        mock_history.append_log_batch = AsyncMock(return_value=0)
+        mock_history.append_log_batch = AsyncMock()
         mock_hub.publish_agent = AsyncMock()
         await _handle_stream_chunk(event, "task-1", "agent-1", [], _LogStreamState())
 
     mock_history.append_log_batch.assert_awaited_once()
     mock_hub.publish_agent.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_handle_stream_chunk_ids_continue_across_batches_as_the_logs_page_numbers_them():
+    log_state = _LogStreamState()
+    chunks = [b"first\n\nsecond", b" \nthird"]
+
+    with (
+        patch("orchestrator.main.task_history") as mock_history,
+        patch("orchestrator.main.streaming_hub") as mock_hub,
+    ):
+        mock_history.append_log_batch = AsyncMock()
+        mock_hub.publish_agent = AsyncMock()
+        for chunk in chunks:
+            event = TaskArtifactUpdateEvent(
+                context_id="ctx-1", task_id="task-1", artifact=_raw_artifact("logs", chunk), last_chunk=False
+            )
+            await _handle_stream_chunk(event, "task-1", "agent-1", [], log_state)
+
+    streamed_ids = [entry["id"] for call in mock_hub.publish_agent.call_args_list for entry in call.args[1]["entries"]]
+    page_ids = [entry.entry_id for entry in parse_agent_logs(log_state.lines, "task-1", "agent-1")]
+    assert streamed_ids == page_ids == ["task-1:1", "task-1:2", "task-1:3"]
 
 
 @pytest.mark.asyncio
