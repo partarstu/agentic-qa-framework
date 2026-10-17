@@ -1,0 +1,97 @@
+/*
+ * SPDX-FileCopyrightText: 2025-2026 Taras Paruta (partarstu@gmail.com)
+ *
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
+@layer components {
+  .overview {
+    display: grid;
+    gap: var(--space-4);
+  }
+
+  .kpi-strip {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 14rem), 1fr));
+    gap: var(--space-4);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .kpi {
+    display: grid;
+    align-content: start;
+    gap: var(--space-2);
+    border-color: color-mix(in srgb, var(--accent) 35%, var(--rule));
+  }
+
+  .kpi-label {
+    color: var(--muted);
+    font-size: var(--text-sm);
+    font-weight: 600;
+  }
+
+  .kpi-value {
+    font-size: var(--text-2xl);
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    line-height: 1.1;
+  }
+
+  .kpi-note {
+    color: var(--muted);
+    font-size: var(--text-sm);
+  }
+
+  .overview-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 26rem), 1fr));
+    gap: var(--space-4);
+  }
+
+  .activity-feed {
+    max-block-size: 22rem;
+    overflow-y: auto;
+    font-size: var(--text-sm);
+
+    & > ol {
+      display: grid;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    & li {
+      display: grid;
+      grid-template-columns: max-content max-content minmax(0, 1fr);
+      gap: var(--space-2);
+      padding-block: var(--space-1);
+      border-block-end: 1px solid var(--rule);
+    }
+
+    & time {
+      color: var(--muted);
+      font-variant-numeric: tabular-nums;
+    }
+  }
+
+  .activity-agent {
+    font-weight: 600;
+  }
+
+  .activity-text {
+    overflow-wrap: anywhere;
+  }
+
+  .failure-message {
+    display: -webkit-box;
+    overflow: hidden;
+    color: var(--failed);
+    font-size: var(--text-sm);
+    overflow-wrap: anywhere;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+  }
+}

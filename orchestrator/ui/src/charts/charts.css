@@ -1,0 +1,173 @@
+/*
+ * SPDX-FileCopyrightText: 2025-2026 Taras Paruta (partarstu@gmail.com)
+ *
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
+/* Hand-built charts on the series and status tokens; each pairs its marks with text, so none depends on colour alone */
+@layer components {
+  .bar-track {
+    display: flex;
+    gap: 2px;
+    block-size: 0.625rem;
+    overflow: hidden;
+    border-radius: 999px;
+    background: var(--rule);
+  }
+
+  .bar-part {
+    flex-basis: 0;
+    min-inline-size: 4px;
+  }
+
+  .bar-tone-passed { background: var(--passed); }
+  .bar-tone-running { background: var(--accent); }
+  .bar-tone-failed { background: var(--failed); }
+  .bar-tone-warning { background: var(--warning); }
+  .bar-tone-error { background: var(--error); }
+  .bar-tone-neutral { background: var(--muted); }
+  .bar-series-1 { background: var(--series-1); }
+  .bar-series-2 { background: var(--series-2); }
+  .bar-series-3 { background: var(--series-3); }
+  .bar-series-4 { background: var(--series-4); }
+
+  .segmented-meter,
+  .stacked-bar {
+    display: grid;
+    gap: var(--space-2);
+  }
+
+  .chart-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-1) var(--space-3);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    font-size: var(--text-sm);
+    font-variant-numeric: tabular-nums;
+
+    & > li {
+      display: inline-flex;
+      align-items: center;
+      gap: var(--space-1);
+    }
+  }
+
+  .chart-swatch {
+    inline-size: 0.75rem;
+    block-size: 0.75rem;
+    border-radius: 2px;
+  }
+
+  .sparkline {
+    display: block;
+    inline-size: 100%;
+    block-size: 2rem;
+    overflow: visible;
+  }
+
+  .sparkline-line {
+    fill: none;
+    stroke: var(--accent);
+    stroke-width: 2;
+    stroke-linejoin: round;
+  }
+
+  .sparkline-area {
+    fill: color-mix(in srgb, var(--accent) 14%, transparent);
+  }
+
+  .sparkline-empty {
+    font-size: var(--text-sm);
+  }
+
+  .topology svg {
+    display: block;
+    inline-size: 100%;
+    max-block-size: 22rem;
+  }
+
+  .topology-edge {
+    stroke: var(--field-border);
+    stroke-width: 1.5;
+  }
+
+  .topology-edge-busy {
+    stroke: var(--accent);
+    stroke-width: 3;
+  }
+
+  .topology-edge-broken {
+    stroke: var(--failed);
+    stroke-dasharray: 4 5;
+  }
+
+  .topology-hub {
+    fill: var(--accent-soft);
+    stroke: var(--accent);
+    stroke-width: 2;
+  }
+
+  .topology-hub-label,
+  .topology-name {
+    fill: var(--ink);
+    font-size: 13px;
+    font-weight: 650;
+  }
+
+  .topology-state {
+    fill: var(--muted);
+    font-size: 12px;
+  }
+
+  .topology-node {
+    & > circle:first-child,
+    & > rect {
+      fill: var(--panel);
+      stroke: var(--passed);
+      stroke-width: 3;
+    }
+  }
+
+  .topology-node-busy > circle:first-child {
+    fill: var(--accent);
+    stroke: var(--accent);
+  }
+
+  .topology-node-ring {
+    fill: none;
+    stroke: var(--accent);
+    stroke-width: 1.5;
+  }
+
+  .topology-node-broken > rect {
+    fill: var(--failed-soft);
+    stroke: var(--failed);
+  }
+
+  @media (forced-colors: active) {
+    .bar-part,
+    .chart-swatch {
+      forced-color-adjust: none;
+      background: CanvasText;
+    }
+
+    .topology-edge,
+    .topology-node > *,
+    .sparkline-line {
+      stroke: CanvasText;
+    }
+
+    .topology-edge-busy,
+    .topology-node-busy > circle:first-child {
+      stroke: Highlight;
+    }
+
+    .topology-hub-label,
+    .topology-name,
+    .topology-state {
+      fill: CanvasText;
+    }
+  }
+}

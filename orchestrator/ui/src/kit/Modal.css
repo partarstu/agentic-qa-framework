@@ -49,6 +49,19 @@
     inline-size: min(48rem, calc(100vw - 2rem));
   }
 
+  .modal-sheet {
+    inline-size: min(48rem, 100vw);
+    max-inline-size: 100vw;
+    block-size: 100dvh;
+    max-block-size: 100dvh;
+    margin-block: 0;
+    margin-inline: auto 0;
+    overflow-y: auto;
+    border-radius: var(--radius-xl) 0 0 var(--radius-xl);
+    border-block: 0;
+    border-inline-end: 0;
+  }
+
   .modal-title {
     font-size: var(--text-xl);
     font-weight: 700;

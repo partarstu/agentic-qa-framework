@@ -6,6 +6,29 @@ const relativeTime = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' })
 const subMinute = new Intl.DurationFormat(undefined, { style: 'short', milliseconds: 'numeric', fractionalDigits: 1 });
 const subSecond = new Intl.DurationFormat(undefined, { style: 'short', millisecondsDisplay: 'always' });
 const wholeUnits = new Intl.DurationFormat(undefined, { style: 'short' });
+const integer = new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 });
+const compactInteger = new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 });
+const dollars = new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 4 });
+const wholePercent = new Intl.NumberFormat(undefined, { style: 'percent', maximumFractionDigits: 0 });
+
+export function count(value: number): string {
+  return integer.format(value);
+}
+
+/** A large count shortened for a tile, as in "1.2M". */
+export function compactCount(value: number): string {
+  return compactInteger.format(value);
+}
+
+/** A cost in dollars, with up to four decimals, since a single model call often costs less than a cent. */
+export function usd(value: number): string {
+  return dollars.format(value);
+}
+
+/** A ratio from 0 to 1 as a whole percentage. */
+export function percent(ratio: number): string {
+  return wholePercent.format(ratio);
+}
 
 export function localTime(iso: string): string {
   return clockTime(new Date(iso));

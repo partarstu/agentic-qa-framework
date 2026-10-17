@@ -4,13 +4,13 @@
 
 import type { UseQueryResult } from '@tanstack/react-query';
 
-/** The state of a view's query in one line, until the view shows its data. */
-export function QueryNote<T>({ query, describe }: { query: UseQueryResult<T>; describe: (data: T) => string }) {
+/** The loading or error state of a view's query in one line; nothing while its data is fresh. */
+export function QueryStatus({ query, what }: { query: UseQueryResult<unknown>; what: string }) {
   if (query.isPending) {
-    return <p className="muted">Loading…</p>;
+    return <p className="muted">Loading {what}…</p>;
   }
   if (query.isError) {
     return <p className="alert" role="alert">The orchestrator did not answer: {query.error.message}</p>;
   }
-  return <p>{describe(query.data)}</p>;
+  return null;
 }

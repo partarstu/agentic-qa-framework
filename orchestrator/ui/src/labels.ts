@@ -46,3 +46,15 @@ export const TASK_STATUS_TONES: Record<TaskStatus, Tone> = {
   FAILED: 'failed',
   CANCELLED: 'neutral',
 };
+
+const SYNC_STATUS_ASPECTS: Record<string, { label: string; tone: Tone }> = {
+  running: { label: 'Running', tone: 'running' },
+  completed: { label: 'Completed', tone: 'passed' },
+  completed_with_errors: { label: 'Completed with errors', tone: 'warning' },
+  failed: { label: 'Failed', tone: 'failed' },
+};
+
+/** The word and tone of a knowledge sync status; a status this dashboard does not know yet shows as it came. */
+export function syncStatusAspect(status: string): { label: string; tone: Tone } {
+  return SYNC_STATUS_ASPECTS[status] ?? { label: status, tone: 'neutral' };
+}

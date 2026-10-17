@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import { describe, expect, it } from 'vitest';
-import { age, duration } from './format';
+import { age, compactCount, duration, percent, usd } from './format';
 
 // The runner's locale picks the words and the decimal separator, so the checks look at the numbers only
 describe('duration', () => {
@@ -34,5 +34,19 @@ describe('age', () => {
 
   it('counts minutes within the hour', () => {
     expect(age('2026-10-04T11:55:00Z', now)).toMatch(/5/);
+  });
+});
+
+describe('figures', () => {
+  it('shortens a large count', () => {
+    expect(compactCount(1_234_000)).toMatch(/^1[.,]2/);
+  });
+
+  it('keeps the fractions of a cent in a cost', () => {
+    expect(usd(0.0042)).toMatch(/0[.,]0042/);
+  });
+
+  it('rounds a ratio to a whole percentage', () => {
+    expect(percent(0.924)).toMatch(/^92\D|\D92\D/);
   });
 });

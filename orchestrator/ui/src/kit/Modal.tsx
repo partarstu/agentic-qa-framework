@@ -11,11 +11,13 @@ type Props = {
   /** The safe answer Escape gives; without one, Escape does nothing. */
   onCancel?: () => void;
   wide?: boolean;
+  /** A side sheet at the end of the window, for details that keep the view behind them in mind. */
+  sheet?: boolean;
   children: ReactNode;
 } & ({ title: string; labelledBy?: never } | { labelledBy: string; title?: never });
 
 /** A blocking dialog on the native `<dialog>`, which provides the top layer, the inert background, the focus trap and the focus return. */
-export function Modal({ open, title, labelledBy, onCancel, wide = false, children }: Props) {
+export function Modal({ open, title, labelledBy, onCancel, wide = false, sheet = false, children }: Props) {
   const dialog = useRef<HTMLDialogElement>(null);
   const answeredBeforeClose = useRef(false);
   const titleId = useId();
@@ -37,7 +39,7 @@ export function Modal({ open, title, labelledBy, onCancel, wide = false, childre
   return (
     <dialog
       ref={dialog}
-      className={wide ? 'modal modal-wide' : 'modal'}
+      className={['modal', wide ? 'modal-wide' : null, sheet ? 'modal-sheet' : null].filter(Boolean).join(' ')}
       aria-labelledby={labelledBy ?? titleId}
       onCancel={(event) => {
         event.preventDefault();

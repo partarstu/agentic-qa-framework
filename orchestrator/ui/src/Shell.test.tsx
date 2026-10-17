@@ -12,6 +12,7 @@ import { createQueryClient } from './data/queries';
 import { clearStreamToken } from './data/streamToken';
 import { Shell } from './Shell';
 import { axeViolations, installDom } from './testing/dom';
+import { summary } from './testing/fixtures';
 import { FakeEventSource, STREAM_TOKEN_PATH, streamToken, stubRoutes } from './testing/network';
 import type { AgentInfo, TaskInfo } from './types/dashboard';
 
@@ -55,7 +56,7 @@ describe('Shell', () => {
         case PATHS.agents:
           return [AGENT];
         case PATHS.summary:
-          return { tasks_total: 12 };
+          return summary({ tasks_total: 12 });
         case PATHS.tasks:
           return [TASK];
         case PATHS.discovery:
@@ -73,7 +74,7 @@ describe('Shell', () => {
 
   it('has no axe violations', async () => {
     renderShell();
-    await screen.findByText('12 tasks in the history');
+    await screen.findByText(/over 12 retained tasks/);
 
     expect(await axeViolations()).toEqual([]);
     expect(screen.getByRole('contentinfo').textContent).toContain('Source code');
@@ -105,7 +106,7 @@ describe('Shell', () => {
     await user.keyboard('{Enter}');
 
     expect(selected()).toBe('Tasks');
-    expect(await screen.findByText('1 of the last 100 tasks loaded')).toBeTruthy();
+    expect(await screen.findByRole('rowheader', { name: 'Review story QA-7' })).toBeTruthy();
   });
 
   it('opens Search and jump with Ctrl+K and closes it with Escape', async () => {
@@ -140,26 +141,25 @@ describe('Shell', () => {
     vi.useFakeTimers();
     renderShell();
     await act(() => vi.advanceTimersByTimeAsync(0));
-    fireEvent.click(tab('Tasks'));
+    expect(network.count(PATHS.errors)).toBe(0);
+    fireEvent.click(tab('Errors'));
     await act(() => vi.advanceTimersByTimeAsync(0));
-    expect(network.count(PATHS.tasks)).toBe(1);
+    expect(network.count(PATHS.errors)).toBe(1);
 
-    fireEvent.click(tab('Overview'));
+    fireEvent.click(tab('Logs'));
     await act(() => vi.advanceTimersByTimeAsync(0));
-    const summaries = network.count(PATHS.summary);
+    const [errors, summaries, logs] = [network.count(PATHS.errors), network.count(PATHS.summary), network.count(PATHS.logs)];
     await act(() => vi.advanceTimersByTimeAsync(35_000));
 
-    expect(network.count(PATHS.tasks)).toBe(1);
-    expect(network.count(PATHS.errors)).toBe(0);
-    expect(network.count(PATHS.logs)).toBe(0);
-    expect(network.count(PATHS.summary)).toBeGreaterThan(summaries);
+    expect(network.count(PATHS.errors)).toBe(errors);
+    expect(network.count(PATHS.summary)).toBe(summaries);
+    expect(network.count(PATHS.logs)).toBeGreaterThan(logs);
   });
 
-  it('offers the agents and, only while it is open, the loaded tasks in Search and jump', async () => {
+  it('offers the agents and the loaded tasks in Search and jump, and opens a task in its sheet', async () => {
     const user = userEvent.setup();
     renderShell();
-    await screen.findByText('12 tasks in the history');
-    expect(network.count(PATHS.tasks)).toBe(0);
+    await screen.findByText(/over 12 retained tasks/);
 
     await user.click(screen.getByRole('button', { name: /Search and jump/ }));
     const list = screen.getByRole('listbox', { name: 'Commands' });
@@ -168,7 +168,21 @@ describe('Shell', () => {
     expect(within(list).getByRole('option', { name: /Requirements review\s*Agent$/ })).toBeTruthy();
 
     await user.keyboard('review story{Enter}');
-    expect(selected()).toBe('Tasks');
+    expect(await screen.findByRole('dialog', { name: 'Review story QA-7' })).toBeTruthy();
+    expect(selected()).toBe('Overview');
+  });
+
+  it('opens Logs on the source a sheet asks for and closes the sheet', async () => {
+    const user = userEvent.setup();
+    renderShell();
+    await user.keyboard('{Control>}k{/Control}requirements review{Enter}');
+    await screen.findByRole('dialog', { name: 'Requirements review' });
+
+    await user.click(screen.getByRole('button', { name: 'Open in Logs' }));
+
+    expect(selected()).toBe('Logs');
+    expect(screen.queryByRole('dialog', { name: 'Requirements review' })).toBeNull();
+    expect(screen.getByRole<HTMLSelectElement>('combobox', { name: 'Source' }).value).toBe('agent:requirements');
   });
 
   it('runs the discovery from Search and jump and keeps its result until dismissed', async () => {

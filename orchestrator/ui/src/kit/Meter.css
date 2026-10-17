@@ -27,6 +27,10 @@
     .meter-poor > & {
       background: var(--failed);
     }
+
+    .meter-neutral > & {
+      background: var(--accent);
+    }
   }
 
   @media (forced-colors: active) {

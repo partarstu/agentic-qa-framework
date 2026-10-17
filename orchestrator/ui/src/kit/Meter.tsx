@@ -11,6 +11,8 @@ interface Props {
   value: number;
   max: number;
   valueText: string;
+  /** A quantity that is neither good nor bad, such as busy capacity, fills in the accent instead of a status colour. */
+  neutral?: boolean;
 }
 
 const GOOD_PERCENT = 80;
@@ -25,10 +27,10 @@ export function meterTone(percent: number): MeterTone {
 }
 
 /** A ratio as a thin bar, announced with its own wording; the caller shows the same wording as text. */
-export function Meter({ label, value, max, valueText }: Props) {
+export function Meter({ label, value, max, valueText, neutral = false }: Props) {
   const percent = max > 0 ? Math.min(100, Math.max(0, (value / max) * 100)) : 0;
   return (
-    <span className={`meter meter-${meterTone(percent)}`} role="meter" aria-label={label} aria-valuemin={0} aria-valuemax={max}
+    <span className={`meter meter-${neutral ? 'neutral' : meterTone(percent)}`} role="meter" aria-label={label} aria-valuemin={0} aria-valuemax={max}
       aria-valuenow={value} aria-valuetext={valueText}>
       <span className="meter-fill" style={{ inlineSize: `${percent}%` }} />
     </span>
