@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import babelParser from '@babel/eslint-parser';
+import js from '@eslint/js';
 import jsxA11y from 'eslint-plugin-jsx-a11y-x';
 import reactHooks from 'eslint-plugin-react-hooks';
 import { defineConfig } from 'eslint/config';
@@ -11,6 +12,9 @@ export default defineConfig([
   { ignores: ['dist/'] },
   {
     files: ['**/*.{ts,tsx}'],
+    extends: [js.configs.recommended],
+    // Babel's scope analysis sees neither type names nor JSX usages, so these two flag sound code; tsc checks both (noUnusedLocals)
+    rules: { 'no-undef': 'off', 'no-unused-vars': 'off' },
     languageOptions: {
       // typescript-eslint needs the compiler API that TypeScript 7 no longer ships, so Babel parses the sources
       parser: babelParser,

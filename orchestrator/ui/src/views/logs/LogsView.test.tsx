@@ -82,7 +82,8 @@ describe('LogsView', () => {
     expect(stream.url).toBe('/api/dashboard/agents/requirements/stream?stream_token=token');
 
     act(() => stream.open());
-    await waitFor(() => expect(logRequests()).toEqual([{ limit: '100', offset: '0', agent_id: 'requirements' }]));
+    const newestPage = { limit: '100', offset: '0', agent_id: 'requirements' };
+    await waitFor(() => expect(logRequests()).toEqual([newestPage, newestPage]));
     act(() => stream.emit('log_batch', { task_id: 'task-1', entries: [logEntry({ message: 'Reading the story' })] }));
     expect(shownLines()).toEqual(['Reading the story']);
     expect(await screen.findByText('[Review story QA-7]')).toBeTruthy();

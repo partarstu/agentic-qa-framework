@@ -89,7 +89,7 @@ export function useLiveDashboard(agents: AgentInfo[] | undefined) {
   const [live, setLive] = useState(INITIAL_LIVE_STATE);
   const [announcement, setAnnouncement] = useState('');
   // A repeated sentence gets a different text, or the live region would not read it again
-  const [controller] = useState(() => createLiveController(queryClient, setLive, (text) => setAnnouncement((previous) => (previous === text ? `${text} ` : text))));
+  const [controller] = useState(() => createLiveController(queryClient, setLive, (text) => setAnnouncement((previous) => (previous === text ? `${text}\u00a0` : text))));
 
   useEffect(() => () => controller.dispose(), [controller]);
 

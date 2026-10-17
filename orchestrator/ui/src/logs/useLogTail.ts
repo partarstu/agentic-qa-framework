@@ -186,10 +186,8 @@ export function useLogTail(source: LogSource, { follow, level }: Options) {
   const streamUrl = follow && agentId !== null && !snapshot.taskDone ? `/api/dashboard/agents/${encodeURIComponent(agentId)}/stream` : null;
   const streaming = streamUrl !== null;
 
+  // Also while streaming, as a stream that never opens would leave the tail empty; a stream that ends reloads the finished log
   useEffect(() => {
-    if (streaming) {
-      return;
-    }
     const controller = new AbortController();
     void tail.loadNewest(0, { signal: controller.signal });
     return () => controller.abort();

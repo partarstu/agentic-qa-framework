@@ -87,7 +87,7 @@ describe('useLogTail', () => {
     write(5);
     const { result } = renderTail({ kind: 'agent', agentId: 'ui' }, true);
     await settle();
-    expect(pageRequests()).toEqual([]);
+    expect(pageRequests()).toHaveLength(1);
 
     act(() => FakeEventSource.latest().open());
     await settle();
@@ -102,8 +102,19 @@ describe('useLogTail', () => {
     act(() => FakeEventSource.latest().open());
     await settle();
 
-    expect(pageRequests()).toHaveLength(2);
+    expect(pageRequests()).toHaveLength(3);
     expect(ids(result.current.items)).toEqual(newest(11));
+  });
+
+  it('loads the newest page of a followed agent even when its stream never opens', async () => {
+    write(5);
+
+    const { result } = renderTail({ kind: 'agent', agentId: 'ui' }, true);
+    await settle();
+
+    expect(FakeEventSource.instances).toHaveLength(1);
+    expect(result.current.status).toBe('ready');
+    expect(ids(result.current.items)).toEqual(newest(5));
   });
 
   it('keeps only the lines of its own task and level from the stream', async () => {
