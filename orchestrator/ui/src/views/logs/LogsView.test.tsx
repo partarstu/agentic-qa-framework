@@ -9,10 +9,10 @@ import type { LogSource } from '../../data/dashboardApi';
 import { clearStreamToken } from '../../data/streamToken';
 import { INITIAL_LIVE_STATE } from '../../live/liveState';
 import { axeViolations, installDom } from '../../testing/dom';
-import { agent, logEntry } from '../../testing/fixtures';
+import { agent, logEntry, task } from '../../testing/fixtures';
 import { FakeEventSource, json, STREAM_TOKEN_PATH, streamToken, stubRoutes, type FetchCall } from '../../testing/network';
 import { renderView } from '../../testing/render';
-import type { LogEntry } from '../../types/dashboard';
+import type { LogEntry, TaskInfo } from '../../types/dashboard';
 import { LogsView } from './LogsView';
 
 installDom();
@@ -21,9 +21,11 @@ const ORCHESTRATOR: LogSource = { kind: 'orchestrator' };
 const AGENT: LogSource = { kind: 'agent', agentId: 'requirements' };
 
 let logs: LogEntry[] | Promise<never> | Response = [];
+let tasks: TaskInfo[] = [];
 let network: { calls: FetchCall[] };
 
 const logRequests = () => network.calls.filter(({ path }) => path === '/api/dashboard/logs').map(({ params }) => Object.fromEntries(params));
+const taskRequests = () => network.calls.filter(({ path }) => path === '/api/dashboard/tasks');
 const shownLines = () => [...document.querySelectorAll('.log-line')].map((line) => line.textContent?.split(' - ')[1]);
 
 describe('LogsView', () => {
@@ -31,12 +33,15 @@ describe('LogsView', () => {
     FakeEventSource.install();
     clearStreamToken();
     logs = [logEntry({ id: 'orchestrator-1', task_id: null, logger: 'orchestrator.main', message: 'Started', timestamp: '2026-10-16T10:00:00' })];
+    tasks = [task()];
     network = stubRoutes(({ path }) => {
       switch (path) {
         case STREAM_TOKEN_PATH:
           return streamToken('token');
         case '/api/dashboard/agents':
           return [agent()];
+        case '/api/dashboard/tasks':
+          return tasks;
         case '/api/dashboard/logs':
           return logs;
         default:
@@ -53,6 +58,7 @@ describe('LogsView', () => {
     expect(logRequests()[0]).toEqual({ limit: '100', offset: '0' });
     expect(FakeEventSource.instances).toHaveLength(0);
     expect(screen.getByText('Following the newest lines.').getAttribute('role')).toBe('status');
+    expect(taskRequests()).toEqual([]);
 
     fireEvent.change(await screen.findByRole('combobox', { name: 'Source' }), { target: { value: 'agent:requirements' } });
     expect(onSource).toHaveBeenCalledWith(AGENT);
@@ -79,7 +85,7 @@ describe('LogsView', () => {
     await waitFor(() => expect(logRequests()).toEqual([{ limit: '100', offset: '0', agent_id: 'requirements' }]));
     act(() => stream.emit('log_batch', { task_id: 'task-1', entries: [logEntry({ message: 'Reading the story' })] }));
     expect(shownLines()).toEqual(['Reading the story']);
-    expect(screen.getByText('[task-1]')).toBeTruthy();
+    expect(await screen.findByText('[Review story QA-7]')).toBeTruthy();
 
     rerender(<LogsView source={AGENT} onSource={vi.fn()} />, { sheetOpen: true });
     expect(stream.closed).toBe(true);
@@ -119,10 +125,11 @@ describe('LogsView', () => {
   });
 
   it('names a task source after the task and keeps it among the choices', async () => {
+    tasks = [task({ task_id: 'task-7', description: 'Run TC-7' })];
     renderView(<LogsView source={{ kind: 'task', taskId: 'task-7', agentId: 'requirements' }} onSource={vi.fn()} />);
 
     const select = await screen.findByRole<HTMLSelectElement>('combobox', { name: 'Source' });
-    expect(select.selectedOptions[0].textContent).toBe('Task: task-7');
+    await waitFor(() => expect(select.selectedOptions[0].textContent).toBe('Task: Run TC-7'));
   });
 
   it('says when the source has no lines yet', async () => {

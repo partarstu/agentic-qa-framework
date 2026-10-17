@@ -9,7 +9,7 @@ import { Modal } from '../kit/Modal';
 import './Sheet.css';
 
 /** The details of an agent or a task in a side sheet, closed by its button or Escape. */
-export function Sheet({ open, title, onClose, children }: { open: boolean; title: string; onClose: () => void; children: ReactNode }) {
+export function Sheet({ open, title, onClose, children }: { open: boolean; title: ReactNode; onClose: () => void; children: ReactNode }) {
   const headingId = useId();
   return (
     <Modal open={open} labelledBy={headingId} onCancel={onClose} sheet>

@@ -13,7 +13,7 @@ import { useNavigation } from '../../navigation';
 import { isTaskActive } from '../taskStats';
 import './logs.css';
 
-const LOG_LEVELS =['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'];
+const LOG_LEVELS = ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'];
 
 const ORCHESTRATOR = 'orchestrator';
 
@@ -36,8 +36,8 @@ interface Props {
 /** One log source at a time, as the API returns them: the orchestrator's own logs, or the execution logs of one agent or one task. */
 export function LogsView({ source, onSource }: Props) {
   const agents = useAgents();
-  // Only for the names of the tasks: the Logs view never loads the task list itself
-  const tasks = useTasks(false);
+  // For the names of the tasks, which only the lines of an agent or a task source show
+  const tasks = useTasks(source.kind !== 'orchestrator');
   const live = useLive();
   const { sheetOpen } = useNavigation();
   const [level, setLevel] = useState<string | null>(null);

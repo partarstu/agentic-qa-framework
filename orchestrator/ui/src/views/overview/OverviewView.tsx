@@ -88,7 +88,7 @@ function KeyFigures({ agents, summary, tasks }: { agents?: AgentInfo[]; summary?
     <ul className="kpi-strip">
       <li className="card kpi">
         <span className="kpi-label">Agents</span>
-        <span className="kpi-value">{agents ? count(agents.length) : '…'}</span>
+        <KpiValue>{agents ? count(agents.length) : '…'}</KpiValue>
         <SegmentedMeter label="Agents by status" segments={[
           { label: 'available', value: byStatus('AVAILABLE'), tone: 'passed' },
           { label: 'busy', value: byStatus('BUSY'), tone: 'running' },
@@ -97,7 +97,7 @@ function KeyFigures({ agents, summary, tasks }: { agents?: AgentInfo[]; summary?
       </li>
       <li className="card kpi">
         <span className="kpi-label">Succeeded</span>
-        <span className="kpi-value">{summary ? (rate === null ? '—' : percent(rate)) : '…'}</span>
+        <KpiValue>{summary ? (rate === null ? '—' : percent(rate)) : '…'}</KpiValue>
         <span className="kpi-note">
           {summary && (rate === null ? 'No finished task yet' : `${count(summary.tasks_completed)} of ${count(summary.tasks_completed + summary.tasks_failed)} finished tasks`)}
         </span>
@@ -107,7 +107,7 @@ function KeyFigures({ agents, summary, tasks }: { agents?: AgentInfo[]; summary?
       </li>
       <li className="card kpi">
         <span className="kpi-label">Cost</span>
-        <span className="kpi-value">{summary ? (summary.cost_usd_total === null ? 'Not priced' : usd(summary.cost_usd_total)) : '…'}</span>
+        <KpiValue>{summary ? (summary.cost_usd_total === null ? 'Not priced' : usd(summary.cost_usd_total)) : '…'}</KpiValue>
         <span className="kpi-note">{summary && `${compactCount(summary.tokens_total)} tokens over ${count(summary.tasks_total)} retained tasks`}</span>
       </li>
       <li className="card kpi">
@@ -117,6 +117,11 @@ function KeyFigures({ agents, summary, tasks }: { agents?: AgentInfo[]; summary?
       </li>
     </ul>
   );
+}
+
+/** A key figure that rolls into place as it changes: a new value mounts afresh, which replays the CSS entry, since a view transition would block the page's input on every refresh. */
+export function KpiValue({ children }: { children: string }) {
+  return <span key={children} className="kpi-value">{children}</span>;
 }
 
 function LatestFailures({ tasks }: { tasks: UseQueryResult<TaskInfo[]> }) {

@@ -29,7 +29,7 @@ const CAPABILITY_LABELS: Record<keyof AgentCapabilities, string> = {
   stateTransitionHistory: 'State transition history',
 };
 
-/** The agent sheet: running and recent tasks, stats over the last 100 tasks, capabilities and the log tail of all its tasks. */
+/** The agent sheet: running and recent tasks, stats over the last {@link TASK_LIMIT} tasks, capabilities and the log tail of all its tasks. */
 export function AgentSheet({ agentId, onClose }: { agentId: string | null; onClose: () => void }) {
   const agents = useAgents();
   const agent = agents.data?.find(({ id }) => id === agentId);
@@ -51,7 +51,8 @@ function AgentDetails({ agent }: { agent: AgentInfo }) {
   const { openTask, openLogs } = useNavigation();
   const now = useNow(1_000);
   const [{ running }] = agentNodes([agent], live.running);
-  const tail = useLogTail({ kind: 'agent', agentId: agent.id }, { follow: running > 0, level: null });
+  // Following while idle too, since a short task can start and end between two polls and only its task_done reloads the tail
+  const tail = useLogTail({ kind: 'agent', agentId: agent.id }, { follow: true, level: null });
   const own = newestFirst((tasks.data ?? []).filter(({ agent_id }) => agent_id === agent.id));
   const stats = taskStats(own);
   const descriptions = new Map((tasks.data ?? []).map(({ task_id, description }) => [task_id, description]));

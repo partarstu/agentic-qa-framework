@@ -315,7 +315,7 @@ JIRA_URL=YOUR_JIRA_INSTANCE_URL # Required for Xray, the RAG sync runtime and th
                                  # MCP server (see "Jira MCP Server Setup" below), which has its own .env file.
 JIRA_USERNAME=YOUR_JIRA_USERNAME # Required alongside JIRA_URL. The email address associated with your Jira account.
 JIRA_API_TOKEN=YOUR_JIRA_API_TOKEN # Required alongside JIRA_URL. A Jira API token for authentication.
-ORCHESTRATOR_VERSION=3.1.0 # Default: 3.1.0. Version of the orchestrator, reported for traceability.
+ORCHESTRATOR_VERSION=4.0.0 # Default: 4.0.0. Version of the orchestrator, reported for traceability.
 ORCHESTRATOR_THINKING_LEVEL=medium # Default: medium. Thinking level of the orchestrator's model calls (routing, multi-agent routing and results extraction): none (thinking off), minimal, low, medium, high or xhigh. On Qwen, a level turns thinking on at the matching reasoning effort and none turns it off through the chat template (recommended on Qwen: none).
 TEST_CASE_DESIGN_TASK_TIMEOUT_SECONDS=3300 # Default: 3300. How long the orchestrator waits for one test case design, the wait for a free Test Case Design agent included; keep it below the orchestrator's request timeout (3500 s on Cloud Run).
 TEST_ENVIRONMENT_LABEL=Standard Test Environment # Default: Standard Test Environment. Label describing the
@@ -603,7 +603,7 @@ To run the Jira MCP server, you will need Docker installed.
 
 ### Web UI Monitoring Dashboard
 
-The orchestrator includes a built-in web UI for monitoring agent status, tasks, and logs in real-time.
+The orchestrator includes a built-in web UI for monitoring agent status, tasks, and logs in real-time. It targets WCAG 2.2 AA: every control works by keyboard, statuses pair colour with an icon and a word, every chart has a text alternative, and it follows the system's light or dark theme, a raised contrast preference, Windows contrast themes and reduced motion.
 
 #### Accessing the Dashboard
 
@@ -620,11 +620,15 @@ placeholder.
 
 #### Dashboard Features
 
-* **Summary View:** Displays orchestrator uptime, total tasks processed, success/failure rates, agent health overview, and the aggregated token consumption and estimated cost across recorded tasks.
-* **Agent Grid:** Shows all registered agents with their current status (AVAILABLE, BUSY, BROKEN), capabilities, and last activity. Includes a manual "Discover Agents" button to trigger re-discovery on demand.
-* **Task History:** Lists recent tasks with execution details, duration, assigned agent, status, and the tokens consumed and estimated cost per task. Click on a task to view its execution logs.
-* **Error Log:** Displays recent errors with context, including traceback snippets and related task/agent information.
-* **Log Viewer:** Filterable log viewer supporting level filtering (INFO, WARNING, ERROR), task/agent-specific log queries, and paginated log loading ("Load More").
+The views are tabs of the app bar (a bottom bar on a phone); a view keeps its state while another one is shown, and a hidden view sends no requests.
+
+* **Overview:** Key figures (agents by status, success rate of the finished tasks with its trend over the last 100 tasks, estimated cost and tokens, uptime and version), a live topology of the orchestrator and its agents, the live activity feed since the page opened, the latest failures and the knowledge sync outcomes.
+* **Agents:** Every registered agent with its status (Available, Busy, Broken, with the reason of a broken agent), capacity, running tasks and live activity, and the "Discover agents" action. An agent opens a side sheet with its running and recent tasks, its description and the tail of its tasks' logs, live while the sheet is open.
+* **Tasks:** The last 100 tasks (the most the API returns) as a sortable, filterable table with agent, status, start, duration, tokens and cost. A task opens a side sheet with its timing, error, token usage per operation and its log tail, live while it runs; "Open in Logs" opens the Logs view on it.
+* **Errors:** The latest 50 errors, grouped by module and agent, with their tracebacks and a link to the task.
+* **Logs:** The orchestrator's logs, or those of one agent or one task, with a level filter, a search in the loaded lines, "Load older" paging and a follow mode that keeps up with new lines.
+* **Search and jump** (`Ctrl+K`, `⌘K` on macOS) finds views, agents and tasks; `G` then a view's letter switches views, `?` lists the keyboard shortcuts, and the preferences set the theme.
+* Task starts and ends are announced to screen readers in batches (for example "3 tasks started, 2 finished, 1 failed"), and so is a lost connection to the orchestrator.
 
 #### Starting the UI Development Server (For Development Only)
 
@@ -634,11 +638,11 @@ orchestrator is running on first — the dev server's proxy configuration requir
 ```bash
 cd orchestrator/ui
 export ORCHESTRATOR_PORT=8000   # Windows (PowerShell): $env:ORCHESTRATOR_PORT=8000
-npm install
+npm ci
 npm run dev
 ```
 
-The development server runs on port 5173 with a proxy to the orchestrator backend.
+The development server runs on port 5173 with a proxy to the orchestrator backend. It needs Node.js 24 with npm 11.10 or newer, because `orchestrator/ui/.npmrc` disables the packages' install scripts and installs only versions released at least three days ago. `npm run lint` (no warning allowed), `npm run build` (type-check and bundle) and `npm test` (Vitest) are the checks the `Dashboard UI` CI job runs; `orchestrator/ui/README.md` describes the stack and the tests.
 
 #### Building the UI for Production
 
@@ -654,7 +658,7 @@ start.bat
 ```
 
 This will build the React application, copy the static files to `orchestrator/static/` for serving by the
-orchestrator, and then start the dev server on top of that build.
+orchestrator, and then start the dev server on top of that build. The orchestrator's Docker image builds the UI itself. The build also writes `licenses.md`, the licences of the bundled packages and fonts, which the orchestrator serves at `/licenses.md` and the dashboard links from its legal notice.
 
 ### Model Settings and the pydantic-ai Version
 
@@ -1190,9 +1194,9 @@ The dashboard exposes REST API endpoints for programmatic access to monitoring d
 
 * `GET /api/dashboard/summary` - Get high-level statistics (uptime, task counts, agent health).
 * `GET /api/dashboard/agents` - Get detailed status of all registered agents.
-* `GET /api/dashboard/tasks?limit=50` - Get recent tasks with execution details.
+* `GET /api/dashboard/tasks?limit=50` - Get recent tasks with execution details, without their agent logs, which the logs endpoint returns.
 * `GET /api/dashboard/errors?limit=20` - Get recent errors with context.
-* `GET /api/dashboard/logs?limit=100&offset=0&level=ERROR&task_id=xxx&agent_id=yyy` - Get filtered application logs (supports pagination via `offset`).
+* `GET /api/dashboard/logs?limit=100&offset=0&level=ERROR&task_id=xxx&agent_id=yyy` - Get filtered application logs (supports pagination via `offset`). Every entry carries a stable `id`: `<task_id>:<n>` (the `task_id` of the task list) for the n-th non-empty line of a task's agent log, whose `task_id` is that of the task list too (never the agent's own task id from a structured line), the same in every page and in the streamed `log_batch` events, and an id unique across orchestrator restarts for an orchestrator log line.
 * `POST /api/dashboard/discovery` - Manually trigger agent discovery: registers new agents, re-probes every registered
   agent (a reachable BROKEN agent becomes AVAILABLE again, an unreachable one is removed unless it is BUSY) and returns
   `{"message": "N agents reachable, M unreachable agents removed", "reachable": N, "removed": M}`. Startup, periodic
@@ -1246,14 +1250,29 @@ overwrites the previous activity on each new event (no history is retained).
 #### `agent_logs_stream` (OPTIONAL)
 
 Log batches flushed every 2 s by `DefaultAgentExecutor`. External agents that do not use
-this executor will not emit it; the dashboard falls back to polling for logs.
+this executor will not emit it; the dashboard then shows their logs when the task ends.
+
+The orchestrator parses each batch and publishes it on the agent's dashboard stream as a `log_batch` event whose
+`entries` have the shape and the ids of the logs endpoint, so the dashboard merges streamed lines with loaded pages
+without duplicates. A batch of blank lines publishes nothing.
 
 ```json
 {
   "version": 1,
   "type": "log_batch",
   "task_id": "<internal-task-id>",
-  "lines": ["2025-05-17 12:00:01 INFO  fetching issue", "..."]
+  "entries": [
+    {
+      "id": "<internal-task-id>:1",
+      "timestamp": "2025-05-17T12:00:01.026832+00:00",
+      "level": "INFO",
+      "logger": "requirements_review",
+      "message": "fetching issue",
+      "task_id": "<internal-task-id>",
+      "agent_id": "<agent-id>",
+      "agent_name": "Jira Requirements Reviewer"
+    }
+  ]
 }
 ```
 
@@ -1296,7 +1315,7 @@ captured URL (browser history, proxy logs) cannot be replayed once the stream ex
 3. The UI opens `EventSource` with `?stream_token=<token>` as a query parameter.
 4. Every 15 s the server sends a `heartbeat` frame and re-validates the token expiry.
    On expiry it emits a one-shot `event: auth_error` frame and closes the connection;
-   the UI's 401 handler routes to the login page.
+   the UI fetches a new stream token and reconnects (a rejected token request signs the user out).
 
 #### SSE Endpoints
 
@@ -1304,10 +1323,12 @@ captured URL (browser history, proxy logs) cannot be replayed once the stream ex
 |---|---|
 | `POST /api/dashboard/stream-token` | Mint a 5-min stream token (requires Bearer JWT). |
 | `GET /api/dashboard/stream?stream_token=<token>` | Global stream: initial `snapshot` frame + live `agent_activity`, `task_done`, and `gap` events. |
-| `GET /api/dashboard/agents/{agent_id}/stream?stream_token=<token>` | Per-agent stream: live `log_batch` events used by the log modal. |
+| `GET /api/dashboard/agents/{agent_id}/stream?stream_token=<token>` | Per-agent stream: an initial `heartbeat` frame (so a proxy that holds the headers until the first byte passes them at once) + live `log_batch`, `task_done` and `gap` events that feed the agent and task sheets and the follow mode of the Logs view. |
 
 The first frame on the global stream has `event: snapshot` and carries the current agent
 registry plus all running tasks with their latest activity text.
+
+On every connect of the per-agent stream, the first one and each reconnect, the UI loads the newest log page and merges it with the streamed entries by their `id`, so no line falls between the stream and the page. A `gap` event, sent when the client's buffer on the server overflowed, makes the UI refresh its views from the REST API; on the per-agent stream it marks the missed lines in the log tail. A browser tab keeps at most the global stream and one per-agent stream open, and closes both while it is hidden.
 
 ---
 
@@ -1370,6 +1391,7 @@ schedulers before upgrading:
 21. **The routing result is three output tools instead of one with an outcome field, and a prompt override of `prompts/routing_instruction_template.md` under `PROMPT_OVERRIDES_DIR` must be rebased on the new bundled template.** The template has no placeholders, so an old override still loads without an error, but it instructs the `outcome` field and the optional agent ID, which no routing output tool has any more (`AgentSelected` with a required `agent_id`, `SuitableAgentBusy` and `NoSuitableAgent`).
 22. **`QWEN_THINKING_ENABLED` is removed.** Thinking is set per agent through `<AGENT>_THINKING_LEVEL` (`none` turns it off), so a Qwen deployment that set nothing now thinks on every agent at the default levels; set the recommended values from *Qwen3.8-27B: recommended settings*. The thinking-off presence penalty is now `QWEN_NON_THINKING_PRESENCE_PENALTY` (default 0, formerly the fixed 1.5).
 23. **The Test Case Design agent rebuilds and reviews its test cases with the recorded procedures** (see *Procedure Knowledge*), requested through the orchestrator's new A2A delegation endpoint. Deploy the procedure knowledge agent of the `test-execution-agents` repository and add its URL to `_REMOTE_EXECUTION_AGENT_HOSTS`, set `_ORCHESTRATOR_URL` to the orchestrator's URL, and give the orchestrator the `INTERNAL_SERVICE_API_KEY` secret (the manifest now references it). Without them every request fails and is logged as an error, and the test cases stay as generated; `PROCEDURE_KNOWLEDGE_ENABLED=false` turns the requests off. An override of `agents/test_case_review/system_prompts/review_with_attachments_prompt.md` fails startup until it carries the new `{procedure_knowledge_review}` placeholder; overrides of `severity_classifier.md`, `test_case_creation_prompt.md` and `test_case_fixer_prompt.md` still load but lack the new severity line and the one-precondition-per-line rule, so rebase them too. An environment running a Claude model lists `ANTHROPIC_API_KEY` under its `secrets` in `deploy/manifest.yaml`, next to its `MODEL_NAME` override; other environments don't deploy that secret.
+24. **Two dashboard payloads change shape (orchestrator `4.0.0`).** `GET /api/dashboard/tasks` no longer carries each task's `agent_logs`; read them from `GET /api/dashboard/logs?task_id=<task_id>`. The `log_batch` events of the per-agent dashboard stream carry the parsed `entries`, each with its stable `id`, instead of the raw `lines` (see *A2A Streaming Contract*). The `task_id` of an agent log entry is the orchestrator's task id, no longer the agent's own one from a structured log line. The dashboard UI is the only consumer the orchestrator ships; adapt any other client of these two payloads.
 
 ### Migrating a vector collection
 

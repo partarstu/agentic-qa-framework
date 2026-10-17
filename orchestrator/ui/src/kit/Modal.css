@@ -60,6 +60,15 @@
     border-radius: var(--radius-xl) 0 0 var(--radius-xl);
     border-block: 0;
     border-inline-end: 0;
+
+    /* A sheet slides in from the edge it is docked to */
+    @media (prefers-reduced-motion: no-preference) {
+      @starting-style {
+        &[open] {
+          translate: 2rem 0;
+        }
+      }
+    }
   }
 
   .modal-title {

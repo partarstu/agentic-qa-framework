@@ -10,7 +10,7 @@ import { task } from '../../testing/fixtures';
 import { json, stubRoutes } from '../../testing/network';
 import { renderView } from '../../testing/render';
 import type { TaskInfo } from '../../types/dashboard';
-import { TasksView } from './TasksView';
+import { taskMorphName, TasksView } from './TasksView';
 
 installDom();
 
@@ -83,6 +83,21 @@ describe('TasksView', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Run TC-1' }));
 
     expect(navigation.openTask).toHaveBeenCalledWith('task-2');
+  });
+
+  it('keeps the row button, the focus return target, while its title morphs into the open sheet', async () => {
+    tasks = TASKS;
+    const { rerender } = renderView(<TasksView />);
+    const button = await screen.findByRole('button', { name: 'Run TC-1' });
+
+    rerender(<TasksView />, { openTaskId: 'task-2' });
+
+    expect(screen.getByRole('button', { name: 'Run TC-1' })).toBe(button);
+  });
+
+  it('names the morph with a CSS identifier whatever the task id holds', () => {
+    expect(taskMorphName('3f01c748-2e9d')).toBe('task-3f01c748-2e9d');
+    expect(taskMorphName('a b/c:d')).toBe('task-a_b_c_d');
   });
 
   it('says that there are no tasks yet', async () => {

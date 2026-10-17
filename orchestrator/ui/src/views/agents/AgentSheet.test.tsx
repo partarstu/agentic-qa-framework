@@ -10,12 +10,13 @@ import { axeViolations, installDom } from '../../testing/dom';
 import { agent, logEntry, task } from '../../testing/fixtures';
 import { FakeEventSource, json, STREAM_TOKEN_PATH, streamToken, stubRoutes } from '../../testing/network';
 import { renderView } from '../../testing/render';
-import type { AgentInfo } from '../../types/dashboard';
+import type { AgentInfo, LogEntry } from '../../types/dashboard';
 import { AgentSheet } from './AgentSheet';
 
 installDom();
 
 let agents: AgentInfo[] | Promise<never> | Response = [];
+let logs: LogEntry[] = [];
 
 const TASKS = [
   task({ task_id: 'task-1', status: 'COMPLETED', duration_ms: 60_000, token_usage: null }),
@@ -26,6 +27,7 @@ const TASKS = [
 
 describe('AgentSheet', () => {
   beforeEach(() => {
+    logs = [logEntry({ id: 'task-1:1', task_id: 'task-1', message: 'Reading the story', timestamp: '' })];
     FakeEventSource.install();
     clearStreamToken();
     stubRoutes(({ path }) => {
@@ -37,7 +39,7 @@ describe('AgentSheet', () => {
         case '/api/dashboard/tasks':
           return TASKS;
         case '/api/dashboard/logs':
-          return [logEntry({ id: 'task-1:1', task_id: 'task-1', message: 'Reading the story', timestamp: '' })];
+          return logs;
         default:
           return [];
       }
@@ -69,13 +71,18 @@ describe('AgentSheet', () => {
     expect(navigation.openTask).toHaveBeenCalledWith('task-2');
   });
 
-  it('loads the log page of an idle agent without a stream', async () => {
+  it('streams for an idle agent too, so a task that starts and ends between two polls reloads the tail', async () => {
     agents = [agent()];
     renderView(<AgentSheet agentId="requirements" onClose={vi.fn()} />);
 
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+    act(() => FakeEventSource.latest().open());
     expect(await screen.findByText(/Reading the story/)).toBeTruthy();
-    expect(FakeEventSource.instances).toHaveLength(0);
     expect(screen.getByText('None.')).toBeTruthy();
+
+    logs = [logEntry({ id: 'task-5:1', task_id: 'task-5', message: 'Quick review' }), ...logs];
+    act(() => FakeEventSource.latest().emit('task_done', { task_id: 'task-5', agent_id: 'requirements', status: 'COMPLETED' }));
+    expect(await screen.findByText(/Quick review/)).toBeTruthy();
   });
 
   it('shows the loading and the error state', async () => {

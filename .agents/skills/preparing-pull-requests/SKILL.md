@@ -1,6 +1,6 @@
 ---
 name: preparing-pull-requests
-description: Prepares the current branch of the QuAIA repository for a pull request by running the CI checks locally (ruff, pytest, bandit, uv audit, CALM validation), checking compliance with PYTHON_GUIDELINES.md, license headers, documentation and smoke-suite coverage, then committing, pushing and opening the PR once the user approves. Use when the user wants to open a PR or get a branch ready for review.
+description: Prepares the current branch of the QuAIA repository for a pull request by running the CI checks locally (ruff, pytest, the dashboard UI lint, build and tests, bandit, uv audit, npm audit, CALM validation), checking compliance with PYTHON_GUIDELINES.md, license headers, documentation and smoke-suite coverage, then committing, pushing and opening the PR once the user approves. Use when the user wants to open a PR or get a branch ready for review.
 ---
 
 # Preparing Pull Requests
@@ -13,7 +13,7 @@ Copy this checklist and track progress:
 - [ ] 1. Determine the scope
 - [ ] 2. Lint, format and Python guidelines
 - [ ] 3. License headers
-- [ ] 4. Unit tests
+- [ ] 4. Unit tests and dashboard UI checks
 - [ ] 5. Security and dependency checks
 - [ ] 6. CALM validation
 - [ ] 7. Documentation, skills and smoke coverage
@@ -47,21 +47,33 @@ ruff enforces only part of `PYTHON_GUIDELINES.md`. Read the changed Python code 
 
 ## 3. License headers
 
-Add the SPDX header (*Project conventions* in `AGENTS.md`) to new `.py` files in scope that lack it. Ask the user about generated or third-party code.
+Add the SPDX header (*Project conventions* in `AGENTS.md`) to new `.py` files in scope that lack it. In `orchestrator/ui`, new `.ts`, `.tsx`, `.js`, `.css`, `.html`, `.svg` and `.npmrc` files carry the same header in their comment syntax (as in `src/main.tsx`, `src/styles/tokens.css`, `index.html`, `public/favicon.svg` and `.npmrc`), and a new JSON file gets a `<name>.json.license` sidecar like `package.json.license`. Ask the user about generated or third-party code.
 
-## 4. Unit tests
+## 4. Unit tests and dashboard UI checks
 
 Run the unit tests with coverage (*Commands* in `AGENTS.md`). If tests fail, fix them with the `running-unit-tests` skill before continuing.
+
+When the scope touches `orchestrator/ui`, run the dashboard UI checks as the `Dashboard UI` CI job does:
+
+```bash
+npm --prefix orchestrator/ui ci
+npm --prefix orchestrator/ui run lint
+npm --prefix orchestrator/ui run build
+npm --prefix orchestrator/ui run test
+```
+
+The lint, the build and the tests must pass; the lint allows no warning. Fix a failure at its cause, never by disabling a rule or a test.
 
 ## 5. Security and dependency checks
 
 ```bash
 uv run bandit -r . -x "./tests,./orchestrator/ui,./.venv,./.uv-cache" -f txt
 uv audit --preview-features audit-command --frozen --no-dev
+npm --prefix orchestrator/ui audit --omit=dev  # only when the scope touches orchestrator/ui
 ```
 
 - **bandit**: fix high and medium findings in files in scope, or present them to the user with a proposed fix. Fix low findings when the fix is trivial. Findings in untouched files are reported, not fixed.
-- **uv audit**: for a vulnerable package, propose upgrading to a fixed version. If none exists, ask the user and note the vulnerability in the PR description.
+- **uv audit** and **npm audit**: for a vulnerable package, propose upgrading to a fixed version (an npm version must have passed the release cooldown of `orchestrator/ui/.npmrc`). If none exists, ask the user and note the vulnerability in the PR description.
 
 ## 6. CALM validation
 

@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-only
 
-import { useEffect, useId, useRef, type ReactNode } from 'react';
+import { useId, useLayoutEffect, useRef, type ReactNode } from 'react';
 import './Modal.css';
 
 /** A dialog shows its `title` as its heading, or is named by a heading of its content (`labelledBy`) that it does not repeat. */
@@ -22,7 +22,8 @@ export function Modal({ open, title, labelledBy, onCancel, wide = false, sheet =
   const answeredBeforeClose = useRef(false);
   const titleId = useId();
 
-  useEffect(() => {
+  // A layout effect runs inside a view transition, so the dialog is open in its new state and a shared element can morph into it
+  useLayoutEffect(() => {
     const element = dialog.current;
     if (!element) {
       return;

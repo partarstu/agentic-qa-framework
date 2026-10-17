@@ -37,6 +37,18 @@
     font-weight: 700;
     font-variant-numeric: tabular-nums;
     line-height: 1.1;
+
+    /* A changed figure rolls up into place; with reduced motion it just changes */
+    @media (prefers-reduced-motion: no-preference) {
+      animation: kpi-in var(--duration) var(--ease-out);
+    }
+  }
+
+  @keyframes kpi-in {
+    from {
+      opacity: 0;
+      translate: 0 0.5em;
+    }
   }
 
   .kpi-note {

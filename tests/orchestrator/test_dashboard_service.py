@@ -258,7 +258,7 @@ def test_parse_agent_logs_reads_structured_fields_through_the_shared_renderer():
     assert parsed[0].level == "ERROR"
     assert parsed[0].logger_name == "ui_agent"
     assert parsed[0].message == "Failed\nTraceback: boom"
-    assert parsed[0].task_id == "remote-task"
+    assert parsed[0].task_id == "task-1"
     assert parsed[0].agent_id == "agent-1"
     assert parsed[0].to_dict()["agent_name"] == "UI Agent"
 

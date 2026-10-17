@@ -22,6 +22,7 @@ from orchestrator.main import (
     _sse_hub_events,
     _validate_api_key,
     _validate_stream_token,
+    get_agent_sse_stream,
     orchestrator_app,
 )
 from orchestrator.models import AgentStatus
@@ -265,6 +266,16 @@ async def test_sse_hub_events_emits_auth_error_when_token_expired():
 
     assert len(events) == 1
     assert events[0].event == "auth_error"
+
+
+@pytest.mark.asyncio
+async def test_agent_sse_stream_starts_with_a_heartbeat():
+    response = await get_agent_sse_stream("agent-1", datetime.now(UTC) + timedelta(minutes=5))
+
+    first = await asyncio.wait_for(anext(response.body_iterator), timeout=1)
+    await response.body_iterator.aclose()
+
+    assert first.event == "heartbeat"
 
 
 @pytest.mark.parametrize("test_case_key", ["SMOKE-T100", "PROJ-42"], ids=["zephyr", "xray"])

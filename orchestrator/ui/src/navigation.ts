@@ -14,11 +14,13 @@ export interface Navigation {
   discover: (() => void) | null;
   /** An open sheet owns the per-agent stream, so the Logs view pauses its follow until it closes. */
   sheetOpen: boolean;
+  /** The task whose sheet is open, whose row hands its title over to the sheet. */
+  openTaskId: string | null;
 }
 
 const ignore = () => undefined;
 
-const NavigationContext = createContext<Navigation>({ openAgent: ignore, openTask: ignore, openLogs: ignore, discover: null, sheetOpen: false });
+const NavigationContext = createContext<Navigation>({ openAgent: ignore, openTask: ignore, openLogs: ignore, discover: null, sheetOpen: false, openTaskId: null });
 
 export const NavigationProvider = NavigationContext.Provider;
 

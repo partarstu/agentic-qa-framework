@@ -457,6 +457,8 @@ async def get_agent_sse_stream(
 
     async def _generate():
         async with streaming_hub.subscribe_agent(agent_id) as subscriber:
+            # A proxy may hold the headers until the first byte, and the client reads the stream as open only once they arrive
+            yield ServerSentEvent(data="{}", event="heartbeat")
             async for sse_event in _sse_hub_events(subscriber, token_expires_at):
                 yield sse_event
 

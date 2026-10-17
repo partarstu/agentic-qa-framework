@@ -16,7 +16,7 @@ import { NavigationProvider, type Navigation } from '../navigation';
  * `rerender` keeps the cache and may change the navigation.
  */
 export function renderView(ui: ReactElement, { navigation = {}, live = INITIAL_LIVE_STATE }: { navigation?: Partial<Navigation>; live?: LiveState } = {}) {
-  const spies: Navigation = { openAgent: vi.fn(), openTask: vi.fn(), openLogs: vi.fn(), discover: vi.fn(), sheetOpen: false, ...navigation };
+  const spies: Navigation = { openAgent: vi.fn(), openTask: vi.fn(), openLogs: vi.fn(), discover: vi.fn(), sheetOpen: false, openTaskId: null, ...navigation };
   const queryClient = createQueryClient();
   const wrap = (element: ReactElement, current: Navigation) => (
     <QueryClientProvider client={queryClient}>

@@ -1208,6 +1208,61 @@ def test_dashboard_api_rejects_missing_token(http_client: httpx.Client) -> None:
     )
 
 
+def test_dashboard_page_and_its_script_are_served(http_client: httpx.Client) -> None:
+    """The orchestrator image builds the dashboard, so its page and the bundle the page references are served."""
+    page = http_client.get(f"{ORCHESTRATOR_URL}/")
+    assert page.status_code == 200, f"The dashboard page is not served: {page.status_code}"
+    script = re.search(r'<script type="module"[^>]* src="(/assets/[^"]+\.js)"', page.text)
+    assert script, f"The dashboard page references no bundled script: {page.text[:500]}"
+    bundle = http_client.get(f"{ORCHESTRATOR_URL}{script.group(1)}")
+    assert bundle.status_code == 200, f"The bundled script is not served: {bundle.status_code}"
+    assert "javascript" in bundle.headers.get("content-type", ""), bundle.headers
+
+
+def test_dashboard_licence_list_is_served_instead_of_the_page(http_client: httpx.Client) -> None:
+    """The SPA fallback answers a missing file with the page and 200, so only the content tells the licence list apart."""
+    response = http_client.get(f"{ORCHESTRATOR_URL}/licenses.md")
+    assert response.status_code == 200, f"The licence list is not served: {response.status_code}"
+    assert "<!doctype html" not in response.text.lower(), "The SPA fallback answered instead of the licence list."
+    assert re.search(r"^## react - ", response.text, re.MULTILINE), (
+        f"The licence list names no react: {response.text[:500]}"
+    )
+
+
+def test_dashboard_task_list_carries_no_agent_logs(
+    requirements_review_response: httpx.Response, http_client: httpx.Client, auth_headers: dict[str, str]
+) -> None:
+    """The dashboard reads a task's logs from the logs endpoint, so the task list leaves them out."""
+    response = http_client.get(f"{ORCHESTRATOR_URL}/api/dashboard/tasks", params={"limit": 100}, headers=auth_headers)
+    assert response.status_code == 200, response.text
+    tasks = response.json()
+    assert tasks, "The task list is empty."
+    with_logs = [task["task_id"] for task in tasks if "agent_logs" in task]
+    assert not with_logs, f"Tasks of the list carry their agent logs: {with_logs}"
+
+
+def test_agent_log_entries_carry_distinct_line_ids(
+    requirements_review_response: httpx.Response, http_client: httpx.Client, auth_headers: dict[str, str]
+) -> None:
+    """Every agent log line of a task carries its stable id `<task_id>:<line number>` and the task's own id, by which the dashboard merges and labels the lines."""
+    agent_name = config.RequirementsReviewAgentConfig.OWN_NAME
+    tasks = _completed_tasks_of(http_client, auth_headers, agent_name)
+    assert tasks, f"No completed task of '{agent_name}' is listed on the dashboard."
+    task_id = tasks[0]["task_id"]
+    response = http_client.get(
+        f"{ORCHESTRATOR_URL}/api/dashboard/logs", params={"task_id": task_id, "limit": 1000}, headers=auth_headers
+    )
+    assert response.status_code == 200, response.text
+    entries = [entry for entry in response.json() if entry.get("agent_name") == agent_name]
+    ids = [entry.get("id") for entry in entries]
+    assert ids, "No agent log line of the task reached the dashboard."
+    foreign = {entry.get("task_id") for entry in entries} - {task_id}
+    assert not foreign, f"Agent log lines of task {task_id} carry other task ids: {foreign}"
+    assert len(set(ids)) == len(ids), f"Agent log lines share ids: {ids}"
+    malformed = [entry_id for entry_id in ids if not re.fullmatch(rf"{re.escape(task_id)}:\d+", entry_id or "")]
+    assert not malformed, f"Agent log ids are not '<task_id>:<n>': {malformed}"
+
+
 def test_dashboard_reports_the_configured_agent_version(
     all_agents_ready: None, http_client: httpx.Client, auth_headers: dict[str, str]
 ) -> None:

@@ -90,6 +90,18 @@
     border-inline-start-color: var(--warning);
   }
 
+  /* Contrast themes drop the level colours, so only the error and warning lines keep a visible edge */
+  @media (forced-colors: active) {
+    .log-line {
+      border-inline-start-color: Canvas;
+    }
+
+    .log-error,
+    .log-warn {
+      border-inline-start-color: CanvasText;
+    }
+  }
+
   .log-error .log-time,
   .log-error .log-logger,
   .log-error .log-task,

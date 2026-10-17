@@ -81,7 +81,7 @@ services:
       QDRANT__SERVICE__API_KEY: QDRANT_API_KEY
 
   orchestrator:
-    version: "3.1.0"
+    version: "4.0.0"
     env:
       ORCHESTRATOR_VERSION: "{version}"
       # Model selection, left empty for the code defaults; a Qwen deployment sets these in its environment overrides.

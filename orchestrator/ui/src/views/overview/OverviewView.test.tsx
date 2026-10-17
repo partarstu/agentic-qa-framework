@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 // @vitest-environment jsdom
-import { fireEvent, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { INITIAL_LIVE_STATE } from '../../live/liveState';
 import { axeViolations, installDom } from '../../testing/dom';
@@ -11,7 +11,7 @@ import { agent, summary, task } from '../../testing/fixtures';
 import { json, stubRoutes } from '../../testing/network';
 import { renderView } from '../../testing/render';
 import type { DashboardSummary, RagSyncOutcome, TaskInfo } from '../../types/dashboard';
-import { OverviewView, successTrend } from './OverviewView';
+import { KpiValue, OverviewView, successTrend } from './OverviewView';
 
 installDom();
 
@@ -47,6 +47,20 @@ describe('successTrend', () => {
 
   it('has no point without finished tasks', () => {
     expect(successTrend([task({ status: 'RUNNING' })])).toEqual([]);
+  });
+});
+
+describe('KpiValue', () => {
+  it('mounts a changed figure afresh, so its entry animation replays, and keeps an unchanged one', () => {
+    const { container, rerender } = render(<KpiValue>12</KpiValue>);
+    const first = container.querySelector('.kpi-value');
+
+    rerender(<KpiValue>12</KpiValue>);
+    expect(container.querySelector('.kpi-value')).toBe(first);
+
+    rerender(<KpiValue>13</KpiValue>);
+    expect(container.querySelector('.kpi-value')).not.toBe(first);
+    expect(container.textContent).toBe('13');
   });
 });
 

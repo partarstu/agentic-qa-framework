@@ -70,21 +70,25 @@ export function Shell({ onSignedOut }: Props) {
     });
   };
 
+  // A transition, so a task's title morphs between its row and its sheet
+  const showSheet = (next: OpenSheet) => startTransition(() => setSheet(next));
+
   const signOut = () => {
     logout();
     onSignedOut();
   };
 
   const navigation: Navigation = {
-    openAgent: (id) => setSheet({ kind: 'agent', id }),
-    openTask: (id) => setSheet({ kind: 'task', id }),
+    openAgent: (id) => showSheet({ kind: 'agent', id }),
+    openTask: (id) => showSheet({ kind: 'task', id }),
     openLogs: (source) => {
-      setSheet(null);
+      showSheet(null);
       setLogSource(source);
       select('logs');
     },
     discover: discovery.isPending ? null : () => discovery.mutate(),
     sheetOpen: sheet !== null,
+    openTaskId: sheet?.kind === 'task' ? sheet.id : null,
   };
 
   const commands = dashboardCommands({
@@ -169,8 +173,8 @@ export function Shell({ onSignedOut }: Props) {
           <LegalNotice />
           <CommandPalette open={paletteOpen} commands={commands} onClose={() => setPaletteOpen(false)} />
           <ShortcutsSheet open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
-          <AgentSheet agentId={sheet?.kind === 'agent' ? sheet.id : null} onClose={() => setSheet(null)} />
-          <TaskSheet taskId={sheet?.kind === 'task' ? sheet.id : null} onClose={() => setSheet(null)} />
+          <AgentSheet agentId={sheet?.kind === 'agent' ? sheet.id : null} onClose={() => showSheet(null)} />
+          <TaskSheet taskId={sheet?.kind === 'task' ? sheet.id : null} onClose={() => showSheet(null)} />
           <div className="visually-hidden" aria-live="polite">{announcement}</div>
         </div>
       </NavigationProvider>

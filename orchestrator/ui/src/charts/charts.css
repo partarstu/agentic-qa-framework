@@ -96,6 +96,24 @@
   .topology-edge-busy {
     stroke: var(--accent);
     stroke-width: 3;
+
+    /* Work flows from the orchestrator to the agent as a task starts; it stops within five seconds (WCAG 2.2.2) and the edge stays lit */
+    @media (prefers-reduced-motion: no-preference) {
+      animation: topology-flow 0.7s linear 7;
+    }
+  }
+
+  /* The dashes exist only while the flow runs, so the edge is solid again when it stops */
+  @keyframes topology-flow {
+    from {
+      stroke-dasharray: 8 6;
+      stroke-dashoffset: 14;
+    }
+
+    to {
+      stroke-dasharray: 8 6;
+      stroke-dashoffset: 0;
+    }
   }
 
   .topology-edge-broken {

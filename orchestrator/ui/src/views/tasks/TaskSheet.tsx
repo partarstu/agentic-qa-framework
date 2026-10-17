@@ -19,17 +19,17 @@ import { useNow } from '../../useNow';
 import { QueryStatus } from '../QueryStatus';
 import { Sheet } from '../Sheet';
 import { isTaskActive } from '../taskStats';
-import { taskCost, taskDuration } from './TasksView';
+import { taskCost, taskDuration, TaskTitleMorph } from './TasksView';
 
 const operationTokens = (operation: OperationUsage) =>
   operation.uncached_input_tokens + operation.cache_read_tokens + operation.cache_write_tokens + operation.output_tokens;
 
-/** The task sheet: timing, error, token usage per operation and the task's log tail; a task outside the last 100 says so. */
+/** The task sheet: timing, error, token usage per operation and the task's log tail; a task outside the last {@link TASK_LIMIT} says so. */
 export function TaskSheet({ taskId, onClose }: { taskId: string | null; onClose: () => void }) {
   const tasks = useTasks(taskId !== null);
   const task = tasks.data?.find(({ task_id }) => task_id === taskId);
   return (
-    <Sheet open={taskId !== null} title={task?.description ?? 'Task'} onClose={onClose}>
+    <Sheet open={taskId !== null} title={task ? <TaskTitleMorph taskId={task.task_id}>{task.description}</TaskTitleMorph> : 'Task'} onClose={onClose}>
       {taskId !== null && (task ? <TaskDetails task={task} /> : (
         <>
           <QueryStatus query={tasks} what="the task" />

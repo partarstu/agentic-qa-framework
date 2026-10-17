@@ -72,7 +72,8 @@ def _parse_agent_log_line(line: str, entry_id: str, task_id: str, agent_id: str)
             level=_normalise_level(str(structured.get("level", "INFO"))),
             logger_name=str(structured.get("logger", f"agent.{agent_id}")),
             message=utils.render_log_message(structured),
-            task_id=str(structured.get("task_id") or task_id),
+            # The agent's own task id is unknown to the dashboard, which knows the task by the orchestrator's id
+            task_id=task_id,
             agent_id=str(structured.get("agent_id") or agent_id),
             agent_name=None if agent_name is None else str(agent_name),
             entry_id=entry_id,

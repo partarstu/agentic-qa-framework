@@ -76,4 +76,10 @@
       background: none;
     }
   }
+
+  /* A task's title travels across the window into its sheet, so it takes longer than a fade; reduced motion still stops it */
+  ::view-transition-group(*.task-morph) {
+    animation-duration: var(--duration-slow);
+    animation-timing-function: var(--ease-out);
+  }
 }

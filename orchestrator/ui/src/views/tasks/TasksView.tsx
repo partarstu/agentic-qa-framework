@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import { ArrowDown, ArrowUp, ListChecks } from 'lucide-react';
-import { useState } from 'react';
+import { useState, ViewTransition, type ReactNode } from 'react';
 import { TASK_LIMIT } from '../../data/dashboardApi';
 import { useTasks } from '../../data/queries';
 import { count, duration, localDateTime, usd } from '../../format';
@@ -57,10 +57,10 @@ export function sortTasks(tasks: TaskInfo[], { key, descending }: Sort, now: num
   });
 }
 
-/** The last 100 tasks as a sortable, filterable table; a task's button opens its sheet. */
+/** The last {@link TASK_LIMIT} tasks as a sortable, filterable table; a task's button opens its sheet. */
 export function TasksView() {
   const tasks = useTasks();
-  const { openTask } = useNavigation();
+  const { openTask, openTaskId } = useNavigation();
   const now = useNow(1_000);
   const [sort, setSort] = useState<Sort>({ key: 'start', descending: true });
   const [status, setStatus] = useState('');
@@ -126,7 +126,9 @@ export function TasksView() {
                 {shown.map((task) => (
                   <tr key={task.task_id}>
                     <th scope="row">
-                      <button type="button" className="link" onClick={() => openTask(task.task_id)}>{task.description}</button>
+                      <button type="button" className="link" onClick={() => openTask(task.task_id)}>
+                        {openTaskId === task.task_id ? task.description : <TaskTitleMorph taskId={task.task_id}>{task.description}</TaskTitleMorph>}
+                      </button>
                     </th>
                     <td>{task.agent_name}</td>
                     <td><Aspect tone={TASK_STATUS_TONES[task.status]} quiet>{TASK_STATUS_LABELS[task.status]}</Aspect></td>
@@ -142,6 +144,14 @@ export function TasksView() {
         ))}
     </section>
   );
+}
+
+/** A view-transition name is a CSS identifier, which a task id from the server need not be. */
+export const taskMorphName = (taskId: string) => `task-${taskId.replace(/[^\w-]/g, '_')}`;
+
+/** A task's title, which morphs between its row and its sheet as the sheet opens and closes, its only animation. */
+export function TaskTitleMorph({ taskId, children }: { taskId: string; children: ReactNode }) {
+  return <ViewTransition name={taskMorphName(taskId)} default="none" share="task-morph"><span>{children}</span></ViewTransition>;
 }
 
 /** The duration of a finished task, or the time a running one has been running for. */

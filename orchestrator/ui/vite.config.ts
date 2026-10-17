@@ -37,8 +37,8 @@ export default defineConfig(({ command, mode, isPreview }) => {
     server: {
       proxy: orchestratorPort ? { '/api': { target: `http://localhost:${orchestratorPort}`, changeOrigin: true } } : undefined,
     },
-    // Vitest empties CSS imports unless included; tokens.test.ts checks the contrast of the token values in the stylesheet
-    test: { css: { include: /\/tokens\.css/ } },
+    // Vitest empties CSS imports unless included; the style tests read stylesheets raw, while the components' imports stay empty
+    test: { css: { include: /\.css\?raw$/ } },
     build: {
       outDir: 'dist',
       emptyOutDir: true,
