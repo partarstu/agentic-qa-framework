@@ -1,0 +1,294 @@
+/*
+ * SPDX-FileCopyrightText: 2025-2026 Taras Paruta (partarstu@gmail.com)
+ *
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+/*
+ * The shell: one app bar of constant height that never wraps (brand, views, tools), which on a phone keeps the brand and the
+ * tools while the views move to a bottom bar within the thumb's reach.
+ */
+@layer components {
+  .shell {
+    display: grid;
+    grid-template-rows: auto auto 1fr auto;
+    min-block-size: 100dvh;
+
+    /* The legal notice stays clear of the bottom bar */
+    @media (width < 40rem) {
+      padding-block-end: calc(var(--bottom-nav-block-size) + env(safe-area-inset-bottom));
+    }
+  }
+
+  .appbar {
+    position: sticky;
+    inset-block-start: 0;
+    z-index: 10;
+    display: flex;
+    align-items: center;
+    gap: var(--space-4);
+    block-size: var(--appbar-block-size);
+    padding-inline: var(--space-5);
+    border-block-end: 1px solid color-mix(in srgb, var(--accent) 35%, var(--rule));
+
+    /* The blur sits on a layer of its own: a filter on the bar would trap the fixed bottom bar inside it */
+    &::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      z-index: -1;
+      background: color-mix(in srgb, var(--panel) 92%, transparent);
+      backdrop-filter: blur(12px);
+    }
+
+    @media (width < 40rem) {
+      gap: var(--space-2);
+      padding-inline: var(--space-3) var(--space-2);
+    }
+  }
+
+  .appbar-brand {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: var(--space-2);
+
+    & h1 {
+      font-size: var(--text-md);
+      font-weight: 750;
+      white-space: nowrap;
+    }
+
+    @media (width < 30rem) {
+      & h1 {
+        position: absolute;
+        inline-size: 1px;
+        block-size: 1px;
+        overflow: hidden;
+        clip-path: inset(50%);
+      }
+    }
+  }
+
+  .appbar-tools {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    margin-inline-start: auto;
+    min-inline-size: 0;
+  }
+
+  /* Tool labels give way to their icons below a wide screen; they stay the buttons' accessible names */
+  .appbar-label {
+    @media (width < 80rem) {
+      position: absolute;
+      inline-size: 1px;
+      block-size: 1px;
+      overflow: hidden;
+      clip-path: inset(50%);
+      white-space: nowrap;
+    }
+  }
+
+  .appbar-tools > button,
+  .appbar-tools .popover-toggle {
+    @media (width < 80rem) {
+      min-inline-size: var(--control-height);
+      padding-inline: var(--space-2);
+    }
+  }
+
+  .appbar-tools .popover-toggle > .lucide-chevron-down {
+    @media (width < 80rem) {
+      display: none;
+    }
+  }
+
+  .command-trigger {
+    @media (width >= 80rem) {
+      min-inline-size: 15rem;
+      justify-content: flex-start;
+      color: var(--muted);
+      background: var(--raised);
+      border-color: var(--rule);
+    }
+  }
+
+  .command-trigger-kbd {
+    margin-inline-start: auto;
+
+    @media (width < 80rem) {
+      display: none;
+    }
+  }
+
+  .appbar-stream {
+    display: inline-flex;
+    padding-inline: var(--space-2);
+    white-space: nowrap;
+  }
+
+  /* The views: a segmented control in the bar */
+  .appbar-nav.tab-list {
+    flex-wrap: nowrap;
+    gap: var(--space-1);
+
+    & [role="tab"] {
+      gap: var(--space-2);
+      padding-inline: var(--space-3);
+      border-radius: var(--radius);
+
+      &[aria-selected="true"] {
+        color: var(--ink);
+        background: var(--accent-soft);
+
+        & > svg {
+          color: var(--accent);
+        }
+
+        &::after {
+          display: none;
+        }
+      }
+
+      @media (forced-colors: active) {
+        &[aria-selected="true"] {
+          forced-color-adjust: none;
+          color: HighlightText;
+          background: Highlight;
+
+          & > svg {
+            color: HighlightText;
+          }
+        }
+      }
+    }
+
+    @media (width < 64rem) and (width >= 40rem) {
+      & .nav-label {
+        position: absolute;
+        inline-size: 1px;
+        block-size: 1px;
+        overflow: hidden;
+        clip-path: inset(50%);
+      }
+    }
+
+    /* On a phone the views become a bottom bar, icon over label, clear of the home indicator */
+    @media (width < 40rem) {
+      position: fixed;
+      inset: auto 0 0;
+      z-index: 10;
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 0;
+      block-size: calc(var(--bottom-nav-block-size) + env(safe-area-inset-bottom));
+      padding: var(--space-1) var(--space-2) calc(var(--space-1) + env(safe-area-inset-bottom));
+      background: var(--panel);
+      border-block-start: 1px solid var(--rule);
+      box-shadow: 0 -4px 16px rgb(0 0 0 / 6%);
+
+      & [role="tab"] {
+        position: relative;
+        flex-direction: column;
+        gap: 0.125rem;
+        block-size: 100%;
+        padding-inline: 0;
+        font-size: var(--text-xs);
+      }
+    }
+  }
+
+  .preferences {
+    display: grid;
+    gap: var(--space-3);
+
+    & fieldset {
+      display: grid;
+      gap: var(--space-2);
+      margin: 0;
+      padding: 0;
+      border: 0;
+    }
+
+    & legend {
+      margin-block-end: var(--space-1);
+      padding: 0;
+      font-weight: 650;
+    }
+  }
+
+  .shell-notices {
+    display: grid;
+    gap: var(--space-2);
+    padding-inline: var(--space-5);
+
+    & p {
+      align-items: center;
+      margin: var(--space-3) 0 0;
+    }
+
+    & p > span {
+      flex: 1;
+    }
+
+    @media (width < 40rem) {
+      padding-inline: var(--space-3);
+    }
+  }
+
+  .shell-info {
+    background: var(--accent-soft);
+
+    & > svg {
+      color: var(--accent);
+    }
+  }
+
+  .shell-main {
+    padding: var(--space-5) var(--space-5) var(--space-6);
+
+    &:focus-visible {
+      outline: none;
+    }
+
+    @media (width < 40rem) {
+      padding: var(--space-3) var(--space-3) var(--space-5);
+    }
+  }
+
+  /* Reading views keep a measure on a very wide screen */
+  .tab-panel {
+    container-type: inline-size;
+    max-inline-size: 100rem;
+    margin-inline: auto;
+  }
+
+  /* View transitions: a quick cross-fade between the views; with reduced motion they switch at once */
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation-duration: 160ms;
+
+    @media (prefers-reduced-motion: reduce) {
+      animation: none;
+    }
+  }
+
+  .shortcuts {
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr);
+    gap: var(--space-3) var(--space-5);
+    align-items: center;
+
+    & dt {
+      display: flex;
+      align-items: center;
+      gap: var(--space-1);
+    }
+  }
+
+  .shortcut-join {
+    color: var(--muted);
+    font-size: var(--text-xs);
+  }
+}

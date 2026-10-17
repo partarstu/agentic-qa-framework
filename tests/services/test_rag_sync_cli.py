@@ -100,8 +100,9 @@ def test_lost_lock_exits_three(cli, monkeypatch) -> None:
         assert cli.main() == 3
 
 
-@pytest.fixture
+@pytest.fixture(autouse=True)
 def report_outcome():
+    """Keeps every run off the metadata store, whose connection retries would stall each test for seconds."""
     with patch("rag_sync.outcome_reporting.report_terminal_outcome", new_callable=AsyncMock) as report:
         yield report
 

@@ -2,13 +2,13 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
-from datetime import datetime
-from unittest.mock import MagicMock
+from datetime import UTC, datetime
 
 import pytest
 from a2a.types import AgentCapabilities, AgentCard, AgentExtension, AgentInterface
 
-from orchestrator.dashboard_service import OrchestratorDashboardService
+from common.streaming import LogEntryPayload
+from orchestrator.dashboard_service import OrchestratorDashboardService, parse_agent_logs
 from orchestrator.models import (
     TASK_CAPACITY_EXTENSION_URI,
     AgentRegistry,
@@ -17,14 +17,6 @@ from orchestrator.models import (
     TaskRecord,
     TaskStatus,
 )
-
-
-@pytest.fixture
-def mock_dashboard_service():
-    registry = MagicMock(spec=AgentRegistry)
-    tasks = MagicMock(spec=TaskHistory)
-    errors = MagicMock(spec=ErrorHistory)
-    return OrchestratorDashboardService(registry, tasks, errors)
 
 
 def _task_with_usage(task_id: str, total_tokens: int, cost_usd: float | None) -> TaskRecord:
@@ -69,25 +61,25 @@ async def test_get_summary_cost_none_when_no_priced_tasks():
     assert summary["cost_usd_total"] is None
 
 
-def test_parse_agent_logs_standard(mock_dashboard_service):
+def test_parse_agent_logs_standard():
     raw_logs = [
         "2026-01-01 12:00:00,000 - agent - INFO - normal message",
         "2026-01-01 12:00:01,000 - agent - ERROR - error message",
     ]
-    parsed = mock_dashboard_service._parse_agent_logs(raw_logs, "task-1", "agent-1")
+    parsed = parse_agent_logs(raw_logs, "task-1", "agent-1")
     assert len(parsed) == 2
     assert parsed[0].level == "INFO"
     assert parsed[1].level == "ERROR"
 
 
-def test_parse_agent_logs_json_with_error_field(mock_dashboard_service):
+def test_parse_agent_logs_json_with_error_field():
     # This matches the user's issue: JSON with "error" field should NOT be classified as ERROR level
     # if it doesn't look like a log line
     json_log = '{"error": "some data", "status": "failed"}'
     # Without timestamp, it might trigger fallback
 
     raw_logs = [json_log]
-    parsed = mock_dashboard_service._parse_agent_logs(raw_logs, "task-1", "agent-1")
+    parsed = parse_agent_logs(raw_logs, "task-1", "agent-1")
 
     assert len(parsed) == 1
     # Should default to INFO, not ERROR (which was the bug)
@@ -95,7 +87,7 @@ def test_parse_agent_logs_json_with_error_field(mock_dashboard_service):
     assert parsed[0].message == json_log
 
 
-def test_parse_agent_logs_multiline_json(mock_dashboard_service):
+def test_parse_agent_logs_multiline_json():
     raw_logs = [
         "2026-01-01 12:00:00 - agent - INFO - Sending request:",
         "{",
@@ -103,7 +95,7 @@ def test_parse_agent_logs_multiline_json(mock_dashboard_service):
         '  "data": "value"',
         "}",
     ]
-    parsed = mock_dashboard_service._parse_agent_logs(raw_logs, "task-1", "agent-1")
+    parsed = parse_agent_logs(raw_logs, "task-1", "agent-1")
 
     assert len(parsed) == 5
     # First line is standard
@@ -114,28 +106,28 @@ def test_parse_agent_logs_multiline_json(mock_dashboard_service):
     assert "error" in parsed[2].message
 
 
-def test_parse_agent_logs_real_log_format(mock_dashboard_service):
+def test_parse_agent_logs_real_log_format():
     # Test with the format that comes from AgentLogCaptureHandler
     # '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     raw_logs = ['2026-01-06 16:20:30,123 - my_agent - INFO - {"error": "data"}']
-    parsed = mock_dashboard_service._parse_agent_logs(raw_logs, "task-1", "agent-1")
+    parsed = parse_agent_logs(raw_logs, "task-1", "agent-1")
 
     assert len(parsed) == 1
     assert parsed[0].level == "INFO"
     assert parsed[0].message == '{"error": "data"}'
 
 
-def test_parse_agent_logs_fallback_timestamp(mock_dashboard_service):
+def test_parse_agent_logs_fallback_timestamp():
     # Verify that when timestamp is missing, we get an empty string
     raw_logs = ["Just a message"]
-    parsed = mock_dashboard_service._parse_agent_logs(raw_logs, "task-1", "agent-1")
+    parsed = parse_agent_logs(raw_logs, "task-1", "agent-1")
 
     assert len(parsed) == 1
     # Check that timestamp is empty
     assert parsed[0].timestamp == ""
 
 
-def test_parse_agent_logs_logback_format(mock_dashboard_service):
+def test_parse_agent_logs_logback_format():
     # The UI agent emits logback/SLF4J lines: "HH:mm:ss.SSS LEVEL Logger - message".
     # These don't match the Python logging layout, so the level must be detected from the line
     # instead of defaulting to INFO.
@@ -144,18 +136,94 @@ def test_parse_agent_logs_logback_format(mock_dashboard_service):
         "21:10:43.754 DEBUG KnowledgeService - No procedure match found for description: 'x'",
         "21:10:42.918 INFO  KnowledgeBasedExecutionOrchestrator - Processing execution item",
     ]
-    parsed = mock_dashboard_service._parse_agent_logs(raw_logs, "task-1", "agent-1")
+    parsed = parse_agent_logs(raw_logs, "task-1", "agent-1")
 
     assert [entry.level for entry in parsed] == ["ERROR", "DEBUG", "INFO"]
     # The full original line is preserved as the message for these formats.
     assert parsed[0].message == raw_logs[0]
 
 
-def test_parse_agent_logs_warn_alias_normalised(mock_dashboard_service):
-    raw_logs = ["21:10:43.758 WARN UiTestAgent - something looks off"]
-    parsed = mock_dashboard_service._parse_agent_logs(raw_logs, "task-1", "agent-1")
+@pytest.mark.parametrize(
+    ("line", "level"),
+    [
+        ("21:10:43.758 WARN UiTestAgent - something looks off", "WARNING"),
+        ("2026-01-01 12:00:00,000 - agent - WARN - something looks off", "WARNING"),
+        ("2026-01-01 12:00:00,000 - agent - fatal - out of memory", "CRITICAL"),
+        (
+            '{"timestamp": "2026-05-04T10:33:56+00:00", "level": "warn", "message": "slow", "logger": "ui_agent"}',
+            "WARNING",
+        ),
+        (
+            '{"timestamp": "2026-05-04T10:33:56+00:00", "level": "FATAL", "message": "down", "logger": "ui_agent"}',
+            "CRITICAL",
+        ),
+    ],
+)
+def test_parse_agent_logs_normalises_level_aliases_in_every_format(line: str, level: str):
+    [entry] = parse_agent_logs([line], "task-1", "agent-1")
 
-    assert parsed[0].level == "WARNING"
+    assert entry.level == level
+
+
+def test_parse_agent_logs_numbers_the_non_empty_lines_of_the_task():
+    parsed = parse_agent_logs(["first\n\nsecond", "   ", "third"], "task-1", "agent-1")
+
+    assert [entry.to_dict()["id"] for entry in parsed] == ["task-1:1", "task-1:2", "task-1:3"]
+
+
+@pytest.mark.asyncio
+async def test_streamed_batches_get_the_ids_of_a_page_of_the_same_task():
+    tasks = TaskHistory()
+    await tasks.add(
+        TaskRecord(
+            task_id="t1",
+            agent_id="agent-1",
+            agent_name="Agent",
+            description="task",
+            status=TaskStatus.RUNNING,
+            start_time=datetime.now(UTC),
+        )
+    )
+    streamed_ids = []
+    for batch in (["2026-01-01 12:00:00 - agent - INFO - one", "", "21:10:43.758 INFO Ui - two"], ["three", "four"]):
+        await tasks.append_log_batch("t1", batch)
+        entries = parse_agent_logs(batch, "t1", "agent-1", preceding_line_count=len(streamed_ids))
+        streamed_ids += [entry.entry_id for entry in entries]
+    service = OrchestratorDashboardService(AgentRegistry(), tasks, ErrorHistory())
+
+    task_page = await service.get_logs(task_id="t1")
+    agent_page = await service.get_logs(agent_id="agent-1")
+
+    assert streamed_ids == ["t1:1", "t1:2", "t1:3", "t1:4"]
+    assert sorted(entry["id"] for entry in task_page) == sorted(streamed_ids)
+    assert sorted(entry["id"] for entry in agent_page) == sorted(streamed_ids)
+
+
+def test_parse_agent_logs_keeps_an_unparsable_timestamp_as_given():
+    [entry] = parse_agent_logs(["yesterday - agent - INFO - late"], "task-1", "agent-1")
+
+    assert (entry.timestamp, entry.message) == ("yesterday", "late")
+
+
+def test_parse_agent_logs_turns_a_structured_agent_name_into_text_for_the_stream_payload():
+    [entry] = parse_agent_logs(['{"message": "x", "agent_name": 7}'], "task-1", "agent-1")
+
+    assert LogEntryPayload.model_validate(entry.to_dict()).agent_name == "7"
+
+
+@pytest.mark.asyncio
+async def test_get_recent_tasks_leaves_out_the_agent_logs():
+    tasks = TaskHistory()
+    record = _task_with_usage("t1", 10, None)
+    record.agent_logs = ["a log line"]
+    await tasks.add(record)
+    service = OrchestratorDashboardService(AgentRegistry(), tasks, ErrorHistory())
+
+    [task] = await service.get_recent_tasks()
+
+    assert "agent_logs" not in task
+    assert task["task_id"] == "t1"
+    assert (await tasks.get_by_id("t1")).to_dict()["agent_logs"] == ["a log line"]
 
 
 @pytest.mark.asyncio
@@ -175,20 +243,20 @@ async def test_get_agents_status_reports_the_agent_version():
     assert [agent["version"] for agent in agents] == ["2.5"]
 
 
-def test_parse_agent_logs_reads_structured_fields_through_the_shared_renderer(mock_dashboard_service):
+def test_parse_agent_logs_reads_structured_fields_through_the_shared_renderer():
     line = (
         '{"timestamp": "2026-05-04T10:33:56+00:00", "level": "error", "message": "Failed", "logger": "ui_agent", '
         '"task_id": "remote-task", "agent_id": null, "agent_name": "UI Agent", "exception": "Traceback: boom"}'
     )
 
-    parsed = mock_dashboard_service._parse_agent_logs([line], "task-1", "agent-1")
+    parsed = parse_agent_logs([line], "task-1", "agent-1")
 
     assert len(parsed) == 1
     assert parsed[0].timestamp == "2026-05-04T10:33:56+00:00"
     assert parsed[0].level == "ERROR"
     assert parsed[0].logger_name == "ui_agent"
     assert parsed[0].message == "Failed\nTraceback: boom"
-    assert parsed[0].task_id == "remote-task"
+    assert parsed[0].task_id == "task-1"
     assert parsed[0].agent_id == "agent-1"
     assert parsed[0].to_dict()["agent_name"] == "UI Agent"
 

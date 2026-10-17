@@ -88,13 +88,14 @@ from common.streaming import (
     AgentSnapshot,
     AuthErrorEvent,
     LogBatchEvent,
+    LogEntryPayload,
     RunningTaskSnapshot,
     SnapshotEvent,
     TaskDoneEvent,
 )
 from common.token_usage import TokenUsage
 from orchestrator.auth import LoginRequest, TokenResponse, auth_service, client_ip, dashboard_auth, login_rate_limiter
-from orchestrator.dashboard_service import dashboard_service
+from orchestrator.dashboard_service import dashboard_service, parse_agent_logs
 from orchestrator.dashboard_state import dashboard_state_store
 from orchestrator.delegation import DELEGATION_PATH, DelegationExecutor, create_delegation_app
 from orchestrator.memory_log_handler import setup_memory_logging
@@ -456,6 +457,8 @@ async def get_agent_sse_stream(
 
     async def _generate():
         async with streaming_hub.subscribe_agent(agent_id) as subscriber:
+            # A proxy may hold the headers until the first byte, and the client reads the stream as open only once they arrive
+            yield ServerSentEvent(data="{}", event="heartbeat")
             async for sse_event in _sse_hub_events(subscriber, token_expires_at):
                 yield sse_event
 
@@ -1517,6 +1520,7 @@ class _LogStreamState:
 
     artifact_id: str | None = None
     lines: list[str] = field(default_factory=list)
+    entry_count: int = 0
 
 
 def _build_logs_artifact(log_lines: list[str]) -> Artifact:
@@ -1573,10 +1577,18 @@ async def _handle_stream_chunk(
         if new_lines:
             log_state.lines.extend(new_lines)
             await task_history.append_log_batch(internal_task_id, new_lines)
-            await streaming_hub.publish_agent(
-                agent_id,
-                LogBatchEvent(task_id=internal_task_id, lines=new_lines).model_dump(),
+            entries = parse_agent_logs(
+                new_lines, internal_task_id, agent_id, preceding_line_count=log_state.entry_count
             )
+            log_state.entry_count += len(entries)
+            if entries:
+                await streaming_hub.publish_agent(
+                    agent_id,
+                    LogBatchEvent(
+                        task_id=internal_task_id,
+                        entries=[LogEntryPayload.model_validate(entry.to_dict()) for entry in entries],
+                    ).model_dump(),
+                )
         if artifact_event.last_chunk and log_state.lines:
             collected_artifacts.append(_build_logs_artifact(log_state.lines))
         return
@@ -1688,29 +1700,12 @@ async def _send_task_to_agent_with_message(
         )
         response_iterator = a2a_client.send_message(SendMessageRequest(message=message))
         start_time = time.time()
-        last_status = None
         collected_artifacts: list[Artifact] = []
         log_state = _LogStreamState()
         while (time_left := _get_time_left_for_task_completion_waiting(start_time, task_timeout_seconds)) > 0:
             try:
                 chunk = await asyncio.wait_for(response_iterator.__anext__(), timeout=time_left)
             except StopAsyncIteration:
-                if last_status and last_status.state in (
-                    TaskState.TASK_STATE_COMPLETED,
-                    TaskState.TASK_STATE_FAILED,
-                    TaskState.TASK_STATE_REJECTED,
-                ):
-                    final_status = (
-                        TaskStatus.COMPLETED
-                        if last_status.state == TaskState.TASK_STATE_COMPLETED
-                        else TaskStatus.FAILED
-                    )
-                    completed_task = Task(id=last_task_id or "", status=last_status, artifacts=collected_artifacts)
-                    await _finalize_task(internal_task_id, agent_id, final_status)
-                    await _save_agent_logs_from_task(completed_task, internal_task_id)
-                    await _save_agent_usage_from_task(completed_task, internal_task_id)
-                    await agent_registry.release_task(agent_id, internal_task_id)
-                    return completed_task
                 await _finalize_task(
                     internal_task_id, agent_id, TaskStatus.FAILED, "Iterator finished before completion"
                 )
@@ -1758,9 +1753,10 @@ async def _send_task_to_agent_with_message(
                         else None
                     )
                     completed_task = Task(id=last_task_id, status=last_status, artifacts=collected_artifacts)
-                    await _finalize_task(internal_task_id, agent_id, final_status, error_msg)
+                    # Before task_done, on which the dashboard reloads the task's logs and usage
                     await _save_agent_logs_from_task(completed_task, internal_task_id)
                     await _save_agent_usage_from_task(completed_task, internal_task_id)
+                    await _finalize_task(internal_task_id, agent_id, final_status, error_msg)
                     await agent_registry.release_task(agent_id, internal_task_id)
                     return completed_task
                 elif last_status.state == TaskState.TASK_STATE_WORKING:

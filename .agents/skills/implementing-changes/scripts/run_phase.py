@@ -20,7 +20,12 @@ from pathlib import Path
 SKILL_DIR = Path(__file__).resolve().parent.parent
 ROLE_TOOLS = {
     "reviewer": ["Bash(uv run ruff *)"],
-    "tester": ["Bash(uv run *)", "Bash(env UV_PROJECT_ENVIRONMENT=* uv run *)"],
+    "tester": [
+        "Bash(uv run *)",
+        "Bash(env UV_PROJECT_ENVIRONMENT=* uv run *)",
+        # Exact commands: `dev` and `preview` never exit, and extra arguments could pass `--fix` to the lint
+        *(f"Bash(npm --prefix orchestrator/ui run {script})" for script in ("lint", "build", "test")),
+    ],
 }
 
 

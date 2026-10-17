@@ -87,6 +87,7 @@ export interface TaskInfo {
   end_time: string | null;
   duration_ms: number | null;
   error_message: string | null;
+  current_activity: string | null;
   token_usage: TokenUsage | null;
 }
 
@@ -100,7 +101,9 @@ export interface ErrorInfo {
   traceback_snippet: string | null;
 }
 
+/** A parsed log line whose `id` a streamed line and the same line on a page share. */
 export interface LogEntry {
+  id: string;
   timestamp: string;
   level: string;
   logger: string;
@@ -121,22 +124,23 @@ export interface RagSyncOutcome {
   stale: boolean;
 }
 
-// SSE live-state overlay (keyed by task_id in App.tsx)
-export interface TaskLiveState {
+export interface DiscoveryResult {
+  message: string;
+  reachable: number;
+  removed: number;
+}
+
+export interface RunningTaskSnapshot {
   task_id: string;
   agent_id: string;
+  description: string;
   current_activity: string | null;
 }
 
-// SSE event payload shapes
 export interface SnapshotPayload {
   version: number;
-  running_tasks: Array<{
-    task_id: string;
-    agent_id: string;
-    description: string;
-    current_activity: string | null;
-  }>;
+  agents: Array<{ id: string; name: string; status: string; running_task_ids: string[] }>;
+  running_tasks: RunningTaskSnapshot[];
 }
 
 export interface AgentActivityPayload {
@@ -148,11 +152,18 @@ export interface AgentActivityPayload {
 export interface TaskDonePayload {
   task_id: string;
   agent_id: string;
-  status: string;
+  status: TaskInfo['status'];
   error_message?: string | null;
 }
 
 export interface LogBatchPayload {
   task_id: string;
-  lines: string[];
+  entries: LogEntry[];
+}
+
+/** The server dropped events this client could not take in time. */
+export interface GapPayload {
+  reason: string;
+  since: number;
+  until: number;
 }

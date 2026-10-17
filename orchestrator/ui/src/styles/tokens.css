@@ -1,0 +1,132 @@
+/*
+ * SPDX-FileCopyrightText: 2025-2026 Taras Paruta (partarstu@gmail.com)
+ *
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
+/*
+ * Control room: cool surfaces, the QuAIA cyan-blue for what is interactive or current, and status aspects that always pair colour
+ * with shape and a word. Every text pair passes 4.5:1 and every boundary 3:1 in both themes, which tokens.test.ts enforces.
+ * The values are plain hex so that the test can read them; colorScheme.ts sets data-theme before rendering.
+ */
+@layer tokens {
+  :root {
+    color-scheme: light;
+    --surface: #EEF1F4;
+    --panel: #FFFFFF;
+    --raised: #F6F8FA;
+    --field: #FFFFFF;
+    --field-border: #7C8696;
+    --rule: #D9DFE6;
+    --ink: #141B24;
+    --muted: #55606F;
+    --accent: #0B65A3;
+    --accent-strong: #084E80;
+    --accent-soft: #E3F1FA;
+    --on-accent: #FFFFFF;
+    --passed: #1E7A46;
+    --passed-soft: #E2F3E8;
+    --failed: #B42318;
+    --failed-soft: #FCE8E6;
+    --warning: #8A5A00;
+    --warning-soft: #FAF0DA;
+    --error: #7A3BAF;
+    --error-soft: #F1E8F9;
+    --backdrop: rgb(15 20 25 / 50%);
+    --shadow-1: 0 1px 2px rgb(20 27 36 / 6%), 0 1px 1px rgb(20 27 36 / 4%);
+    --shadow-2: 0 2px 6px rgb(20 27 36 / 8%), 0 8px 24px rgb(20 27 36 / 8%);
+    --shadow-3: 0 12px 40px rgb(20 27 36 / 22%), 0 2px 8px rgb(20 27 36 / 10%);
+    /* Chart series in a fixed order, apart for colour-blind eyes and at 3:1 on the panel in both themes, which tokens.test.ts enforces */
+    --series-1: #2A78D6;
+    --series-2: #EB6834;
+    --series-3: #3A6A10;
+    --series-4: #960078;
+
+    --font-ui: "Atkinson Hyperlegible Next Variable", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+    --font-mono: "Atkinson Hyperlegible Mono Variable", "Cascadia Mono", ui-monospace, monospace;
+    --text-xs: 0.8125rem;
+    --text-sm: 0.875rem;
+    --text-md: 0.9375rem;
+    --text-lg: 1.125rem;
+    --text-xl: 1.375rem;
+    --text-2xl: 1.75rem;
+    --space-1: 0.25rem;
+    --space-2: 0.5rem;
+    --space-3: 0.75rem;
+    --space-4: 1rem;
+    --space-5: 1.5rem;
+    --space-6: 2rem;
+    --radius-sm: 4px;
+    --radius: 8px;
+    --radius-lg: 12px;
+    --radius-xl: 16px;
+    --control-height: 2.25rem;
+    --control-height-small: 1.75rem;
+    --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+    --duration-fast: 120ms;
+    --duration: 200ms;
+    --duration-slow: 320ms;
+    /* The app bar never wraps, so its height is a constant that sticky content and scroll padding can rely on */
+    --appbar-block-size: 3.5rem;
+    --bottom-nav-block-size: 0rem;
+  }
+
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --surface: #0F1419;
+    --panel: #171D24;
+    --raised: #1D252E;
+    --field: #0F1419;
+    --field-border: #6B7787;
+    --rule: #2A333E;
+    --ink: #E6EBF1;
+    --muted: #9AA6B5;
+    --accent: #4DBDF0;
+    --accent-strong: #8AD3F5;
+    --accent-soft: #0E3248;
+    --on-accent: #0F1419;
+    --passed: #57C084;
+    --passed-soft: #143323;
+    --failed: #F28A79;
+    --failed-soft: #3D1C18;
+    --warning: #E2A43E;
+    --warning-soft: #3A2C10;
+    --error: #C9A0EC;
+    --error-soft: #2E2140;
+    --backdrop: rgb(0 0 0 / 60%);
+    --shadow-1: 0 1px 2px rgb(0 0 0 / 40%);
+    --shadow-2: 0 2px 6px rgb(0 0 0 / 35%), 0 8px 24px rgb(0 0 0 / 30%);
+    --shadow-3: 0 12px 40px rgb(0 0 0 / 55%), 0 2px 8px rgb(0 0 0 / 40%);
+    --series-1: #3987E5;
+    --series-2: #D95926;
+    --series-3: #30906C;
+    --series-4: #9648A2;
+  }
+
+  /* Paints the dark surface before the script has set data-theme, so a dark system never flashes the light one */
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme]) {
+      color-scheme: dark;
+      --surface: #0F1419;
+    }
+  }
+
+  /* Who asks for more contrast gets rules as strong as field borders and darker secondary text */
+  @media (prefers-contrast: more) {
+    :root {
+      --rule: #7C8696;
+      --muted: #3E4855;
+    }
+
+    :root[data-theme="dark"] {
+      --rule: #6B7787;
+      --muted: #C2CBD6;
+    }
+  }
+
+  @media (width < 40rem) {
+    :root {
+      --bottom-nav-block-size: 4rem;
+    }
+  }
+}

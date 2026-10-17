@@ -86,7 +86,7 @@ class DashboardStateStore:
             return False
         # Deferred: both modules enqueue into this store, so importing them at module level
         # would be circular.
-        from orchestrator.memory_log_handler import LogEntry, memory_log_handler
+        from orchestrator.memory_log_handler import LogEntry, memory_log_handler, next_log_id
         from orchestrator.models import ErrorRecord, TaskRecord, TaskStatus, error_history, task_history
 
         cutoffs = _retention_cutoffs()
@@ -138,6 +138,8 @@ class DashboardStateStore:
                             task_id=payload.get("task_id"),
                             agent_id=payload.get("agent_id"),
                             agent_name=payload.get("agent_name"),
+                            # A persisted line without an id gets one of this process
+                            entry_id=str(payload.get("id") or next_log_id()),
                         )
                     )
             except (KeyError, TypeError, ValueError):

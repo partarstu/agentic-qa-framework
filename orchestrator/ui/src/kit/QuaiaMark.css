@@ -1,0 +1,58 @@
+/*
+ * SPDX-FileCopyrightText: 2025-2026 Taras Paruta (partarstu@gmail.com)
+ *
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
+@layer components {
+  .quaia-mark {
+    vertical-align: middle;
+    overflow: visible;
+  }
+
+  .quaia-mark-shield {
+    fill: var(--accent-soft);
+    stroke: var(--accent);
+    stroke-width: 1.5;
+    stroke-linejoin: round;
+  }
+
+  .quaia-mark-links {
+    fill: none;
+    stroke: var(--accent);
+    stroke-width: 0.6;
+    stroke-linecap: round;
+    opacity: 0.7;
+  }
+
+  .quaia-mark-nodes {
+    fill: var(--accent);
+  }
+
+  .quaia-mark-check {
+    fill: none;
+    stroke: var(--passed);
+    stroke-width: 2.4;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  @media (forced-colors: active) {
+    .quaia-mark-shield {
+      fill: Canvas;
+      stroke: CanvasText;
+    }
+
+    .quaia-mark-links {
+      stroke: CanvasText;
+    }
+
+    .quaia-mark-nodes {
+      fill: CanvasText;
+    }
+
+    .quaia-mark-check {
+      stroke: Highlight;
+    }
+  }
+}

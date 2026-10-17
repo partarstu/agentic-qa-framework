@@ -1,0 +1,78 @@
+/*
+ * SPDX-FileCopyrightText: 2025-2026 Taras Paruta (partarstu@gmail.com)
+ *
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
+/* Native dialogs for questions that must block; they rise into place when opened, unless motion is reduced */
+@layer components {
+  .modal {
+    inline-size: min(34rem, calc(100vw - 2rem));
+    max-block-size: calc(100dvh - 2rem);
+    padding: var(--space-5);
+    color: var(--ink);
+    background: var(--panel);
+    border: 1px solid var(--rule);
+    border-radius: var(--radius-xl);
+    box-shadow: var(--shadow-3);
+
+    & > * + * {
+      margin-block-start: var(--space-4);
+    }
+
+    &::backdrop {
+      background: var(--backdrop);
+      backdrop-filter: blur(2px);
+    }
+
+    @media (prefers-reduced-motion: no-preference) {
+      transition: opacity 160ms, translate 160ms, display 160ms allow-discrete, overlay 160ms allow-discrete;
+
+      &::backdrop {
+        transition: opacity 160ms, display 160ms allow-discrete, overlay 160ms allow-discrete;
+      }
+
+      @starting-style {
+        &[open] {
+          opacity: 0;
+          translate: 0 8px;
+        }
+
+        &[open]::backdrop {
+          opacity: 0;
+        }
+      }
+    }
+  }
+
+  .modal-wide {
+    inline-size: min(48rem, calc(100vw - 2rem));
+  }
+
+  .modal-sheet {
+    inline-size: min(48rem, 100vw);
+    max-inline-size: 100vw;
+    block-size: 100dvh;
+    max-block-size: 100dvh;
+    margin-block: 0;
+    margin-inline: auto 0;
+    overflow-y: auto;
+    border-radius: var(--radius-xl) 0 0 var(--radius-xl);
+    border-block: 0;
+    border-inline-end: 0;
+
+    /* A sheet slides in from the edge it is docked to */
+    @media (prefers-reduced-motion: no-preference) {
+      @starting-style {
+        &[open] {
+          translate: 2rem 0;
+        }
+      }
+    }
+  }
+
+  .modal-title {
+    font-size: var(--text-xl);
+    font-weight: 700;
+  }
+}

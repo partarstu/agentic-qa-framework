@@ -1,0 +1,133 @@
+/*
+ * SPDX-FileCopyrightText: 2025-2026 Taras Paruta (partarstu@gmail.com)
+ *
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
+@layer components {
+  .log-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+    margin-block-end: var(--space-3);
+  }
+
+  .log-search {
+    flex: 1 1 12rem;
+    inline-size: auto;
+  }
+
+  .log-copy-result {
+    color: var(--passed);
+    font-size: var(--text-sm);
+    font-weight: 600;
+  }
+
+  .log-copy-blocked {
+    color: var(--failed);
+  }
+
+  .log-frame {
+    position: relative;
+  }
+
+  .log-jump {
+    position: absolute;
+    inset-block-start: var(--space-3);
+    inset-inline-end: var(--space-4);
+    box-shadow: var(--shadow-2);
+  }
+
+  .log-lines {
+    max-block-size: 28rem;
+    overflow: auto;
+    padding: var(--space-2) var(--space-3);
+    background: var(--raised);
+    border: 1px solid var(--rule);
+    border-radius: var(--radius-lg);
+    font: 400 var(--text-xs) / 1.6 var(--font-mono);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+
+    & mark {
+      color: var(--ink);
+      background: var(--warning-soft);
+      outline: 1px solid var(--warning);
+      border-radius: 2px;
+    }
+  }
+
+  .log-lines-nowrap {
+    white-space: pre;
+    overflow-wrap: normal;
+  }
+
+  .log-time,
+  .log-logger,
+  .log-task {
+    color: var(--muted);
+  }
+
+  .log-level {
+    font-weight: 700;
+  }
+
+  /* A hanging indent, so a wrapped line's continuation does not read as a line of its own */
+  .log-line {
+    padding-inline-start: calc(var(--space-2) + 2ch);
+    text-indent: -2ch;
+    border-inline-start: 2px solid transparent;
+  }
+
+  .log-error {
+    color: var(--failed);
+    border-inline-start-color: var(--failed);
+  }
+
+  .log-warn {
+    color: var(--warning);
+    border-inline-start-color: var(--warning);
+  }
+
+  /* Contrast themes drop the level colours, so only the error and warning lines keep a visible edge */
+  @media (forced-colors: active) {
+    .log-line {
+      border-inline-start-color: Canvas;
+    }
+
+    .log-error,
+    .log-warn {
+      border-inline-start-color: CanvasText;
+    }
+  }
+
+  .log-error .log-time,
+  .log-error .log-logger,
+  .log-error .log-task,
+  .log-warn .log-time,
+  .log-warn .log-logger,
+  .log-warn .log-task {
+    color: inherit;
+  }
+
+  .log-marker {
+    margin-block: var(--space-1);
+    padding: var(--space-1) var(--space-2);
+    color: var(--warning);
+    border: 1px dashed var(--warning);
+    border-radius: var(--radius-sm);
+    font-family: var(--font-ui);
+    font-weight: 600;
+    text-align: center;
+  }
+
+  .log-older {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+    margin-block-start: var(--space-2);
+    font-size: var(--text-sm);
+  }
+}

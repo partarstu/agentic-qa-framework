@@ -1,0 +1,34 @@
+/*
+ * SPDX-FileCopyrightText: 2025-2026 Taras Paruta (partarstu@gmail.com)
+ *
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
+@layer components {
+  .clamped-error {
+    display: grid;
+    justify-items: start;
+    gap: var(--space-1);
+    min-inline-size: 0;
+  }
+
+  /* Line breaks are kept, so a stack trace shows its first lines rather than one run-on paragraph */
+  .clamped-error-text {
+    justify-self: stretch;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  .clamped-error-collapsed {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 4;
+    line-clamp: 4;
+    overflow: hidden;
+  }
+
+  button.clamped-error-toggle {
+    font-size: var(--text-sm);
+    font-weight: 600;
+  }
+}

@@ -9,8 +9,8 @@ FROM node:24.21.0-alpine3.24 AS ui-builder
 
 WORKDIR /ui
 
-# Copy package files first for better caching
-COPY orchestrator/ui/package*.json ./
+# Copy package files first for better caching; .npmrc keeps the packages' lifecycle scripts disabled
+COPY orchestrator/ui/package*.json orchestrator/ui/.npmrc ./
 
 # Install dependencies
 RUN npm ci

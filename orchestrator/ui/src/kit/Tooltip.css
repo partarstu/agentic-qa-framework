@@ -1,0 +1,39 @@
+/*
+ * SPDX-FileCopyrightText: 2025-2026 Taras Paruta (partarstu@gmail.com)
+ *
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
+/* A tooltip above its trigger, below it when there is no room; ink on panel inverts the theme's text for both themes */
+@layer components {
+  .tooltip {
+    inset: auto;
+    max-inline-size: 20rem;
+    margin: 0 0 var(--space-1);
+    padding: var(--space-1) var(--space-2);
+    color: var(--panel);
+    background: var(--ink);
+    border: 0;
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-2);
+    font-size: var(--text-xs);
+    font-weight: 600;
+    line-height: 1.4;
+    position-area: block-start;
+    position-try-fallbacks: flip-block;
+
+    @media (forced-colors: active) {
+      border: 1px solid CanvasText;
+    }
+
+    @media (prefers-reduced-motion: no-preference) {
+      transition: opacity 120ms, display 120ms allow-discrete, overlay 120ms allow-discrete;
+
+      @starting-style {
+        &:popover-open {
+          opacity: 0;
+        }
+      }
+    }
+  }
+}
