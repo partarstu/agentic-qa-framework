@@ -1,0 +1,73 @@
+/*
+ * SPDX-FileCopyrightText: 2025-2026 Taras Paruta (partarstu@gmail.com)
+ *
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
+@layer components {
+  .agent-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 20rem), 1fr));
+    gap: var(--space-4);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .agent-card {
+    display: grid;
+    align-content: start;
+    gap: var(--space-3);
+  }
+
+  .agent-card-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+
+    & > h3 {
+      font-size: var(--text-lg);
+      overflow-wrap: anywhere;
+    }
+  }
+
+  .agent-broken {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2) var(--space-3);
+  }
+
+  .agent-capacity {
+    display: grid;
+    gap: var(--space-1);
+    font-size: var(--text-sm);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .agent-description {
+    font-size: var(--text-sm);
+    overflow-wrap: anywhere;
+
+    & ul,
+    & ol {
+      padding-inline-start: 1.25rem;
+    }
+  }
+
+  /* The card shows the start of the description; the agent sheet shows all of it */
+  .agent-description-clamped {
+    display: -webkit-box;
+    overflow: hidden;
+    color: var(--muted);
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+    line-clamp: 3;
+  }
+
+  .agent-facts {
+    font-size: var(--text-sm);
+  }
+}

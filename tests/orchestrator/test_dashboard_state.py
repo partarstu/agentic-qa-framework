@@ -157,6 +157,24 @@ class TestRehydrate:
         # Pruning ran on the first maintenance tick, before the retried read.
         service.ensure_payload_collection.assert_awaited()
 
+    @pytest.mark.asyncio
+    async def test_restored_log_lines_keep_their_ids_and_get_one_when_they_have_none(self, fresh_state):
+        _, _, log_handler = fresh_state
+        now = datetime.now(UTC)
+        with_id = _log_payload(now, "persisted with an id") | {"id": "earlier-process:7"}
+        service = AsyncMock()
+        service.scroll_payload_records.return_value = [
+            _stored("log", with_id),
+            _stored("log", _log_payload(now, "without id")),
+        ]
+
+        await DashboardStateStore(service).rehydrate()
+        live = LogEntry(now.isoformat(), "INFO", "boot", "line of this process")
+
+        restored_ids = [entry.entry_id for entry in log_handler.restore.call_args.args[0]]
+        assert restored_ids[0] == "earlier-process:7"
+        assert len({*restored_ids, live.entry_id}) == 3
+
 
 @pytest.mark.asyncio
 async def test_task_history_restore_merges_chronologically_with_live_tasks():
@@ -198,3 +216,10 @@ def test_log_restore_keeps_the_newest_lines_in_chronological_order():
         assert [entry.message for entry in handler._buffer] == ["older", "boot line"]
     finally:
         handler._buffer = original
+
+
+def test_orchestrator_log_entries_get_distinct_ids_of_this_process():
+    first, second = (LogEntry("2026-01-01T00:00:01+00:00", "INFO", "boot", message) for message in ("one", "two"))
+
+    assert first.to_dict()["id"] != second.to_dict()["id"]
+    assert first.entry_id.split(":")[0] == second.entry_id.split(":")[0]

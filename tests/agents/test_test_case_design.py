@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 from pydantic_ai import ModelRetry
 from pydantic_ai.messages import ModelMessage, ModelResponse, ToolCallPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
+from pydantic_ai.models.test import TestModel
 from pydantic_ai.toolsets import FunctionToolset
 from pydantic_ai.usage import RunUsage, UsageLimits
 
@@ -107,6 +108,16 @@ def _generator(fix: Callable[[TestCaseDesignSession], None] = _fix) -> MagicMock
         return "fixed"
 
     return MagicMock(generate=AsyncMock(side_effect=generate), fix=AsyncMock(side_effect=run_fix))
+
+
+@pytest.fixture(autouse=True)
+def offline_clients() -> Iterator[None]:
+    """Every model and vector-store call here is scripted or faked, so no agent needs a real client, whose set-up costs seconds."""
+    with (
+        patch("common.custom_llm_wrapper.build_model", return_value=TestModel()),
+        patch("agents.test_case_review.main.VectorDbService"),
+    ):
+        yield
 
 
 @pytest.fixture

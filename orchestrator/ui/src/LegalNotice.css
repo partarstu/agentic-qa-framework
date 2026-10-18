@@ -1,0 +1,21 @@
+/*
+ * SPDX-FileCopyrightText: 2025-2026 Taras Paruta (partarstu@gmail.com)
+ *
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+@layer components {
+  .legal-notice {
+    padding: var(--space-4) var(--space-5);
+    color: var(--muted);
+    font-size: var(--text-xs);
+    text-align: center;
+
+    & p {
+      margin: 0;
+    }
+
+    & a {
+      color: inherit;
+    }
+  }
+}

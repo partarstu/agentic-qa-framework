@@ -1,0 +1,90 @@
+/*
+ * SPDX-FileCopyrightText: 2025-2026 Taras Paruta (partarstu@gmail.com)
+ *
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+/* The entry screens: the splash while the session is checked, the unreachable orchestrator and the login */
+@layer components {
+  .entry {
+    display: grid;
+    grid-template-rows: 1fr auto;
+    min-block-size: 100dvh;
+    background:
+      radial-gradient(60rem 30rem at 50% -10%, var(--accent-soft), transparent 70%),
+      var(--surface);
+  }
+
+  .splash,
+  .login {
+    display: grid;
+    align-content: center;
+    justify-items: center;
+    gap: var(--space-4);
+    padding: var(--space-4);
+  }
+
+  .login-note {
+    inline-size: min(26rem, 100%);
+    margin: 0;
+  }
+
+  .splash-title {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    font-size: var(--text-lg);
+  }
+
+  .login-form {
+    display: grid;
+    gap: var(--space-2);
+    inline-size: min(26rem, 100%);
+    padding: var(--space-6) var(--space-5) var(--space-5);
+    border-radius: var(--radius-xl);
+    box-shadow: var(--shadow-3);
+
+    & > label {
+      margin-block-start: var(--space-2);
+      font-weight: 600;
+    }
+
+    & > button[type="submit"] {
+      margin-block-start: var(--space-3);
+      min-block-size: 2.5rem;
+    }
+  }
+
+  .login-head {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+
+    & h1 {
+      font-size: var(--text-lg);
+    }
+  }
+
+  /* The reveal button sits inside the field's end, which keeps its text clear of it */
+  .password-field {
+    position: relative;
+
+    & input {
+      min-block-size: 2.75rem;
+      padding-inline-end: 2.75rem;
+    }
+
+    & button {
+      position: absolute;
+      inset-block: 0;
+      inset-inline-end: var(--space-1);
+      margin-block: auto;
+    }
+  }
+
+  .loading-note {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    color: var(--muted);
+  }
+}

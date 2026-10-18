@@ -1,0 +1,46 @@
+/*
+ * SPDX-FileCopyrightText: 2025-2026 Taras Paruta (partarstu@gmail.com)
+ *
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
+@layer components {
+  .tab-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-1);
+
+    & [role="tab"] {
+      position: relative;
+      color: var(--muted);
+      font-weight: 600;
+      background: none;
+      border-color: transparent;
+
+      &:hover:not(:disabled) {
+        color: var(--ink);
+        background: var(--raised);
+        border-color: transparent;
+      }
+
+      /* Only the colour and the indicator mark the selection; a bolder weight would widen the tab and shift its neighbours */
+      &[aria-selected="true"] {
+        color: var(--ink);
+
+        &::after {
+          content: "";
+          position: absolute;
+          inset: auto var(--space-2) 0;
+          height: 3px;
+          border-radius: 3px 3px 0 0;
+          background: var(--accent);
+
+          @media (forced-colors: active) {
+            forced-color-adjust: none;
+            background: CanvasText;
+          }
+        }
+      }
+    }
+  }
+}

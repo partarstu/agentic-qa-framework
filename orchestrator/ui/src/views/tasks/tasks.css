@@ -1,0 +1,85 @@
+/*
+ * SPDX-FileCopyrightText: 2025-2026 Taras Paruta (partarstu@gmail.com)
+ *
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
+@layer components {
+  .tasks-filters {
+    margin-block-end: var(--space-3);
+
+    & > label {
+      display: inline-flex;
+      align-items: center;
+      gap: var(--space-2);
+    }
+  }
+
+  .tasks-search {
+    flex: 1 1 14rem;
+    inline-size: auto;
+  }
+
+  /* A wide table scrolls inside its own region, so the page never scrolls sideways */
+  .table-scroll {
+    overflow-x: auto;
+    padding: 0;
+  }
+
+  .data-table {
+    inline-size: 100%;
+    font-size: var(--text-sm);
+    font-variant-numeric: tabular-nums;
+
+    & caption {
+      padding: var(--space-3) var(--space-4) var(--space-2);
+      color: var(--muted);
+      text-align: start;
+    }
+
+    & th,
+    & td {
+      padding: var(--space-2) var(--space-3);
+      border-block-start: 1px solid var(--rule);
+      text-align: start;
+      vertical-align: top;
+    }
+
+    & thead th {
+      color: var(--muted);
+      font-weight: 600;
+      white-space: nowrap;
+    }
+
+    & tbody th {
+      font-weight: 500;
+      min-inline-size: 14rem;
+      overflow-wrap: anywhere;
+    }
+
+    & .numeric {
+      text-align: end;
+      white-space: nowrap;
+    }
+  }
+
+  .sort-button {
+    min-block-size: 0;
+    padding: 0;
+    color: inherit;
+    background: none;
+    border: 0;
+    font-weight: inherit;
+
+    &:hover:not(:disabled) {
+      color: var(--ink);
+      background: none;
+    }
+  }
+
+  /* A task's title travels across the window into its sheet, so it takes longer than a fade; reduced motion still stops it */
+  ::view-transition-group(*.task-morph) {
+    animation-duration: var(--duration-slow);
+    animation-timing-function: var(--ease-out);
+  }
+}

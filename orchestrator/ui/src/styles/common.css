@@ -1,0 +1,337 @@
+/*
+ * SPDX-FileCopyrightText: 2025-2026 Taras Paruta (partarstu@gmail.com)
+ *
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
+/* Patterns shared by every view: surfaces, section heads, toolbars, button rows, tags, notes and choice lists */
+@layer components {
+  .card {
+    padding: var(--space-4);
+    background: var(--panel);
+    border: 1px solid var(--rule);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-1);
+  }
+
+  .section-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2) var(--space-3);
+    margin-block-end: var(--space-3);
+
+    & > h2,
+    & > h3 {
+      display: inline-flex;
+      align-items: center;
+      gap: var(--space-2);
+    }
+
+    & > .section-tools {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: var(--space-2);
+      margin-inline-start: auto;
+    }
+  }
+
+  .kbd {
+    display: inline-grid;
+    place-items: center;
+    min-inline-size: 1.4em;
+    padding: 0 0.3em;
+    color: var(--muted);
+    background: var(--raised);
+    border: 1px solid var(--rule);
+    border-block-end-width: 2px;
+    border-radius: var(--radius-sm);
+    font: 600 var(--text-xs) / 1.45 var(--font-mono);
+  }
+
+  .eyebrow {
+    color: var(--muted);
+    font-size: var(--text-sm);
+    font-weight: 600;
+  }
+
+  .section-note {
+    color: var(--muted);
+    font-size: var(--text-sm);
+  }
+
+  .toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2) var(--space-3);
+    color: var(--muted);
+    font-size: var(--text-sm);
+
+    & > .toolbar-end {
+      margin-inline-start: auto;
+    }
+
+    & select {
+      inline-size: auto;
+    }
+  }
+
+  .answers {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  .answers-end {
+    margin-inline-start: auto;
+  }
+
+  .form {
+    display: grid;
+    gap: var(--space-1);
+    max-inline-size: 46rem;
+
+    & label:not(.check) {
+      margin-block-start: var(--space-2);
+      font-size: var(--text-sm);
+      font-weight: 600;
+    }
+
+    & .answers {
+      margin-block-start: var(--space-3);
+    }
+  }
+
+  .check {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    cursor: pointer;
+  }
+
+  .field-hint {
+    color: var(--muted);
+    font-size: var(--text-sm);
+  }
+
+  .field-error,
+  .alert {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    color: var(--failed);
+    background: var(--failed-soft);
+    border-radius: var(--radius);
+
+    & > svg {
+      margin-block-start: 0.15em;
+    }
+  }
+
+  .note {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    color: var(--ink);
+    background: var(--warning-soft);
+    border-radius: var(--radius);
+
+    & > svg {
+      margin-block-start: 0.15em;
+      color: var(--warning);
+    }
+  }
+
+  .empty-state {
+    display: grid;
+    justify-items: center;
+    gap: var(--space-2);
+    padding: var(--space-6) var(--space-4);
+    color: var(--muted);
+    text-align: center;
+
+    & > svg {
+      color: var(--muted);
+    }
+
+    & > strong {
+      color: var(--ink);
+    }
+  }
+
+  summary:has(> .disclosure) {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    list-style: none;
+
+    &::-webkit-details-marker {
+      display: none;
+    }
+  }
+
+  .disclosure {
+    color: var(--muted);
+
+    @media (prefers-reduced-motion: no-preference) {
+      transition: rotate 150ms;
+    }
+
+    details[open] > summary > &,
+    [aria-expanded="true"] > & {
+      rotate: 90deg;
+    }
+  }
+
+  .tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-1);
+  }
+
+  .tag {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    padding: 0 var(--space-2);
+    border-radius: 999px;
+    color: var(--muted);
+    background: var(--raised);
+    border: 1px solid var(--rule);
+    font-size: var(--text-xs);
+    font-weight: 550;
+    line-height: 1.6;
+  }
+
+  .facts {
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr);
+    gap: var(--space-1) var(--space-4);
+
+    & dt {
+      color: var(--muted);
+    }
+
+    & dd {
+      overflow-wrap: anywhere;
+    }
+  }
+
+  .plain-list {
+    margin: var(--space-1) 0 var(--space-3);
+    padding-inline-start: 1.25rem;
+  }
+
+  .choice-list {
+    display: grid;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
+
+    &:empty {
+      display: none;
+    }
+  }
+
+  .choice {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2) var(--space-3);
+    padding: var(--space-2) var(--space-3);
+
+    & + .choice {
+      border-block-start: 1px solid var(--rule);
+    }
+
+    & > .choice-title {
+      flex: 1 1 18rem;
+    }
+  }
+
+  .choice-text {
+    display: grid;
+    flex: 1 1 18rem;
+    gap: var(--space-1);
+    min-inline-size: 0;
+  }
+
+  .choice-title {
+    font-weight: 600;
+    overflow-wrap: anywhere;
+  }
+
+  /* A single choice among a few, as one strip of radio buttons */
+  .segmented {
+    display: inline-flex;
+    margin: 0;
+    padding: 2px;
+    background: var(--raised);
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
+  }
+
+  .segment {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    min-block-size: calc(var(--control-height-small) - 2px);
+    padding: 0 var(--space-2);
+    color: var(--muted);
+    border-radius: calc(var(--radius) - 2px);
+    font-size: var(--text-sm);
+    font-weight: 600;
+    cursor: pointer;
+
+    & input {
+      position: absolute;
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    &:has(input:checked) {
+      color: var(--ink);
+      background: var(--panel);
+      box-shadow: var(--shadow-1);
+
+      & .segment-count {
+        background: var(--raised);
+      }
+    }
+
+    &:has(input:focus-visible) {
+      outline: 2px solid var(--accent);
+      outline-offset: 1px;
+    }
+
+    @media (forced-colors: active) {
+      &:has(input:checked) {
+        forced-color-adjust: none;
+        color: HighlightText;
+        background: Highlight;
+      }
+    }
+  }
+
+  .segment-count {
+    padding: 0 0.35rem;
+    color: var(--muted);
+    background: var(--panel);
+    border-radius: 999px;
+    font-size: var(--text-xs);
+  }
+
+  .row-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-1);
+  }
+}

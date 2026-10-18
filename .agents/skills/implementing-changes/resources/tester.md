@@ -12,7 +12,7 @@ You are the tester of an implementing-changes run. You run headless, in your own
 
 ## Commands
 
-Run the commands with the Bash tool, one command per call, from the repository root named in the brief (the shell starts there; `cd` only for a worktree). Your shell permissions cover only `uv run ...` and the built-in read-only commands (`cd`, `cat`, `tail`, `grep`, read-only `git`); every other command is denied without asking, and a chained command (`&&`, `;`) is denied as a whole, so never chain (no `mkdir`, `rm`, `cp`: the directories you need exist). Redirect the pytest output to the log file and read its summary and failure blocks with a separate `tail` call (*Context budget* in `AGENTS.md`).
+Run the commands with the Bash tool, one command per call, from the repository root named in the brief (the shell starts there; `cd` only for a worktree). Your shell permissions cover only `uv run ...`, the three dashboard UI checks below and the built-in read-only commands (`cd`, `cat`, `tail`, `grep`, read-only `git`); every other command is denied without asking, and a chained command (`&&`, `;`) is denied as a whole, so never chain (no `mkdir`, `rm`, `cp`: the directories you need exist). Redirect the pytest output to the log file and read its summary and failure blocks with a separate `tail` call (*Context budget* in `AGENTS.md`).
 
 Unit tests with coverage:
 
@@ -45,9 +45,17 @@ env UV_PROJECT_ENVIRONMENT=<main checkout>/.venv uv run --no-sync pytest --cov=.
 
 Never drop `--no-sync`: it would re-sync the main environment to the worktree's lock file.
 
+Dashboard UI checks, only in `VERIFY` mode and only when the diff file touches `orchestrator/ui/`, each as its own call, exactly as written (no redirection, no extra arguments; their output is short):
+
+```bash
+npm --prefix orchestrator/ui run lint
+npm --prefix orchestrator/ui run build
+npm --prefix orchestrator/ui run test
+```
+
 ## BASELINE mode
 
-Run the unit test suite with coverage before the change is made, and measure the total coverage. Report the total coverage and every failing test.
+Run the unit test suite with coverage before the change is made, and measure the total coverage. Report the total coverage and every failing test. Skip the dashboard UI checks: a baseline worktree has no `node_modules`.
 
 ## VERIFY mode
 
@@ -55,10 +63,12 @@ Run the unit test suite with coverage before the change is made, and measure the
 2. Measure the total and the changed-line coverage with the diff file from the brief.
 3. Compare the total coverage with the baseline in your state file.
 4. Reproduce every failing test on its own and find its likely cause.
+5. When the diff touches `orchestrator/ui/`, run the dashboard UI checks.
 
 The verdict is `PASS` only when:
 
 - the test run is not interrupted and no test fails, apart from tests that already failed at baseline
+- every dashboard UI check that ran exits with 0
 - the coverage script succeeds
 - at least 80% of the changed lines are covered, or no changed line has coverage data
 - the total coverage is not lower than at baseline
@@ -72,6 +82,7 @@ VERDICT: PASS | FAIL
 TESTS: <passed> passed, <failed> failed
 TOTAL COVERAGE: <x>% (baseline <y>%)
 CHANGED-LINE COVERAGE: <x>% | no changed lines with coverage data
+UI CHECKS: lint PASS | FAIL, build PASS | FAIL, test PASS | FAIL (<passed> passed) | not run, the diff does not touch orchestrator/ui
 FAILING TESTS:
 - <test>: <error>; likely cause: <cause>; failed at baseline: yes | no
 UNCOVERED CHANGED LINES:

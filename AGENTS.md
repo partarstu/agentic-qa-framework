@@ -12,6 +12,7 @@ Run from the repository root unless noted; if imports of third-party packages fa
 
 * Unit tests: `uv run pytest` (`pytest.ini` deselects the smoke and A/B tests); one file: `uv run pytest tests/<path>/test_<module>.py -v`; with coverage, as CI runs them: `uv run pytest --cov=. --cov-report=term-missing`.
 * Lint, the CI gate: `uv run ruff check .`
+* Dashboard UI (`orchestrator/ui`, Node.js 24 with npm 11.10+): install with `npm --prefix orchestrator/ui ci`, then `npm --prefix orchestrator/ui run lint` (zero warnings), `run build` (type-check and bundle) and `run test` (Vitest); `run dev` needs `ORCHESTRATOR_PORT` for its `/api` proxy.
 * CALM validation, run from `calm/` or from its temporary copy; a clean run prints `No issues found.` and exits `0`:
   ```bash
   npx -y @finos/calm-cli@1.46.0 validate -p patterns/quaia.pattern.json -a architecture/quaia.arch.json -u url-mapping.json --strict -f pretty
@@ -157,7 +158,7 @@ Temporary files - scratch scripts, drafts, PR descriptions, review JSON, copies 
 
 ## Definition of done
 
-A change is done when the unit tests of every touched module pass, the affected versions are bumped (*Versioning*), the smoke suite, the A/B suite and the CALM model cover the change (*Smoke suite*, *A/B suite*, *Architecture first (CALM)*), README.md describes the changed behaviour, and everything temporary is cleaned up. Skip what doesn't apply; if you skip something that might look applicable, say why.
+A change is done when the unit tests of every touched module pass, a change to `orchestrator/ui` passes the dashboard UI lint, build and tests (*Commands*), the affected versions are bumped (*Versioning*), the smoke suite, the A/B suite and the CALM model cover the change (*Smoke suite*, *A/B suite*, *Architecture first (CALM)*), README.md describes the changed behaviour, and everything temporary is cleaned up. Skip what doesn't apply; if you skip something that might look applicable, say why.
 
 Finish every implementation task with a report in three short parts:
 

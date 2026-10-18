@@ -22,6 +22,13 @@ from common.models import RagUpdateResult  # noqa: E402
 API_KEY = "internal-key"
 
 
+@pytest.fixture(autouse=True)
+def report_outcome():
+    """Keeps every sync off the metadata store, whose connection retries would stall each test for seconds."""
+    with patch("rag_sync.outcome_reporting.report_terminal_outcome", new_callable=AsyncMock) as report:
+        yield report
+
+
 @pytest.fixture
 def client(monkeypatch):
     monkeypatch.setattr(local_service.config, "INTERNAL_SERVICE_API_KEY", API_KEY)

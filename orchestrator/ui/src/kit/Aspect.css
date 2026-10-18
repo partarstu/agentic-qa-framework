@@ -1,0 +1,72 @@
+/*
+ * SPDX-FileCopyrightText: 2025-2026 Taras Paruta (partarstu@gmail.com)
+ *
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
+@layer components {
+  .aspect {
+    --tone: var(--muted);
+    --tone-soft: var(--raised);
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.05rem 0.55rem 0.05rem 0.4rem;
+    border-radius: 999px;
+    color: var(--tone);
+    background: var(--tone-soft);
+    font-size: var(--text-sm);
+    font-weight: 650;
+    line-height: 1.5;
+    white-space: nowrap;
+  }
+
+  .aspect-quiet {
+    padding: 0;
+    background: none;
+    font-weight: 550;
+  }
+
+  .aspect-passed {
+    --tone: var(--passed);
+    --tone-soft: var(--passed-soft);
+  }
+
+  .aspect-failed {
+    --tone: var(--failed);
+    --tone-soft: var(--failed-soft);
+  }
+
+  .aspect-warning {
+    --tone: var(--warning);
+    --tone-soft: var(--warning-soft);
+  }
+
+  .aspect-error {
+    --tone: var(--error);
+    --tone-soft: var(--error-soft);
+  }
+
+  .aspect-running {
+    --tone: var(--accent);
+    --tone-soft: var(--accent-soft);
+  }
+
+  .aspect-pulse {
+    width: 0.55rem;
+    height: 0.55rem;
+    margin-inline: 0.15rem;
+    border-radius: 50%;
+    background: currentColor;
+
+    @media (prefers-reduced-motion: no-preference) {
+      animation: aspect-pulse 1.6s ease-in-out infinite;
+    }
+  }
+
+  @keyframes aspect-pulse {
+    50% {
+      box-shadow: 0 0 0 4px color-mix(in srgb, currentColor 25%, transparent);
+    }
+  }
+}
