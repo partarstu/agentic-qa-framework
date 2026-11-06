@@ -143,8 +143,6 @@ class VectorDbService:
             check_compatibility=False,
         )
         self.embedding_service_url = config.QdrantConfig.EMBEDDING_SERVICE_URL
-        if not self.embedding_service_url:
-            logger.warning("EMBEDDING_SERVICE_URL is not configured. Vector operations requiring embeddings will fail.")
         self._http_client = httpx.AsyncClient(
             timeout=httpx.Timeout(config.QdrantConfig.EMBEDDING_SERVICE_TIMEOUT_SECONDS)
         )

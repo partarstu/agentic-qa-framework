@@ -81,7 +81,7 @@ services:
       QDRANT__SERVICE__API_KEY: QDRANT_API_KEY
 
   orchestrator:
-    version: "4.0.0"
+    version: "4.0.1"
     env:
       ORCHESTRATOR_VERSION: "{version}"
       # Model selection, left empty for the code defaults; a Qwen deployment sets these in its environment overrides.
@@ -190,7 +190,7 @@ services:
 
   # Runs the test case generation, review and classification agents in-process as its delegates.
   test-case-design-agent:
-    version: "1.3.0"
+    version: "1.4.0"
     env:
       TEST_CASE_DESIGN_AGENT_VERSION: "{version}"
       MODEL_NAME: ""

@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pydantic_ai import ModelRetry
+from pydantic_ai.exceptions import UsageLimitExceeded
 from pydantic_ai.messages import BinaryContent, ModelMessage, ModelResponse, ToolCallPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.usage import RunUsage, UsageLimits
@@ -630,17 +631,41 @@ async def test_fixed_and_added_test_cases_are_rebuilt_and_an_unavailable_one_is_
     assert [call.args[0].name for call in selections.await_args_list] == ["First fixed", "Covers AC-2"]
 
 
-async def test_a_failed_rebuild_leaves_the_session_unchanged(knowledge_generator):
+async def test_a_failed_rebuild_keeps_its_draft_logs_the_error_and_is_named_while_the_others_are_rebuilt(
+    knowledge_generator, caplog
+):
+    session = _session("First", "Second")
+    session.findings = {"DRAFT-1": [_finding("DRAFT-1")], "DRAFT-2": [_finding("DRAFT-2")]}
+    knowledge_generator.test_case_fixer_agent.run = _fixer_returning(
+        _knowledge_draft("First fixed"), _knowledge_draft("Second fixed")
+    )
+    knowledge_generator.knowledge_aware_generator_agent.run.side_effect = [
+        RuntimeError("model unavailable"),
+        MagicMock(
+            output=KnowledgeAwareTestCase(
+                preconditions=[_item(["P1"], "User exists")], steps=[_item(["S1", "S2", "S3"], procedure_id="checkout")]
+            )
+        ),
+    ]
+
+    with caplog.at_level(logging.ERROR, logger="test_case_generation_agent"):
+        summary = await knowledge_generator.fix(session, RunUsage(), _USAGE_LIMITS)
+
+    assert session.test_cases["DRAFT-1"] == _knowledge_draft("First fixed")
+    assert [step.action for step in session.test_cases["DRAFT-2"].steps] == ["Pay for the cart"]
+    assert summary.endswith(" Recorded procedures were unavailable for DRAFT-1, which stay unchanged by them.")
+    assert "The rebuild of test case 'First fixed' of PROJ-1 from recorded procedures failed" in caplog.text
+    assert "model unavailable" in caplog.text
+
+
+async def test_a_usage_limit_hit_by_a_rebuild_still_stops_the_run(knowledge_generator):
     session = _session("First")
     session.findings = {"DRAFT-1": [_finding("DRAFT-1")]}
     knowledge_generator.test_case_fixer_agent.run = _fixer_returning(_knowledge_draft("First fixed"))
-    knowledge_generator.knowledge_aware_generator_agent.run.side_effect = RuntimeError("model unavailable")
-    before = session.model_copy(deep=True)
+    knowledge_generator.knowledge_aware_generator_agent.run.side_effect = UsageLimitExceeded("token limit exceeded")
 
-    with pytest.raises(RuntimeError, match="model unavailable"):
+    with pytest.raises(UsageLimitExceeded):
         await knowledge_generator.fix(session, RunUsage(), _USAGE_LIMITS)
-
-    assert session == before
 
 
 def _rebuild_context() -> SimpleNamespace:

@@ -363,3 +363,14 @@ class TestTriggerModes:
         assert exc_info.value.start_confirmed is False
         lock_store.release.assert_not_called()
         main.config.RagSyncConfig.JOB_NAME = None
+
+
+def test_the_sync_trigger_and_the_dashboard_share_one_metadata_service(monkeypatch):
+    monkeypatch.setattr(main, "_metadata_db", None)
+    monkeypatch.setattr(main, "_rag_sync_trigger", None)
+
+    with patch("orchestrator.main.VectorDbService") as service_class:
+        trigger = main._get_rag_sync_trigger()
+        assert trigger._metadata_db is main._get_metadata_db()
+
+    service_class.assert_called_once()

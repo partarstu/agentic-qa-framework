@@ -2,11 +2,15 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
-from datetime import UTC, datetime
+import asyncio
+from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock
 
 import pytest
 from a2a.types import AgentCapabilities, AgentCard, AgentExtension, AgentInterface
 
+import config
+import orchestrator.dashboard_service as dashboard_service_module
 from common.streaming import LogEntryPayload
 from orchestrator.dashboard_service import OrchestratorDashboardService, parse_agent_logs
 from orchestrator.models import (
@@ -291,3 +295,57 @@ async def test_get_agents_status_lists_every_running_task_and_the_capacity():
     assert [task["description"] for task in agent["running_tasks"]] == ["select procedures t1", "select procedures t2"]
     assert agent["task_capacity"] == 3
     assert agent["status"] == "AVAILABLE"
+
+
+def _dashboard() -> OrchestratorDashboardService:
+    return OrchestratorDashboardService(registry=AgentRegistry(), tasks=TaskHistory(), errors=ErrorHistory())
+
+
+@pytest.mark.asyncio
+async def test_get_rag_sync_status_sorts_newest_first_and_marks_overdue_runs_stale(monkeypatch):
+    monkeypatch.setattr(config.RagSyncConfig, "JOB_TASK_TIMEOUT_SECONDS", 3600)
+    now = datetime.now(UTC)
+    metadata_db = AsyncMock()
+    metadata_db.scroll_payload_records.return_value = [
+        {"status": "completed", "updated_at": (now - timedelta(hours=1)).isoformat()},
+        {"status": "running", "updated_at": (now - timedelta(hours=2)).isoformat()},
+        {"status": "running", "updated_at": now.isoformat()},
+    ]
+
+    outcomes = await _dashboard().get_rag_sync_status(metadata_db)
+
+    assert [(outcome["status"], outcome["stale"]) for outcome in outcomes] == [
+        ("running", False),
+        ("completed", False),
+        ("running", True),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_get_rag_sync_status_returns_nothing_when_qdrant_fails():
+    metadata_db = AsyncMock()
+    metadata_db.scroll_payload_records.side_effect = RuntimeError("offline")
+
+    assert await _dashboard().get_rag_sync_status(metadata_db) == []
+
+
+@pytest.mark.asyncio
+async def test_a_slow_rag_sync_read_returns_nothing_and_keeps_running_for_the_next_poll(monkeypatch):
+    monkeypatch.setattr(dashboard_service_module, "RAG_SYNC_STATUS_TIMEOUT_SECONDS", 0.01)
+    release = asyncio.Event()
+    outcome = {"status": "completed", "updated_at": datetime.now(UTC).isoformat()}
+
+    async def slow_read(_filter: dict) -> list[dict]:
+        await release.wait()
+        return [outcome]
+
+    metadata_db = AsyncMock()
+    metadata_db.scroll_payload_records.side_effect = slow_read
+    dashboard = _dashboard()
+
+    assert await dashboard.get_rag_sync_status(metadata_db) == []
+    assert await dashboard.get_rag_sync_status(metadata_db) == []
+    release.set()
+    assert await dashboard.get_rag_sync_status(metadata_db) == [outcome]
+    # One read served all three polls: the timeouts neither cancelled it nor started another.
+    metadata_db.scroll_payload_records.assert_called_once()

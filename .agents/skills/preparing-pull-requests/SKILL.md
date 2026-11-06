@@ -47,7 +47,7 @@ ruff enforces only part of `PYTHON_GUIDELINES.md`. Read the changed Python code 
 
 ## 3. License headers
 
-Add the SPDX header (*Project conventions* in `AGENTS.md`) to new `.py` files in scope that lack it. In `orchestrator/ui`, new `.ts`, `.tsx`, `.js`, `.css`, `.html`, `.svg` and `.npmrc` files carry the same header in their comment syntax (as in `src/main.tsx`, `src/styles/tokens.css`, `index.html`, `public/favicon.svg` and `.npmrc`), and a new JSON file gets a `<name>.json.license` sidecar like `package.json.license`. Ask the user about generated or third-party code.
+Add the SPDX header (*Project conventions* in `AGENTS.md`) to new `.py` files in scope that lack it. In `orchestrator/ui`, new `.ts`, `.tsx`, `.js`, `.css`, `.html`, `.svg` and `.npmrc` files carry the same header in their comment syntax (as in `src/main.tsx`, `src/styles/tokens.css`, `index.html` and `.npmrc`), and a new JSON file gets a `<name>.json.license` sidecar like `package.json.license`. Ask the user about generated or third-party code.
 
 ## 4. Unit tests and dashboard UI checks
 

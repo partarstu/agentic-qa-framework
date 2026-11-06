@@ -1,6 +1,6 @@
 # QuAIA™ — Quality Assurance with Intelligent Agents
 
-<img src="static/quaia_logo.png" alt="QuAIA Logo" width="50" style="margin-right: 15px; float:left">
+<img src="static/quaia_logo.png" alt="QuAIA Logo" width="360">
 
 QuAIA™ is an open-source framework for intelligent automation of the most important software testing life cycle 
 processes starting with software requirements review and up to generating test execution reports.
@@ -82,7 +82,7 @@ The UI test execution agents of the `test-execution-agents` repository record ev
 
 The Test Case Design agent uses these selections in two independent assessments:
 
-* **Rebuild** after `generate_test_cases` (every draft) and after `fix_test_cases` (every fixed or added test case): the selections of all test cases are requested at once, then the knowledge-aware test case generator rebuilds each test case that got at least one procedure. It **reuses** a fitting procedure (its description, test data names and expected results for unchanged behaviour), **merges** a run of steps selected together into one step, **adds** a precondition for an unmet prerequisite of a reused procedure, and **keeps** an item no selection fits; the story wins for the behaviour it introduces or changes. A reused item takes the procedure's description verbatim, filled in by code, so the execution agent matches it exactly. Name, summary, comment and acceptance criteria stay those of the draft, and every draft item is covered exactly once and in order. Generation and fixing prompts write one precondition per line.
+* **Rebuild** after `generate_test_cases` (every draft) and after `fix_test_cases` (every fixed or added test case): the selections of all test cases are requested at once, then the knowledge-aware test case generator rebuilds each test case that got at least one procedure. It **reuses** a fitting procedure (its description, test data names and expected results for unchanged behaviour), **merges** a run of steps selected together into one step, **adds** a precondition for an unmet prerequisite of a reused procedure, and **keeps** an item no selection fits; a test case whose rebuild fails stays as drafted, the error is logged and the step summary names it among those without recorded procedures; the story wins for the behaviour it introduces or changes. A reused item takes the procedure's description verbatim, filled in by code, so the execution agent matches it exactly. Name, summary, comment and acceptance criteria stay those of the draft, and every draft item is covered exactly once and in order. Generation and fixing prompts write one precondition per line.
 * **Review**: each per-test-case review gets a fresh selection for the test case as it is now and checks it for fitting procedures or workflows that were not reused, unmet prerequisites, and test data and expected results that deviate from a recorded workflow of unchanged behaviour (at least high severity). An item without a selected procedure is no finding, since the graph knows only what was executed before. The whole-set review asks for nothing.
 
 The design agent does not know the knowledge agent: it sends each request to the **orchestrator's own A2A endpoint** (`ORCHESTRATOR_URL` + `/a2a`, card at `/a2a/.well-known/agent-card.json`), which requires `X-API-Key: INTERNAL_SERVICE_API_KEY` and fails closed (503) without it. The request is one data part `{capability, payload, timeout_seconds}`: the routing selects the registered agent whose capability fits the configured capability text, the orchestrator forwards the payload as one data part and returns that agent's artifacts unchanged, and the task appears on the dashboard with its logs, errors and the token usage the agent reports. The timeout is capped at 1800 s. Any failure (no fitting agent, timeout, agent error, an invalid selection) is logged as an error and named in the step's summary, and the test case goes on unchanged; `PROCEDURE_KNOWLEDGE_ENABLED=false` skips the requests altogether.
@@ -315,7 +315,7 @@ JIRA_URL=YOUR_JIRA_INSTANCE_URL # Required for Xray, the RAG sync runtime and th
                                  # MCP server (see "Jira MCP Server Setup" below), which has its own .env file.
 JIRA_USERNAME=YOUR_JIRA_USERNAME # Required alongside JIRA_URL. The email address associated with your Jira account.
 JIRA_API_TOKEN=YOUR_JIRA_API_TOKEN # Required alongside JIRA_URL. A Jira API token for authentication.
-ORCHESTRATOR_VERSION=4.0.0 # Default: 4.0.0. Version of the orchestrator, reported for traceability.
+ORCHESTRATOR_VERSION=4.0.1 # Default: 4.0.1. Version of the orchestrator, reported for traceability.
 ORCHESTRATOR_THINKING_LEVEL=medium # Default: medium. Thinking level of the orchestrator's model calls (routing, multi-agent routing and results extraction): none (thinking off), minimal, low, medium, high or xhigh. On Qwen, a level turns thinking on at the matching reasoning effort and none turns it off through the chat template (recommended on Qwen: none).
 TEST_CASE_DESIGN_TASK_TIMEOUT_SECONDS=3300 # Default: 3300. How long the orchestrator waits for one test case design, the wait for a free Test Case Design agent included; keep it below the orchestrator's request timeout (3500 s on Cloud Run).
 TEST_ENVIRONMENT_LABEL=Standard Test Environment # Default: Standard Test Environment. Label describing the
@@ -394,7 +394,7 @@ TEST_CASE_CLASSIFICATION_THINKING_LEVEL=medium # Default: medium. Recommended on
 # Version each agent reports in its A2A agent card (visible in the dashboard) and, for execution agents,
 # on every test execution result. Each agent reads its own variable.
 REQUIREMENTS_REVIEW_AGENT_VERSION=1.5.0 # Default: 1.5.0.
-TEST_CASE_DESIGN_AGENT_VERSION=1.3.0 # Default: 1.3.0.
+TEST_CASE_DESIGN_AGENT_VERSION=1.4.0 # Default: 1.4.0.
 TEST_CASE_CLASSIFICATION_AGENT_VERSION=1.5.0 # Default: 1.5.0.
 INCIDENT_CREATION_AGENT_VERSION=1.4.0 # Default: 1.4.0.
 

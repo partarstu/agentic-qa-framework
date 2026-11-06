@@ -212,6 +212,8 @@ async def lifespan(app: FastAPI):
 
     await streaming_hub.shutdown()
     await dashboard_state_store.close()
+    if _metadata_db is not None:
+        await _metadata_db.close()
 
 
 def _validate_api_key(api_key: str = Security(api_key_header)):
@@ -303,7 +305,7 @@ async def get_recent_errors(limit: int = Query(default=20, le=50), _: str = Depe
 @orchestrator_app.get("/api/dashboard/rag-sync-status")
 async def get_rag_sync_status(_: str = Depends(dashboard_auth)):
     """Get durable RAG sync outcomes for the dashboard panel."""
-    return await dashboard_service.get_rag_sync_status()
+    return await dashboard_service.get_rag_sync_status(_get_metadata_db())
 
 
 @orchestrator_app.post("/sync-outcome")
@@ -850,14 +852,22 @@ async def trigger_test_case_generation_workflow(request: Request, api_key: str =
 # instance (its agent registry is in-memory and it is deployed with max-instances=1).
 _rag_sync_lock = asyncio.Lock()
 _rag_sync_trigger: RagSyncTrigger | None = None
+_metadata_db: VectorDbService | None = None
+
+
+def _get_metadata_db() -> VectorDbService:
+    """Lazily-created metadata collection service shared by the RAG sync trigger and the dashboard."""
+    global _metadata_db
+    if _metadata_db is None:
+        _metadata_db = VectorDbService(config.QdrantConfig.METADATA_COLLECTION_NAME)
+    return _metadata_db
 
 
 def _get_rag_sync_trigger() -> RagSyncTrigger:
     """Lazily-created singleton trigger (avoids import-time vector DB clients)."""
     global _rag_sync_trigger
     if _rag_sync_trigger is None:
-        metadata_db = VectorDbService(config.QdrantConfig.METADATA_COLLECTION_NAME)
-        _rag_sync_trigger = RagSyncTrigger(metadata_db)
+        _rag_sync_trigger = RagSyncTrigger(_get_metadata_db())
     return _rag_sync_trigger
 
 
