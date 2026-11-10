@@ -29,7 +29,9 @@ offered under commercial licenses. To make this possible, every contributor must
   [test execution agents](https://github.com/partarstu/test-execution-agents).
 * You keep the copyright in your contributions. The CLA grants the maintainer a license to them, including the right to license them
   under the AGPL-3.0 and under commercial terms.
-* Every contribution that is merged stays publicly available under the AGPL-3.0.
-* If you contribute on behalf of your employer, make sure you are allowed to do so before signing.
+* As long as the maintainer distributes QuAIA™ with your contribution, the contribution also stays publicly available under the AGPL-3.0 or another open source license.
+* If your employer or a client may have rights to your work, send the maintainer their signed written permission before your first pull request. If you are not of legal age, send your parent's or guardian's written consent.
+* If you used AI tools for a non-trivial part of a pull request, say so in its description, naming the tool and the model, and review everything you submit.
+* Code you didn't write yourself is accepted only under the MIT, BSD, ISC or Apache-2.0 license, or with the maintainer's prior approval. Co-authors must sign the CLA too.
 
 Pull requests from contributors who have not signed the CLA cannot be merged.
