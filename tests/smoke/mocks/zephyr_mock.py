@@ -15,7 +15,7 @@ at ``GET /__recorded`` for the assertions (the seeded executable case is
 deliberately excluded from it).
 """
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 
 app = FastAPI()
 
@@ -142,7 +142,9 @@ async def list_test_cases() -> dict:
 
 @app.get("/testcases/{key}")
 async def get_test_case(key: str) -> dict:
-    return _all_test_cases().get(key, {})
+    if key not in _all_test_cases():
+        raise HTTPException(status_code=404, detail=f"Test case {key} does not exist.")
+    return _all_test_cases()[key]
 
 
 @app.get("/testcases/{key}/teststeps")

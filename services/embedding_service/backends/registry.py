@@ -61,9 +61,9 @@ def create_registry(enabled_backends: tuple[str, ...]) -> BackendRegistry:
     backends: dict[str, EmbeddingBackend] = {}
     for name in enabled_backends:
         if name == "text":
-            from embedding_service.backends.text_backend import BgeM3TextBackend
+            from embedding_service.backends.text_backend import EmbeddingGemmaTextBackend
 
-            backends[name] = BgeM3TextBackend()
+            backends[name] = EmbeddingGemmaTextBackend()
         else:
             raise ValueError(f"Unknown embedding backend: '{name}'. Known backends: text.")
     return BackendRegistry(backends)

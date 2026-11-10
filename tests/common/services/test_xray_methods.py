@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from common.models import TestCase, TestExecutionResult, TestStep, TestStepResult
+from common.services.test_management_base import TestCaseNotFoundError
 from common.services.xray_client import XrayClient
 
 
@@ -167,3 +168,11 @@ def test_fetch_test_cases_by_project_pages_within_the_api_limit(xray_client):
     assert {call.args[1]["limit"] for call in query.call_args_list} == {100}
     assert query.call_args_list[0].args[1]["jql"] == 'project = "PROJ"'
     assert (listed[0].status, listed[0].test_case.steps[0].expected_results) == ("Approved", "Page shown")
+
+
+def test_fetch_test_case_by_key_raises_not_found_for_a_missing_test_case(xray_client):
+    with (
+        patch.object(xray_client, "_fetch_test_cases_by_jql", return_value=[]),
+        pytest.raises(TestCaseNotFoundError, match=r"^Test case PROJ-9 was not found\.$"),
+    ):
+        xray_client.fetch_test_case_by_key("PROJ-9")

@@ -7,6 +7,10 @@ from abc import ABC, abstractmethod
 from common.models import ListedTestCase, TestCase, TestExecutionResult
 
 
+class TestCaseNotFoundError(LookupError):
+    __test__ = False
+
+
 class TestManagementClientBase(ABC):
     @abstractmethod
     def fetch_test_cases_by_project(self, project_key: str) -> list[ListedTestCase]:
@@ -43,6 +47,7 @@ class TestManagementClientBase(ABC):
 
     @abstractmethod
     def fetch_test_case_by_key(self, test_case_key: str) -> TestCase:
+        """Raises TestCaseNotFoundError when the test management system has no test case with this key."""
         raise NotImplementedError
 
     @abstractmethod

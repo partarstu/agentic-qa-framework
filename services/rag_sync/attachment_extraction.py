@@ -31,7 +31,7 @@ logger = utils.get_logger("rag_attachment_extraction")
 RASTER_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff", ".tif"}
 CONVERT_ONLY_EXTENSIONS = {".doc", ".ppt", ".odt", ".odp", ".rtf", ".xls", ".ods"}
 CONVERT_WITH_FALLBACK_EXTENSIONS = {".docx", ".pptx"}
-TEXT_ONLY_CONVERTED_EXTENSIONS = {".xls", ".ods"}
+SPREADSHEET_CONVERTED_EXTENSIONS = {".xls", ".ods"}
 OFFICE_EXTENSIONS = CONVERT_ONLY_EXTENSIONS | CONVERT_WITH_FALLBACK_EXTENSIONS
 PDF_POINTS_PER_INCH = 72
 # PDFium joins a word hyphenated across a line break itself and leaves this control character for the hyphen.
@@ -121,8 +121,8 @@ async def extract_attachment_async(file_name: str, content: bytes) -> ExtractedD
     return await asyncio.to_thread(extract_attachment, file_name, content)
 
 
-def _extract_pdf(content: bytes, include_images: bool = True) -> ExtractedDocument:
-    """Extracts native text and, when enabled, a PNG rendering for each PDF page."""
+def _extract_pdf(content: bytes) -> ExtractedDocument:
+    """Extracts native text and a PNG rendering for each PDF page."""
     import pypdfium2
 
     with _pdfium_lock:
@@ -142,8 +142,8 @@ def _extract_pdf(content: bytes, include_images: bool = True) -> ExtractedDocume
                 for page_number in range(min(total_page_count, page_limit)):
                     page = document[page_number]
                     native_text = page.get_textpage().get_text_bounded().replace(PDFIUM_LINE_END_HYPHEN, "")
-                    image = _render_page(page) if include_images else None
-                    text = _page_text_with_ocr(page, native_text, image) if include_images else native_text
+                    image = _render_page(page)
+                    text = _page_text_with_ocr(page, native_text, image)
                     pages.append(PageContent(_normalize_extracted_text(text, strip_page_numbers=True), image))
                 return ExtractedDocument(pages, total_page_count)
         except ExtractionError:
@@ -256,11 +256,16 @@ def _extract_raster_images(content: bytes) -> ExtractedDocument:
 
 
 async def _extract_office(file_name: str, content: bytes, extension: str) -> ExtractedDocument:
-    """Converts an office document to PDF, with native fallback for DOCX and PPTX."""
+    """Converts an office document to PDF (a spreadsheet to XLSX), with native fallback for DOCX and PPTX."""
     if not office_conversion.conversion_available():
         if extension in CONVERT_WITH_FALLBACK_EXTENSIONS:
             return await asyncio.to_thread(_extract_office_native, extension, content)
         raise OfficeConversionError(f"Conversion of '{file_name}' is unavailable; the format needs it.")
+
+    if extension in SPREADSHEET_CONVERTED_EXTENSIONS:
+        # A PDF clips the text of a cell to its column width, so the converted workbook's own values are read.
+        xlsx_bytes = await office_conversion.convert_to_xlsx(content, file_name)
+        return await asyncio.to_thread(_extract_xlsx, xlsx_bytes)
 
     try:
         pdf_bytes = await office_conversion.convert_to_pdf(content, file_name)
@@ -270,8 +275,7 @@ async def _extract_office(file_name: str, content: bytes, extension: str) -> Ext
         logger.warning("Converting '%s' failed; falling back to its native text-only reader.", file_name)
         return await asyncio.to_thread(_extract_office_native, extension, content)
 
-    include_images = extension not in TEXT_ONLY_CONVERTED_EXTENSIONS
-    return await asyncio.to_thread(_extract_pdf, pdf_bytes, include_images)
+    return await asyncio.to_thread(_extract_pdf, pdf_bytes)
 
 
 def _extract_office_native(extension: str, content: bytes) -> ExtractedDocument:

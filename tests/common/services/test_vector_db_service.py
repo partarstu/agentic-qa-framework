@@ -33,7 +33,7 @@ def _collection_info(
     """A collection description as get_collection returns it; defaults to the active embedding mode."""
     params = models.CollectionParams(
         vectors=vectors if vectors is not None else {"dense": models.VectorParams(size=3, distance="Cosine")},
-        sparse_vectors=sparse_vectors if sparse_vectors is not None else {"sparse": models.SparseVectorParams()},
+        sparse_vectors=sparse_vectors,
     )
     return MagicMock(config=MagicMock(params=params))
 
@@ -58,10 +58,7 @@ def mock_httpx_client():
             mock_response.raise_for_status.return_value = None
             mock_response.json.return_value = {
                 "model": "test-model",
-                "embeddings": [
-                    {"dense": [0.1, 0.2, 0.3], "sparse": {"indices": [1, 2], "values": [0.5, 0.6]}}
-                    for _ in (json or {}).get("texts", [])
-                ],
+                "embeddings": [{"dense": [0.1, 0.2, 0.3]} for _ in (json or {}).get("texts", [])],
             }
             return mock_response
 
@@ -107,7 +104,7 @@ def test_the_sharepoint_collection_indexes_its_scope_fields(mock_qdrant_client):
 
     service = VectorDbService(config.QdrantConfig.SHAREPOINT_COLLECTION_NAME)
 
-    assert {"source", "drive_id", "folder_path", "document_name"} <= set(service._indexed_fields())
+    assert {"source", "drive_id", "folder_path", "folder_ancestors", "document_name"} <= set(service._indexed_fields())
 
 
 def test_init_missing_service_url(mock_qdrant_client):
@@ -145,7 +142,7 @@ async def test_ensure_collection_creates(vector_db_service, mock_qdrant_client, 
 
 
 @pytest.mark.asyncio
-async def test_ensure_collection_creates_named_dense_and_sparse_vectors(
+async def test_ensure_collection_creates_only_the_named_dense_vector(
     vector_db_service, mock_qdrant_client, mock_httpx_client
 ):
     _mock_collections_exist(mock_qdrant_client, "test_collection", exists=False)
@@ -153,10 +150,11 @@ async def test_ensure_collection_creates_named_dense_and_sparse_vectors(
     await vector_db_service.ensure_collection()
 
     create_kwargs = mock_qdrant_client.create_collection.call_args.kwargs
+    assert set(create_kwargs["vectors_config"]) == {"dense"}
     dense = create_kwargs["vectors_config"]["dense"]
     assert dense.size == 3
     assert dense.distance == models.Distance.COSINE
-    assert create_kwargs["sparse_vectors_config"]["sparse"].modifier == models.Modifier.IDF
+    assert "sparse_vectors_config" not in create_kwargs
 
 
 class TestSchemaValidation:
@@ -184,9 +182,12 @@ class TestSchemaValidation:
                 _collection_info(vectors={"dense": models.VectorParams(size=3, distance="Dot")}),
                 "the dense vector uses Dot distance instead of cosine",
             ),
-            (_collection_info(sparse_vectors={}), "the named sparse vector 'sparse' is missing"),
+            (
+                _collection_info(sparse_vectors={"sparse": models.SparseVectorParams()}),
+                "it still has the sparse vector(s) ['sparse'] of the former hybrid mode",
+            ),
         ],
-        ids=["unnamed-dense", "wrong-size", "wrong-distance", "no-sparse"],
+        ids=["unnamed-dense", "wrong-size", "wrong-distance", "former-hybrid"],
     )
     async def test_a_mismatch_names_the_collection_the_mode_and_the_problem(
         self, vector_db_service, mock_qdrant_client, info, expected_problem
@@ -199,7 +200,7 @@ class TestSchemaValidation:
 
         message = str(raised.value)
         assert "Collection 'test_collection' does not match the active embedding mode" in message
-        assert "named dense vector 'dense' of size 3 with cosine distance" in message
+        assert "named dense vector 'dense' of size 3 with cosine distance only" in message
         assert expected_problem in message
         assert "Recreate the collection and resync its source" in message
         mock_qdrant_client.create_payload_index.assert_not_called()
@@ -207,7 +208,8 @@ class TestSchemaValidation:
     async def test_every_problem_is_reported_at_once(self, vector_db_service, mock_qdrant_client):
         _mock_collections_exist(mock_qdrant_client, "test_collection", exists=True)
         mock_qdrant_client.get_collection.return_value = _collection_info(
-            vectors={"dense": models.VectorParams(size=5, distance="Euclid")}, sparse_vectors={}
+            vectors={"dense": models.VectorParams(size=5, distance="Euclid")},
+            sparse_vectors={"sparse": models.SparseVectorParams()},
         )
 
         with pytest.raises(vector_db_service_module.VectorCollectionSchemaError) as raised:
@@ -215,34 +217,36 @@ class TestSchemaValidation:
 
         assert "size 5 instead of 3" in str(raised.value)
         assert "Euclid distance" in str(raised.value)
-        assert "sparse vector 'sparse' is missing" in str(raised.value)
+        assert "former hybrid mode" in str(raised.value)
 
     async def test_a_search_validates_with_the_query_embedding_before_querying(
         self, vector_db_service, mock_qdrant_client
     ):
-        mock_qdrant_client.get_collection.return_value = _collection_info(sparse_vectors={})
+        mock_qdrant_client.get_collection.return_value = _collection_info(
+            vectors={"dense": models.VectorParams(size=1024, distance="Cosine")}
+        )
 
         with pytest.raises(vector_db_service_module.VectorCollectionSchemaError):
-            await vector_db_service.hybrid_search("text")
+            await vector_db_service.dense_search(["text"])
 
-        mock_qdrant_client.query_points.assert_not_called()
+        mock_qdrant_client.query_batch_points.assert_not_called()
 
     async def test_validation_runs_once_per_service_instance(self, vector_db_service, mock_qdrant_client):
         _mock_collections_exist(mock_qdrant_client, "test_collection", exists=True)
-        mock_qdrant_client.query_points.return_value = MagicMock(points=[])
+        mock_qdrant_client.query_batch_points.return_value = [MagicMock(points=[])]
 
-        await vector_db_service.hybrid_search("first")
-        await vector_db_service.hybrid_search("second")
+        await vector_db_service.dense_search(["first"])
+        await vector_db_service.dense_search(["second"])
         await vector_db_service.ensure_collection()
 
         mock_qdrant_client.get_collection.assert_awaited_once()
 
     async def test_a_newly_created_collection_needs_no_validation(self, vector_db_service, mock_qdrant_client):
         _mock_collections_exist(mock_qdrant_client, "test_collection", exists=False)
-        mock_qdrant_client.query_points.return_value = MagicMock(points=[])
+        mock_qdrant_client.query_batch_points.return_value = [MagicMock(points=[])]
 
         await vector_db_service.ensure_collection()
-        await vector_db_service.hybrid_search("query")
+        await vector_db_service.dense_search(["query"])
 
         mock_qdrant_client.get_collection.assert_not_called()
 
@@ -251,7 +255,7 @@ class TestSchemaValidation:
             404, "Not Found", b"missing collection", httpx.Headers()
         )
 
-        assert await vector_db_service.hybrid_search("text") == []
+        assert await vector_db_service.dense_search(["text"]) == []
 
 
 @pytest.mark.asyncio
@@ -281,10 +285,9 @@ async def test_delete(vector_db_service, mock_qdrant_client):
 
 
 @pytest.mark.asyncio
-async def test_embed_texts_returns_dense_and_sparse_per_text(vector_db_service, mock_httpx_client):
+async def test_embed_texts_returns_the_dense_vector_per_text(vector_db_service, mock_httpx_client):
     embeddings, model = await vector_db_service._embed_texts(["one", "two"])
-    assert len(embeddings) == 2
-    assert embeddings[0] == ([0.1, 0.2, 0.3], [1, 2], [0.5, 0.6])
+    assert embeddings == [[0.1, 0.2, 0.3], [0.1, 0.2, 0.3]]
     assert model == "test-model"
     called_url = mock_httpx_client.post.call_args.args[0]
     assert called_url.endswith("/embed-document-text")
@@ -307,64 +310,138 @@ async def test_embed_texts_query_uses_query_endpoint(vector_db_service, mock_htt
 
 
 @pytest.mark.asyncio
-async def test_get_embedding_returns_dense_only(vector_db_service, mock_httpx_client):
-    dense = await vector_db_service._get_embedding("text")
-    assert dense == [0.1, 0.2, 0.3]
+async def test_embed_texts_slices_requests_to_the_service_batch_limit_and_keeps_the_order(
+    vector_db_service, mock_httpx_client, monkeypatch
+):
+    monkeypatch.setattr(vector_db_service_module.config.EmbeddingServiceConfig, "MAX_BATCH_SIZE", 32)
+    texts = [f"text-{index}" for index in range(70)]
+
+    def _respond_with_index(url, json=None, headers=None):
+        response = MagicMock()
+        response.raise_for_status.return_value = None
+        response.json.return_value = {
+            "model": "test-model",
+            "embeddings": [{"dense": [float(text.split("-")[1])]} for text in json["texts"]],
+        }
+        return response
+
+    mock_httpx_client.post.side_effect = _respond_with_index
+
+    embeddings, model = await vector_db_service._embed_texts(texts)
+
+    sent = [call.kwargs["json"]["texts"] for call in mock_httpx_client.post.call_args_list]
+    assert [len(batch) for batch in sent] == [32, 32, 6]
+    assert [dense[0] for dense in embeddings] == [float(index) for index in range(70)]
+    assert model == "test-model"
 
 
 @pytest.mark.asyncio
-async def test_hybrid_search_composes_prefetches_with_rrf(vector_db_service, mock_qdrant_client, mock_httpx_client):
-    _mock_collections_exist(mock_qdrant_client, "test_collection", exists=True)
-    mock_response = MagicMock()
-    mock_response.points = [models.ScoredPoint(id="1", version=1, score=1.0, payload={}, vector=None)]
-    mock_qdrant_client.query_points.return_value = mock_response
+async def test_embed_texts_refuses_slices_from_different_models(vector_db_service, mock_httpx_client, monkeypatch):
+    monkeypatch.setattr(vector_db_service_module.config.EmbeddingServiceConfig, "MAX_BATCH_SIZE", 1)
+    models_by_call = iter(["model-a", "model-b"])
 
-    query_filter = models.Filter(must=[models.FieldCondition(key="issue_type", match=models.MatchValue(value="Bug"))])
-    results = await vector_db_service.hybrid_search(
-        "incident text", limit=7, score_threshold=0.7, query_filter=query_filter
-    )
+    def _respond_with_next_model(url, json=None, headers=None):
+        response = MagicMock()
+        response.raise_for_status.return_value = None
+        response.json.return_value = {
+            "model": next(models_by_call),
+            "embeddings": [{"dense": [0.1]}],
+        }
+        return response
 
-    assert len(results) == 1
-    call = mock_qdrant_client.query_points.call_args
-    dense_prefetch, sparse_prefetch = call.kwargs["prefetch"]
-    # One prefetch per named vector, each covering the final limit...
-    assert dense_prefetch.using == "dense"
-    assert dense_prefetch.limit == 7
-    assert sparse_prefetch.using == "sparse"
-    assert sparse_prefetch.limit == 7
-    # ...with the SAME filter, but the threshold only on the dense branch.
-    assert dense_prefetch.filter == query_filter
-    assert sparse_prefetch.filter == query_filter
-    assert dense_prefetch.score_threshold == 0.7
-    assert sparse_prefetch.score_threshold is None
-    # Fused with RRF at the outer query.
-    assert call.kwargs["query"].fusion == models.Fusion.RRF
-    assert call.kwargs["limit"] == 7
+    mock_httpx_client.post.side_effect = _respond_with_next_model
+
+    with pytest.raises(RuntimeError, match="switched models"):
+        await vector_db_service._embed_texts(["one", "two"])
 
 
 @pytest.mark.asyncio
-async def test_hybrid_search_without_threshold_keeps_prefetch_unfiltered(
+async def test_get_payload_record_creates_the_missing_metadata_collection_before_reading(
+    vector_db_service, mock_qdrant_client
+):
+    _mock_collections_exist(mock_qdrant_client, "test_collection", exists=False)
+    mock_qdrant_client.retrieve.return_value = []
+
+    assert await vector_db_service.get_payload_record("state-1") is None
+
+    mock_qdrant_client.create_collection.assert_awaited_once_with(collection_name="test_collection", vectors_config={})
+    mock_qdrant_client.retrieve.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_get_payload_record_if_exists_never_creates_the_collection(vector_db_service, mock_qdrant_client):
+    _mock_collections_exist(mock_qdrant_client, "test_collection", exists=False)
+
+    assert await vector_db_service.get_payload_record_if_exists("state-1") is None
+
+    mock_qdrant_client.create_collection.assert_not_awaited()
+    mock_qdrant_client.retrieve.assert_not_awaited()
+
+
+def _hit(point_id: str, score: float) -> models.ScoredPoint:
+    return models.ScoredPoint(id=point_id, version=1, score=score, payload={}, vector=None)
+
+
+@pytest.mark.asyncio
+async def test_dense_search_sends_one_request_per_query_text_with_the_same_filter_and_threshold(
     vector_db_service, mock_qdrant_client, mock_httpx_client
 ):
-    """The sparse-no-match edge case (qdrant#4937) is mitigated by the dense-only threshold:
-    without a threshold the sparse branch may surface unrelated points, which the caller opts into."""
     _mock_collections_exist(mock_qdrant_client, "test_collection", exists=True)
-    mock_qdrant_client.query_points.return_value = MagicMock(points=[])
+    mock_qdrant_client.query_batch_points.return_value = [MagicMock(points=[]), MagicMock(points=[])]
+    query_filter = models.Filter(must=[models.FieldCondition(key="issue_type", match=models.MatchValue(value="Bug"))])
 
-    await vector_db_service.hybrid_search("incident text", limit=5)
+    await vector_db_service.dense_search(["first", "second"], limit=7, score_threshold=0.5, query_filter=query_filter)
 
-    dense_prefetch, _ = mock_qdrant_client.query_points.call_args.kwargs["prefetch"]
-    assert dense_prefetch.score_threshold is None
+    assert mock_httpx_client.post.await_count == 1
+    assert mock_httpx_client.post.call_args.args[0].endswith("/embed-query-text")
+    assert mock_httpx_client.post.call_args.kwargs["json"] == {"texts": ["first", "second"]}
+    requests = mock_qdrant_client.query_batch_points.call_args.kwargs["requests"]
+    assert len(requests) == 2
+    for request in requests:
+        assert (request.using, request.limit, request.score_threshold, request.filter) == (
+            "dense",
+            7,
+            0.5,
+            query_filter,
+        )
+        assert request.query == [0.1, 0.2, 0.3]
 
 
 @pytest.mark.asyncio
-async def test_hybrid_search_missing_collection_returns_empty(vector_db_service, mock_qdrant_client):
-    mock_qdrant_client.query_points.side_effect = UnexpectedResponse(
+async def test_dense_search_merges_the_queries_by_the_best_score_per_point(
+    vector_db_service, mock_qdrant_client, mock_httpx_client
+):
+    _mock_collections_exist(mock_qdrant_client, "test_collection", exists=True)
+    mock_qdrant_client.query_batch_points.return_value = [
+        MagicMock(points=[_hit("a", 0.9), _hit("b", 0.6), _hit("c", 0.55)]),
+        MagicMock(points=[_hit("b", 0.8), _hit("d", 0.7)]),
+    ]
+
+    results = await vector_db_service.dense_search(["first", "second"], limit=3)
+
+    assert [(hit.id, hit.score) for hit in results] == [("a", 0.9), ("b", 0.8), ("d", 0.7)]
+
+
+@pytest.mark.asyncio
+async def test_dense_search_as_documents_embeds_like_the_stored_items(
+    vector_db_service, mock_qdrant_client, mock_httpx_client
+):
+    _mock_collections_exist(mock_qdrant_client, "test_collection", exists=True)
+    mock_qdrant_client.query_batch_points.return_value = [MagicMock(points=[])]
+
+    await vector_db_service.dense_search(["incident text"], as_documents=True)
+
+    assert mock_httpx_client.post.call_args.args[0].endswith("/embed-document-text")
+
+
+@pytest.mark.asyncio
+async def test_dense_search_missing_collection_returns_empty(vector_db_service, mock_qdrant_client, mock_httpx_client):
+    mock_qdrant_client.query_batch_points.side_effect = UnexpectedResponse(
         404, "Not Found", b"missing collection", httpx.Headers()
     )
-    results = await vector_db_service.hybrid_search("incident text")
+    results = await vector_db_service.dense_search(["incident text"])
     assert results == []
-    mock_qdrant_client.query_points.assert_awaited_once()
+    mock_qdrant_client.query_batch_points.assert_awaited_once()
 
 
 @pytest.fixture
@@ -469,9 +546,7 @@ async def test_upsert_batch_respects_batch_size(vector_db_service, mock_qdrant_c
     first_call_points = mock_qdrant_client.upsert.call_args_list[0].kwargs["points"]
     assert len(first_call_points) == 2
     point = first_call_points[0]
-    assert set(point.vector.keys()) == {"dense", "sparse"}
-    assert point.vector["dense"] == [0.1, 0.2, 0.3]
-    assert point.vector["sparse"].indices == [1, 2]
+    assert point.vector == {"dense": [0.1, 0.2, 0.3]}
 
 
 @pytest.mark.asyncio
@@ -520,15 +595,15 @@ class TestQdrantRetries:
             attempts.append(1)
             if len(attempts) == 1:
                 raise module.UnexpectedResponse(status_code=502, reason_phrase="bad gateway", content=b"", headers={})
-            return MagicMock(points=[])
+            return [MagicMock(points=[])]
 
         vector_db_service.client = MagicMock()
-        vector_db_service.client.query_points = flaky
-        monkeypatch.setattr(vector_db_service, "_embed_texts", AsyncMock(return_value=([([0.0], [0], [0.0])], "m")))
+        vector_db_service.client.query_batch_points = flaky
+        monkeypatch.setattr(vector_db_service, "_embed_texts", AsyncMock(return_value=([[0.0]], "m")))
         monkeypatch.setattr(vector_db_service, "_verify_model_identity", AsyncMock())
         monkeypatch.setattr(vector_db_service, "_validate_schema", AsyncMock())
 
-        results = await vector_db_service.hybrid_search("text")
+        results = await vector_db_service.dense_search(["text"])
 
         assert results == []
         assert len(attempts) == 2
@@ -545,13 +620,13 @@ class TestQdrantRetries:
             raise module.UnexpectedResponse(status_code=400, reason_phrase="bad request", content=b"", headers={})
 
         vector_db_service.client = MagicMock()
-        vector_db_service.client.query_points = forbidden
-        monkeypatch.setattr(vector_db_service, "_embed_texts", AsyncMock(return_value=([([0.0], [0], [0.0])], "m")))
+        vector_db_service.client.query_batch_points = forbidden
+        monkeypatch.setattr(vector_db_service, "_embed_texts", AsyncMock(return_value=([[0.0]], "m")))
         monkeypatch.setattr(vector_db_service, "_verify_model_identity", AsyncMock())
         monkeypatch.setattr(vector_db_service, "_validate_schema", AsyncMock())
 
         with pytest.raises(module.UnexpectedResponse):
-            await vector_db_service.hybrid_search("text")
+            await vector_db_service.dense_search(["text"])
 
         assert len(attempts) == 1
 
@@ -566,15 +641,15 @@ class TestQdrantRetries:
             attempts.append(1)
             if len(attempts) == 1:
                 raise module.ResponseHandlingException(ConnectionError("reset"))
-            return MagicMock(points=[])
+            return [MagicMock(points=[])]
 
         vector_db_service.client = MagicMock()
-        vector_db_service.client.query_points = flaky
-        monkeypatch.setattr(vector_db_service, "_embed_texts", AsyncMock(return_value=([([0.0], [0], [0.0])], "m")))
+        vector_db_service.client.query_batch_points = flaky
+        monkeypatch.setattr(vector_db_service, "_embed_texts", AsyncMock(return_value=([[0.0]], "m")))
         monkeypatch.setattr(vector_db_service, "_verify_model_identity", AsyncMock())
         monkeypatch.setattr(vector_db_service, "_validate_schema", AsyncMock())
 
-        await vector_db_service.hybrid_search("text")
+        await vector_db_service.dense_search(["text"])
 
         assert len(attempts) == 2
 
@@ -594,7 +669,7 @@ class TestEmbeddingStatusRetries:
         ok_response = httpx.Response(
             200,
             json={
-                "embeddings": [{"dense": [0.1], "sparse": {"indices": [0], "values": [0.1]}}],
+                "embeddings": [{"dense": [0.1]}],
                 "model": "m",
             },
             request=httpx.Request("POST", "http://embeddings/embed"),

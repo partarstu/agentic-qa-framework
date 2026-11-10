@@ -22,6 +22,17 @@ from dataclasses import dataclass
 import config
 
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$", re.MULTILINE)
+_FENCE_RE = re.compile(r"^```.*?^```", re.MULTILINE | re.DOTALL)
+
+
+def _headings(markdown: str) -> list[re.Match[str]]:
+    """The markdown headings outside fenced code, where a comment line can start with ``#``."""
+    fenced = [match.span() for match in _FENCE_RE.finditer(markdown)]
+    return [
+        match
+        for match in _HEADING_RE.finditer(markdown)
+        if not any(start <= match.start() < end for start, end in fenced)
+    ]
 
 
 @dataclass(slots=True)
@@ -68,13 +79,14 @@ def _split_sections(markdown: str) -> list[tuple[str, str]]:
     body text yields an empty-text section, which the caller drops while later
     sections inherit the heading in their breadcrumbs.
     """
-    matches = list(_HEADING_RE.finditer(markdown))
+    matches = _headings(markdown)
     if not matches:
         body = markdown.strip()
         return [("", body)] if body else []
 
     sections: list[tuple[str, str]] = []
-    heading_path: list[str] = []
+    # (level, title) of the open headings; a skipped level (an h2 straight under the h1) leaves no gap.
+    heading_path: list[tuple[int, str]] = []
     preamble = markdown[: matches[0].start()].strip()
     if preamble:
         sections.append(("", preamble))
@@ -83,11 +95,13 @@ def _split_sections(markdown: str) -> list[tuple[str, str]]:
         title = match.group(2).strip()
         if level == 1:
             # The h1 is the page title; it is prepended by the caller, not repeated.
-            heading_path = [title]
+            heading_path = []
             breadcrumb = ""
         else:
-            heading_path = [*heading_path[: level - 1], title]
-            breadcrumb = " > ".join(heading_path[1:])
+            while heading_path and heading_path[-1][0] >= level:
+                heading_path.pop()
+            heading_path.append((level, title))
+            breadcrumb = " > ".join(heading for _, heading in heading_path)
         end = matches[index + 1].start() if index + 1 < len(matches) else len(markdown)
         sections.append((breadcrumb, markdown[match.end() : end].strip()))
     return sections
@@ -114,7 +128,7 @@ def _split_by_budget(text: str, budget: int) -> list[str]:
             if len(paragraph) <= budget:
                 current = paragraph
             else:
-                pieces.extend(_split_by_words(paragraph, budget))
+                pieces.extend(_split_by_lines(paragraph, budget))
                 current = ""
     if current:
         pieces.append(current)
@@ -140,18 +154,42 @@ def _split_blocks(text: str) -> list[str]:
     return blocks
 
 
-def _split_by_words(paragraph: str, budget: int) -> list[str]:
-    words = paragraph.split(" ")
+def _split_by_lines(block: str, budget: int) -> list[str]:
+    """Splits an oversized block between its lines (list items, table rows), and an oversized line between words."""
     pieces: list[str] = []
     current = ""
-    for word in words:
+    for line in block.split("\n"):
+        candidate = f"{current}\n{line}" if current else line
+        if len(candidate) <= budget:
+            current = candidate
+            continue
+        if current:
+            pieces.append(current)
+        if len(line) <= budget:
+            current = line
+        else:
+            *full, current = _split_by_words(line, budget)
+            pieces.extend(full)
+    if current:
+        pieces.append(current)
+    return pieces
+
+
+def _split_by_words(line: str, budget: int) -> list[str]:
+    """Splits a line between words; a word longer than the budget is cut at the budget."""
+    pieces: list[str] = []
+    current = ""
+    for word in line.split(" "):
         candidate = f"{current} {word}" if current else word
         if len(candidate) <= budget:
             current = candidate
-        else:
-            if current:
-                pieces.append(current)
-            current = word
+            continue
+        if current:
+            pieces.append(current)
+        while len(word) > budget:
+            pieces.append(word[:budget])
+            word = word[budget:]
+        current = word
     if current:
         pieces.append(current)
     return pieces

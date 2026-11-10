@@ -12,19 +12,10 @@ from dataclasses import dataclass, field
 
 
 @dataclass(slots=True)
-class SparseVector:
-    """Learned-sparse output of one text: token id to weight."""
-
-    indices: list[int] = field(default_factory=list)
-    values: list[float] = field(default_factory=list)
-
-
-@dataclass(slots=True)
 class TextEmbedding:
-    """Dense and learned-sparse representation of one text, produced in a single pass."""
+    """Dense representation of one text."""
 
     dense: list[float] = field(default_factory=list)
-    sparse: SparseVector = field(default_factory=SparseVector)
 
 
 class EmbeddingBackend:

@@ -71,7 +71,7 @@ FOCUS_AREA_FINDINGS = {
         "which no acceptance criterion covers."
     ),
 }
-RETRIEVAL_QUERY = "password reset link expiry policy"
+RETRIEVAL_QUERIES = ["password reset link expiry policy", "account recovery email token lifetime"]
 STORY_FIELDS = ("summary", "description", "issuetype", "attachment")
 LINK_TYPE = "Blocks"
 CLASSIFICATION_LABELS = [TestCaseType.UI.label, "manual"]
@@ -386,8 +386,8 @@ def _review_requirements(conversation: _Conversation) -> _Answer:
     review = conversation.result_of(review_tool)
     if review is None:
         arguments = {"jira_issue_key": issue_key, "jira_issue_content": issue, "focus_areas": list(FOCUS_AREA_FINDINGS)}
-        if "retrieval_query" in conversation.tool_schemas[review_tool].get("properties", {}):
-            arguments["retrieval_query"] = RETRIEVAL_QUERY
+        if "retrieval_queries" in conversation.tool_schemas[review_tool].get("properties", {}):
+            arguments["retrieval_queries"] = RETRIEVAL_QUERIES
         return [_ToolCall(review_tool, arguments)]
     feedback = RequirementsReviewFeedback.model_validate_json(review)
     if conversation.result_of("add_jira_comment") is None:

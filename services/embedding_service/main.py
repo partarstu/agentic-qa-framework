@@ -68,14 +68,8 @@ class TextEmbeddingRequest(BaseModel):
     texts: list[str] = Field(min_length=1)
 
 
-class SparseVectorResponse(BaseModel):
-    indices: list[int]
-    values: list[float]
-
-
 class TextEmbeddingResponse(BaseModel):
     dense: list[float]
-    sparse: SparseVectorResponse
 
 
 class TextEmbeddingsResponse(BaseModel):
@@ -139,13 +133,7 @@ async def _embed_texts(texts: list[str], query: bool):
 def _to_response(embeddings, model: str) -> TextEmbeddingsResponse:
     return TextEmbeddingsResponse(
         model=model,
-        embeddings=[
-            TextEmbeddingResponse(
-                dense=embedding.dense,
-                sparse=SparseVectorResponse(indices=embedding.sparse.indices, values=embedding.sparse.values),
-            )
-            for embedding in embeddings
-        ],
+        embeddings=[TextEmbeddingResponse(dense=embedding.dense) for embedding in embeddings],
     )
 
 
@@ -153,7 +141,7 @@ def _to_response(embeddings, model: str) -> TextEmbeddingsResponse:
 async def embed_document_texts(
     request: TextEmbeddingRequest, _: None = Depends(_require_service_auth)
 ) -> TextEmbeddingsResponse:
-    """Embed document content texts; returns a dense vector and sparse weights per input."""
+    """Embed document content texts; returns a dense vector per input."""
     embeddings, model = await _embed_texts(request.texts, query=False)
     return _to_response(embeddings, model)
 

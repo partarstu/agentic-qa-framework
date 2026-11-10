@@ -13,7 +13,6 @@ from pydantic_ai.messages import BinaryContent
 
 from agents.requirements_review.main import RequirementsReviewAgent
 from common.models import RequirementsReviewFeedback
-from common.services.document_retrieval import RetrievalResult
 
 
 @pytest.fixture
@@ -84,7 +83,7 @@ def retrieval(retrieved_page):
             stack.enter_context(
                 patch(
                     "agents.requirements_review.main.retrieve_documents",
-                    AsyncMock(return_value=RetrievalResult([retrieved_page], [])),
+                    AsyncMock(return_value=[retrieved_page]),
                 )
             ),
             stack.enter_context(
@@ -103,13 +102,34 @@ def _focus_areas_of_review_runs(agent: RequirementsReviewAgent) -> list[str]:
 
 
 @pytest.mark.asyncio
-async def test_blank_retrieval_query_raises_model_retry(agent, retrieval):
-    with pytest.raises(ModelRetry, match="retrieval_query"):
+@pytest.mark.parametrize(
+    ("retrieval_queries", "message"),
+    [
+        ([], "between 1 and 5 documentation search queries; got 0"),
+        (["q"] * 6, "between 1 and 5 documentation search queries; got 6"),
+        (["login flow", "  "], "Every item of retrieval_queries must be non-blank"),
+        (["login flow", "Q" * 301], r"retrieval_queries\[1\] must be at most 300 characters long; got 301"),
+    ],
+)
+async def test_invalid_retrieval_queries_raise_model_retry(agent, retrieval, retrieval_queries, message):
+    with pytest.raises(ModelRetry, match=message):
         await agent._review_with_reference_documentation(
-            ISSUE_KEY, "issue content", focus_areas=FOCUS_AREAS, retrieval_query="  "
+            ISSUE_KEY, "issue content", focus_areas=FOCUS_AREAS, retrieval_queries=retrieval_queries
         )
 
+    retrieval[1].assert_not_awaited()
     agent.review_agent.run.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_every_retrieval_query_at_the_limits_reaches_the_retrieval(agent, retrieval):
+    queries = ["login flow", "password reset", "AUTH-17", "session timeout", "Q" * 300]
+
+    await agent._review_with_reference_documentation(
+        ISSUE_KEY, "issue content", focus_areas=FOCUS_AREAS, retrieval_queries=queries
+    )
+
+    assert retrieval[1].await_args.args[1] == queries
 
 
 @pytest.mark.asyncio
@@ -118,11 +138,11 @@ async def test_documentation_parts_are_appended_after_issue_and_attachments(agen
     retrieval[0].return_value = {"mock.png": attachment}
 
     await agent._review_with_reference_documentation(
-        ISSUE_KEY, "issue content", focus_areas=FOCUS_AREAS, retrieval_query="login flow"
+        ISSUE_KEY, "issue content", focus_areas=FOCUS_AREAS, retrieval_queries=["login flow"]
     )
 
     mock_retrieve = retrieval[1]
-    assert mock_retrieve.await_args.args[1] == "login flow"
+    assert mock_retrieve.await_args.args[1] == ["login flow"]
     parts = agent.review_agent.run.await_args.args[0]
     assert parts[0] == "Review focus area: error handling"
     assert parts[1] == "Jira Issue content:\n```issue content```"
@@ -136,7 +156,7 @@ async def test_documentation_parts_are_appended_after_issue_and_attachments(agen
 async def test_oversized_scope_parameter_raises_model_retry(agent, retrieval, param):
     with pytest.raises(ModelRetry, match=f"{param} must be at most 400 characters long; got 401"):
         await agent._review_with_reference_documentation(
-            ISSUE_KEY, "issue content", focus_areas=FOCUS_AREAS, retrieval_query="q", **{param: "X" * 401}
+            ISSUE_KEY, "issue content", focus_areas=FOCUS_AREAS, retrieval_queries=["q"], **{param: "X" * 401}
         )
 
     retrieval[0].assert_not_awaited()
@@ -150,7 +170,7 @@ async def test_scope_parameters_at_the_length_limit_pass_unchanged(agent, retrie
         ISSUE_KEY,
         "issue content",
         focus_areas=FOCUS_AREAS,
-        retrieval_query="q",
+        retrieval_queries=["q"],
         space_key="S" * 400,
         folder_path="F" * 400,
     )
@@ -242,7 +262,7 @@ async def test_retrieval_runtime_failure_fails_the_review(agent, retrieval) -> N
 
     with pytest.raises(ConnectionError, match="embedding service unreachable"):
         await agent._review_with_reference_documentation(
-            ISSUE_KEY, "issue content", focus_areas=FOCUS_AREAS, retrieval_query="login flow"
+            ISSUE_KEY, "issue content", focus_areas=FOCUS_AREAS, retrieval_queries=["login flow"]
         )
 
     agent.review_agent.run.assert_not_awaited()
@@ -262,7 +282,7 @@ async def test_focus_area_count_outside_the_limit_raises_model_retry(agent, retr
 async def test_blank_focus_area_raises_model_retry(agent, retrieval) -> None:
     with pytest.raises(ModelRetry, match="non-blank"):
         await agent._review_with_reference_documentation(
-            ISSUE_KEY, "issue content", focus_areas=["security", " "], retrieval_query="login flow"
+            ISSUE_KEY, "issue content", focus_areas=["security", " "], retrieval_queries=["login flow"]
         )
 
     retrieval[1].assert_not_awaited()
@@ -281,7 +301,7 @@ async def test_oversized_focus_area_raises_model_retry(agent, retrieval) -> None
 @pytest.mark.asyncio
 async def test_each_focus_area_gets_its_own_review_on_material_prepared_once(agent, retrieval) -> None:
     await agent._review_with_reference_documentation(
-        ISSUE_KEY, "issue content", focus_areas=["security", "F" * 400], retrieval_query="login flow"
+        ISSUE_KEY, "issue content", focus_areas=["security", "F" * 400], retrieval_queries=["login flow"]
     )
 
     retrieval[0].assert_awaited_once()

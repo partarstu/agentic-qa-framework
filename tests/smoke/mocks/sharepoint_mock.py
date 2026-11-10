@@ -5,7 +5,7 @@
 """Stateful recording mock for the Microsoft Graph surface the SharePoint sync exercises.
 
 Serves the Entra token endpoint (client-credentials flow), the drive delta enumeration
-(root folder, one subfolder and one small PDF file, ending in a delta link) and the item
+(the drive root as Graph names it, one subfolder and one small PDF file, ending in a delta link) and the item
 content download. Everything recorded is exposed at ``GET /__recorded`` for the smoke
 assertions.
 """
@@ -37,6 +37,11 @@ _recorded: dict[str, list] = {"token_requests": [], "delta_calls": [], "download
 def _folder(item_id: str, name: str, parent_id: str | None) -> dict:
     parent = {"id": parent_id, "driveId": DRIVE_ID} if parent_id else {"driveId": DRIVE_ID}
     return {"id": item_id, "name": name, "folder": {"childCount": 0}, "parentReference": parent}
+
+
+def _drive_root() -> dict:
+    """The drive root as Graph lists it in a delta: named ``root``, with the ``root`` facet and no parent."""
+    return {**_folder(ROOT_FOLDER_ID, "root", None), "root": {}}
 
 
 def _pdf_file() -> dict:
@@ -71,7 +76,7 @@ async def delta(drive_id: str) -> JSONResponse:
     _recorded["delta_calls"].append({"drive_id": drive_id, "at": time.time()})
     return JSONResponse(
         {
-            "value": [_folder(ROOT_FOLDER_ID, "", None), _folder(DOCS_FOLDER_ID, "Docs", ROOT_FOLDER_ID), _pdf_file()],
+            "value": [_drive_root(), _folder(DOCS_FOLDER_ID, "Docs", ROOT_FOLDER_ID), _pdf_file()],
             "@odata.deltaLink": _recorded.get("next_delta_link") or DELTA_LINK,
         }
     )

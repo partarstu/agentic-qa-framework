@@ -2,29 +2,27 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
-"""Text backend: one multilingual model producing dense and learned-sparse output.
+"""Text backend: dense embeddings from the text encoder of EmbeddingGemma 2.
 
-The BGE-M3 family produces both vectors in a single forward pass. The ML library
-(FlagEmbedding) is imported only inside ``load``, so importing this module stays cheap
-and the service module never pulls ML libraries at import time.
+The ML library (sentence-transformers) is imported only inside ``load``, so importing this
+module stays cheap and the service module never pulls ML libraries at import time.
 """
 
 import os
 from pathlib import Path
 
-from embedding_service.backends.base import EmbeddingBackend, SparseVector, TextEmbedding
+from embedding_service.backends.base import EmbeddingBackend, TextEmbedding
 
 import config
 
+# The model's own retrieval prompts (config_sentence_transformers.json); a document has no title here,
+# because the ingestion already puts its breadcrumb into the text.
+_QUERY_PROMPT = "task: search result | query: "
+_DOCUMENT_PROMPT = "title: none | text: "
 
-def _build_sparse(lexical_weights: dict) -> SparseVector:
-    """Convert one lexical-weights mapping (token id -> weight) into parallel lists."""
-    indices = sorted(lexical_weights)
-    return SparseVector(indices=indices, values=[float(lexical_weights[token]) for token in indices])
 
-
-class BgeM3TextBackend(EmbeddingBackend):
-    """Dense + learned-sparse text embedding through the BGE-M3 model family."""
+class EmbeddingGemmaTextBackend(EmbeddingBackend):
+    """Dense text embedding through EmbeddingGemma 2, loaded without its vision and audio encoders."""
 
     name = "text"
 
@@ -32,19 +30,24 @@ class BgeM3TextBackend(EmbeddingBackend):
         self._model = None
 
     def load(self) -> None:
-        from FlagEmbedding import BGEM3FlagModel
+        import torch
         from huggingface_hub import snapshot_download
+        from sentence_transformers import SentenceTransformer
 
         os.environ.setdefault("TOKENIZERS_PARALLELISM", "true")
         if _model_available_locally():
             model_path = _configured_model_path()
         else:
             model_path = snapshot_download(
-                _configured_model_name(),
-                revision=config.EmbeddingServiceConfig.TEXT_MODEL_REVISION,
-                ignore_patterns=list(config.EmbeddingServiceConfig.TEXT_MODEL_DOWNLOAD_IGNORE_PATTERNS),
+                _configured_model_name(), revision=config.EmbeddingServiceConfig.TEXT_MODEL_REVISION
             )
-        self._model = BGEM3FlagModel(model_path, use_fp16=False)
+        self._model = SentenceTransformer(
+            model_path,
+            device="cpu",
+            # float16 overflows the model's activation range and yields NaN or degraded vectors silently.
+            model_kwargs={"torch_dtype": torch.float32},
+            config_kwargs={"vision_config": None, "audio_config": None},
+        )
 
     def is_loaded(self) -> bool:
         return self._model is not None
@@ -53,22 +56,14 @@ class BgeM3TextBackend(EmbeddingBackend):
         return _configured_model_name()
 
     def embed_document_texts(self, texts: list[str]) -> list[TextEmbedding]:
-        return self._encode(texts)
+        return self._encode(texts, _DOCUMENT_PROMPT)
 
     def embed_query_texts(self, texts: list[str]) -> list[TextEmbedding]:
-        return self._encode(texts)
+        return self._encode(texts, _QUERY_PROMPT)
 
-    def _encode(self, texts: list[str]) -> list[TextEmbedding]:
-        output = self._model.encode(
-            texts,
-            return_dense=True,
-            return_sparse=True,
-            return_colbert_vecs=False,
-        )
-        embeddings = []
-        for dense_row, weights in zip(output["dense_vecs"].tolist(), output["lexical_weights"], strict=True):
-            embeddings.append(TextEmbedding(dense=dense_row, sparse=_build_sparse(weights)))
-        return embeddings
+    def _encode(self, texts: list[str], prompt: str) -> list[TextEmbedding]:
+        vectors = self._model.encode(texts, prompt=prompt, normalize_embeddings=True, convert_to_numpy=True)
+        return [TextEmbedding(dense=row) for row in vectors.tolist()]
 
 
 def _configured_model_name() -> str:

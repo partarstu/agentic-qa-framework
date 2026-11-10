@@ -72,6 +72,11 @@ class ConfluenceSyncRequest(SharedConfluenceSyncRequest, _LockedSyncRequest):
     pass
 
 
+def _runner_failure(exc: Exception) -> HTTPException:
+    """The answer for a run that failed inline: the failure's own message, so the caller can show the reason."""
+    return HTTPException(status_code=500, detail=f"{type(exc).__name__}: {exc}")
+
+
 @app.post("/sync/jira")
 async def sync_jira(request: JiraSyncRequest, _: None = Depends(_require_service_auth)):
     """Runs the Jira sync inline and returns the result."""
@@ -85,7 +90,7 @@ async def sync_jira(request: JiraSyncRequest, _: None = Depends(_require_service
         raise HTTPException(status_code=409, detail=str(e)) from e
     except Exception as exc:
         await report_terminal_outcome("jira", request.project_key, error=exc)
-        raise
+        raise _runner_failure(exc) from exc
     await report_terminal_outcome("jira", request.project_key, result=result)
     return {"message": "Jira sync completed.", "details": result.model_dump()}
 
@@ -103,7 +108,7 @@ async def sync_test_cases(request: JiraSyncRequest, _: None = Depends(_require_s
         raise HTTPException(status_code=409, detail=str(e)) from e
     except Exception as exc:
         await report_terminal_outcome("test_cases", request.project_key, error=exc)
-        raise
+        raise _runner_failure(exc) from exc
     await report_terminal_outcome("test_cases", request.project_key, result=result)
     return {"message": f"Test-case sync {result.status}.", "details": result.model_dump()}
 
@@ -126,7 +131,7 @@ async def sync_sharepoint(request: SharePointSyncRequest, _: None = Depends(_req
         raise HTTPException(status_code=409, detail=str(e)) from e
     except Exception as exc:
         await report_terminal_outcome("sharepoint", request.drive_id, error=exc)
-        raise
+        raise _runner_failure(exc) from exc
     await report_terminal_outcome("sharepoint", request.drive_id, result=result)
     return {"message": f"SharePoint sync {result.status}.", "details": result.model_dump()}
 
@@ -150,7 +155,7 @@ async def sync_confluence(request: ConfluenceSyncRequest, _: None = Depends(_req
         raise HTTPException(status_code=409, detail=str(e)) from e
     except Exception as exc:
         await report_terminal_outcome("confluence", request.space_key, error=exc)
-        raise
+        raise _runner_failure(exc) from exc
     await report_terminal_outcome("confluence", request.space_key, result=result)
     return {"message": f"Confluence sync {result.status}.", "details": result.model_dump()}
 

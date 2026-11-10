@@ -98,10 +98,6 @@ MIT License  -  <https://opensource.org/licenses/MIT>
     PyYAML
     https://github.com/yaml/pyyaml
 
-  * FlagEmbedding (embedding service)
-    FlagEmbedding
-    https://github.com/FlagOpen/FlagEmbedding
-
   * einops (embedding service)
     einops
     https://github.com/arogozhnikov/einops
@@ -210,7 +206,7 @@ The Dockerfiles install the following software from its publishers while an imag
 AI models (downloaded at runtime, not redistributed by this project)
 --------------------------------------------------------------------------------
 
-  * BAAI/bge-m3 (embedding service)  -  MIT License  -  https://huggingface.co/BAAI/bge-m3
+  * google/embeddinggemma-2 (embedding service)  -  Apache License 2.0  -  https://huggingface.co/google/embeddinggemma-2
   * ProtectAI/deberta-v3-base-prompt-injection-v2 (prompt-guard service)  -  Apache License 2.0  -  https://huggingface.co/protectai/deberta-v3-base-prompt-injection-v2
 
 ================================================================================

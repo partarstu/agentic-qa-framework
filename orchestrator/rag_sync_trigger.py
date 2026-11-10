@@ -164,9 +164,10 @@ class RagSyncTrigger:
                 f"{config.RagSyncConfig.SERVICE_URL}/sync/{source}", json=payload, headers=headers
             )
         if response.status_code >= 500:
-            raise SyncTriggerError(
-                f"The local sync service failed: {response.status_code} {response.text}", start_confirmed=False
-            )
+            # The service runs the sync inline, so its answer means the run is over and failed: the reason
+            # is reported as it is, and the lock is released if this request still holds it.
+            await self._lock_store.release(scope_key(source, scope_id), token)
+            raise SyncTriggerError(f"The local sync service failed: {_error_detail(response)}", start_confirmed=True)
         try:
             body = response.json()
         except ValueError:
@@ -195,6 +196,15 @@ class RagSyncTrigger:
         lock = await self._lock_store.read(scope)
         if lock and lock.get("holder_token"):
             await self._lock_store.release(scope, lock["holder_token"])
+
+
+def _error_detail(response: httpx.Response) -> str:
+    """The ``detail`` of an error response, or its status and text when it carries none."""
+    try:
+        detail = response.json().get("detail")
+    except (ValueError, AttributeError):
+        detail = None
+    return str(detail) if detail else f"{response.status_code} {response.text}"
 
 
 def _is_definite_start_failure(error: Exception) -> bool:

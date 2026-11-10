@@ -129,6 +129,9 @@ class DocumentPagePart(VectorizableBaseModel):
     page_title: str = Field(default="", description="Title of the Confluence page")
     drive_id: str | None = Field(default=None, description="ID of the SharePoint drive")
     folder_path: str | None = Field(default=None, description="Folder path of the SharePoint file")
+    folder_ancestors: list[str] | None = Field(
+        default=None, description="Every prefix of the SharePoint folder path, so a folder scope matches its subfolders"
+    )
     page_url: str | None = Field(default=None, description="Web UI link of the page")
     attachment_id: str | None = Field(default=None, description="ID of the attachment, for attachment pages")
     attachment_name: str | None = Field(default=None, description="File name of the attachment")

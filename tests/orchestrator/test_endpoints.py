@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 
 import config
 from common.models import AgentExecutionError, TestCaseDesignResult
+from common.services.test_management_base import TestCaseNotFoundError
 from common.streaming import SnapshotEvent
 from orchestrator.auth import auth_service
 from orchestrator.main import (
@@ -279,34 +280,49 @@ async def test_agent_sse_stream_starts_with_a_heartbeat():
 
 
 @pytest.mark.parametrize("test_case_key", ["SMOKE-T100", "PROJ-42"], ids=["zephyr", "xray"])
-async def test_execute_test_accepts_test_case_keys_of_both_systems_and_creates_no_incident(test_case_key):
+async def test_execute_test_returns_only_the_result_without_incident_upload_or_report(test_case_key):
     result = MagicMock()
     result.model_dump.return_value = {"testCaseKey": test_case_key, "testExecutionStatus": "failed"}
     with (
         patch("orchestrator.main.get_test_management_client") as mock_client,
         patch("orchestrator.main._execute_single_test", new_callable=AsyncMock, return_value=result) as mock_execute,
-        patch("orchestrator.main._generate_test_report", new_callable=AsyncMock, return_value=[]) as mock_report,
+        patch("orchestrator.main._generate_test_report", new_callable=AsyncMock) as mock_report,
         patch("orchestrator.main._request_incident_creation", new_callable=AsyncMock) as mock_incident,
     ):
-        response = client.post(
-            "/execute-test", json={"test_case_key": test_case_key, "agent_id": "agent-1", "project_key": "SMOKE"}
-        )
+        response = client.post("/execute-test", json={"test_case_key": test_case_key, "agent_id": "agent-1"})
 
     assert response.status_code == 200
-    assert response.json()["testCaseKey"] == test_case_key
-    assert response.json()["reporting_failures"] == []
+    assert response.json() == {"testCaseKey": test_case_key, "testExecutionStatus": "failed"}
     mock_client.return_value.fetch_test_case_by_key.assert_called_once_with(test_case_key)
     assert mock_execute.await_args.args[0] == "agent-1"
     assert mock_execute.await_args.kwargs["pin_to_agent"] is True
-    mock_report.assert_awaited_once()
+    mock_report.assert_not_awaited()
+    mock_client.return_value.create_test_plan.assert_not_called()
+    mock_client.return_value.create_test_execution.assert_not_called()
     mock_incident.assert_not_awaited()
+
+
+async def test_execute_test_answers_404_and_records_the_error_for_an_unknown_test_case():
+    with (
+        patch("orchestrator.main.get_test_management_client") as mock_client,
+        patch("orchestrator.main._execute_single_test", new_callable=AsyncMock) as mock_execute,
+        patch("orchestrator.main.error_history") as mock_error_history,
+    ):
+        mock_error_history.add = AsyncMock()
+        mock_client.return_value.fetch_test_case_by_key.side_effect = TestCaseNotFoundError(
+            "Test case SMOKE-T404 was not found."
+        )
+        response = client.post("/execute-test", json={"test_case_key": "SMOKE-T404", "agent_id": "agent-1"})
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Test case SMOKE-T404 was not found."
+    mock_execute.assert_not_awaited()
+    assert mock_error_history.add.await_args.args[0].message == "Test case SMOKE-T404 was not found."
 
 
 @pytest.mark.parametrize("test_case_key", ["smoke-t1", "SMOKE-X1", "SMOKE-T", "SMOKE"])
 def test_execute_test_rejects_a_malformed_test_case_key(test_case_key):
-    response = client.post(
-        "/execute-test", json={"test_case_key": test_case_key, "agent_id": "agent-1", "project_key": "SMOKE"}
-    )
+    response = client.post("/execute-test", json={"test_case_key": test_case_key, "agent_id": "agent-1"})
 
     assert response.status_code == 422
 

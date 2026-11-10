@@ -10,13 +10,17 @@ body and the per-page attachment listing. The space seeds one page with
 headings, paragraphs and a container macro; a small PDF and a PNG attachment are
 listed already so the ingestion flow sees the full shape.
 
+A second space holds one page, one text attachment whose names ``POST /__control/rename`` changes (for the
+smoke test of the rename handling) and one legacy workbook (for the test of its conversion). Like the real API, the attachment listing rejects a ``sort``
+value outside the ``AttachmentSortOrder`` enum with a 400.
+
 Everything recorded is exposed at ``GET /__recorded`` for the smoke assertions.
 """
 
 import base64
 
 from fastapi import FastAPI, Request
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 
 app = FastAPI()
 
@@ -82,6 +86,137 @@ _SEEDED_ATTACHMENTS = [
     },
 ]
 
+RENAME_SPACE_KEY = "RENAMEDOC"
+RENAME_SPACE_ID = "9002"
+RENAME_PAGE_ID = "7707"
+RENAME_PAGE_TITLE = "Rename Candidate"
+RENAME_ATTACHMENT_NAME = "notes.txt"
+_NOTES_BYTES = b"Notes that outlive every rename."
+RENAME_LEGACY_SHEET_NAME = "limits.xls"
+# A legacy workbook with two sheets in default-width columns, made with LibreOffice: a PDF conversion would clip the cell texts.
+_LIMITS_XLS_BYTES = base64.b64decode(
+    "0M8R4KGxGuEAAAAAAAAAAAAAAAAAAAAAOwADAP7/CQAGAAAAAAAAAAAAAAABAAAACQAAAAAAAAAAEAAAAgAAAAEAAAD+////AAAA"
+    "AAAAAAD/////////////////////////////////////////////////////////////////////////////////////////////"
+    "////////////////////////////////////////////////////////////////////////////////////////////////////"
+    "////////////////////////////////////////////////////////////////////////////////////////////////////"
+    "////////////////////////////////////////////////////////////////////////////////////////////////////"
+    "////////////////////////////////////////////////////////////////////////////////////////////////////"
+    "///////////////////////////////////////////////////////////////////////////////////9//////////7///8E"
+    "AAAABQAAAAYAAAAHAAAACAAAAP7///8KAAAA/v//////////////////////////////////////////////////////////////"
+    "////////////////////////////////////////////////////////////////////////////////////////////////////"
+    "////////////////////////////////////////////////////////////////////////////////////////////////////"
+    "////////////////////////////////////////////////////////////////////////////////////////////////////"
+    "////////////////////////////////////////////////////////////////////////////////////////////////////"
+    "////////////////////////////////////////////////////////////////////////////////////////////////////"
+    "/////////////////////////////////////////////////////////////////1IAbwBvAHQAIABFAG4AdAByAHkAAAAAAAAA"
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWAAUA////////////////AAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    "AAAAAAAAAAAAAAAAAAAA/v///wAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAD///////////////8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD+////AAAA"
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAP//"
+    "/////////////wAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAP7///8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA////////////////AAAAAAAAAAAAAAAA"
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/v///wAAAAAAAAAAAQAAAAIAAAADAAAABAAAAAUAAAAGAAAABwAAAAgAAAAJAAAACgAA"
+    "AAsAAAAMAAAADQAAAA4AAAAPAAAAEAAAABEAAAASAAAAEwAAABQAAAAVAAAAFgAAABcAAAAYAAAAGQAAABoAAAAbAAAAHAAAAB0A"
+    "AAAeAAAAHwAAACAAAAAhAAAA/v///yMAAAD+/////v///yYAAAAnAAAAKAAAAP7///8qAAAAKwAAAP7/////////////////////"
+    "////////////////////////////////////////////////////////////////////////////////////////////////////"
+    "////////////////////////////////////////////////////////////////////////////////////////////////////"
+    "////////////////////////////////////////////////////////////////////////////////////////////////////"
+    "////////////////////////////////////////////////////////////////////////////////////////////////////"
+    "//////////////////////////////8JCBAAAAYFALsNzAcAAAAABgAAAOEAAgCwBMEAAgAAAOIAAABcAHAABAAAQ2FsYyAgICAg"
+    "ICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAg"
+    "ICAgICAgICAgICAgICAgICAgICAgICAgIEIAAgCwBGEBAgAAAMABAAA9AQQAAQACAJwAAgAOAK8BAgAAALwBAgAAAD0AEgAAAAAA"
+    "AEAAIDgAAAAAAAEAWAJAAAIAAACNAAIAAAAiAAIAAAAOAAIAAQC3AQIAAADaAAIAAAAxAB4A3AAAAAgAkAEAAAACAQAHAUMAYQBs"
+    "AGkAYgByAGkAMQAaAMgAAAD/f5ABAAAAAAAABQFBAHIAaQBhAGwAMQAaAMgAAAD/f5ABAAAAAAAABQFBAHIAaQBhAGwAMQAaAMgA"
+    "AAD/f5ABAAAAAAAABQFBAHIAaQBhAGwAHgQMAKQABwAAR2VuZXJhbOAAFAAAAKQA9f8gAAAAAAAAAAAAAADAIOAAFAABAAAA9f8g"
+    "AAD0AAAAAAAAAADAIOAAFAABAAAA9f8gAAD0AAAAAAAAAADAIOAAFAACAAAA9f8gAAD0AAAAAAAAAADAIOAAFAACAAAA9f8gAAD0"
+    "AAAAAAAAAADAIOAAFAAAAAAA9f8gAAD0AAAAAAAAAADAIOAAFAAAAAAA9f8gAAD0AAAAAAAAAADAIOAAFAAAAAAA9f8gAAD0AAAA"
+    "AAAAAADAIOAAFAAAAAAA9f8gAAD0AAAAAAAAAADAIOAAFAAAAAAA9f8gAAD0AAAAAAAAAADAIOAAFAAAAAAA9f8gAAD0AAAAAAAA"
+    "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"
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABIAAgADAAAA//////////8AAAAAAAAAAAAAAAAAAAAAAAAA"
+    "AAAAAAAAAAAAAAAAAAAAAAAiAAAASQAAAAAAAAABAE8AbABlAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    "AAAAAAAAAAAAAAAAAAAAAAAACgACAP///////////////wAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACQAAAAU"
+    "AAAAAAAAAAUAUwB1AG0AbQBhAHIAeQBJAG4AZgBvAHIAbQBhAHQAaQBvAG4AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAoAAIA"
+    "/////wUAAAD/////AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAJQAAAMgAAAAAAAAABQBEAG8AYwB1AG0AZQBu"
+    "AHQAUwB1AG0AbQBhAHIAeQBJAG4AZgBvAHIAbQBhAHQAaQBvAG4AAAAAAAAAAAAAADgAAgD///////////////8AAAAAAAAAAAAA"
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAApAAAAqAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAP///////////////wAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    "AAAAAP7///8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    "AAAAAAAAAAAA////////////////AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/v///wAAAAAAAAAA"
+)
+
+_RENAME_PAGE = {
+    "id": RENAME_PAGE_ID,
+    "status": "current",
+    "title": RENAME_PAGE_TITLE,
+    "spaceId": RENAME_SPACE_ID,
+    "parentId": None,
+    "version": {"createdAt": "2026-09-01T10:00:00Z", "number": 1},
+    "body": {"storage": {"representation": "storage", "value": "<h2>Section</h2><p>Stable page text.</p>"}},
+    "_links": {"webui": f"/spaces/{RENAME_SPACE_KEY}/pages/{RENAME_PAGE_ID}/{RENAME_PAGE_TITLE.replace(' ', '+')}"},
+}
+_RENAME_ATTACHMENTS = [
+    {
+        "id": "att-3",
+        "status": "current",
+        "title": RENAME_ATTACHMENT_NAME,
+        "pageId": RENAME_PAGE_ID,
+        "mediaType": "text/plain",
+        "fileSize": len(_NOTES_BYTES),
+        "version": {"number": 1},
+        "downloadLink": f"/download/{RENAME_ATTACHMENT_NAME}",
+    },
+    {
+        "id": "att-4",
+        "status": "current",
+        "title": RENAME_LEGACY_SHEET_NAME,
+        "pageId": RENAME_PAGE_ID,
+        "mediaType": "application/vnd.ms-excel",
+        "fileSize": len(_LIMITS_XLS_BYTES),
+        "version": {"number": 1},
+        "downloadLink": f"/download/{RENAME_LEGACY_SHEET_NAME}",
+    },
+]
+_SPACES = {SEEDED_SPACE_KEY: SEEDED_SPACE_ID, RENAME_SPACE_KEY: RENAME_SPACE_ID}
+_PAGES = {SEEDED_PAGE_ID: _SEEDED_PAGE, RENAME_PAGE_ID: _RENAME_PAGE}
+_ATTACHMENTS = {SEEDED_PAGE_ID: _SEEDED_ATTACHMENTS, RENAME_PAGE_ID: _RENAME_ATTACHMENTS}
+# The values of the v2 API's AttachmentSortOrder enum.
+_ATTACHMENT_SORT_ORDERS = {"created-date", "-created-date", "modified-date", "-modified-date"}
+
 _recorded: dict = {
     "space_lookups": [],
     "page_listings": [],
@@ -95,19 +230,16 @@ _recorded: dict = {
 async def list_spaces(request: Request) -> dict:
     keys = request.query_params.getlist("keys")
     _recorded["space_lookups"].append({"keys": keys})
-    results = []
-    if SEEDED_SPACE_KEY in keys:
-        results.append({"id": SEEDED_SPACE_ID, "key": SEEDED_SPACE_KEY, "name": "Smoke Documents"})
+    results = [{"id": _SPACES[key], "key": key, "name": key} for key in keys if key in _SPACES]
     return {"results": results, "_links": {"next": None}}
 
 
 @app.get("/wiki/api/v2/spaces/{space_id}/pages")
 async def list_pages(space_id: str, request: Request) -> dict:
     _recorded["page_listings"].append({"space_id": space_id, "cursor": request.query_params.get("cursor")})
-    if space_id != SEEDED_SPACE_ID:
-        return {"results": [], "_links": {"next": None}}
+    pages = [page for page in _PAGES.values() if page["spaceId"] == space_id]
     return {
-        "results": [{key: value for key, value in _SEEDED_PAGE.items() if key not in ("body",)}],
+        "results": [{key: value for key, value in page.items() if key != "body"} for page in pages],
         "_links": {"next": None},
     }
 
@@ -115,17 +247,44 @@ async def list_pages(space_id: str, request: Request) -> dict:
 @app.get("/wiki/api/v2/pages/{page_id}")
 async def get_page(page_id: str, request: Request) -> dict:
     _recorded["page_fetches"].append({"page_id": page_id, "body_format": request.query_params.get("body-format")})
-    if page_id != SEEDED_PAGE_ID:
-        return {"message": f"No page with id {page_id}"}
-    return _SEEDED_PAGE
+    return _PAGES.get(page_id) or {"message": f"No page with id {page_id}"}
 
 
-@app.get("/wiki/api/v2/pages/{page_id}/attachments")
-async def list_attachments(page_id: str, request: Request) -> dict:
-    _recorded["attachment_listings"].append({"page_id": page_id, "filename": request.query_params.get("filename")})
-    if page_id != SEEDED_PAGE_ID:
-        return {"results": [], "_links": {"next": None}}
-    return {"results": _SEEDED_ATTACHMENTS, "_links": {"next": None}}
+@app.get("/wiki/api/v2/pages/{page_id}/attachments", response_model=None)
+async def list_attachments(page_id: str, request: Request):
+    sort = request.query_params.get("sort")
+    _recorded["attachment_listings"].append(
+        {"page_id": page_id, "filename": request.query_params.get("filename"), "sort": sort}
+    )
+    if sort is not None and sort not in _ATTACHMENT_SORT_ORDERS:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "errors": [
+                    {
+                        "status": 400,
+                        "code": "INVALID_REQUEST_PARAMETER",
+                        "title": f"Provided value {{{sort}}} for 'sort' is not the correct type. "
+                        "Expected type is AttachmentSortOrder",
+                    }
+                ]
+            },
+        )
+    return {"results": _ATTACHMENTS.get(page_id, []), "_links": {"next": None}}
+
+
+@app.post("/__control/rename")
+async def rename(page_title: str | None = None, attachment_name: str | None = None) -> dict:
+    """Renames the rename space's page and/or attachment; a page rename is a new version, an attachment rename is not."""
+    if page_title:
+        _RENAME_PAGE["title"] = page_title
+        _RENAME_PAGE["version"] = {**_RENAME_PAGE["version"], "number": _RENAME_PAGE["version"]["number"] + 1}
+        _RENAME_PAGE["_links"] = {
+            "webui": f"/spaces/{RENAME_SPACE_KEY}/pages/{RENAME_PAGE_ID}/{page_title.replace(' ', '+')}"
+        }
+    if attachment_name:
+        _RENAME_ATTACHMENTS[0]["title"] = attachment_name
+    return {"page_title": _RENAME_PAGE["title"], "attachment_name": _RENAME_ATTACHMENTS[0]["title"]}
 
 
 @app.get("/wiki/download/{filename}")
@@ -135,6 +294,10 @@ async def download_attachment(filename: str) -> Response:
         return Response(content=_PDF_BYTES, media_type="application/pdf")
     if filename == "flow-diagram.png":
         return Response(content=_PNG_BYTES, media_type="image/png")
+    if filename == RENAME_ATTACHMENT_NAME:
+        return Response(content=_NOTES_BYTES, media_type="text/plain")
+    if filename == RENAME_LEGACY_SHEET_NAME:
+        return Response(content=_LIMITS_XLS_BYTES, media_type="application/vnd.ms-excel")
     return Response(status_code=404)
 
 

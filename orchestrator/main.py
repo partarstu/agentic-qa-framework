@@ -80,6 +80,7 @@ from common.models import (
     TestExecutionResult,
 )
 from common.services.sync_lock_store import SyncLockHeldError
+from common.services.test_management_base import TestCaseNotFoundError
 from common.services.test_management_system_client_provider import get_test_management_client
 from common.services.test_reporting_client_base_provider import get_test_reporting_client
 from common.services.vector_db_service import VectorDbService
@@ -877,7 +878,6 @@ class ManualTestExecutionRequest(BaseModel):
     # Xray test cases are Jira issues (PROJ-42); Zephyr Scale keys carry a "T" (PROJ-T42).
     test_case_key: str = Field(min_length=1, max_length=100, pattern=r"^[A-Z][A-Z0-9_]*-T?\d+$")
     agent_id: str = Field(min_length=1, max_length=100)
-    project_key: str = Field(min_length=1, max_length=50, pattern=r"^[A-Z][A-Z0-9_]*$")
 
 
 async def _trigger_rag_sync(source: str, scope_id: str, request: SyncRequest) -> SyncStartResult:
@@ -1002,14 +1002,16 @@ async def execute_tests(request: ProjectExecutionRequest, api_key: str = Depends
 
 @orchestrator_app.post("/execute-test")
 async def execute_test(request: ManualTestExecutionRequest, api_key: str = Depends(_validate_api_key)):
-    """Execute one test on the explicitly selected agent without incident creation."""
+    """Execute one test on the explicitly selected agent without incident creation, upload or report."""
     test_management_client = get_test_management_client()
-    test_case = await asyncio.to_thread(test_management_client.fetch_test_case_by_key, request.test_case_key)
+    try:
+        test_case = await asyncio.to_thread(test_management_client.fetch_test_case_by_key, request.test_case_key)
+    except TestCaseNotFoundError as e:
+        _handle_exception(str(e), 404)
     result = await _execute_single_test(request.agent_id, test_case, "manual", pin_to_agent=True)
     if result is None:
         raise HTTPException(status_code=502, detail="Execution agent returned no result.")
-    reporting_failures = await _generate_test_report([result], request.project_key, test_management_client)
-    return {**result.model_dump(), "reporting_failures": reporting_failures}
+    return result.model_dump()
 
 
 async def _generate_test_report(all_execution_results, project_key, test_management_client) -> list[str]:

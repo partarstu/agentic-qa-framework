@@ -130,11 +130,12 @@ class IncidentCreationAgent(AgentBase):
             else [],
         )
 
-        hits = await self.vector_db_service.hybrid_search(
-            incident_description,
+        hits = await self.vector_db_service.dense_search(
+            [incident_description],
             limit=config.QdrantConfig.MAX_RESULTS,
             score_threshold=RAG_MIN_SIMILARITY,
             query_filter=bug_filter,
+            as_documents=True,
         )
 
         candidates: list[JiraIssue] = []

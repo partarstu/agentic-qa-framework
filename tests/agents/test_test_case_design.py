@@ -154,7 +154,7 @@ def jira() -> Iterator[list[dict[str, Any]]]:
 
 @pytest.fixture
 def vector_db() -> MagicMock:
-    return MagicMock(hybrid_search=AsyncMock(return_value=[]), upsert_batch=AsyncMock())
+    return MagicMock(dense_search=AsyncMock(return_value=[]), upsert_batch=AsyncMock())
 
 
 def _ctx(session: TestCaseDesignSession) -> SimpleNamespace:
@@ -206,7 +206,7 @@ async def test_a_converging_design_fetches_the_story_then_is_checked_for_duplica
     comment = client.add_test_case_review_comment.call_args.args[1]
     assert "No duplicate test cases found." in comment
     client.change_test_case_status.assert_called_once_with("PROJ", "PROJ-T1", "Review Complete")
-    vector_db.hybrid_search.assert_awaited_once()
+    vector_db.dense_search.assert_awaited_once()
     vector_db.upsert_batch.assert_not_awaited()
     classified, classification_deps, _ = agent.classification_agent.run_delegated.await_args.args
     assert classified.startswith("Test cases:\n```[{") and classified.endswith("}]```")

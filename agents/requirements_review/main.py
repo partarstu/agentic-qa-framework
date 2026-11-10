@@ -36,11 +36,34 @@ _JIRA_TOOL_ALLOWLIST = (JIRA_GET_ISSUE, JIRA_ADD_COMMENT)
 
 # Fits the longest SharePoint folder path; IDs, keys and focus areas are far shorter.
 _TOOL_PARAM_MAX_LENGTH = 400
+# Several short reformulations retrieve better with a dense model than one long query.
+_RETRIEVAL_QUERY_MAX_COUNT = 5
+_RETRIEVAL_QUERY_MAX_LENGTH = 300
 
 
 def _check_length(name: str, value: str | None) -> None:
     if value is not None and len(value) > _TOOL_PARAM_MAX_LENGTH:
         raise ModelRetry(f"{name} must be at most {_TOOL_PARAM_MAX_LENGTH} characters long; got {len(value)}.")
+
+
+def _validate_retrieval_queries(retrieval_queries: list[str]) -> None:
+    if not 1 <= len(retrieval_queries) <= _RETRIEVAL_QUERY_MAX_COUNT:
+        raise ModelRetry(
+            f"retrieval_queries must hold between 1 and {_RETRIEVAL_QUERY_MAX_COUNT} documentation search queries; "
+            f"got {len(retrieval_queries)}."
+        )
+    if any(not query.strip() for query in retrieval_queries):
+        # No fallback to the issue content: a missing query is an explicit tool error.
+        raise ModelRetry(
+            "Every item of retrieval_queries must be non-blank: distil key topics, feature names, "
+            "domain terms and identifiers from the issue."
+        )
+    for index, query in enumerate(retrieval_queries):
+        if len(query) > _RETRIEVAL_QUERY_MAX_LENGTH:
+            raise ModelRetry(
+                f"retrieval_queries[{index}] must be at most {_RETRIEVAL_QUERY_MAX_LENGTH} characters long; "
+                f"got {len(query)}."
+            )
 
 
 def _validate_focus_areas(focus_areas: list[str]) -> None:
@@ -176,7 +199,7 @@ class RequirementsReviewAgent(AgentBase):
         jira_issue_key: str,
         jira_issue_content: str,
         focus_areas: list[str],
-        retrieval_query: str,
+        retrieval_queries: list[str],
         space_key: str | None = None,
         page_id: str | None = None,
         document_name_pattern: str | None = None,
@@ -185,7 +208,7 @@ class RequirementsReviewAgent(AgentBase):
     ) -> RequirementsReviewFeedback:
         """
         Reviews a Jira issue, taking into account all its attachments and the reference
-        documentation matching the retrieval query across every enabled source, with one
+        documentation matching any of the retrieval queries across every enabled source, with one
         focused review per focus area.
 
         Args:
@@ -193,22 +216,21 @@ class RequirementsReviewAgent(AgentBase):
             jira_issue_content: The complete content of the Jira issue.
             focus_areas: The review focus areas for this issue, each a topic of the issue as a short phrase,
                 never a quality criterion; at least one, at most the number the instructions allow.
-            retrieval_query: A concise documentation search query (key topics, feature names, domain terms).
+            retrieval_queries: One to five concise documentation search queries, each at most 300 characters and
+                each a different angle on the issue: key topics and feature names, domain terms with their
+                synonyms, and every identifier the issue names (requirement IDs, error codes, endpoints) as a
+                query of its own. A page matching any query is retrieved.
             space_key: Optional Confluence space key scope.
             page_id: Optional Confluence page ID scope.
             document_name_pattern: Optional regex pattern on document names, applied to every source.
             drive_id: Optional SharePoint drive ID scope.
-            folder_path: Optional SharePoint folder path scope, relative to the drive root.
+            folder_path: Optional SharePoint folder path scope, relative to the drive root (e.g. "Specs", never
+                "root/Specs"); it includes the documents of every subfolder.
 
         Returns:
             Requirements review feedback with improvement suggestions, merged across all focus areas.
         """
-        if not retrieval_query.strip():
-            # No fallback to the issue content: a missing query is an explicit tool error.
-            raise ModelRetry(
-                "A non-blank retrieval_query is required: distil key topics, feature names "
-                "and domain terms from the issue and pass them as retrieval_query."
-            )
+        _validate_retrieval_queries(retrieval_queries)
         _validate_focus_areas(focus_areas)
         scope_params = {
             "space_key": space_key,
@@ -228,7 +250,7 @@ class RequirementsReviewAgent(AgentBase):
             folder_path,
             jira_issue_key,
             page_id,
-            retrieval_query,
+            retrieval_queries,
             space_key,
             user_message_parts,
         )
@@ -242,7 +264,7 @@ class RequirementsReviewAgent(AgentBase):
         folder_path: str | None,
         jira_issue_key: str,
         page_id: str | None,
-        retrieval_query: str,
+        retrieval_queries: list[str],
         space_key: str | None,
         user_message_parts: list[str | BinaryContent],
     ) -> None:
@@ -253,21 +275,11 @@ class RequirementsReviewAgent(AgentBase):
             drive_id=drive_id,
             folder_path=folder_path,
         )
-        rag_result = await retrieve_documents(
-            self.documents_db, retrieval_query, rag_scope, sharepoint_db=self.sharepoint_db
+        pages = await retrieve_documents(
+            self.documents_db, retrieval_queries, rag_scope, sharepoint_db=self.sharepoint_db
         )
-        for source in rag_result.unavailable_sources:
-            user_message_parts.append(
-                f"Note: the {source} knowledge base was unavailable during this review; its documents were not fetched."
-            )
-
-        user_message_parts.extend(assemble_retrieved_parts(rag_result.pages))
-        logger.info(
-            "Retrieved %d reference documentation page(s) for issue %s (unavailable sources: %s)",
-            len(rag_result.pages),
-            jira_issue_key,
-            rag_result.unavailable_sources or "none",
-        )
+        user_message_parts.extend(assemble_retrieved_parts(pages))
+        logger.info("Retrieved %d reference documentation page(s) for issue %s", len(pages), jira_issue_key)
 
     async def _run_review(
         self, jira_issue_key: str, user_message_parts: list[str | BinaryContent], focus_areas: list[str]

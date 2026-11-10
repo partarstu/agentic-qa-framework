@@ -19,7 +19,7 @@ review's duplicate judge runs over the test cases indexed next to it.
 ``POST /embed-document-text`` and ``POST /embed-query-text`` stand in for the
 embedding service — ``VectorDbService`` embeds every text before storing or
 querying, and the vector values themselves are irrelevant here — so the whole
-flow stays hermetic and LLM-free.
+flow stays hermetic and LLM-free. Like the service, they reject a batch above its limit.
 
 ``GET /`` answers the qdrant-client's version-compatibility probe, and everything
 recorded is exposed at ``GET /__recorded`` for the smoke assertions.
@@ -32,6 +32,8 @@ from fastapi import FastAPI, HTTPException, Request
 app = FastAPI()
 
 _EMBEDDING_DIM = 8
+# The embedding service's default EMBEDDING_MAX_BATCH_SIZE.
+_EMBEDDING_MAX_BATCH_SIZE = 32
 
 # Collections keyed by name; each holds its points keyed by stringified point id.
 _collections: dict[str, dict[str, dict]] = {}
@@ -43,12 +45,11 @@ _recorded: dict = {
     "collection_schemas": {},
     "payload_indexes": [],
     "upserted_points": [],
-    "queries": [],
     "deleted_point_ids": [],
     "deleted_by_filter": [],
     "payload_updates": [],
     "embedding_calls": [],
-    "hybrid_queries": [],
+    "dense_queries": [],
 }
 
 _UPDATE_RESULT = {"result": {"operation_id": 0, "status": "completed"}, "status": "ok", "time": 0.0}
@@ -86,6 +87,7 @@ async def embed_document_text(request: Request) -> dict:
     payload = await request.json()
     texts = payload.get("texts", [])
     _recorded["embedding_calls"].append({"endpoint": "/embed-document-text", "texts": texts})
+    _reject_oversized_batch(texts)
     return _embeddings_response(texts)
 
 
@@ -95,11 +97,20 @@ async def embed_query_text(request: Request) -> dict:
     payload = await request.json()
     texts = payload.get("texts", [])
     _recorded["embedding_calls"].append({"endpoint": "/embed-query-text", "texts": texts})
+    _reject_oversized_batch(texts)
     return _embeddings_response(texts)
 
 
+def _reject_oversized_batch(texts: list) -> None:
+    """Answer like the embedding service (422) when a request exceeds its batch limit."""
+    if len(texts) > _EMBEDDING_MAX_BATCH_SIZE:
+        raise HTTPException(
+            status_code=422, detail=f"Batch of {len(texts)} exceeds the limit of {_EMBEDDING_MAX_BATCH_SIZE} texts"
+        )
+
+
 def _fake_embedding() -> dict:
-    return {"dense": [0.1] * _EMBEDDING_DIM, "sparse": {"indices": [1], "values": [0.5]}}
+    return {"dense": [0.1] * _EMBEDDING_DIM}
 
 
 def _embeddings_response(texts: list) -> dict:
@@ -120,7 +131,7 @@ async def create_collection(name: str, request: Request) -> dict:
     _collections.setdefault(name, {})
     _vector_configs[name] = {
         "vectors": payload.get("vectors") or {},
-        "sparse_vectors": payload.get("sparse_vectors") or {},
+        "sparse_vectors": payload.get("sparse_vectors"),
     }
     _recorded["created_collections"].append(name)
     _recorded["collection_schemas"][name] = {
@@ -258,12 +269,16 @@ def _equality_conditions(conditions: list[dict] | None) -> dict:
 
 
 def _matches_filter(point: dict, point_filter: dict | None) -> bool:
-    """Honour the top-level ``must`` and ``must_not`` equality conditions the services send."""
+    """Honour the top-level ``must`` and ``must_not`` equality conditions and the ``must`` ID conditions the services
+    send."""
     payload = point.get("payload", {})
     required = _equality_conditions((point_filter or {}).get("must"))
     excluded = _equality_conditions((point_filter or {}).get("must_not"))
-    return all(payload.get(key) == value for key, value in required.items()) and not any(
-        payload.get(key) == value for key, value in excluded.items()
+    required_ids = [condition["has_id"] for condition in (point_filter or {}).get("must") or [] if "has_id" in condition]
+    return (
+        all(payload.get(key) == value for key, value in required.items())
+        and not any(payload.get(key) == value for key, value in excluded.items())
+        and all(str(point["id"]) in {str(pid) for pid in ids} for ids in required_ids)
     )
 
 
@@ -281,39 +296,28 @@ def _scored_points(name: str, point_filter: dict | None, limit: int) -> list[dic
     ]
 
 
-@app.post("/collections/{name}/points/query")
-async def query_points(name: str, request: Request) -> dict:
-    """Report stored matching points for the test-case collection and no hits elsewhere.
+@app.post("/collections/{name}/points/query/batch")
+async def query_points_batch(name: str, request: Request) -> dict:
+    """Answer one dense query per query text: stored matching points for the test-case collection, no hits elsewhere.
 
     Every other collection answers with no hits, so e.g. the incident duplicate search
-    deterministically finds no duplicates. Hybrid queries (named-vector prefetches fused
-    with RRF) are recorded with each prefetch's filter so the smoke suite can assert the
-    flows issue scoped hybrid searches.
+    deterministically finds no duplicates. Each query is recorded with its named vector,
+    threshold and filter so the smoke suite can assert the flows issue scoped dense searches.
     """
     payload = await request.json()
-    _recorded["queries"].append({"collection": name, "filter": payload.get("filter")})
-    prefetches = payload.get("prefetch") or []
-    if prefetches:
-        _recorded["hybrid_queries"].append(
+    results = []
+    for search in payload.get("searches", []):
+        _recorded["dense_queries"].append(
             {
                 "collection": name,
-                "prefetches": [
-                    {
-                        "using": p.get("using"),
-                        "limit": p.get("limit"),
-                        "score_threshold": p.get("score_threshold"),
-                        "filter": p.get("filter"),
-                    }
-                    for p in prefetches
-                ],
-                "fusion": (payload.get("query") or {}).get("fusion"),
-                "limit": payload.get("limit"),
-                "filter": payload.get("filter"),
+                "using": search.get("using"),
+                "limit": search.get("limit"),
+                "score_threshold": search.get("score_threshold"),
+                "filter": search.get("filter"),
             }
         )
-    point_filter = prefetches[0].get("filter") if prefetches else payload.get("filter")
-    points = _scored_points(name, point_filter, payload.get("limit") or 10)
-    return {"result": {"points": points}, "status": "ok", "time": 0.0}
+        results.append({"points": _scored_points(name, search.get("filter"), search.get("limit") or 10)})
+    return {"result": results, "status": "ok", "time": 0.0}
 
 
 @app.get("/__recorded")

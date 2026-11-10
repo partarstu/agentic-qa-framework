@@ -151,6 +151,18 @@ class TestUpdateJiraDb:
 
 
 class TestUpdateConfluenceDb:
+    def test_a_failed_local_run_reports_its_reason(self, client, reset_trigger_singleton):
+        reason = "ConfluenceApiError: No Confluence space found for key 'NOPE'."
+        _mock_trigger(
+            None,
+            start_error=SyncTriggerError(f"The local sync service failed: {reason}", start_confirmed=True),
+        )
+
+        response = client.post("/update-confluence-db", json={"space_key": "NOPE"})
+
+        assert response.status_code == 503
+        assert reason in response.json()["detail"]
+
     def test_scope_options_forwarded_as_runner_args(self, client, monkeypatch, reset_trigger_singleton):
         monkeypatch.setattr(main.config.RagSyncConfig, "JOB_NAME", "projects/p/locations/us-central1/jobs/rag-sync")
         _mock_trigger(monkeypatch, start_result=SyncStartResult(status_code=202, execution="exec-1"))
@@ -293,6 +305,47 @@ class TestTriggerModes:
 
         assert result.status_code == status_code
         assert lock_store.release.await_count == (1 if released else 0)
+
+    @pytest.mark.parametrize(
+        ("body", "expected_detail"),
+        [
+            ({"detail": "ConfluenceApiError: No Confluence space found for key 'NOPE'."}, "No Confluence space found"),
+            (None, "502 gateway down"),
+        ],
+        ids=["the_runners_reason", "a_body_without_detail"],
+    )
+    async def test_local_run_failure_is_definitive_and_frees_the_scope(
+        self, trigger, monkeypatch, body, expected_detail
+    ):
+        """The service runs the sync inline, so its 5xx answer ends the run: the reason is kept, the lock is freed."""
+        trigger_obj, lock_store = trigger
+        state = MagicMock()
+        state.acquired = True
+        state.lock_info = {"holder_token": "tok"}
+        lock_store.acquire.return_value = state
+        lock_store.release = AsyncMock(return_value=True)
+        monkeypatch.setattr(main.config.RagSyncConfig, "JOB_NAME", None)
+        monkeypatch.setattr(main.config.RagSyncConfig, "SERVICE_URL", "http://local-sync:8080")
+
+        response = MagicMock()
+        response.status_code = 500 if body else 502
+        response.text = "gateway down"
+        if body:
+            response.json.return_value = body
+        else:
+            response.json.side_effect = ValueError("not json")
+
+        with patch("orchestrator.rag_sync_trigger.httpx.AsyncClient") as client_cls:
+            http = AsyncMock()
+            http.post = AsyncMock(return_value=response)
+            client_cls.return_value.__aenter__ = AsyncMock(return_value=http)
+            client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            with pytest.raises(SyncTriggerError, match=expected_detail) as error:
+                await _acquire_and_start(trigger_obj, "confluence", "NOPE", ConfluenceSyncRequest(space_key="NOPE"))
+
+        assert error.value.start_confirmed is True
+        lock_store.release.assert_awaited_once_with("confluence:NOPE", "tok")
 
     async def test_neither_mode_configured_raises(self, trigger, monkeypatch):
         trigger_obj, _ = trigger

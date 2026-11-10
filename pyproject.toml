@@ -43,13 +43,17 @@ dependencies = [
 # service images on top of the shared base (see services/*/Dockerfile).
 [project.optional-dependencies]
 embedding-service = [
-    "FlagEmbedding==1.4.2",
     "sentence-transformers==6.1.0",
+    # EmbeddingGemma 2 (model type embedding_gemma2) ships from transformers 5.19.0.
+    "transformers==5.22.2",
+    # sentence-transformers loads the model's full processor even for text-only use; its image and video
+    # processors need torchvision (which brings Pillow).
+    "torchvision==0.29.2",
     "einops==0.8.2",
     "huggingface-hub==1.32.0",
 ]
 prompt-guard-service = [
-    "transformers==5.17.0",
+    "transformers==5.22.2",
     "torch==2.14.0",
 ]
 # The RAG sync runtime's attachment ingestion (services/rag_sync): PDF text and
@@ -83,6 +87,7 @@ constraint-dependencies = ["oauthlib==4.0.0"]
 # The ML services run on CPU only; the default Linux torch wheel pulls ~2.4 GB of unused CUDA libraries.
 [tool.uv.sources]
 torch = [{ index = "pytorch-cpu" }]
+torchvision = [{ index = "pytorch-cpu" }]
 
 [[tool.uv.index]]
 name = "pytorch-cpu"
