@@ -22,7 +22,7 @@ We follow the [Contributor Covenant Code of Conduct](https://www.contributor-cov
 
 QuAIA™ is dual-licensed: it is open source under the GNU Affero General Public License v3.0 (AGPL-3.0-only), and it is also
 offered under commercial licenses. To make this possible, every contributor must sign the
-[QuAIA™ Individual Contributor License Agreement](CLA_GIST_URL) (CLA) before their first pull request can be merged.
+[QuAIA™ Individual Contributor License Agreement](CLA.md) (CLA) before their first pull request can be merged.
 
 * When you open your first pull request, the CLA assistant bot comments on it with a link. Sign in with your GitHub account and accept
   the agreement; it takes about a minute and covers all your future contributions to this repository and to the
