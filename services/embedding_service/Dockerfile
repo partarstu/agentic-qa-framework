@@ -13,7 +13,8 @@ ARG EMBEDDING_TEXT_MODEL=google/embeddinggemma-2
 ENV EMBEDDING_TEXT_MODEL=${EMBEDDING_TEXT_MODEL}
 ARG EMBEDDING_TEXT_MODEL_REVISION=f9972ac22e696a105c482202646979e33e4b5a1e
 ENV EMBEDDING_TEXT_MODEL_REVISION=${EMBEDDING_TEXT_MODEL_REVISION}
-RUN uv sync --frozen --no-dev --extra embedding-service
+RUN --mount=from=ghcr.io/astral-sh/uv:0.11.21,source=/uv,target=/bin/uv \
+    uv sync --frozen --no-dev --extra embedding-service
 
 COPY services/embedding_service/ ${WORK_DIR}/embedding_service
 COPY common/ ${WORK_DIR}/common

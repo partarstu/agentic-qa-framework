@@ -5,9 +5,6 @@
 # Use an official Python runtime as a parent image
 FROM python:3.14.7-slim-trixie
 
-# Install the uv package manager (pinned for reproducible builds)
-COPY --from=ghcr.io/astral-sh/uv:0.11.21 /uv /uvx /bin/
-
 # Set the working directory in the container
 WORKDIR /app
 
@@ -24,9 +21,11 @@ ENV PYDANTIC_AI_NO_BANNER=1
 
 # Install the shared runtime dependencies from the lock file (no dev tools, no
 # optional service extras). Only the dependency manifests are copied, so this
-# layer stays cached as long as the locked dependencies don't change.
+# layer stays cached as long as the locked dependencies don't change. uv (pinned
+# for reproducible builds) is only mounted for the install, so it stays out of every image.
 COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen --no-dev --no-install-project
+RUN --mount=from=ghcr.io/astral-sh/uv:0.11.21,source=/uv,target=/bin/uv \
+    uv sync --frozen --no-dev --no-install-project
 
 # Create local_models directory for pre-downloaded models
 RUN mkdir -p /app/local_models

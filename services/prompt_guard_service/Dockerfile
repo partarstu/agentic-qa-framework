@@ -13,7 +13,8 @@ ARG PROMPT_INJECTION_MODEL_NAME=ProtectAI/deberta-v3-base-prompt-injection-v2
 ENV PROMPT_INJECTION_MODEL_NAME=${PROMPT_INJECTION_MODEL_NAME}
 ARG PROMPT_INJECTION_MODEL_REVISION=90c9989b1a342275dd0d1a95aad283c04e075671
 ENV PROMPT_INJECTION_MODEL_REVISION=${PROMPT_INJECTION_MODEL_REVISION}
-RUN uv sync --frozen --no-dev --extra prompt-guard-service
+RUN --mount=from=ghcr.io/astral-sh/uv:0.11.21,source=/uv,target=/bin/uv \
+    uv sync --frozen --no-dev --extra prompt-guard-service
 
 COPY services/prompt_guard_service/ ${WORK_DIR}/prompt_guard_service
 COPY common/ ${WORK_DIR}/common
