@@ -21,7 +21,7 @@ FINGERPRINT_RECORD_KIND = "sync-fingerprint"
 
 # Bump when normalization, chunking or rendering logic changes, so stored
 # fingerprints no longer match and items are re-ingested.
-INGESTION_SCHEMA_VERSION = 1
+INGESTION_SCHEMA_VERSION = 3
 
 
 def content_hash(raw_content: str | bytes, *extra: str) -> str:

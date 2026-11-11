@@ -13,7 +13,7 @@ import threading
 import time
 import types
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -285,8 +285,6 @@ class TestAttachmentExtraction:
             (".odt", True),
             (".odp", True),
             (".rtf", True),
-            (".xls", False),
-            (".ods", False),
         ],
     )
     async def test_office_formats_use_converted_pdf(self, extension, expects_image):
@@ -301,6 +299,30 @@ class TestAttachmentExtraction:
 
         assert "Converted page" in document.pages[0].text
         assert (document.pages[0].image is not None) is expects_image
+
+    @pytest.mark.parametrize("extension", [".xls", ".ods"])
+    async def test_legacy_spreadsheets_are_read_from_the_converted_workbook_not_from_a_pdf(self, extension):
+        """A PDF clips a cell's text to its column width, so the converted XLSX is read sheet by sheet."""
+        convert_to_pdf = AsyncMock(side_effect=AssertionError("a spreadsheet must not take the PDF route"))
+        with (
+            patch("rag_sync.office_conversion.conversion_available", return_value=True),
+            patch("rag_sync.office_conversion.convert_to_pdf", convert_to_pdf),
+            patch("rag_sync.office_conversion.convert_to_xlsx", AsyncMock(return_value=_xlsx_bytes())) as convert,
+        ):
+            document = await extract_attachment_async(f"legacy{extension}", b"source")
+
+        convert.assert_awaited_once_with(b"source", f"legacy{extension}")
+        assert document.total_page_count == 2
+        assert "Name Value" in document.pages[0].text and "Beta 2" in document.pages[1].text
+        assert all(page.image is None for page in document.pages)
+
+    async def test_legacy_spreadsheet_conversion_failure_is_an_error(self):
+        with (
+            patch("rag_sync.office_conversion.conversion_available", return_value=True),
+            patch("rag_sync.office_conversion.convert_to_xlsx", AsyncMock(side_effect=OfficeConversionError("failed"))),
+            pytest.raises(OfficeConversionError),
+        ):
+            await extract_attachment_async("legacy.xls", b"source")
 
     async def test_docx_falls_back_to_native_reader_when_conversion_is_unavailable(self):
         with patch("rag_sync.office_conversion.conversion_available", return_value=False):
@@ -381,7 +403,7 @@ class TestOfficeConversion:
     async def test_filename_is_sanitized_inside_the_temporary_directory(self):
         seen_source = None
 
-        def fake_convert(source: Path, output_directory: Path) -> Path:
+        def fake_convert(source: Path, output_directory: Path, target_format: str) -> Path:
             nonlocal seen_source
             seen_source = source
             pdf = output_directory / f"{source.stem}.pdf"
@@ -410,7 +432,7 @@ class TestOfficeConversion:
             patch("rag_sync.office_conversion.shutil.which", return_value="/usr/bin/soffice"),
             patch("rag_sync.office_conversion.subprocess.run", side_effect=fake_run) as run,
         ):
-            produced = office_conversion._run_soffice(source, output_directory)
+            produced = office_conversion._run_soffice(source, output_directory, "pdf")
 
         command = run.call_args.args[0]
         assert "--headless" in command
@@ -461,3 +483,34 @@ class TestOcr:
         ocr._engine_initialization_attempted = True
 
         assert ocr.extract_text(b"image") == ""
+
+    async def test_spreadsheet_conversion_asks_soffice_for_xlsx(self):
+        seen = {}
+
+        def fake_convert(source: Path, output_directory: Path, target_format: str) -> Path:
+            seen["format"] = target_format
+            workbook = output_directory / f"{source.stem}.{target_format}"
+            workbook.write_bytes(b"xlsx")
+            return workbook
+
+        with patch("rag_sync.office_conversion._run_soffice", side_effect=fake_convert):
+            result = await office_conversion.convert_to_xlsx(b"source", "legacy.xls")
+
+        assert result == b"xlsx"
+        assert seen["format"] == "xlsx"
+
+    def test_soffice_command_carries_the_target_format_and_the_missing_output_is_reported(self, tmp_path):
+        source = tmp_path / "legacy.xls"
+        source.write_bytes(b"source")
+        output_directory = tmp_path / "out"
+        output_directory.mkdir()
+
+        with (
+            patch("rag_sync.office_conversion.shutil.which", return_value="/usr/bin/soffice"),
+            patch("rag_sync.office_conversion.subprocess.run", return_value=MagicMock(returncode=0, stderr="")) as run,
+            pytest.raises(OfficeConversionError, match="produced no XLSX"),
+        ):
+            office_conversion._run_soffice(source, output_directory, "xlsx")
+
+        command = run.call_args.args[0]
+        assert command[command.index("--convert-to") + 1] == "xlsx"

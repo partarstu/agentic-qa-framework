@@ -8,7 +8,8 @@ WORKDIR ${WORK_DIR}
 
 # Install only the sync runtime's locked optional dependencies. The OCR models ship
 # inside the rapidocr wheel, so nothing is downloaded at build time or at runtime.
-RUN uv sync --frozen --no-dev --no-install-project --extra rag-sync
+RUN --mount=from=ghcr.io/astral-sh/uv:0.11.21,source=/uv,target=/bin/uv \
+    uv sync --frozen --no-dev --no-install-project --extra rag-sync
 
 # LibreOffice performs the office-to-PDF conversion. Metric-compatible Microsoft
 # font substitutes plus Noto keep page layout and broad-Unicode text stable.

@@ -1,6 +1,6 @@
 # QuAIA™ — Quality Assurance with Intelligent Agents
 
-<img src="static/quaia_logo.png" alt="QuAIA Logo" width="50" style="margin-right: 15px; float:left">
+<img src="static/quaia_logo.png" alt="QuAIA Logo" width="360">
 
 QuAIA™ is an open-source framework for intelligent automation of the most important software testing life cycle 
 processes starting with software requirements review and up to generating test execution reports.
@@ -43,8 +43,8 @@ Watch a demo of QuAIA™ in action:
 * **Orchestration Layer:** A central orchestrator manages agent registration, task routing, and workflow execution.
 * **Integration with External Systems:** Supports integration with Jira by utilizing its MCP server.
 * **Vector Database Integration:** Uses Qdrant for semantic search capabilities, enabling intelligent duplicate detection and RAG-based features.
-* **Embedding Service:** Dedicated microservice for generating dense and learned-sparse text
-  embeddings in one pass, using a multilingual model (BGE-M3 family). Endpoints:
+* **Embedding Service:** Dedicated microservice for generating dense text embeddings with the
+  multilingual EmbeddingGemma 2 model, loaded without its vision and audio encoders. Endpoints:
   `POST /embed-document-text` and `POST /embed-query-text` (batches, guarded by
   `INTERNAL_SERVICE_API_KEY`), `GET /health` (liveness) and `GET /ready` (readiness after
   model warm-up).
@@ -82,7 +82,7 @@ The UI test execution agents of the `test-execution-agents` repository record ev
 
 The Test Case Design agent uses these selections in two independent assessments:
 
-* **Rebuild** after `generate_test_cases` (every draft) and after `fix_test_cases` (every fixed or added test case): the selections of all test cases are requested at once, then the knowledge-aware test case generator rebuilds each test case that got at least one procedure. It **reuses** a fitting procedure (its description, test data names and expected results for unchanged behaviour), **merges** a run of steps selected together into one step, **adds** a precondition for an unmet prerequisite of a reused procedure, and **keeps** an item no selection fits; the story wins for the behaviour it introduces or changes. A reused item takes the procedure's description verbatim, filled in by code, so the execution agent matches it exactly. Name, summary, comment and acceptance criteria stay those of the draft, and every draft item is covered exactly once and in order. Generation and fixing prompts write one precondition per line.
+* **Rebuild** after `generate_test_cases` (every draft) and after `fix_test_cases` (every fixed or added test case): the selections of all test cases are requested at once, then the knowledge-aware test case generator rebuilds each test case that got at least one procedure. It **reuses** a fitting procedure (its description, test data names and expected results for unchanged behaviour), **merges** a run of steps selected together into one step, **adds** a precondition for an unmet prerequisite of a reused procedure, and **keeps** an item no selection fits; a test case whose rebuild fails stays as drafted, the error is logged and the step summary names it among those without recorded procedures; the story wins for the behaviour it introduces or changes. A reused item takes the procedure's description verbatim, filled in by code, so the execution agent matches it exactly. Name, summary, comment and acceptance criteria stay those of the draft, and every draft item is covered exactly once and in order. Generation and fixing prompts write one precondition per line.
 * **Review**: each per-test-case review gets a fresh selection for the test case as it is now and checks it for fitting procedures or workflows that were not reused, unmet prerequisites, and test data and expected results that deviate from a recorded workflow of unchanged behaviour (at least high severity). An item without a selected procedure is no finding, since the graph knows only what was executed before. The whole-set review asks for nothing.
 
 The design agent does not know the knowledge agent: it sends each request to the **orchestrator's own A2A endpoint** (`ORCHESTRATOR_URL` + `/a2a`, card at `/a2a/.well-known/agent-card.json`), which requires `X-API-Key: INTERNAL_SERVICE_API_KEY` and fails closed (503) without it. The request is one data part `{capability, payload, timeout_seconds}`: the routing selects the registered agent whose capability fits the configured capability text, the orchestrator forwards the payload as one data part and returns that agent's artifacts unchanged, and the task appears on the dashboard with its logs, errors and the token usage the agent reports. The timeout is capped at 1800 s. Any failure (no fitting agent, timeout, agent error, an invalid selection) is logged as an error and named in the step's summary, and the test case goes on unchanged; `PROCEDURE_KNOWLEDGE_ENABLED=false` skips the requests altogether.
@@ -315,7 +315,7 @@ JIRA_URL=YOUR_JIRA_INSTANCE_URL # Required for Xray, the RAG sync runtime and th
                                  # MCP server (see "Jira MCP Server Setup" below), which has its own .env file.
 JIRA_USERNAME=YOUR_JIRA_USERNAME # Required alongside JIRA_URL. The email address associated with your Jira account.
 JIRA_API_TOKEN=YOUR_JIRA_API_TOKEN # Required alongside JIRA_URL. A Jira API token for authentication.
-ORCHESTRATOR_VERSION=4.0.0 # Default: 4.0.0. Version of the orchestrator, reported for traceability.
+ORCHESTRATOR_VERSION=5.1.0 # Default: 5.1.0. Version of the orchestrator, reported for traceability.
 ORCHESTRATOR_THINKING_LEVEL=medium # Default: medium. Thinking level of the orchestrator's model calls (routing, multi-agent routing and results extraction): none (thinking off), minimal, low, medium, high or xhigh. On Qwen, a level turns thinking on at the matching reasoning effort and none turns it off through the chat template (recommended on Qwen: none).
 TEST_CASE_DESIGN_TASK_TIMEOUT_SECONDS=3300 # Default: 3300. How long the orchestrator waits for one test case design, the wait for a free Test Case Design agent included; keep it below the orchestrator's request timeout (3500 s on Cloud Run).
 TEST_ENVIRONMENT_LABEL=Standard Test Environment # Default: Standard Test Environment. Label describing the
@@ -340,7 +340,7 @@ MCP_SERVER_TIMEOUT_SECONDS=30 # Client-side MCP timeout applied to both the conn
 MCP_SESSION_LIFECYCLE_TIMEOUT_SECONDS=30 # Bounded, cancellation-shielded window for MCP session set-up/tear-down during a recovery retry.
 ANTHROPIC_API_KEY= # Required when a Claude model is configured (MODEL_NAME starting with anthropic: or claude-).
 TEST_CASE_INDEX_STATUSES= # Comma-separated list of test-case statuses eligible for indexing; empty indexes every status. Recommended: exclude deprecated/obsolete statuses.
-TEST_CASE_DUPLICATE_MIN_SCORE=0.8 # Minimum dense similarity for test-case duplicate candidates.
+TEST_CASE_DUPLICATE_MIN_SCORE=0.85 # Minimum dense similarity for test-case duplicate candidates.
 TEST_CASE_DUPLICATE_MAX_CANDIDATES=5 # Maximum duplicate candidates judged per reviewed test case.
 LOGIN_RATE_LIMIT_ATTEMPTS=5 # Login attempts allowed per client IP per window.
 LOGIN_RATE_LIMIT_WINDOW_SECONDS=60 # Sliding-window length for the login rate limit.
@@ -393,10 +393,10 @@ TEST_CASE_REVIEW_THINKING_LEVEL=medium # Default: medium. Recommended on Qwen: l
 TEST_CASE_CLASSIFICATION_THINKING_LEVEL=medium # Default: medium. Recommended on Qwen: low.
 # Version each agent reports in its A2A agent card (visible in the dashboard) and, for execution agents,
 # on every test execution result. Each agent reads its own variable.
-REQUIREMENTS_REVIEW_AGENT_VERSION=1.5.0 # Default: 1.5.0.
-TEST_CASE_DESIGN_AGENT_VERSION=1.3.0 # Default: 1.3.0.
+REQUIREMENTS_REVIEW_AGENT_VERSION=1.8.0 # Default: 1.8.0.
+TEST_CASE_DESIGN_AGENT_VERSION=1.6.0 # Default: 1.6.0.
 TEST_CASE_CLASSIFICATION_AGENT_VERSION=1.5.0 # Default: 1.5.0.
-INCIDENT_CREATION_AGENT_VERSION=1.4.0 # Default: 1.4.0.
+INCIDENT_CREATION_AGENT_VERSION=1.6.0 # Default: 1.6.0.
 
 # Agent Discovery (for remote agents)
 REMOTE_EXECUTION_AGENT_HOSTS=http://localhost # Default: http://localhost. Comma-separated URLs of remote agent hosts, the procedure knowledge agent included.
@@ -430,13 +430,14 @@ QDRANT_COLLECTION_NAME=jira_issues # Default: jira_issues. Name of the main coll
 QDRANT_TICKETS_COLLECTION_NAME=jira_issues # Default: jira_issues. Name of the collection the RAG DB sync writes Jira issues to.
 QDRANT_METADATA_COLLECTION_NAME=rag_metadata # Default: rag_metadata. Name of the collection for RAG metadata.
 QDRANT_DOCUMENTS_COLLECTION_NAME=confluence_documents # Default: confluence_documents. Name of the collection the Confluence sync writes document parts to.
-RAG_MIN_SIMILARITY_SCORE=0.7 # Default: 0.7. Minimum similarity score for vector search results.
-RAG_MAX_RESULTS=5 # Default: 5. Maximum number of results to return from vector search.
+RAG_MIN_SIMILARITY_SCORE=0.64 # Default: 0.64. Minimum dense similarity of every document retrieval result, for each retrieval query.
+RAG_MAX_RESULTS=5 # Default: 5. Maximum number of results to return from vector search; a document retrieval returns the pages of at most this many unique documents.
+RAG_MAX_RETRIEVED_PAGES_PER_DOCUMENT=5 # Default: 5. Maximum number of pages a document retrieval returns per unique document.
 EMBEDDING_SERVICE_URL= # Required for agents using Vector DB. URL of the embedding service for remote embedding generation.
 EMBEDDING_SERVICE_TIMEOUT_SECONDS=120.0 # Default: 120.0. Timeout for embedding service requests.
 EMBEDDING_SERVICE_MAX_RETRIES=6 # Default: 6. Connect/timeout retry attempts (with backoff) while the embedding service starts (e.g. Cloud Run cold start).
 EMBEDDING_SERVICE_RETRY_BACKOFF_CAP_SECONDS=32.0 # Default: 32.0. Upper bound for the exponential backoff between embedding service retries.
-QDRANT_UPSERT_BATCH_SIZE=64 # Default: 64. Number of points per batched vector upsert.
+QDRANT_UPSERT_BATCH_SIZE=64 # Default: 64. Number of points per batched vector upsert; its texts are embedded in slices of EMBEDDING_MAX_BATCH_SIZE.
 
 # RAG Sync Runtime
 RAG_SYNC_JOB_NAME= # Unset by default. Cloud Run job resource name (projects/<p>/locations/<r>/jobs/<job>); enables job mode.
@@ -467,13 +468,13 @@ RAG_OCR_TEXT_THRESHOLD_CHARACTERS=20 # Default: 20. Pages below this native-text
 
 # Embedding Service Configuration
 EMBEDDING_BACKENDS=text # Default: text. Comma-separated enabled backends; "text" is the only one implemented.
-EMBEDDING_TEXT_MODEL=BAAI/bge-m3 # Default: BAAI/bge-m3. Multilingual model producing dense and learned-sparse output in one pass.
-EMBEDDING_TEXT_MODEL_REVISION=5617a9f61b028005a4858fdac845db406aefb181 # Default: 5617a9f61b028005a4858fdac845db406aefb181. Hugging Face commit of EMBEDDING_TEXT_MODEL downloaded at image build time; set it together with EMBEDDING_TEXT_MODEL.
+EMBEDDING_TEXT_MODEL=google/embeddinggemma-2 # Default: google/embeddinggemma-2. Multilingual dense model; only its text encoder is loaded, with its own retrieval query and document prompts.
+EMBEDDING_TEXT_MODEL_REVISION=f9972ac22e696a105c482202646979e33e4b5a1e # Default: f9972ac22e696a105c482202646979e33e4b5a1e. Hugging Face commit of EMBEDDING_TEXT_MODEL downloaded at image build time; set it together with EMBEDDING_TEXT_MODEL.
 EMBEDDING_MAX_BATCH_SIZE=32 # Default: 32. Maximum number of texts per embedding request.
 EMBEDDING_MAX_TEXT_LENGTH=50000 # Default: 50000. Maximum text length (characters) per input.
 
 # Incident Creation Agent Configuration
-INCIDENT_AGENT_MIN_SIMILARITY_SCORE=0.7 # Default: 0.7. Minimum score for duplicate detection.
+INCIDENT_AGENT_MIN_SIMILARITY_SCORE=0.75 # Default: 0.75. Minimum score for duplicate detection.
 ISSUE_PRIORITY_FIELD_ID=priority # Default: priority. Jira field ID for issue priority.
 ISSUE_SEVERITY_FIELD_NAME=customfield_10124 # Default: customfield_10124. Jira custom field name for severity.
 JIRA_BUG_ISSUE_TYPE=Bug # Default: Bug. Jira issue type used when searching the vector DB for duplicate bugs.
@@ -880,22 +881,21 @@ The suite drives the system through the orchestrator's public webhooks and asser
 
 * **Every LLM call** → each model-driven operation of the flows (routing, results extraction, the requirements review with its focused reviews and their merge, every step of the test case design including the duplicate judgement, classification and incident creation) reached the LLM mock, and none went unanswered.
 * **Model request settings** → the mock records each request's `temperature`, `top_p`, `presence_penalty`, `reasoning_effort`, `chat_template_kwargs` and the properties and required fields of every offered tool. The stack sets `ORCHESTRATOR_THINKING_LEVEL: "none"`, so the routing requests carry thinking off (`enable_thinking: false`, temperature 0.7, top_p 0.8, presence penalty 0) and exactly the three routing result tools with every field required, while the test case design requests carry its default level (`reasoning_effort: medium`, temperature 1.0, top_p 0.95, presence penalty 0.5).
-* **Requirements review** (`POST /new-requirements-available`) → a non-empty review comment reaches Jira (REST or MCP), and the agent first fetched the source story via the Jira MCP. The prompt override mounted from `tests/smoke/overrides/` reaches the review model's instructions, the story attachment is downloaded over Jira REST, and the review issues a hybrid documents query whose text is non-empty and shorter than the issue content. With `REQUIREMENTS_REVIEW_FOCUS_AREA_COUNT` set to 3, the usage artifact meters the three focused reviews (`review_with_attachments`) and the merge run (`merge_reviews`).
+* **Requirements review** (`POST /new-requirements-available`) → a non-empty review comment reaches Jira (REST or MCP), and the agent first fetched the source story via the Jira MCP. The prompt override mounted from `tests/smoke/overrides/` reaches the review model's instructions, the story attachment is downloaded over Jira REST, and the review embeds its retrieval queries (each non-empty and shorter than the issue content) in one call and issues one gated dense documents query per retrieval query. With `REQUIREMENTS_REVIEW_FOCUS_AREA_COUNT` set to 3, the usage artifact meters the three focused reviews (`review_with_attachments`) and the merge run (`merge_reviews`).
 * **Additional Jira fields** (`JIRA_ADDITIONAL_FIELD_IDS`) → the configured custom field IDs reach the models of the requirements review and the test case design, and the Jira MCP mock records that both flows requested them.
 * **Routing and cards** → routing decisions with justifications reach the dashboard logs, and every agent's card
   description carries its model, version and skill name.
 * **Test case design** (`POST /story-ready-for-test-case-generation`) → the Test Case Design agent generates, reviews and fixes the test cases through the whole loop: the LLM mock reports a high finding per test case in every review (on a real model, the severity-classifier override mounted from `tests/smoke/overrides/` does), so the design runs exactly one fix cycle and stops as `iteration_limit` after the second review (`TEST_CASE_DESIGN_MAX_ITERATIONS: "2"` in the compose file), and every final comment reports that; a design that converges on its own is covered by the unit tests. Then the scripted test cases (name + steps, one per acceptance criterion) reach Zephyr exactly once, each linked once to the originating story; the classification labels reach every test case; every test case gets the "Review Complete" status and a final review comment with the header naming the iterations and the stop reason, its severity-tagged findings, and the "Duplicate check" section, which renders the judge's partial overlap with a seeded test case. The design's LLM fetched the story exactly once through the Jira MCP, without comments (`comment_limit` 0) and with the content and the configured fields. When publishing, each final test case was searched for duplicates exactly once, within its project (the Qdrant mock answers test-case queries with the stored points, so the judge runs end to end); the usage artifact carries per-operation counters of the design agent and the sub-agents of its generation and review delegates, the test case fixer and the knowledge-aware test case generator included.
 * **Procedure knowledge** → the design delegates one knowledge request per test case to the orchestrator's A2A endpoint (`ORCHESTRATOR_URL` and `INTERNAL_SERVICE_API_KEY` in the compose file) after the generation, before each review and after the fix: the mock knowledge agent receives every draft once and the rebuilt test cases in both reviews and the fix, each as a completed task of that agent in the orchestrator's task history with the usage of its `token_usage` artifact, and the dashboard reports the capacity its card declares. Every per-test-case review request carries the selected procedures, and every saved test case reuses their descriptions verbatim, with its two steps merged into the one recorded workflow.
 * **Test execution / incident creation** (`POST /execute-tests`) → a failed automated test drives a real Bug issue into the seeded Jira project, the failed execution is reported to Zephyr inside a fresh test cycle, the bug is linked to that execution, and the duplicate search consulted the vector DB with the project filter. The executing agent's name and version and the environment label reach the incident model and the bug. The typed (`api`) test case reaches the execution agent while the seeded untyped one is skipped with a warning.
-* **Manual execution** (`POST /execute-test`) → one result for the chosen mock agent reaches Zephyr and no bug is
-  created.
+* **Manual execution** (`POST /execute-test`) → the chosen mock agent's result comes back in the response, nothing reaches Zephyr and no bug is created; an unknown test case key answers `404`.
 * **Structured logging** → the requirements review's log lines carry the agent's name and task id.
 * **Dashboard** → the login answers `429` with `Retry-After` after the configured attempts, and the task history
   survives an orchestrator restart. The restart check runs last and calls `docker compose -f docker-compose.smoke.yml
   restart orchestrator` (override the file with `SMOKE_COMPOSE_FILE`), so the Docker CLI must be available where
   pytest runs.
 * **Jira DB update** (`POST /update-jira-db`) → the orchestrator forwards to the local sync service, which pushes the seeded Jira story into the mocked vector DB
-  (collection creation with the named dense + sparse schema, and a point upsert carrying both vectors), and also a
+  (collection creation with only the named dense vector, and a point upsert carrying that vector), and also a
   seeded issue in the `Closed` status.
 * **Confluence DB update** (`POST /update-confluence-db`) → the local sync service ingests the seeded Confluence page
   (space lookup, page listing, body fetch, breadcrumb-prefixed chunks upserted into the documents collection) and its
@@ -1011,11 +1011,7 @@ You can trigger the execution of automated tests for a specific project.
   left queued after every execution agent of their group has gone are returned as `error` results.
 
 * **Execute a single test case manually:**
-  Send a POST request to `/execute-test` with the `test_case_key`, the `agent_id` of an
-  explicitly chosen unattended execution agent and the `project_key`. The agent is reserved
-  directly (404 unknown, 409 busy, 503 broken) with no LLM routing; the result is uploaded to
-  the test management system and the report is regenerated. A manual run never creates
-  incidents. The response is the structured execution result plus its `reporting_failures`.
+  Send a POST request to `/execute-test` with the `test_case_key` and the `agent_id` of an explicitly chosen unattended execution agent. A test case missing from the test management system is rejected with 404 ("Test case <key> was not found."). The agent is reserved directly (404 unknown, 409 busy, 503 broken) with no LLM routing. A manual run never uploads its result to the test management system, never generates the Allure report and never creates incidents: the response is the structured execution result only.
   ```json
   {"test_case_key": "SCRUM-42", "agent_id": "ui-execution-agent", "project_key": "SCRUM"}
   ```
@@ -1071,13 +1067,15 @@ lock TTL.
   Page bodies are ingested: the storage-format body is normalized to markdown
   (headings, lists, tables, code and content macros kept; navigation/dynamic macros
   dropped), chunked along headings with `Page title > Section` breadcrumbs, and
-  upserted as dense + sparse vectors into the documents collection. The run is
+  upserted as dense vectors into the documents collection. The run is
   idempotent: unchanged page and attachment versions are skipped without any fetch,
   and a re-run after a crash re-ingests only the items whose fingerprint was never
   saved.
   ```json
   {"space_key": "DEV", "page_id": 12345, "attachment_name_pattern": "^report.*\\.pdf$", "skip_page_body": false}
   ```
+  Nested lists and the indentation of code are kept, status and date labels are stored as their text, a box (info, note, warning, tip, panel, expand, section, column, layout) is stored as quoted text, task lists and macro parameters are left out, and every part links to its page with the site's absolute address (`CONFLUENCE_URL/wiki/...`). A renamed page, a renamed attachment and the attachments of a renamed page are processed again, because the names are part of every breadcrumb; a new version whose text is identical is not. A run that fails answers with its reason (for example `No Confluence space found for key '<key>'.`) and releases the scope lock. A change of the ingestion logic raises the ingestion schema version, so the next sync of every Confluence and SharePoint scope stores its content again.
+
   Attachments matching the name pattern are stored one record per document page. Each
   record carries the page text, the page image (when the format has one) and the
   reconciliation chain (Confluence page, attachment, page `n` of `m`); its embedded text
@@ -1090,7 +1088,7 @@ lock TTL.
   | PNG, JPEG, GIF, WebP, BMP, TIFF          | OCR (one page per frame)                                              | Normalized PNG  |
   | DOCX, PPTX                               | Converted PDF; native text-only reader if conversion is off or fails  | Rendered page   |
   | DOC, PPT, ODT, ODP, RTF                  | Converted PDF                                                         | Rendered page   |
-  | XLS, ODS                                 | Converted PDF                                                         | None            |
+  | XLS, ODS                                 | Converted to XLSX, then read like one (full cell text)                | None            |
   | XLSX                                     | Native reader, one page per sheet                                     | None            |
   | CSV / TXT, MD                            | Whole file (TXT and MD verbatim)                                      | None            |
 
@@ -1104,15 +1102,22 @@ lock TTL.
 
 * **Update the SharePoint documents collection:**
   Send a POST request to `/update-sharepoint-db` with a JSON payload containing the
-  `drive_id`, and optionally a `folder_path` (restricting the sync to that folder's
-  descendants) and an `attachment_name_pattern` (case-insensitive regex). Access is
+  `drive_id`, and optionally a `folder_path` (relative to the drive root, e.g. `Specs` or
+  `Specs/Archive`, restricting the sync to that folder's descendants; a folder the drive
+  doesn't have fails the run with the reason) and an `attachment_name_pattern`
+  (case-insensitive regex). Access is
   app-only through Microsoft Entra (a client-credentials token request; the least-privilege
   setup grants `Sites.Selected` per site). Change detection uses delta enumeration on
   the drive root: a drive-scoped run resumes from the stored delta link, a folder-scoped
   run performs a full enumeration filtered to the folder and never advances the drive's
   delta link, an expired delta link (`410 Gone`) restarts a full enumeration, and
-  `cTag`/`eTag` distinguish content changes from renames or moves. Files are processed
-  by the same ingestion pipeline as Confluence attachments.
+  `cTag`/`eTag` distinguish content changes from renames or moves (a move with a new
+  `cTag` but unchanged content is a payload-only update too). Every run also repairs the
+  stored folder path of each file whose folder was renamed or moved, or whose path was
+  stored with the drive root as its first segment (`root/Specs`), without re-embedding.
+  Every part stores `folder_path` and `folder_ancestors` (each prefix of the path), so a
+  retrieval scoped to `Specs` also finds `Specs/Archive`. Files are processed by the same
+  ingestion pipeline as Confluence attachments.
   ```json
   {"drive_id": "b!abc123", "folder_path": "Specs", "attachment_name_pattern": "^spec.*\.pdf$"}
   ```
@@ -1150,15 +1155,19 @@ The Requirements Review agent grounds its review in the ingested Confluence docu
 and the embedding service are configured (`EMBEDDING_SERVICE_URL` set); otherwise retrieval is skipped with one INFO
 log at startup and the review uses the issue and its attachments only.
 
-* With retrieval enabled, the agent's review tool requires a focused retrieval query (key topics, feature names and
-  domain terms, without Jira boilerplate) and accepts an optional scope (space key, page ID, document-name regex) that
-  the model sets only when the issue explicitly references a Confluence location. A blank query is an explicit tool
-  error. With retrieval disabled, the tool advertises neither parameter and no retrieval instruction is added.
-* The retrieval is a hybrid dense + sparse query over the documents collection. Hits are grouped per page, and each of
-  the top `RAG_MAX_RESULTS` pages contributes a header (reconciliation chain or breadcrumb and URL) plus its page image
-  when one exists, otherwise its text. The parts are appended after the issue content and the Jira attachments.
-* A retrieval failure at runtime (e.g. an unreachable embedding service or Qdrant) fails the review instead of
-  silently reviewing without documentation.
+* With retrieval enabled, the agent's review tool requires one to five focused retrieval queries of at most 300
+  characters each, each a different angle on the issue (key topics and feature names, domain terms with their
+  synonyms, and every identifier the issue names as a query of its own, without Jira boilerplate), and accepts an
+  optional scope (space key, page ID, document-name regex) that the model sets only when the issue explicitly
+  references a Confluence location. A missing, blank or oversized query is an explicit tool error. With retrieval
+  disabled, the tool advertises neither parameter and no retrieval instruction is added.
+* The retrieval is a dense query per retrieval query over the documents collection, all embedded in one call and run
+  in one batch. `RAG_MIN_SIMILARITY_SCORE` is the relevance gate of every query, so an unrelated query returns
+  nothing; a page matching any query keeps its best score. There is no keyword (BM25) branch: on the live calibration
+  corpus, identifiers such as error codes and requirement IDs are found by the dense model alone. A SharePoint
+  `folder_path` scope includes its subfolders. Hits are grouped per page and the pages per unique document (an attachment or a page body): the review receives the pages of at most `RAG_MAX_RESULTS` documents, each with at most `RAG_MAX_RETRIEVED_PAGES_PER_DOCUMENT` of its best-ranked pages, so several pages of one document count as one document and a long document cannot flood the review. Each page contributes a header plus its page image when one exists, otherwise its text. The header identifies the page by the attachment file name and page number (`FEH_Payments_Spec_v2.pdf, page 4 of 6`) or by the page title and chunk number (`Design page, chunk 3`), followed by the source, the SharePoint folder or Confluence space and, for a page body, the URL. The parts are appended after the issue content and the Jira attachments.
+* The grounding instruction makes every finding that relies on reference documentation end with a `Reference documentation:` line listing each relevant retrieved part, written as its header identifies it (plain text, no extra output field), and the merge instruction keeps those lines and unites them for merged findings.
+* A retrieval failure at runtime of any enabled source (e.g. an unreachable embedding service or Qdrant, or a source whose collection fails) fails the review instead of silently reviewing without that source's documentation.
 * Retrieved text passes the prompt-injection guard like any other model input. Page images cannot be screened by the
   text classifier; since Confluence content is editable by many users, treat ingested spaces as part of the attack
   surface and restrict ingestion to trusted spaces.
@@ -1168,8 +1177,8 @@ log at startup and the review uses the issue and its attachments only.
 The test case reviewer of the Test Case Design agent checks every final test case for duplicate coverage among the existing test cases of the same project, using the test-case collection (`QDRANT_TEST_CASES_COLLECTION_NAME`):
 
 1. The test case is rendered as the test-case sync renders it and compared by its content only; it is never indexed. A test case design runs the check once, over its final test cases when it publishes them, before anything is saved; a failed check is repeated only for the test cases it failed for.
-2. Per test case, a hybrid query searches the same project, excluding the test case itself, with
-   `TEST_CASE_DUPLICATE_MIN_SCORE` on the dense branch and at most `TEST_CASE_DUPLICATE_MAX_CANDIDATES` results;
+2. Per test case, a dense query searches the same project, excluding the test case itself, embedding the test case like the stored ones (both sides are the same kind of text), with
+   `TEST_CASE_DUPLICATE_MIN_SCORE` as its relevance gate and at most `TEST_CASE_DUPLICATE_MAX_CANDIDATES` results;
    candidates are de-duplicated by test case key.
 3. When candidates exist, a dedicated judge sub-agent (`test_case_duplicate_judge`, prompt `agents/test_case_review/system_prompts/test_case_duplicate_judge_prompt.md`) decides which of them genuinely overlap in **coverage** - not in topic - explains each overlap and tells whether the existing test case fully covers the checked one or only partly overlaps it. The checks of all test cases run concurrently.
 4. The verdict is stored with the test case and rendered in code as the "Duplicate check" section of its review comment: "No duplicate test cases found.", or the overlapping keys with their explanation under "Fully covered by:" and "Partially overlapping with:". It only informs: no test case is changed or deleted because of it.
@@ -1392,14 +1401,17 @@ schedulers before upgrading:
 22. **`QWEN_THINKING_ENABLED` is removed.** Thinking is set per agent through `<AGENT>_THINKING_LEVEL` (`none` turns it off), so a Qwen deployment that set nothing now thinks on every agent at the default levels; set the recommended values from *Qwen3.8-27B: recommended settings*. The thinking-off presence penalty is now `QWEN_NON_THINKING_PRESENCE_PENALTY` (default 0, formerly the fixed 1.5).
 23. **The Test Case Design agent rebuilds and reviews its test cases with the recorded procedures** (see *Procedure Knowledge*), requested through the orchestrator's new A2A delegation endpoint. Deploy the procedure knowledge agent of the `test-execution-agents` repository and add its URL to `_REMOTE_EXECUTION_AGENT_HOSTS`, set `_ORCHESTRATOR_URL` to the orchestrator's URL, and give the orchestrator the `INTERNAL_SERVICE_API_KEY` secret (the manifest now references it). Without them every request fails and is logged as an error, and the test cases stay as generated; `PROCEDURE_KNOWLEDGE_ENABLED=false` turns the requests off. An override of `agents/test_case_review/system_prompts/review_with_attachments_prompt.md` fails startup until it carries the new `{procedure_knowledge_review}` placeholder; overrides of `severity_classifier.md`, `test_case_creation_prompt.md` and `test_case_fixer_prompt.md` still load but lack the new severity line and the one-precondition-per-line rule, so rebase them too. An environment running a Claude model lists `ANTHROPIC_API_KEY` under its `secrets` in `deploy/manifest.yaml`, next to its `MODEL_NAME` override; other environments don't deploy that secret.
 24. **Two dashboard payloads change shape (orchestrator `4.0.0`).** `GET /api/dashboard/tasks` no longer carries each task's `agent_logs`; read them from `GET /api/dashboard/logs?task_id=<task_id>`. The `log_batch` events of the per-agent dashboard stream carry the parsed `entries`, each with its stable `id`, instead of the raw `lines` (see *A2A Streaming Contract*). The `task_id` of an agent log entry is the orchestrator's task id, no longer the agent's own one from a structured log line. The dashboard UI is the only consumer the orchestrator ships; adapt any other client of these two payloads.
+25. **The embedding model is EmbeddingGemma 2 and retrieval is dense-only (embedding service `2.0`).** The embedding service answers with the `dense` vector only (no `sparse` field), and every collection holds only the named `dense` vector of 768 dimensions. Delete `jira_issues`, `test_cases`, `confluence_documents` and `sharepoint_documents` and resync each scope as *Migrating a vector collection* describes; until then every search and write of those collections fails with the schema error. The similarity defaults are recalibrated for the new model (`RAG_MIN_SIMILARITY_SCORE` 0.64, `INCIDENT_AGENT_MIN_SIMILARITY_SCORE` 0.75, `TEST_CASE_DUPLICATE_MIN_SCORE` 0.85), so an environment that set its own values re-checks them. A prompt override of `agents/requirements_review/system_prompts/retrieval_instruction_template.md` still loads but asks for one query; rebase it on the bundled template, which asks for one to five `retrieval_queries`.
 
 ### Migrating a vector collection
 
 Every service validates an existing collection's vector schema once, at first use, against the active embedding
-mode: a named dense vector (`dense`) of the embedding model's size with cosine distance, plus a named sparse vector
-(`sparse`). A mismatch - e.g. a collection created by an older release with a single unnamed dense vector, or a new
-embedding model with another dimension - fails with an error naming the collection, the expected mode and every
-missing or incompatible vector. To migrate:
+mode: one named dense vector (`dense`) of the embedding model's size with cosine distance and no sparse vector. A
+mismatch - e.g. a collection created by an older release with a single unnamed dense vector or with the former hybrid
+sparse vector, or a new embedding model with another dimension - fails with an error naming the collection, the
+expected mode and every missing or incompatible vector. A collection whose vectors come from another model than the
+embedding service now uses fails the same way through the model identity recorded in the metadata collection. To
+migrate:
 
 1. Delete the collection named in the error (e.g. `curl -X DELETE "$QDRANT_URL/collections/<name>"`).
 2. Resync its source: `/update-jira-db` per project for `jira_issues`, `/update-confluence-db` per space and
@@ -1435,6 +1447,14 @@ how to contribute.
 
 ## License
 
-This project is licensed under the GNU Affero General Public License v3.0 (AGPL-3.0) - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the GNU Affero General Public License v3.0 only (AGPL-3.0-only) - see the [LICENSE](LICENSE) file for details.
+
+### Commercial license
+
+QuAIA™ is also available under a commercial license for organizations that want to use, modify or embed it without the obligations
+of the AGPL-3.0, for example without publishing the source code of their changes. For commercial licensing, support or a demo,
+contact partarstu@gmail.com or use the form on [quaia.dev](https://quaia.dev).
+
+Contributions are accepted under the [Contributor License Agreement](CONTRIBUTING.md#contributor-license-agreement).
 
 The third-party components it uses, bundles or installs, and their licenses, are listed in the [NOTICE](NOTICE) file.

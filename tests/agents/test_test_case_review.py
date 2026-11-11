@@ -60,7 +60,7 @@ def reviewer(mock_config: MagicMock) -> TestCaseReviewer:
         test_case_reviewer = TestCaseReviewer()
     test_case_reviewer.vector_db_service = MagicMock()
     test_case_reviewer.vector_db_service.upsert_batch = AsyncMock()
-    test_case_reviewer.vector_db_service.hybrid_search = AsyncMock(return_value=[])
+    test_case_reviewer.vector_db_service.dense_search = AsyncMock(return_value=[])
     test_case_reviewer.duplicate_judge.run = AsyncMock()
     return test_case_reviewer
 
@@ -216,7 +216,7 @@ async def test_attachments_are_downloaded_once_per_session(reviewer, download):
 async def test_sub_agent_runs_share_the_given_usage_and_limits(reviewer, download):
     session = _drafts("First", "Second")
     reviewer.review_agent.run = _feedback_runs(2)
-    reviewer.vector_db_service.hybrid_search.return_value = [_hit("PROJ-T9")]
+    reviewer.vector_db_service.dense_search.return_value = [_hit("PROJ-T9")]
     reviewer.duplicate_judge.run.return_value = _judgement()
     usage = RunUsage()
 
@@ -286,7 +286,7 @@ async def test_a_review_round_runs_no_duplicate_check(reviewer, download):
 
     await reviewer.review_changed(session, RunUsage(), _USAGE_LIMITS)
 
-    reviewer.vector_db_service.hybrid_search.assert_not_awaited()
+    reviewer.vector_db_service.dense_search.assert_not_awaited()
     assert session.duplicate_checks == {}
 
 
@@ -294,8 +294,10 @@ async def test_duplicate_check_searches_the_project_by_content_without_indexing(
     await reviewer.check_duplicates(_reviewed("First"), RunUsage(), _USAGE_LIMITS)
 
     reviewer.vector_db_service.upsert_batch.assert_not_awaited()
-    call = reviewer.vector_db_service.hybrid_search.await_args
-    assert "Name: First" in call.args[0]
+    call = reviewer.vector_db_service.dense_search.await_args
+    [probe] = call.args[0]
+    assert "Name: First" in probe
+    assert call.kwargs["as_documents"] is True
     assert call.kwargs["limit"] == 5
     assert call.kwargs["score_threshold"] == 0.8
     query_filter = call.kwargs["query_filter"]
@@ -308,7 +310,7 @@ async def test_duplicate_check_covers_every_test_case_once(reviewer):
 
     await reviewer.check_duplicates(session, RunUsage(), _USAGE_LIMITS)
 
-    assert reviewer.vector_db_service.hybrid_search.await_count == 2
+    assert reviewer.vector_db_service.dense_search.await_count == 2
     assert set(session.duplicate_checks) == {"DRAFT-1", "DRAFT-2"}
 
 
@@ -323,7 +325,7 @@ async def test_no_candidates_means_no_duplicates_without_asking_the_judge(review
 
 async def test_candidates_are_deduplicated_by_key_before_judging(reviewer):
     session = _reviewed("First")
-    reviewer.vector_db_service.hybrid_search.return_value = [
+    reviewer.vector_db_service.dense_search.return_value = [
         _hit("PROJ-T7", "seven"),
         _hit("PROJ-T7", "seven again"),
         _hit("DRAFT-1", "itself"),
@@ -348,8 +350,8 @@ async def test_candidates_are_deduplicated_by_key_before_judging(reviewer):
 @pytest.mark.parametrize("stage", ["search", "judgement"])
 async def test_duplicate_check_failure_fails_loudly(reviewer, caplog, stage):
     session = _reviewed("First")
-    reviewer.vector_db_service.hybrid_search.return_value = [_hit("PROJ-T7")]
-    failing = reviewer.vector_db_service.hybrid_search if stage == "search" else reviewer.duplicate_judge.run
+    reviewer.vector_db_service.dense_search.return_value = [_hit("PROJ-T7")]
+    failing = reviewer.vector_db_service.dense_search if stage == "search" else reviewer.duplicate_judge.run
     failing.side_effect = ConnectionError("down")
 
     with (
@@ -368,13 +370,14 @@ async def test_a_repeated_duplicate_check_runs_only_the_checks_which_failed(revi
     searched: list[str] = []
     second_down = True
 
-    async def search(text: str, **kwargs) -> list:
+    async def search(texts: list[str], **kwargs) -> list:
+        [text] = texts
         searched.append(text.split("\n")[0])
         if "Second" in text and second_down:
             raise ConnectionError("down")
         return []
 
-    reviewer.vector_db_service.hybrid_search = search
+    reviewer.vector_db_service.dense_search = search
 
     with pytest.raises(TestCaseDuplicateCheckError, match=r"failed for 1 of 2 test case\(s\).*DRAFT-2"):
         await reviewer.check_duplicates(session, RunUsage(), _USAGE_LIMITS)
@@ -391,14 +394,14 @@ async def test_the_duplicate_checks_of_the_test_cases_run_concurrently(reviewer)
     started: list[str] = []
     both_started = asyncio.Event()
 
-    async def search(text: str, **kwargs) -> list:
-        started.append(text)
+    async def search(texts: list[str], **kwargs) -> list:
+        started.append(texts)
         if len(started) == 2:
             both_started.set()
         await asyncio.wait_for(both_started.wait(), timeout=1)
         return []
 
-    reviewer.vector_db_service.hybrid_search = search
+    reviewer.vector_db_service.dense_search = search
 
     await reviewer.check_duplicates(session, RunUsage(), _USAGE_LIMITS)
 

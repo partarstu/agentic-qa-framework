@@ -522,7 +522,7 @@
     },
     {
       "unique-id": "rel-requirements-review-embedding",
-      "description": "Requirements Review Agent requests embeddings of the focused retrieval query from the embedding service.",
+      "description": "Requirements Review Agent requests embeddings of the focused retrieval queries from the embedding service.",
       "protocol": "HTTPS",
       "controls": {
         "internal-service-api-key": {

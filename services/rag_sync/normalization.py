@@ -19,6 +19,7 @@ converter would add a dependency and still need macro-specific handling.
 
 import re
 from html import unescape
+from urllib.parse import unquote, urlparse
 
 from common import utils
 
@@ -47,11 +48,19 @@ _DROP_MACROS = {
     "navigation",
     "tasklist",
     "action",
+    "spaces",
+    "navmap",
 }
-# Inline macros rendered as their visible parameter text.
-_INLINE_TEXT_MACROS = {"status", "date"}
+# Macros that show an attached file; they render as the file's reference.
+_FILE_MACROS = {"view-file", "viewpdf", "viewdoc", "viewxls", "viewppt"}
 
 _TAG_RE = re.compile(r"<[^>]+>")
+_PARAMETER_RE = re.compile(r'<ac:parameter ac:name="([^"]*)"[^>]*>(.*?)</ac:parameter>', re.DOTALL)
+# Whitespace that must survive the per-line trimming (list nesting, code and preformatted text) travels as
+# these private-use characters and is restored at the very end.
+_INDENT = ""
+_BLANK_LINE = ""
+_TAB_WIDTH = 4
 
 
 def normalize_page_body(raw_body: str, page_title: str) -> str:
@@ -138,7 +147,8 @@ def _extract_inner(fragment: str, start: int, tag: str) -> tuple[str, int]:
     Nested same-name tags (lists inside lists, tables inside cells) are honoured by
     counting depth.
     """
-    open_re = re.compile(rf"<{tag}\b[^>]*/?>", re.IGNORECASE)
+    # The lookahead keeps ``ac:link`` from matching ``ac:link-body``, which closes with a different tag.
+    open_re = re.compile(rf"<{tag}(?=[\s/>])[^>]*>", re.IGNORECASE)
     close_re = re.compile(rf"</{tag}\s*>", re.IGNORECASE)
     depth = 1
     cursor = start
@@ -184,8 +194,10 @@ def _render_tag(tag: str, attrs: str, inner: str) -> str:
             text = _strip_tags(inner)
             return f"`{text}`" if text else ""
         case "pre":
-            text = _strip_tags(inner)
-            return f"\n\n```\n{text}\n```\n\n" if text else ""
+            text = _protect_whitespace(_strip_tags(inner))
+            return f"\n\n```\n{text}\n```\n\n" if text.strip() else ""
+        case "time":
+            return _attribute(attrs, "datetime")
         case "a":
             return _render_fragment(inner).strip()
         case "ul" | "ol":
@@ -196,10 +208,14 @@ def _render_tag(tag: str, attrs: str, inner: str) -> str:
             return _render_macro(attrs, inner)
         case "ac:image" | "ri:attachment":
             return _render_image(attrs, inner)
-        case "ac:link" | "ac:plain-text-link-body":
+        case "ac:link":
+            return _render_link(inner)
+        case "ac:plain-text-link-body":
             return _render_fragment(inner)
-        case "ac:placeholder":
-            # Inline placeholders are editor scaffolding, never page content.
+        case "ac:layout-cell":
+            return _quote(_render_fragment(inner))
+        case "ac:placeholder" | "ac:task-list" | "ac:parameter":
+            # Editor scaffolding, task lists and macro parameters are never page content.
             return ""
         case _:
             # Unknown tags keep their text content; wrapping structure tags (tbody
@@ -209,55 +225,112 @@ def _render_tag(tag: str, attrs: str, inner: str) -> str:
 
 def _render_macro(attrs: str, inner: str) -> str:
     """Renders an ``ac:structured-macro``: keep content bodies, drop the rest."""
-    name_match = re.search(r'ac:name="([^"]+)"', attrs)
-    name = name_match.group(1).lower() if name_match else ""
+    name = _attribute(attrs, "ac:name").lower()
     if name in _DROP_MACROS:
         return ""
-    if name in _INLINE_TEXT_MACROS:
-        parameter = re.search(r"<ac:parameter[^>]*>(.*?)</ac:parameter>", inner, re.DOTALL)
-        return parameter.group(1).strip() if parameter else ""
+    parameters, rich_body = _macro_parts(inner)
+    if name == "status":
+        return parameters.get("title", "").strip()
+    if name == "date":
+        return next(iter(parameters.values()), "").strip()
+    if name in _FILE_MACROS:
+        reference = _render_fragment(parameters.get("name", "")).strip()
+        return f"\n\n{reference}\n\n" if reference else ""
     if name in _CONTENT_MACROS:
-        rendered = _render_fragment(inner).strip()
+        title = _render_fragment(parameters.get("title", "")).strip()
+        body = _render_fragment(rich_body).strip() if rich_body else ""
         # Panel-like macros render as block quotes so their content stays readable.
-        return f"\n\n> {rendered}\n\n" if rendered else ""
+        return _quote("\n\n".join(part for part in (title, body) if part))
+    plain_body = re.search(r"<ac:plain-text-body>(.*?)</ac:plain-text-body>", inner, re.DOTALL)
     if name == "code":
         # The language travels as ac:parameter ac:name="language" (v2 storage) or as
         # ac:default-parameter (older storage).
-        language_match = re.search(
-            r'<ac:parameter ac:name="language">(.*?)</ac:parameter>', inner, re.DOTALL
-        ) or re.search(r"<ac:default-parameter>(.*?)</ac:default-parameter>", inner, re.DOTALL)
-        language = _strip_cdata(language_match.group(1).strip()) if language_match else ""
-        body_match = re.search(r"<ac:plain-text-body>(.*?)</ac:plain-text-body>", inner, re.DOTALL)
-        if body_match:
-            code = _strip_cdata(unescape(body_match.group(1)))
-            return f"\n\n```{language}\n{code}\n```\n\n"
+        language = parameters.get("language") or ""
+        if not language:
+            default_match = re.search(r"<ac:default-parameter>(.*?)</ac:default-parameter>", inner, re.DOTALL)
+            language = default_match.group(1) if default_match else ""
+        if plain_body:
+            code = _protect_whitespace(_strip_cdata(unescape(plain_body.group(1))))
+            return f"\n\n```{_strip_cdata(language.strip())}\n{code}\n```\n\n"
         return ""
     # An unknown macro with a rich-text body keeps it; otherwise it is dropped.
-    rich_body = re.search(r"<ac:rich-text-body>(.*?)</ac:rich-text-body>", inner, re.DOTALL)
     if rich_body:
-        rendered = _render_fragment(rich_body.group(1)).strip()
+        rendered = _render_fragment(rich_body).strip()
         return f"\n\n{rendered}\n\n" if rendered else ""
-    plain_body = re.search(r"<ac:plain-text-body>(.*?)</ac:plain-text-body>", inner, re.DOTALL)
     if plain_body:
-        text = _strip_cdata(unescape(plain_body.group(1))).strip()
-        return f"\n\n{text}\n\n" if text else ""
+        text = _protect_whitespace(_strip_cdata(unescape(plain_body.group(1))))
+        return f"\n\n{text}\n\n" if text.strip() else ""
     logger.debug("Dropping unknown macro '%s' without a content body.", name)
     return ""
+
+
+def _macro_parts(inner: str) -> tuple[dict[str, str], str | None]:
+    """The parameters of a macro and its rich-text body.
+
+    The body is cut out before the parameters are read, so the parameters of macros nested in it
+    are not mistaken for this macro's own.
+    """
+    body_tag = "<ac:rich-text-body>"
+    start = inner.find(body_tag)
+    if start == -1:
+        return dict(_PARAMETER_RE.findall(inner)), None
+    body, end = _extract_inner(inner, start + len(body_tag), "ac:rich-text-body")
+    return dict(_PARAMETER_RE.findall(inner[:start] + inner[end:])), body
+
+
+def _attribute(attrs: str, name: str) -> str:
+    match = re.search(rf'{re.escape(name)}="([^"]*)"', attrs)
+    return match.group(1) if match else ""
+
+
+def _quote(text: str) -> str:
+    """Renders text as one block quote, quoting every line so the block stays whole."""
+    text = re.sub(r"\n{3,}", "\n\n", text.strip())
+    if not text:
+        return ""
+    return "\n\n" + "\n".join(f"> {line}" if line.strip() else ">" for line in text.split("\n")) + "\n\n"
+
+
+def _protect_whitespace(text: str) -> str:
+    """Encodes the indentation and the blank lines of verbatim text so the line trimming keeps them."""
+    lines = []
+    for line in text.replace("\r\n", "\n").strip("\n").split("\n"):
+        if not line.strip():
+            lines.append(_BLANK_LINE)
+            continue
+        content = line.lstrip(" \t")
+        indent = line[: len(line) - len(content)].replace("\t", " " * _TAB_WIDTH)
+        lines.append(_INDENT * len(indent) + content.rstrip())
+    return "\n".join(lines)
+
+
+def _render_link(inner: str) -> str:
+    """A link renders as its text; one without text renders as the file it points at or the page title."""
+    for body_tag in ("ac:link-body", "ac:plain-text-link-body"):
+        opening = f"<{body_tag}>"
+        start = inner.find(opening)
+        if start != -1:
+            return _render_fragment(_extract_inner(inner, start + len(opening), body_tag)[0])
+    if filename := _attribute(inner, "ri:filename"):
+        return f"[image: {filename}]"
+    return _attribute(inner, "ri:content-title")
 
 
 def _render_image(attrs: str, inner: str = "") -> str:
     """Images and attachment references render by file name.
 
     The file name sits either directly on ``ri:attachment``'s attributes or on the
-    ``ri:attachment`` child inside an ``ac:image`` wrapper.
+    ``ri:attachment`` child inside an ``ac:image`` wrapper; an image from a URL is named by the URL's last segment.
     """
-    filename_match = re.search(r'ri:filename="([^"]+)"', attrs) or re.search(r'ri:filename="([^"]+)"', inner)
-    if not filename_match:
-        filename_match = re.search(r'ac:default-parameter="([^"]+)"', attrs)
-    return f"[image: {filename_match.group(1)}]" if filename_match else ""
+    filename = _attribute(attrs, "ri:filename") or _attribute(inner, "ri:filename")
+    if not filename:
+        filename = _attribute(attrs, "ac:default-parameter")
+    if not filename and (url := _attribute(inner, "ri:value")):
+        filename = unquote(urlparse(url).path.rsplit("/", 1)[-1]) or url
+    return f"[image: {filename}]" if filename else ""
 
 
-def _render_list(inner: str, ordered: bool, indent: str = "") -> str:
+def _render_list(inner: str, ordered: bool) -> str:
     """Renders a list; nested lists inside items are indented under their item."""
     lines: list[str] = []
     for index, item in enumerate(_top_level_items(inner, "li"), start=1):
@@ -268,9 +341,10 @@ def _render_list(inner: str, ordered: bool, indent: str = "") -> str:
         # Multi-line item content (nested lists) is indented under the item marker.
         rendered = rendered.replace("\n\n", "\n")
         rendered = "\n".join(
-            line if line_index == 0 else f"{indent}    {line}" for line_index, line in enumerate(rendered.split("\n"))
+            line if line_index == 0 else f"{_INDENT * _TAB_WIDTH}{line}"
+            for line_index, line in enumerate(rendered.split("\n"))
         )
-        lines.append(f"{indent}{marker}{rendered}")
+        lines.append(f"{marker}{rendered}")
     if not lines:
         return ""
     return "\n\n" + "\n".join(lines) + "\n\n"
@@ -333,11 +407,11 @@ def _strip_cdata(text: str) -> str:
 
 
 def _normalize_whitespace(text: str) -> str:
-    """Decodes entities, trims lines and collapses runs of blank lines."""
+    """Decodes entities, trims lines (keeping the protected indentation) and collapses runs of blank lines."""
     text = unescape(text)
     lines = [line.strip() for line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n")]
     collapsed: list[str] = []
     for line in lines:
         if line or (collapsed and collapsed[-1]):
             collapsed.append(line)
-    return "\n".join(collapsed).strip()
+    return "\n".join(collapsed).strip().replace(_INDENT, " ").replace(_BLANK_LINE, "")

@@ -22,17 +22,31 @@ COPY orchestrator/ui/ ./
 RUN npm run build
 
 # =============================================================================
-# Stage 2: Build the final image
+# Stage 2: Build a Java runtime with only the modules the Allure command line needs
+# =============================================================================
+FROM eclipse-temurin:25.0.5_8-jdk-noble AS jre-builder
+
+# The modules found by jdeps in Allure's jars and plugins, plus jdk.unsupported and
+# jdk.zipfs, which libraries reach through reflection and service lookup.
+RUN jlink \
+    --add-modules java.base,java.datatransfer,java.desktop,java.logging,java.management,java.naming,java.rmi,java.scripting,java.security.jgss,java.sql,java.xml,jdk.httpserver,jdk.unsupported,jdk.zipfs \
+    --strip-debug --no-man-pages --no-header-files --compress=zip-6 \
+    --output /javaruntime
+
+# =============================================================================
+# Stage 3: Build the final image
 # =============================================================================
 FROM agentic-qa-base:latest
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Create man directories to prevent potential dependency issues with ca-certificates
-RUN mkdir -p /usr/share/man/man1 /usr/share/man/man2 && \
-    apt-get update && \
-    apt-get install -y --no-install-recommends openjdk-25-jre-headless wget unzip && \
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends wget unzip && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
+
+ENV JAVA_HOME=/opt/java
+ENV PATH="${JAVA_HOME}/bin:${PATH}"
+COPY --from=jre-builder /javaruntime ${JAVA_HOME}
 
 # Set the Allure version as an argument
 ARG ALLURE_VERSION=2.34.1

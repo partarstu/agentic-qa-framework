@@ -4,6 +4,7 @@
 
 """Dashboard service for aggregating orchestrator state for the Web UI."""
 
+import asyncio
 import re
 from collections.abc import Iterable, Iterator
 from datetime import UTC, datetime
@@ -36,6 +37,8 @@ logger = utils.get_logger("orchestrator_dashboard")
 _LEVEL_TOKEN_PATTERN = re.compile(r"\b(CRITICAL|FATAL|ERROR|WARNING|WARN|INFO|DEBUG|TRACE)\b")
 _LEVEL_ALIASES = {"WARN": "WARNING", "FATAL": "CRITICAL"}
 _TASK_LOGS_KEY = "agent_logs"
+# Below the dashboard's 5 s request timeout, past which it reports the orchestrator unreachable.
+RAG_SYNC_STATUS_TIMEOUT_SECONDS = 3.0
 
 
 def _normalise_level(level: str) -> str:
@@ -127,6 +130,7 @@ class OrchestratorDashboardService:
         self.registry = registry
         self.tasks = tasks
         self.errors = errors
+        self._rag_sync_read: asyncio.Task[list[dict]] | None = None
 
     async def get_summary(self) -> dict[str, Any]:
         """Returns high-level statistics for the dashboard."""
@@ -241,27 +245,33 @@ class OrchestratorDashboardService:
         errors = await self.errors.get_recent(limit)
         return [error.to_dict() for error in errors]
 
-    async def get_rag_sync_status(self) -> list[dict[str, Any]]:
-        """Return durable sync outcomes without making dashboard availability depend on Qdrant."""
-        service = VectorDbService(config.QdrantConfig.METADATA_COLLECTION_NAME)
+    async def get_rag_sync_status(self, metadata_db: VectorDbService) -> list[dict[str, Any]]:
+        """Return durable sync outcomes, or none while Qdrant fails or answers slower than the dashboard waits."""
+        # A read that outlasts the wait keeps running, so a cold Qdrant or the one-off index setup
+        # completes in the background and the next poll is fast instead of timing out again.
+        if self._rag_sync_read is None or self._rag_sync_read.done():
+            self._rag_sync_read = asyncio.create_task(
+                metadata_db.scroll_payload_records({"kind": SYNC_OUTCOME_RECORD_KIND})
+            )
+            self._rag_sync_read.add_done_callback(lambda read: read.cancelled() or read.exception())
         try:
-            outcomes = await service.scroll_payload_records({"kind": SYNC_OUTCOME_RECORD_KIND})
-            for outcome in outcomes:
-                stale = False
-                if outcome.get("status") == "running":
-                    try:
-                        stale = (
-                            datetime.now(UTC) - datetime.fromisoformat(outcome["updated_at"])
-                        ).total_seconds() > config.RagSyncConfig.JOB_TASK_TIMEOUT_SECONDS
-                    except (KeyError, ValueError):
-                        stale = True
-                outcome["stale"] = stale
-            return sorted(outcomes, key=lambda outcome: outcome.get("updated_at", ""), reverse=True)
+            outcomes = await asyncio.wait_for(
+                asyncio.shield(self._rag_sync_read), timeout=RAG_SYNC_STATUS_TIMEOUT_SECONDS
+            )
         except Exception:
             logger.warning("Unable to load RAG sync outcomes for dashboard.", exc_info=True)
             return []
-        finally:
-            await service.close()
+        for outcome in outcomes:
+            stale = False
+            if outcome.get("status") == "running":
+                try:
+                    stale = (
+                        datetime.now(UTC) - datetime.fromisoformat(outcome["updated_at"])
+                    ).total_seconds() > config.RagSyncConfig.JOB_TASK_TIMEOUT_SECONDS
+                except (KeyError, ValueError):
+                    stale = True
+            outcome["stale"] = stale
+        return sorted(outcomes, key=lambda outcome: outcome.get("updated_at", ""), reverse=True)
 
     async def get_logs(
         self,

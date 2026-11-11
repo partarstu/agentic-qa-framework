@@ -57,3 +57,30 @@ class TestLockTokenForwarding:
 
         assert response.status_code == 200
         assert sync_space.await_args.kwargs["lock_token"] == "tok"
+
+
+class TestFailedRun:
+    @pytest.mark.parametrize(
+        ("path", "body", "runner_patch", "method"),
+        [
+            ("/sync/jira", {"project_key": "PROJ"}, "rag_sync.jira_sync.JiraRagSyncRunner", "sync_project"),
+            (
+                "/sync/confluence",
+                {"space_key": "DEV"},
+                "rag_sync.confluence_sync.ConfluenceRagSyncRunner",
+                "sync_space",
+            ),
+        ],
+        ids=["jira", "confluence"],
+    )
+    def test_a_failed_run_answers_with_its_reason_and_reports_the_outcome(
+        self, client, report_outcome, path, body, runner_patch, method
+    ):
+        failure = RuntimeError("No Confluence space found for key 'DEV'.")
+        with patch(runner_patch) as runner_cls:
+            setattr(runner_cls.return_value, method, AsyncMock(side_effect=failure))
+            response = client.post(path, json=body, headers={"X-API-Key": API_KEY})
+
+        assert response.status_code == 500
+        assert response.json()["detail"] == "RuntimeError: No Confluence space found for key 'DEV'."
+        assert report_outcome.await_args.kwargs["error"] is failure

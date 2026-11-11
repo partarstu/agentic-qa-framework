@@ -22,3 +22,4 @@ test-results.xml
 /logs
 /deploy/rendered/
 /plans
+/tests/live

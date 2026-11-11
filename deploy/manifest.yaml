@@ -61,16 +61,16 @@ services:
       CONFLUENCE_API_TOKEN: CONFLUENCE_API_TOKEN
 
   embedding-service:
-    version: "1.0"
+    version: "2.0"
     env:
       EMBEDDING_BACKENDS: text
-      EMBEDDING_TEXT_MODEL: BAAI/bge-m3
+      EMBEDDING_TEXT_MODEL: google/embeddinggemma-2
     # Its callers send X-API-Key; without the key here _require_service_auth would fail open.
     secrets:
       INTERNAL_SERVICE_API_KEY: INTERNAL_SERVICE_API_KEY
 
   prompt-guard-service:
-    version: "1.0"
+    version: "1.1"
     env: {}
     secrets:
       INTERNAL_SERVICE_API_KEY: INTERNAL_SERVICE_API_KEY
@@ -81,7 +81,7 @@ services:
       QDRANT__SERVICE__API_KEY: QDRANT_API_KEY
 
   orchestrator:
-    version: "4.0.0"
+    version: "5.1.0"
     env:
       ORCHESTRATOR_VERSION: "{version}"
       # Model selection, left empty for the code defaults; a Qwen deployment sets these in its environment overrides.
@@ -127,7 +127,7 @@ services:
       INTERNAL_SERVICE_API_KEY: INTERNAL_SERVICE_API_KEY
 
   rag-sync-job:
-    version: "1.0"
+    version: "1.5"
     env:
       QDRANT_URL: ""
       EMBEDDING_SERVICE_URL: ""
@@ -158,7 +158,7 @@ services:
       SHAREPOINT_CLIENT_SECRET: SHAREPOINT_CLIENT_SECRET
 
   requirements-review-agent:
-    version: "1.5.0"
+    version: "1.8.0"
     env:
       REQUIREMENTS_REVIEW_AGENT_VERSION: "{version}"
       MODEL_NAME: ""
@@ -190,7 +190,7 @@ services:
 
   # Runs the test case generation, review and classification agents in-process as its delegates.
   test-case-design-agent:
-    version: "1.3.0"
+    version: "1.6.0"
     env:
       TEST_CASE_DESIGN_AGENT_VERSION: "{version}"
       MODEL_NAME: ""
@@ -230,7 +230,7 @@ services:
       INTERNAL_SERVICE_API_KEY: INTERNAL_SERVICE_API_KEY
 
   incident-creation-agent:
-    version: "1.4.0"
+    version: "1.6.0"
     env:
       INCIDENT_CREATION_AGENT_VERSION: "{version}"
       MODEL_NAME: ""

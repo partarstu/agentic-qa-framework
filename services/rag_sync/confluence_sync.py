@@ -61,6 +61,10 @@ CONFLUENCE_SCOPE = "confluence"
 ATTACHMENT_LISTING_CONCURRENCY = 4
 
 
+def _space_condition(space_key: str) -> models.FieldCondition:
+    return models.FieldCondition(key="space_key", match=models.MatchValue(value=space_key))
+
+
 @dataclass(frozen=True, slots=True)
 class ScopeListing:
     """What one listing pass found: the items to sync, their parent pages and everything that exists."""
@@ -164,7 +168,7 @@ class ConfluenceRagSyncRunner:
 
             await self._verify_holder_or_abort(scope, lock_token)
             for item_key, removed_payload in removed_keys.items():
-                await self._delete_item(scope, item_key, removed_payload, lock_token)
+                await self._delete_item(space_key, scope, item_key, removed_payload, lock_token)
                 processed += 1
 
             counts = await self._process_items(client, space_key, scope, lock_token, listing, stored, skip_page_body)
@@ -265,10 +269,7 @@ class ConfluenceRagSyncRunner:
         """
         if not any(fingerprint.get("point_ids") for fingerprint in stored.values()):
             return False
-        space_filter = models.Filter(
-            must=[models.FieldCondition(key="space_key", match=models.MatchValue(value=space_key))]
-        )
-        return not await self._documents_db.has_points(space_filter)
+        return not await self._documents_db.has_points(models.Filter(must=[_space_condition(space_key)]))
 
     async def _reset_fingerprints(self, scope: str, stored: dict[str, dict], lock_token: str) -> dict[str, dict]:
         """Forces a full re-ingest of a space whose points are gone from the documents collection.
@@ -373,26 +374,29 @@ class ConfluenceRagSyncRunner:
         version = page.get("version", {}).get("number")
 
         if stored_fingerprint:
+            # A renamed page is processed again even when its version is unchanged, because the title is
+            # part of every breadcrumb.
             if (
                 stored_fingerprint.get("version") == version
                 and stored_fingerprint.get("schema_version") == INGESTION_SCHEMA_VERSION
+                and stored_fingerprint.get("title") == page.get("title")
             ):
-                if self._metadata_changed(stored_fingerprint, page):
-                    await self._update_metadata_only(scope, item_key, page, stored_fingerprint, lock_token)
+                if self._link_changed(stored_fingerprint, page):
+                    await self._update_link_only(scope, item_key, page, stored_fingerprint, lock_token)
                     return True
                 logger.debug("Skipping %s in %s: version unchanged (%s).", item_key, space_key, version)
                 return False
             logger.info(
-                "Version changed for %s in %s: %s -> %s.",
+                "Version or title changed for %s in %s: %s -> %s.",
                 item_key,
                 space_key,
                 stored_fingerprint.get("version"),
                 version,
             )
 
-        # Check 2: raw-content hash, for new and version-changed items only. A
-        # page-scoped run's listing already fetched the page WITH its body, so it is
-        # reused; a space-scoped listing carries no bodies and fetches here.
+        # Check 2: hash of the normalized text, for new and changed items only (Confluence rewrites parts
+        # of the raw body on every save). A page-scoped run's listing already fetched the page WITH its
+        # body, so it is reused; a space-scoped listing carries no bodies and fetches here.
         page_with_body = (
             page
             if page.get("body", {}).get("storage", {}).get("value") is not None
@@ -402,18 +406,21 @@ class ConfluenceRagSyncRunner:
             logger.info("Page %s disappeared before its body was fetched; skipping.", item_key)
             return False
         raw_body = page_with_body.get("body", {}).get("storage", {}).get("value", "")
-        title = page_with_body.get("title", "")
-        hash_value = content_hash(raw_body, title, str(INGESTION_SCHEMA_VERSION))
+        markdown = normalize_page_body(raw_body, page_with_body.get("title", ""))
+        hash_value = content_hash(markdown, str(INGESTION_SCHEMA_VERSION))
 
         if stored_fingerprint and stored_fingerprint.get("content_hash") == hash_value:
-            # Equal hash: only the stored version is updated, without re-processing.
+            # Equal hash: only the stored version (and a changed link) is updated, without re-processing.
+            link_changed = self._link_changed(stored_fingerprint, page_with_body)
+            if link_changed:
+                await self._set_page_url(scope, page_with_body, stored_fingerprint, lock_token)
             await self._verify_holder_or_abort(scope, lock_token)
             fingerprint = self._fingerprint(page_with_body, hash_value)
             fingerprint["point_ids"] = stored_fingerprint.get("point_ids", [])
             await self._fingerprints.save(scope, item_key, fingerprint)
-            return True
+            return link_changed
 
-        parts = self._build_page_parts(space_key, page_with_body, raw_body)
+        parts = self._build_page_parts(space_key, page_with_body, markdown)
         # Crash-safe order: upsert the new points first, then delete the previous
         # version's leftovers (fewer chunks), then save the fingerprint last.
         if parts:
@@ -431,12 +438,22 @@ class ConfluenceRagSyncRunner:
         return True
 
     @staticmethod
-    def _metadata_changed(stored_fingerprint: dict, page: dict) -> bool:
-        return stored_fingerprint.get("title") != page.get("title") or stored_fingerprint.get("webui") != page.get(
-            "_links", {}
-        ).get("webui")
+    def _page_url(page: dict) -> str | None:
+        """The absolute link of a page; the API lists only its path below the site's ``/wiki`` context."""
+        webui = page.get("_links", {}).get("webui")
+        return f"{config.CONFLUENCE_URL.rstrip('/')}/wiki{webui}" if webui else None
 
-    async def _update_metadata_only(
+    @staticmethod
+    def _link_changed(stored_fingerprint: dict, page: dict) -> bool:
+        return stored_fingerprint.get("webui") != page.get("_links", {}).get("webui")
+
+    async def _set_page_url(self, scope: str, page: dict, stored_fingerprint: dict, lock_token: str) -> None:
+        point_ids = stored_fingerprint.get("point_ids", [])
+        if point_ids:
+            await self._verify_holder_or_abort(scope, lock_token)
+            await self._documents_db.set_payload({"page_url": self._page_url(page)}, point_ids=point_ids)
+
+    async def _update_link_only(
         self,
         scope: str,
         item_key: str,
@@ -444,25 +461,12 @@ class ConfluenceRagSyncRunner:
         stored_fingerprint: dict,
         lock_token: str,
     ) -> None:
-        """A metadata-only change (e.g. the page was renamed) updates the stored
-        payload without re-embedding."""
-        title = page.get("title", "")
-        webui = page.get("_links", {}).get("webui")
-        point_ids = stored_fingerprint.get("point_ids", [])
-        if point_ids:
-            await self._verify_holder_or_abort(scope, lock_token)
-            await self._documents_db.set_payload(
-                {"page_title": title, "page_url": webui, "document_name": title},
-                point_ids=point_ids,
-            )
-        fingerprint = {
-            **stored_fingerprint,
-            "title": title,
-            "webui": webui,
-        }
+        """A changed page link updates the stored payload without re-embedding."""
+        await self._set_page_url(scope, page, stored_fingerprint, lock_token)
+        fingerprint = {**stored_fingerprint, "webui": page.get("_links", {}).get("webui")}
         await self._verify_holder_or_abort(scope, lock_token)
         await self._fingerprints.save(scope, item_key, fingerprint)
-        logger.info("Updated metadata of %s in %s without re-embedding.", item_key, scope)
+        logger.info("Updated the link of %s in %s without re-embedding.", item_key, scope)
 
     @staticmethod
     def _fingerprint(page: dict, hash_value: str, parts: list[DocumentPagePart] | None = None) -> dict:
@@ -480,18 +484,16 @@ class ConfluenceRagSyncRunner:
         return fingerprint
 
     @staticmethod
-    def _build_page_parts(space_key: str, page: dict, raw_body: str) -> list[DocumentPagePart]:
+    def _build_page_parts(space_key: str, page: dict, markdown: str) -> list[DocumentPagePart]:
         title = page.get("title", "")
-        markdown = normalize_page_body(raw_body, title)
         chunks = chunk_page_body(markdown, title)
-        webui = page.get("_links", {}).get("webui")
         return [
             DocumentPagePart(
                 source=CONFLUENCE_SCOPE,
                 space_key=space_key,
                 page_id=page.get("id"),
                 page_title=title,
-                page_url=webui,
+                page_url=ConfluenceRagSyncRunner._page_url(page),
                 content_kind="page_body",
                 document_name=title,
                 breadcrumb=chunk.breadcrumb,
@@ -516,9 +518,13 @@ class ConfluenceRagSyncRunner:
         stored_fingerprint = stored.get(item_key)
         version = attachment.get("version", {}).get("number")
         if stored_fingerprint:
+            # A renamed attachment, or one whose page was renamed, is processed again even when its version
+            # is unchanged, because both names are part of every breadcrumb.
             if (
                 stored_fingerprint.get("version") == version
                 and stored_fingerprint.get("schema_version") == INGESTION_SCHEMA_VERSION
+                and stored_fingerprint.get("title") == parent_page.get("title")
+                and stored_fingerprint.get("attachment_name") == attachment.get("title")
             ):
                 if self._attachment_metadata_changed(stored_fingerprint, attachment, parent_page):
                     await self._update_attachment_metadata_only(
@@ -560,10 +566,13 @@ class ConfluenceRagSyncRunner:
                 f"it is {len(content)} bytes once downloaded, exceeding the "
                 f"{config.DocumentRagConfig.MAX_ATTACHMENT_BYTES}-byte limit"
             )
-        hash_value = content_hash(content, str(INGESTION_SCHEMA_VERSION))
+        hash_value = content_hash(
+            content, str(INGESTION_SCHEMA_VERSION), parent_page.get("title", ""), attachment.get("title", "")
+        )
 
         if stored_fingerprint and stored_fingerprint.get("content_hash") == hash_value:
-            if self._attachment_metadata_changed(stored_fingerprint, attachment, parent_page):
+            metadata_changed = self._attachment_metadata_changed(stored_fingerprint, attachment, parent_page)
+            if metadata_changed:
                 await self._set_attachment_payload_metadata(
                     scope, attachment, parent_page, stored_fingerprint, lock_token
                 )
@@ -575,7 +584,7 @@ class ConfluenceRagSyncRunner:
             )
             await self._verify_holder_or_abort(scope, lock_token)
             await self._fingerprints.save(scope, item_key, fingerprint)
-            return True
+            return metadata_changed
 
         extracted = await extract_attachment_async(attachment.get("title", ""), content)
         parts = self._build_attachment_parts(space_key, parent_page, attachment, extracted)
@@ -606,9 +615,7 @@ class ConfluenceRagSyncRunner:
     def _attachment_metadata_changed(stored_fingerprint: dict, attachment: dict, parent_page: dict) -> bool:
         return (
             stored_fingerprint.get("page_id") != parent_page.get("id")
-            or stored_fingerprint.get("title") != parent_page.get("title")
             or stored_fingerprint.get("webui") != parent_page.get("_links", {}).get("webui")
-            or stored_fingerprint.get("attachment_name") != attachment.get("title")
             or stored_fingerprint.get("media_type") != attachment.get("mediaType")
         )
 
@@ -647,10 +654,7 @@ class ConfluenceRagSyncRunner:
         await self._documents_db.set_payload(
             {
                 "page_id": parent_page.get("id"),
-                "page_title": parent_page.get("title", ""),
-                "page_url": parent_page.get("_links", {}).get("webui"),
-                "attachment_name": attachment.get("title", ""),
-                "document_name": attachment.get("title", ""),
+                "page_url": self._page_url(parent_page),
                 "media_type": attachment.get("mediaType"),
             },
             point_ids=point_ids,
@@ -686,7 +690,7 @@ class ConfluenceRagSyncRunner:
     ) -> list[DocumentPagePart]:
         page_title = parent_page.get("title", "")
         attachment_name = attachment.get("title", "")
-        page_url = parent_page.get("_links", {}).get("webui")
+        page_url = ConfluenceRagSyncRunner._page_url(parent_page)
         parts: list[DocumentPagePart] = []
         for page_number, page in enumerate(extracted.pages, start=1):
             breadcrumb = f"{page_title} > {attachment_name} > page {page_number} of {extracted.total_page_count}"
@@ -718,13 +722,19 @@ class ConfluenceRagSyncRunner:
                 )
         return parts
 
-    async def _delete_item(self, scope: str, item_key: str, fingerprint: dict, lock_token: str) -> None:
+    async def _delete_item(
+        self, space_key: str, scope: str, item_key: str, fingerprint: dict, lock_token: str
+    ) -> None:
         """Deletes a removed item's points and fingerprint; a removed page takes its
         attachments with it."""
         await self._verify_holder_or_abort(scope, lock_token)
         point_ids = fingerprint.get("point_ids", [])
         if point_ids:
-            await self._documents_db.delete(point_ids)
+            # Point IDs don't include the space, so an item moved to another space may already
+            # be stored there under the same IDs; only this space's copy is removed.
+            await self._documents_db.delete_by_filter(
+                models.Filter(must=[models.HasIdCondition(has_id=point_ids), _space_condition(space_key)])
+            )
         await self._fingerprints.delete(scope, item_key)
         logger.info("Deleted removed item %s of scope %s (%s point(s)).", item_key, scope, len(point_ids))
 

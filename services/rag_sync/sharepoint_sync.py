@@ -11,9 +11,12 @@ the drive's delta link (so a later drive run still sees everything). A ``410 Gon
 a full enumeration and reconciles against stored state.
 
 Files only: folders maintain an id → (name, parent) tree in the sync state from which each
-file's ancestor folder ids and folder path are derived. ``cTag`` identifies content changes
-and ``eTag`` metadata-only changes (rename/move → payload-only update). A folder rename
-triggers a payload-only update of its descendants (delta does not re-report them). Items
+file's ancestor folder ids and folder path are derived; the path is relative to the drive root,
+which never contributes a segment. ``cTag`` identifies content changes and ``eTag``
+metadata-only changes (rename/move → payload-only update, also when a new ``cTag`` brings
+unchanged content). Every stored file whose folder path or ancestors no longer match the tree
+(a renamed or moved folder, which delta does not re-report the descendants of) gets a
+payload-only update. A folder-scoped run for a folder the drive does not have fails. Items
 with the ``deleted`` facet remove their points and fingerprints; a deleted folder removes
 every point carrying its id as an ancestor. Nothing is deleted when the enumeration was
 incomplete. Content is processed by the same source-agnostic ingestion pipeline as the
@@ -102,11 +105,6 @@ class SharePointRagSyncRunner:
         folder_scope = bool(folder_path)
         delta_link = None if folder_scope else state.get("delta_link")
         items, new_folders, new_delta_link, full_enumeration = await self._enumerate(client, drive_id, delta_link)
-        renamed_folder_ids = {
-            folder_id
-            for folder_id, folder in new_folders.items()
-            if folder_id in folders and folders[folder_id] != folder
-        }
         folders = {**folders, **new_folders}
         for item in items:
             if self._is_deleted(item):
@@ -118,8 +116,9 @@ class SharePointRagSyncRunner:
         if folder_scope:
             scope_folder_id = self._resolve_folder_id(folders, drive_id, folder_path)
             if scope_folder_id is None:
-                logger.warning("Folder %r not found in drive %s; nothing to sync.", folder_path, drive_id)
-                return RagUpdateResult(status=SyncStatus.COMPLETED, processed_count=0)
+                raise LookupError(
+                    f"Folder {folder_path!r} not found in drive {drive_id}; the path is relative to the drive root."
+                )
             items = [
                 item for item in items if self._is_file(item) and scope_folder_id in self._ancestor_ids(item, folders)
             ]
@@ -128,13 +127,16 @@ class SharePointRagSyncRunner:
             pattern = utils.compile_name_pattern(file_name_pattern)
             items = [item for item in items if self._is_deleted(item) or pattern.search(item.get("name", ""))]
 
-        # Delta doesn't re-report the descendants of a renamed or moved folder, so their payloads are
-        # refreshed from the stored fingerprints.
+        # Delta doesn't re-report the descendants of a renamed or moved folder, and points stored while the
+        # drive root still counted as a path segment carry a stale path: both are repaired from the
+        # stored fingerprints. A file whose parent folder is gone is left to the deletions below.
         for item_key, fingerprint in list(stored.items()):
-            if renamed_folder_ids.intersection(fingerprint.get("ancestor_ids", [])):
-                stored[item_key] = await self._update_payload_metadata(
-                    scope, _item_from_fingerprint(fingerprint), folders, fingerprint, lock_token
-                )
+            item = _item_from_fingerprint(fingerprint)
+            if item["parentReference"].get("id") in folders and (
+                self._folder_path(item, folders) != fingerprint.get("folder_path")
+                or self._ancestor_ids(item, folders) != fingerprint.get("ancestor_ids")
+            ):
+                stored[item_key] = await self._update_payload_metadata(scope, item, folders, fingerprint, lock_token)
 
         processed = skipped = failed = deleted = 0
         for item in items:
@@ -218,7 +220,7 @@ class SharePointRagSyncRunner:
                 if self._is_folder(item) and not self._is_deleted(item):
                     folders[item["id"]] = {
                         "name": item.get("name", ""),
-                        "parent": item.get("parentReference", {}).get("id"),
+                        "parent": None if "root" in item else item.get("parentReference", {}).get("id"),
                     }
                 else:
                     items.append(item)
@@ -248,10 +250,8 @@ class SharePointRagSyncRunner:
         return ancestors
 
     def _folder_path(self, item: dict, folders: dict[str, dict]) -> str:
-        """The slash-joined path of an item's ancestors, root first."""
-        names = [
-            folders.get(folder_id, {}).get("name", "") for folder_id in reversed(self._ancestor_ids(item, folders))
-        ]
+        """The slash-joined path of an item's ancestors, relative to the drive root."""
+        names = [_path_segment(folders.get(folder_id, {})) for folder_id in reversed(self._ancestor_ids(item, folders))]
         return "/".join(name for name in names if name)
 
     def _resolve_folder_id(self, folders: dict[str, dict], drive_id: str, folder_path: str) -> str | None:
@@ -265,7 +265,7 @@ class SharePointRagSyncRunner:
             parent: str | None = folder_id
             while parent and parent not in visited:
                 visited.add(parent)
-                chain.insert(0, folders.get(parent, {}).get("name", ""))
+                chain.insert(0, _path_segment(folders.get(parent, {})))
                 parent = folders.get(parent, {}).get("parent")
             if [segment for segment in chain if segment] == wanted:
                 return folder_id
@@ -285,19 +285,19 @@ class SharePointRagSyncRunner:
         item_key = f"file:{item['id']}"
         name = item.get("name", "")
         stored_fingerprint = stored.get(item_key)
-        if stored_fingerprint:
-            renamed_or_moved = stored_fingerprint.get("name") != name or stored_fingerprint.get(
-                "folder_path"
-            ) != self._folder_path(item, folders)
-            if stored_fingerprint.get("ctag") == item.get("cTag"):
-                # The content is unchanged: a rename or move is a payload-only update.
-                if renamed_or_moved:
-                    stored[item_key] = await self._update_payload_metadata(
-                        scope, item, folders, stored_fingerprint, lock_token
-                    )
-                else:
-                    logger.debug("Skipping %s: cTag unchanged.", item_key)
-                return False
+        renamed_or_moved = bool(stored_fingerprint) and (
+            stored_fingerprint.get("name") != name
+            or stored_fingerprint.get("folder_path") != self._folder_path(item, folders)
+        )
+        if stored_fingerprint and stored_fingerprint.get("ctag") == item.get("cTag"):
+            # The content is unchanged: a rename or move is a payload-only update.
+            if renamed_or_moved:
+                stored[item_key] = await self._update_payload_metadata(
+                    scope, item, folders, stored_fingerprint, lock_token
+                )
+            else:
+                logger.debug("Skipping %s: cTag unchanged.", item_key)
+            return False
 
         format_skip_reason = skip_reason(name)
         if format_skip_reason:
@@ -318,6 +318,9 @@ class SharePointRagSyncRunner:
             )
         hash_value = content_hash(content, str(INGESTION_SCHEMA_VERSION))
         if stored_fingerprint and stored_fingerprint.get("content_hash") == hash_value:
+            # A move changes the cTag without changing the content, so the payload still needs the new location.
+            if renamed_or_moved:
+                await self._update_payload_metadata(scope, item, folders, stored_fingerprint, lock_token)
             fingerprint = self._fingerprint(
                 item, folders, hash_value, point_ids=stored_fingerprint.get("point_ids", [])
             )
@@ -382,6 +385,7 @@ class SharePointRagSyncRunner:
                         page_title=name,
                         drive_id=str((item.get("parentReference") or {}).get("driveId", "")),
                         folder_path=folder_path,
+                        folder_ancestors=_folder_ancestors(folder_path),
                         attachment_id=str(item["id"]),
                         attachment_name=name,
                         media_type=item.get("file", {}).get("mimeType"),
@@ -410,6 +414,7 @@ class SharePointRagSyncRunner:
                 "attachment_name": name,
                 "document_name": name,
                 "folder_path": folder_path,
+                "folder_ancestors": _folder_ancestors(folder_path),
                 "breadcrumb": f"{folder_path + '/' if folder_path else ''}{name}",
             },
             point_ids=stored_fingerprint.get("point_ids", []),
@@ -450,9 +455,20 @@ class SharePointRagSyncRunner:
             raise PermissionError(f"Lock for scope {scope} was taken over; this run stops without further writes.")
 
 
+def _path_segment(folder: dict) -> str:
+    """A folder's name as a path segment; the drive root, the only folder without a parent, contributes none."""
+    return folder.get("name", "") if folder.get("parent") else ""
+
+
+def _folder_ancestors(folder_path: str) -> list[str]:
+    """Every prefix of a folder path, e.g. ``["Specs", "Specs/Archive"]`` for ``"Specs/Archive"``."""
+    segments = folder_path.split("/") if folder_path else []
+    return ["/".join(segments[:depth]) for depth in range(1, len(segments) + 1)]
+
+
 def _item_from_fingerprint(fingerprint: dict) -> dict:
     """The drive-item fields a payload-only update reads, rebuilt from a stored fingerprint for a file
-    the delta did not report (the descendant of a renamed folder)."""
+    the delta did not report."""
     ancestor_ids = fingerprint.get("ancestor_ids") or []
     return {
         "id": fingerprint["item_id"],

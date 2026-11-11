@@ -4,9 +4,11 @@
 
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 
 from common.models import TestCase, TestExecutionResult, TestStep, TestStepResult
+from common.services.test_management_base import TestCaseNotFoundError
 from common.services.zephyr_client import ZephyrClient
 
 
@@ -213,3 +215,12 @@ def test_fetch_test_cases_by_project_resolves_status_names_from_the_catalog(zeph
         listed = zephyr_client.fetch_test_cases_by_project("PROJ")
 
     assert [(item.test_case.key, item.status) for item in listed] == [("PROJ-T1", "Approved"), ("PROJ-T2", "Draft")]
+
+
+@pytest.mark.parametrize("status_code, expected_error", [(404, TestCaseNotFoundError), (403, httpx.HTTPStatusError)])
+def test_fetch_test_case_by_key_raises_not_found_only_for_a_missing_test_case(
+    zephyr_client, status_code, expected_error
+):
+    response = httpx.Response(status_code, request=httpx.Request("GET", "http://zephyr/testcases/PROJ-T9"))
+    with patch("httpx.Client.get", return_value=response), pytest.raises(expected_error):
+        zephyr_client.fetch_test_case_by_key("PROJ-T9")

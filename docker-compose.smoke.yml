@@ -91,7 +91,7 @@ services:
     image: smoke-mocks:latest
     command: ["uvicorn", "mocks.jira_mcp_mock:app", "--host", "0.0.0.0", "--port", "9000"]
     ports:
-      - "9000:9000"
+      - "9001:9000"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9000/__recorded')"]
       interval: 5s

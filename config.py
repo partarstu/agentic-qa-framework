@@ -242,7 +242,7 @@ PROMPT_GUARD_SERVICE_URL = os.environ.get("PROMPT_GUARD_SERVICE_URL")
 # Orchestrator
 class OrchestratorConfig:
     THINKING_LEVEL = _thinking_level("ORCHESTRATOR", "medium")
-    VERSION = os.environ.get("ORCHESTRATOR_VERSION", "4.0.0")
+    VERSION = os.environ.get("ORCHESTRATOR_VERSION", "5.1.0")
     # Label describing the environment the execution agents run their test cases against; reported
     # alongside every test execution result.
     TEST_ENVIRONMENT_LABEL = os.environ.get("TEST_ENVIRONMENT_LABEL", "Standard Test Environment")
@@ -294,7 +294,7 @@ class DashboardPersistenceConfig:
 # Requirements Review Agent
 class RequirementsReviewAgentConfig:
     THINKING_LEVEL = _thinking_level("REQUIREMENTS_REVIEW", "medium")
-    VERSION = os.environ.get("REQUIREMENTS_REVIEW_AGENT_VERSION", "1.5.0")
+    VERSION = os.environ.get("REQUIREMENTS_REVIEW_AGENT_VERSION", "1.8.0")
     OWN_NAME = "Jira Requirements Reviewer"
     SKILL_ID = "jira-requirements-review"
     SKILL_NAME = "Jira Requirements Review"
@@ -334,7 +334,7 @@ class TestCaseGenerationAgentConfig:
 # Test Case Design Agent
 class TestCaseDesignAgentConfig:
     THINKING_LEVEL = _thinking_level("TEST_CASE_DESIGN", "medium")
-    VERSION = os.environ.get("TEST_CASE_DESIGN_AGENT_VERSION", "1.3.0")
+    VERSION = os.environ.get("TEST_CASE_DESIGN_AGENT_VERSION", "1.6.0")
     OWN_NAME = "Test Case Design Agent"
     SKILL_ID = "test-case-design"
     SKILL_NAME = "Test Case Design"
@@ -373,7 +373,7 @@ class TestCaseReviewAgentConfig:
 # Incident Creation Agent
 class IncidentCreationAgentConfig:
     THINKING_LEVEL = _thinking_level("INCIDENT_CREATION", "medium")
-    VERSION = os.environ.get("INCIDENT_CREATION_AGENT_VERSION", "1.4.0")
+    VERSION = os.environ.get("INCIDENT_CREATION_AGENT_VERSION", "1.6.0")
     OWN_NAME = "Incident Creation Agent"
     SKILL_ID = "incident-creation"
     SKILL_NAME = "Incident Creation"
@@ -384,7 +384,7 @@ class IncidentCreationAgentConfig:
     MODEL_NAME = DEFAULT_MODEL_NAME
     MAX_OUTPUT_TOKENS = _optional_positive_int("INCIDENT_CREATION_MAX_OUTPUT_TOKENS") or MAX_OUTPUT_TOKENS
     MAX_REQUESTS_PER_TASK = 30
-    MIN_SIMILARITY_SCORE = float(os.environ.get("INCIDENT_AGENT_MIN_SIMILARITY_SCORE", "0.7"))
+    MIN_SIMILARITY_SCORE = float(os.environ.get("INCIDENT_AGENT_MIN_SIMILARITY_SCORE", "0.75"))
     ISSUE_PRIORITY_FIELD_ID = os.environ.get("ISSUE_PRIORITY_FIELD_ID", "priority")
     ISSUE_SEVERITY_FIELD_NAME = os.environ.get("ISSUE_SEVERITY_FIELD_NAME", "customfield_10124")
     # Severity values: comma-separated list of "value:description" pairs
@@ -419,8 +419,9 @@ class QdrantConfig:
     COLLECTION_NAME = os.environ.get("QDRANT_COLLECTION_NAME", "jira_issues")
     TICKETS_COLLECTION_NAME = os.environ.get("QDRANT_TICKETS_COLLECTION_NAME", "jira_issues")
     METADATA_COLLECTION_NAME = os.environ.get("QDRANT_METADATA_COLLECTION_NAME", "rag_metadata")
-    MIN_SIMILARITY_SCORE = float(os.environ.get("RAG_MIN_SIMILARITY_SCORE", "0.7"))
+    MIN_SIMILARITY_SCORE = float(os.environ.get("RAG_MIN_SIMILARITY_SCORE", "0.64"))
     MAX_RESULTS = int(os.environ.get("RAG_MAX_RESULTS", "5"))
+    MAX_RETRIEVED_PAGES_PER_DOCUMENT = int(os.environ.get("RAG_MAX_RETRIEVED_PAGES_PER_DOCUMENT", "5"))
     EMBEDDING_SERVICE_URL = os.environ.get("EMBEDDING_SERVICE_URL")
     EMBEDDING_SERVICE_TIMEOUT_SECONDS = float(os.environ.get("EMBEDDING_SERVICE_TIMEOUT_SECONDS", "120.0"))
     EMBEDDING_SERVICE_MAX_RETRIES = int(os.environ.get("EMBEDDING_SERVICE_MAX_RETRIES", "6"))
@@ -433,7 +434,7 @@ class QdrantConfig:
     TEST_CASE_INDEX_STATUSES = tuple(
         item.strip() for item in os.environ.get("TEST_CASE_INDEX_STATUSES", "").split(",") if item.strip()
     )
-    TEST_CASE_DUPLICATE_MIN_SCORE = float(os.environ.get("TEST_CASE_DUPLICATE_MIN_SCORE", "0.8"))
+    TEST_CASE_DUPLICATE_MIN_SCORE = float(os.environ.get("TEST_CASE_DUPLICATE_MIN_SCORE", "0.85"))
     TEST_CASE_DUPLICATE_MAX_CANDIDATES = int(os.environ.get("TEST_CASE_DUPLICATE_MAX_CANDIDATES", "5"))
     BUG_ISSUE_TYPE = os.environ.get("JIRA_BUG_ISSUE_TYPE", "Bug")
     # Batch size for vector upserts, keeping requests within the size limit.
@@ -451,12 +452,10 @@ class EmbeddingServiceConfig:
     BACKENDS = tuple(
         entry.strip() for entry in os.environ.get("EMBEDDING_BACKENDS", "text").split(",") if entry.strip()
     )
-    # One multilingual model producing dense and learned-sparse output in a single pass.
-    TEXT_MODEL_NAME = os.environ.get("EMBEDDING_TEXT_MODEL", "BAAI/bge-m3")
+    # A multilingual dense model; the service loads only its text encoder.
+    TEXT_MODEL_NAME = os.environ.get("EMBEDDING_TEXT_MODEL", "google/embeddinggemma-2")
     # A pinned commit keeps a later upload to the model repository out of the image; it must belong to TEXT_MODEL_NAME.
-    TEXT_MODEL_REVISION = os.environ.get("EMBEDDING_TEXT_MODEL_REVISION", "5617a9f61b028005a4858fdac845db406aefb181")
-    # The repository also ships an ONNX export (~2.3 GB) and README images the service never loads.
-    TEXT_MODEL_DOWNLOAD_IGNORE_PATTERNS = ("onnx/*", "imgs/*")
+    TEXT_MODEL_REVISION = os.environ.get("EMBEDDING_TEXT_MODEL_REVISION", "f9972ac22e696a105c482202646979e33e4b5a1e")
     TEXT_MODEL_PATH = os.path.join(LOCAL_MODELS_PATH, "embedding_model")
     # Input limits guarding against memory exhaustion.
     MAX_BATCH_SIZE = int(os.environ.get("EMBEDDING_MAX_BATCH_SIZE", "32"))

@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from functools import partial
 
 from pydantic_ai import ModelRetry, RunContext
+from pydantic_ai.exceptions import UsageLimitExceeded
 from pydantic_ai.messages import BinaryContent
 from pydantic_ai.usage import RunUsage, UsageLimits
 
@@ -61,7 +62,7 @@ class _KnowledgeRebuild:
 
 @dataclass(frozen=True, slots=True)
 class _RebuildOutcome:
-    """The test cases after the knowledge-aware rebuild, in their order, and the positions of those without a selection."""
+    """The test cases after the knowledge-aware rebuild, in their order, and the positions of those left as drafted for lack of a selection or by a failed rebuild."""
 
     test_cases: list[DesignedTestCase]
     unavailable: list[int]
@@ -234,17 +235,46 @@ class TestCaseGenerator:
         }
         rebuilds = await utils.run_first_then_concurrently(
             [
-                partial(self._rebuild, context_parts, test_cases[index], selection, usage, usage_limits)
+                partial(self._try_rebuild, session, context_parts, test_cases[index], selection, usage, usage_limits)
                 for index, selection in to_rebuild.items()
             ]
         )
         rebuilt = list(test_cases)
+        failed_rebuilds = []
         for index, test_case in zip(to_rebuild, rebuilds, strict=True):
-            rebuilt[index] = test_case
-        logger.info("Rebuilt %d of %d test case(s) from recorded procedures.", len(to_rebuild), len(test_cases))
-        return _RebuildOutcome(
-            test_cases=rebuilt, unavailable=[index for index, selection in enumerate(selections) if selection is None]
+            if test_case is None:
+                failed_rebuilds.append(index)
+            else:
+                rebuilt[index] = test_case
+        logger.info(
+            "Rebuilt %d of %d test case(s) from recorded procedures.",
+            len(to_rebuild) - len(failed_rebuilds),
+            len(test_cases),
         )
+        failed_selections = [index for index, selection in enumerate(selections) if selection is None]
+        return _RebuildOutcome(test_cases=rebuilt, unavailable=sorted([*failed_selections, *failed_rebuilds]))
+
+    async def _try_rebuild(
+        self,
+        session: TestCaseDesignSession,
+        context_parts: list[str | BinaryContent],
+        draft: DesignedTestCase,
+        selection: ProcedureSelectionResult,
+        usage: RunUsage,
+        usage_limits: UsageLimits,
+    ) -> DesignedTestCase | None:
+        """Rebuilds the draft, or logs the failure and returns nothing so that the draft stays; a usage limit still stops the run."""
+        try:
+            return await self._rebuild(context_parts, draft, selection, usage, usage_limits)
+        except UsageLimitExceeded:
+            raise
+        except Exception:
+            logger.exception(
+                "The rebuild of test case '%s' of %s from recorded procedures failed; the draft stays.",
+                draft.name,
+                session.story_key,
+            )
+            return None
 
     async def _rebuild(
         self,

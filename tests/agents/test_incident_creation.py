@@ -110,7 +110,7 @@ System: {input_data.system_description}"""
         "project_key": "PROJ",
     }
     mock_hit.score = 0.85
-    agent.vector_db_service.hybrid_search.return_value = [mock_hit]
+    agent.vector_db_service.dense_search.return_value = [mock_hit]
 
     # Run
     candidates = await agent._search_duplicate_candidates_in_rag(incident_description, input_data.project_key)
@@ -120,7 +120,10 @@ System: {input_data.system_description}"""
     assert candidates[0].description == "Similar NPE"
     assert candidates[0].issue_type == "Bug"
 
-    agent.vector_db_service.hybrid_search.assert_called_once()
+    agent.vector_db_service.dense_search.assert_called_once()
+    call = agent.vector_db_service.dense_search.call_args
+    assert call.args[0] == [incident_description]
+    assert call.kwargs["as_documents"] is True
 
 
 @pytest.mark.asyncio

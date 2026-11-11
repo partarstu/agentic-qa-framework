@@ -98,10 +98,6 @@ MIT License  -  <https://opensource.org/licenses/MIT>
     PyYAML
     https://github.com/yaml/pyyaml
 
-  * FlagEmbedding (embedding service)
-    FlagEmbedding
-    https://github.com/FlagOpen/FlagEmbedding
-
   * einops (embedding service)
     einops
     https://github.com/arogozhnikov/einops
@@ -193,9 +189,9 @@ The Dockerfiles install the following software from its publishers while an imag
 
   * Python 3.14 slim base image (Debian trixie)  -  Python Software Foundation License; Debian packages under their own licenses
     https://hub.docker.com/_/python
-  * uv (copied into the base image)  -  dual-licensed Apache-2.0 OR MIT
+  * uv (mounted only while the base image installs its dependencies, not part of any image)  -  dual-licensed Apache-2.0 OR MIT
     https://github.com/astral-sh/uv
-  * OpenJDK 25 JRE (orchestrator image, Debian package)  -  GNU GPL 2.0 with the Classpath Exception
+  * Eclipse Temurin 25 (orchestrator image: a Java runtime reduced with jlink to the modules Allure needs)  -  GNU GPL 2.0 with the Classpath Exception
     https://openjdk.org/legal/gplv2+ce.html
   * Allure Commandline 2.34.1 (orchestrator image)  -  Apache License 2.0
     https://github.com/allure-framework/allure2
@@ -210,7 +206,7 @@ The Dockerfiles install the following software from its publishers while an imag
 AI models (downloaded at runtime, not redistributed by this project)
 --------------------------------------------------------------------------------
 
-  * BAAI/bge-m3 (embedding service)  -  MIT License  -  https://huggingface.co/BAAI/bge-m3
+  * google/embeddinggemma-2 (embedding service)  -  Apache License 2.0  -  https://huggingface.co/google/embeddinggemma-2
   * ProtectAI/deberta-v3-base-prompt-injection-v2 (prompt-guard service)  -  Apache License 2.0  -  https://huggingface.co/protectai/deberta-v3-base-prompt-injection-v2
 
 ================================================================================

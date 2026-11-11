@@ -4,7 +4,7 @@
 
 """Unit tests for the embedding service's surface: backends, warm-up and endpoints.
 
-Every ML library and the FlagEmbedding model are mocked; the tests assert the endpoint
+Every ML library and the embedding model are mocked; the tests assert the endpoint
 contracts, the single-flight warm-up, disabled-backend errors, input limits and auth.
 """
 
@@ -28,19 +28,15 @@ if str(SERVICES_DIR) not in sys.path:
 
 @pytest.fixture
 def mock_text_backend():
-    """A loaded fake text backend returning deterministic dense and sparse output."""
-    from embedding_service.backends.base import SparseVector, TextEmbedding
+    """A loaded fake text backend returning deterministic dense output."""
+    from embedding_service.backends.base import TextEmbedding
 
     backend = MagicMock()
     backend.name = "text"
     backend.is_loaded.return_value = True
     backend.model_name.return_value = "test-model"
-    backend.embed_document_texts.return_value = [
-        TextEmbedding(dense=[0.1, 0.2], sparse=SparseVector(indices=[5], values=[0.9]))
-    ]
-    backend.embed_query_texts.return_value = [
-        TextEmbedding(dense=[0.3, 0.4], sparse=SparseVector(indices=[7], values=[0.8]))
-    ]
+    backend.embed_document_texts.return_value = [TextEmbedding(dense=[0.1, 0.2])]
+    backend.embed_query_texts.return_value = [TextEmbedding(dense=[0.3, 0.4])]
     return backend
 
 
@@ -66,13 +62,12 @@ def client(app_with_backend):
 
 
 class TestEndpoints:
-    def test_embed_document_text_returns_dense_and_sparse(self, client):
+    def test_embed_document_text_returns_only_dense(self, client):
         response = client.post("/embed-document-text", json={"texts": ["hello"]})
         assert response.status_code == 200
         body = response.json()
-        assert len(body["embeddings"]) == 1
-        assert body["embeddings"][0]["dense"] == [0.1, 0.2]
-        assert body["embeddings"][0]["sparse"] == {"indices": [5], "values": [0.9]}
+        assert body["embeddings"] == [{"dense": [0.1, 0.2]}]
+        assert body["model"] == "test-model"
 
     def test_embed_query_text_uses_query_backend_call(self, client, mock_text_backend):
         response = client.post("/embed-query-text", json={"texts": ["hello"]})
@@ -81,11 +76,9 @@ class TestEndpoints:
         assert response.json()["embeddings"][0]["dense"] == [0.3, 0.4]
 
     def test_batch_texts_return_one_embedding_each(self, client, mock_text_backend):
-        from embedding_service.backends.base import SparseVector, TextEmbedding
+        from embedding_service.backends.base import TextEmbedding
 
-        mock_text_backend.embed_document_texts.return_value = [
-            TextEmbedding(dense=[0.1], sparse=SparseVector()) for _ in range(2)
-        ]
+        mock_text_backend.embed_document_texts.return_value = [TextEmbedding(dense=[0.1]) for _ in range(2)]
         response = client.post("/embed-document-text", json={"texts": ["a", "b"]})
         assert response.status_code == 200
         assert len(response.json()["embeddings"]) == 2
@@ -209,7 +202,7 @@ class TestWarmUp:
 class TestModuleImport:
     def test_importing_service_module_does_not_import_ml_libraries(self):
         """The service module must stay importable without ML libraries."""
-        blocked = ["FlagEmbedding", "torch", "transformers", "sentence_transformers"]
+        blocked = ["torch", "transformers", "sentence_transformers"]
         for module_name in blocked:
             sys.modules.pop(module_name, None)
 
@@ -223,44 +216,74 @@ class TestModuleImport:
 
     def test_create_registry_imports_backend_lazily(self):
         """No ML library is imported until create_registry constructs the text backend."""
-        sys.modules.pop("FlagEmbedding", None)
+        sys.modules.pop("sentence_transformers", None)
         from embedding_service.backends import registry as registry_module
 
         _ = registry_module.create_registry  # module import alone is ML-free
-        assert "FlagEmbedding" not in sys.modules
+        assert "sentence_transformers" not in sys.modules
 
 
 class TestTextBackendLoad:
     @pytest.fixture
     def ml_modules(self):
-        flag_embedding, hub = MagicMock(), MagicMock()
-        with patch.dict(sys.modules, {"FlagEmbedding": flag_embedding, "huggingface_hub": hub}):
-            yield flag_embedding, hub
+        sentence_transformers, hub, torch = MagicMock(), MagicMock(), MagicMock()
+        modules = {"sentence_transformers": sentence_transformers, "huggingface_hub": hub, "torch": torch}
+        with patch.dict(sys.modules, modules):
+            yield sentence_transformers, hub, torch
 
-    def test_local_copy_is_loaded_without_a_download(self, ml_modules, tmp_path, monkeypatch):
-        from embedding_service.backends.text_backend import BgeM3TextBackend
+    def test_local_copy_is_loaded_text_only_in_float32_without_a_download(self, ml_modules, tmp_path, monkeypatch):
+        from embedding_service.backends.text_backend import EmbeddingGemmaTextBackend
 
-        flag_embedding, hub = ml_modules
+        sentence_transformers, hub, torch = ml_modules
         (tmp_path / "config.json").write_text("{}")
         monkeypatch.setattr(config.EmbeddingServiceConfig, "TEXT_MODEL_PATH", str(tmp_path))
 
-        BgeM3TextBackend().load()
+        EmbeddingGemmaTextBackend().load()
 
         hub.snapshot_download.assert_not_called()
-        flag_embedding.BGEM3FlagModel.assert_called_once_with(str(tmp_path), use_fp16=False)
+        sentence_transformers.SentenceTransformer.assert_called_once_with(
+            str(tmp_path),
+            device="cpu",
+            model_kwargs={"torch_dtype": torch.float32},
+            config_kwargs={"vision_config": None, "audio_config": None},
+        )
 
-    def test_missing_local_copy_downloads_the_pinned_revision_without_unused_files(
-        self, ml_modules, tmp_path, monkeypatch
-    ):
-        from embedding_service.backends.text_backend import BgeM3TextBackend
+    def test_missing_local_copy_downloads_the_pinned_revision(self, ml_modules, tmp_path, monkeypatch):
+        from embedding_service.backends.text_backend import EmbeddingGemmaTextBackend
 
-        flag_embedding, hub = ml_modules
+        sentence_transformers, hub, _ = ml_modules
         monkeypatch.setattr(config.EmbeddingServiceConfig, "TEXT_MODEL_PATH", str(tmp_path / "missing"))
-        monkeypatch.setattr(config.EmbeddingServiceConfig, "TEXT_MODEL_NAME", "BAAI/bge-m3")
+        monkeypatch.setattr(config.EmbeddingServiceConfig, "TEXT_MODEL_NAME", "google/embeddinggemma-2")
         monkeypatch.setattr(config.EmbeddingServiceConfig, "TEXT_MODEL_REVISION", "abc123")
-        monkeypatch.setattr(config.EmbeddingServiceConfig, "TEXT_MODEL_DOWNLOAD_IGNORE_PATTERNS", ("onnx/*",))
 
-        BgeM3TextBackend().load()
+        EmbeddingGemmaTextBackend().load()
 
-        hub.snapshot_download.assert_called_once_with("BAAI/bge-m3", revision="abc123", ignore_patterns=["onnx/*"])
-        flag_embedding.BGEM3FlagModel.assert_called_once_with(hub.snapshot_download.return_value, use_fp16=False)
+        hub.snapshot_download.assert_called_once_with("google/embeddinggemma-2", revision="abc123")
+        assert sentence_transformers.SentenceTransformer.call_args.args == (hub.snapshot_download.return_value,)
+
+    @pytest.mark.parametrize(
+        ("method", "prompt"),
+        [
+            ("embed_query_texts", "task: search result | query: "),
+            ("embed_document_texts", "title: none | text: "),
+        ],
+    )
+    def test_texts_are_encoded_with_the_retrieval_prompt_of_their_side(
+        self, ml_modules, tmp_path, monkeypatch, method, prompt
+    ):
+        from embedding_service.backends.text_backend import EmbeddingGemmaTextBackend
+
+        sentence_transformers, _, _ = ml_modules
+        (tmp_path / "config.json").write_text("{}")
+        monkeypatch.setattr(config.EmbeddingServiceConfig, "TEXT_MODEL_PATH", str(tmp_path))
+        model = sentence_transformers.SentenceTransformer.return_value
+        model.encode.return_value.tolist.return_value = [[0.6, 0.8], [1.0, 0.0]]
+        backend = EmbeddingGemmaTextBackend()
+        backend.load()
+
+        embeddings = getattr(backend, method)(["a", "b"])
+
+        model.encode.assert_called_once_with(
+            ["a", "b"], prompt=prompt, normalize_embeddings=True, convert_to_numpy=True
+        )
+        assert [embedding.dense for embedding in embeddings] == [[0.6, 0.8], [1.0, 0.0]]

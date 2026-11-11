@@ -22,6 +22,7 @@ if str(SERVICES_DIR) not in sys.path:
     sys.path.insert(0, str(SERVICES_DIR))
 
 from rag_sync.sharepoint_sync import SharePointRagSyncRunner  # noqa: E402
+from rag_sync.sync_state import INGESTION_SCHEMA_VERSION, content_hash  # noqa: E402
 
 from common.services.sharepoint_client import DeltaResyncRequired  # noqa: E402
 from tests.conftest import with_real_lock_lifecycle  # noqa: E402
@@ -49,6 +50,15 @@ def _folder(item_id: str, name: str, parent_id: str | None) -> dict:
         "folder": {"childCount": 0},
         "parentReference": {"id": parent_id, "driveId": DRIVE_ID} if parent_id else {"driveId": DRIVE_ID},
     }
+
+
+def _graph_root(item_id: str = "root") -> dict:
+    """The drive root as Graph reports it in a delta: named ``root``, with the ``root`` facet and no parent."""
+    return {**_folder(item_id, "root", None), "root": {}}
+
+
+def _ingested_parts(runner) -> list:
+    return [part for batch in runner._documents_db.upsert_batch.await_args_list for part in batch.args[0]]
 
 
 def _deleted(item: dict) -> dict:
@@ -219,6 +229,35 @@ class TestFolderScoping:
         ingested = [part for batch in runner._documents_db.upsert_batch.await_args_list for part in batch.args[0]]
         assert {part.attachment_id for part in ingested} == {"i-in"}
 
+    @pytest.mark.asyncio
+    async def test_a_folder_run_resolves_a_path_relative_to_a_root_named_root(self, runner, graph):
+        graph.enumerate_delta.return_value = {
+            "value": [
+                _graph_root(),
+                _folder("f-docs", "Docs", "root"),
+                _file("i-in", "inside.pdf", "f-docs"),
+                _file("i-top", "top.pdf", "root"),
+            ],
+            "@odata.deltaLink": "https://graph/delta",
+        }
+
+        result = await runner.sync_drive(DRIVE_ID, folder_path="Docs")
+
+        assert result.processed_count == 1
+        assert {part.attachment_id for part in _ingested_parts(runner)} == {"i-in"}
+
+    @pytest.mark.asyncio
+    async def test_a_folder_run_for_an_unknown_folder_fails_with_the_reason(self, runner, graph):
+        graph.enumerate_delta.return_value = {
+            "value": [_graph_root(), _folder("f-docs", "Docs", "root")],
+            "@odata.deltaLink": "https://graph/delta",
+        }
+
+        with pytest.raises(LookupError, match="'root/Docs' not found in drive drive-1"):
+            await runner.sync_drive(DRIVE_ID, folder_path="root/Docs")
+
+        runner._documents_db.upsert_batch.assert_not_awaited()
+
     def test_a_cyclic_folder_tree_resolves_to_no_folder_instead_of_hanging(self, runner):
         """A folder moved under its own former descendant leaves a cycle in the merged tree."""
         folders = {"f-a": {"name": "A", "parent": "f-b"}, "f-b": {"name": "B", "parent": "f-a"}}
@@ -235,7 +274,7 @@ class TestCtagEtagClassification:
             "ctag": item.get("cTag"),
             "etag": item.get("eTag"),
             "folder_path": "Docs",
-            "ancestor_ids": ["f-docs"],
+            "ancestor_ids": ["f-docs", "root"],
             "content_hash": "h",
             "schema_version": 1,
             "point_ids": point_ids or [],
@@ -274,6 +313,33 @@ class TestCtagEtagClassification:
         runner._documents_db.set_payload.assert_awaited_once()
         payload = runner._documents_db.set_payload.await_args.args[0]
         assert payload["document_name"] == "renamed.pdf"
+
+    @pytest.mark.asyncio
+    async def test_a_move_with_a_new_ctag_but_unchanged_content_updates_the_payload_location(self, runner, graph):
+        """SharePoint changes the cTag on a move; the unchanged content must not hide the new folder."""
+        item = _file("i-1", "spec.pdf", "f-docs")
+        stored = self._stored(
+            item,
+            point_ids=["p1"],
+            ctag="c-before-move",
+            folder_path="Old",
+            ancestor_ids=["f-old", "root"],
+            content_hash=content_hash(b"content", str(INGESTION_SCHEMA_VERSION)),
+        )
+        graph.enumerate_delta.return_value = {
+            "value": [_graph_root(), _folder("f-old", "Old", "root"), _folder("f-docs", "Docs", "root"), item],
+            "@odata.deltaLink": "d",
+        }
+        runner._fingerprints.load_scope.return_value = {"file:i-1": stored}
+
+        await runner.sync_drive(DRIVE_ID)
+
+        runner._documents_db.upsert_batch.assert_not_awaited()
+        payload = runner._documents_db.set_payload.await_args.args[0]
+        assert (payload["folder_path"], payload["folder_ancestors"]) == ("Docs", ["Docs"])
+        assert runner._documents_db.set_payload.await_args.kwargs["point_ids"] == ["p1"]
+        saved = runner._fingerprints.save.await_args.args[2]
+        assert (saved["ctag"], saved["folder_path"], saved["point_ids"]) == (item["cTag"], "Docs", ["p1"])
 
     @pytest.mark.asyncio
     async def test_a_content_change_reingests_the_file(self, runner, graph):
@@ -440,3 +506,140 @@ class TestFolderRename:
         assert runner._documents_db.set_payload.await_args.kwargs["point_ids"] == ["p1"]
         saved = runner._fingerprints.save.await_args.args[2]
         assert (saved["folder_path"], saved["ancestor_ids"]) == ("Specs", ["f-docs", "root"])
+
+
+class TestRootRelativePaths:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "root",
+        [_graph_root(), _folder("root", "root", None)],
+        ids=["root facet", "no parent only"],
+    )
+    async def test_the_drive_root_never_contributes_a_path_segment(self, runner, graph, root):
+        graph.enumerate_delta.return_value = {
+            "value": [
+                root,
+                _folder("f-specs", "Specs", "root"),
+                _folder("f-archive", "Archive", "f-specs"),
+                _file("i-1", "old.pdf", "f-archive"),
+            ],
+            "@odata.deltaLink": "d",
+        }
+
+        await runner.sync_drive(DRIVE_ID)
+
+        (part,) = _ingested_parts(runner)
+        assert (part.folder_path, part.folder_ancestors) == ("Specs/Archive", ["Specs", "Specs/Archive"])
+        assert part.breadcrumb.startswith("Specs/Archive/old.pdf")
+        saved = runner._fingerprints.save.await_args.args[2]
+        assert saved["folder_path"] == "Specs/Archive"
+
+    @pytest.mark.asyncio
+    async def test_a_file_in_the_drive_root_has_an_empty_folder_path(self, runner, graph):
+        graph.enumerate_delta.return_value = {
+            "value": [_graph_root(), _file("i-1", "top.pdf", "root")],
+            "@odata.deltaLink": "d",
+        }
+
+        await runner.sync_drive(DRIVE_ID)
+
+        (part,) = _ingested_parts(runner)
+        assert (part.folder_path, part.folder_ancestors) == ("", [])
+
+
+class TestFolderPathRepair:
+    @pytest.mark.asyncio
+    async def test_payloads_stored_with_the_root_segment_are_repaired_without_reembedding(self, runner, graph):
+        runner._state_store.get_cursor.return_value = {
+            "delta_link": "https://graph/stored-delta",
+            "folders": {"root": {"name": "root", "parent": None}, "f-docs": {"name": "Docs", "parent": "root"}},
+        }
+        graph.enumerate_delta.return_value = {"value": [], "@odata.deltaLink": "d"}
+        runner._fingerprints.load_scope.return_value = {
+            "file:i-1": {
+                "item_id": "i-1",
+                "name": "spec.pdf",
+                "folder_path": "root/Docs",
+                "ancestor_ids": ["f-docs", "root"],
+                "point_ids": ["p1"],
+            },
+        }
+
+        await runner.sync_drive(DRIVE_ID)
+
+        runner._documents_db.upsert_batch.assert_not_awaited()
+        payload = runner._documents_db.set_payload.await_args.args[0]
+        assert (payload["folder_path"], payload["folder_ancestors"]) == ("Docs", ["Docs"])
+        assert payload["breadcrumb"] == "Docs/spec.pdf"
+        assert runner._fingerprints.save.await_args.args[2]["folder_path"] == "Docs"
+
+    @pytest.mark.asyncio
+    async def test_a_file_whose_stored_path_still_matches_is_not_touched(self, runner, graph):
+        runner._state_store.get_cursor.return_value = {
+            "delta_link": "https://graph/stored-delta",
+            "folders": {"root": {"name": "root", "parent": None}, "f-docs": {"name": "Docs", "parent": "root"}},
+        }
+        graph.enumerate_delta.return_value = {"value": [], "@odata.deltaLink": "d"}
+        runner._fingerprints.load_scope.return_value = {
+            "file:i-1": {
+                "item_id": "i-1",
+                "folder_path": "Docs",
+                "ancestor_ids": ["f-docs", "root"],
+                "point_ids": ["p1"],
+            },
+        }
+
+        await runner.sync_drive(DRIVE_ID)
+
+        runner._documents_db.set_payload.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_a_folder_moved_under_another_parent_repairs_its_descendants(self, runner, graph):
+        runner._state_store.get_cursor.return_value = {
+            "delta_link": "https://graph/stored-delta",
+            "folders": {
+                "root": {"name": "", "parent": None},
+                "f-specs": {"name": "Specs", "parent": "root"},
+                "f-docs": {"name": "Docs", "parent": "root"},
+            },
+        }
+        graph.enumerate_delta.return_value = {"value": [_folder("f-docs", "Docs", "f-specs")], "@odata.deltaLink": "d"}
+        runner._fingerprints.load_scope.return_value = {
+            "file:i-1": {
+                "item_id": "i-1",
+                "folder_path": "Docs",
+                "ancestor_ids": ["f-docs", "root"],
+                "point_ids": ["p1"],
+            },
+        }
+
+        await runner.sync_drive(DRIVE_ID)
+
+        payload = runner._documents_db.set_payload.await_args.args[0]
+        assert (payload["folder_path"], payload["folder_ancestors"]) == ("Specs/Docs", ["Specs", "Specs/Docs"])
+        saved = runner._fingerprints.save.await_args.args[2]
+        assert saved["ancestor_ids"] == ["f-docs", "f-specs", "root"]
+
+    @pytest.mark.asyncio
+    async def test_the_files_of_a_deleted_folder_are_deleted_rather_than_repaired(self, runner, graph):
+        runner._state_store.get_cursor.return_value = {
+            "delta_link": "https://graph/stored-delta",
+            "folders": {"root": {"name": "root", "parent": None}, "f-docs": {"name": "Docs", "parent": "root"}},
+        }
+        graph.enumerate_delta.return_value = {
+            "value": [_deleted(_folder("f-docs", "Docs", "root"))],
+            "@odata.deltaLink": "d",
+        }
+        runner._fingerprints.load_scope.return_value = {
+            "file:i-1": {
+                "item_id": "i-1",
+                "folder_path": "root/Docs",
+                "ancestor_ids": ["f-docs", "root"],
+                "point_ids": ["p1"],
+            },
+        }
+
+        await runner.sync_drive(DRIVE_ID)
+
+        runner._documents_db.set_payload.assert_not_awaited()
+        runner._documents_db.delete.assert_awaited_once_with(["p1"])

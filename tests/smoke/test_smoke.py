@@ -15,8 +15,8 @@ reached a mocked boundary, read back from its ``/__recorded`` endpoint:
 * Requirements review   -> the agent first fetched the source story via the Jira MCP.
 * Requirements review   -> the story's attachment was downloaded over the Jira REST API,
                            with the MCP download tool left unused.
-* Requirements review   -> the flow issued a documents-collection hybrid query with a focused
-                           (shorter than the issue) query text.
+* Requirements review   -> the flow issued one gated documents-collection dense query per focused
+                           (shorter than the issue) retrieval query.
 * Requirements review   -> with JIRA_ADDITIONAL_FIELD_IDS configured, the agent requests those custom
                            field IDs (together with the standard content fields) when fetching the story.
 * Test-case design      -> the design's model fetched the story once via the Jira MCP, without comments, with the standard and configured fields.
@@ -41,7 +41,7 @@ reached a mocked boundary, read back from its ``/__recorded`` endpoint:
 * Test execution        -> the incident-creation flow consulted the vector DB for duplicates, filtered on the
                            project.
 * Test execution        -> the typed ("api") test case reached the execution agent and the untyped one was
-                           skipped; /execute-test reported one result to Zephyr and created no bug.
+                           skipped; /execute-test returned its result without a Zephyr upload or a bug.
 * RAG DB update         -> the sync pushed the seeded story into the vector DB, and a Closed issue too.
 * Dashboard             -> the login is rate limited (429), and the task history survives an orchestrator
                            restart (the restart check runs last).
@@ -63,6 +63,7 @@ reached a mocked boundary, read back from its ``/__recorded`` endpoint:
 import re
 import subprocess
 import time
+import uuid
 from datetime import UTC, datetime, timedelta
 
 import httpx
@@ -105,7 +106,13 @@ from tests.smoke.conftest import (
     ZEPHYR_RECORDED_URL,
     AgentStreamRecording,
 )
-from tests.smoke.mocks.llm_mock import CLASSIFICATION_LABELS, FOCUS_AREA_FINDINGS, TEST_CASE_NAMES, TEST_STEPS
+from tests.smoke.mocks.llm_mock import (
+    CLASSIFICATION_LABELS,
+    FOCUS_AREA_FINDINGS,
+    RETRIEVAL_QUERIES,
+    TEST_CASE_NAMES,
+    TEST_STEPS,
+)
 from tests.smoke.mocks.procedure_knowledge_agent import (
     PRECONDITION_PROCEDURE,
     TASK_CAPACITY,
@@ -283,31 +290,38 @@ def test_agent_downloaded_the_story_attachment_over_rest(
     )
 
 
-def test_review_flow_issued_a_documents_hybrid_query_with_a_focused_query_text(
+def test_review_flow_issued_one_documents_dense_query_per_focused_query_text(
     requirements_review_response: httpx.Response, http_client: httpx.Client
 ) -> None:
-    """With retrieval enabled, the review flow must run a hybrid (dense + sparse)
-    query against the documents collection, embedding a focused query text that is
-    shorter than the issue content itself."""
+    """With retrieval enabled, the review flow embeds the model's focused retrieval queries (each shorter than
+    the issue content) in one call and runs one gated dense query per query text against the documents collection."""
     data = wait_for_recorded(
         http_client,
         QDRANT_RECORDED_URL,
-        lambda d: any(q.get("collection") == DOCUMENTS_COLLECTION_NAME for q in d.get("hybrid_queries", [])),
+        lambda d: any(q.get("collection") == DOCUMENTS_COLLECTION_NAME for q in d.get("dense_queries", [])),
     )
-    documents_queries = [q for q in data.get("hybrid_queries", []) if q.get("collection") == DOCUMENTS_COLLECTION_NAME]
-    assert documents_queries, f"No hybrid query reached the documents collection. Recorded: {data}"
+    documents_queries = [q for q in data.get("dense_queries", []) if q.get("collection") == DOCUMENTS_COLLECTION_NAME]
 
     story = http_client.get(JIRA_MCP_SEEDED_STORY_URL).json()
     issue_content = story["fields"]["description"]
-    query_texts = [
-        text
-        for call in data.get("embedding_calls", [])
-        if call.get("endpoint") == "/embed-query-text"
-        for text in call.get("texts", [])
+    query_calls = [
+        call.get("texts", []) for call in data.get("embedding_calls", []) if call.get("endpoint") == "/embed-query-text"
     ]
-    assert any(text.strip() and len(text) < len(issue_content) for text in query_texts), (
-        f"No focused embed-query-text call (non-empty and shorter than the issue content) "
-        f"accompanied the documents query. Query texts: {query_texts}"
+    assert RETRIEVAL_QUERIES in query_calls, (
+        f"The retrieval queries were not embedded together in one call. Query calls: {query_calls}"
+    )
+    assert all(text.strip() and len(text) < len(issue_content) for text in RETRIEVAL_QUERIES)
+    assert len(documents_queries) == len(RETRIEVAL_QUERIES), (
+        f"Expected one documents query per retrieval query. Recorded: {documents_queries}"
+    )
+    for query in documents_queries:
+        _assert_dense_gated(query)
+
+
+def _assert_dense_gated(query: dict) -> None:
+    """A search runs on the named dense vector with the similarity threshold as its relevance gate."""
+    assert query.get("using") == "dense" and query.get("score_threshold") is not None, (
+        f"The search is not a dense query gated by the similarity threshold: {query}"
     )
 
 
@@ -319,16 +333,13 @@ def test_confluence_only_configuration_queries_exactly_one_document_collection(
     data = wait_for_recorded(
         http_client,
         QDRANT_RECORDED_URL,
-        lambda d: any(q.get("collection") == DOCUMENTS_COLLECTION_NAME for q in d.get("hybrid_queries", [])),
+        lambda d: any(q.get("collection") == DOCUMENTS_COLLECTION_NAME for q in d.get("dense_queries", [])),
     )
-    queried = {q.get("collection") for q in data.get("hybrid_queries", [])}
+    queried = {q.get("collection") for q in data.get("dense_queries", [])}
     assert SHAREPOINT_COLLECTION_NAME not in queried, f"The SharePoint collection was queried: {queried}"
-    for query in [q for q in data["hybrid_queries"] if q.get("collection") == DOCUMENTS_COLLECTION_NAME]:
-        for prefetch in query.get("prefetches", []):
-            must = {
-                (c.get("key"), c.get("match", {}).get("value")) for c in (prefetch.get("filter") or {}).get("must", [])
-            }
-            assert ("source", "confluence") in must, f"A document query does not pin the source: {query}"
+    for query in [q for q in data["dense_queries"] if q.get("collection") == DOCUMENTS_COLLECTION_NAME]:
+        must = {(c.get("key"), c.get("match", {}).get("value")) for c in (query.get("filter") or {}).get("must", [])}
+        assert ("source", "confluence") in must, f"A document query does not pin the source: {query}"
 
 
 def _completed_tasks_of(http_client: httpx.Client, auth_headers: dict[str, str], agent_name: str) -> list[dict]:
@@ -586,13 +597,13 @@ def test_review_comment_carries_the_duplicate_check(
 def _draft_duplicate_searches(recorded: dict) -> list[dict]:
     """The design's duplicate searches: test-case queries whose dense filter excludes a draft ID."""
     searches = []
-    for query in recorded.get("hybrid_queries", []):
-        dense_filter = query["prefetches"][0].get("filter") or {}
+    for query in recorded.get("dense_queries", []):
+        dense_filter = query.get("filter") or {}
         excluded = [c.get("match", {}).get("value") for c in dense_filter.get("must_not", [])]
         if query.get("collection") == TEST_CASES_COLLECTION_NAME and any(
             str(value).startswith(DRAFT_ID_PREFIX) for value in excluded
         ):
-            searches.append({"filter": dense_filter, "excluded": excluded})
+            searches.append({"filter": dense_filter, "excluded": excluded, "query": query})
     return searches
 
 
@@ -610,6 +621,7 @@ def test_design_checked_each_final_test_case_once_for_duplicates_in_its_project(
     for search in searches:
         must = {(c.get("key"), c.get("match", {}).get("value")) for c in search["filter"].get("must", [])}
         assert ("project_key", SEEDED_PROJECT_KEY) in must, f"A duplicate search is not project-scoped: {search}"
+        _assert_dense_gated(search["query"])
     searched_drafts = [value for search in searches for value in search["excluded"]]
     assert len(searched_drafts) == len(set(searched_drafts)) == len(generated_keys), (
         f"Expected exactly one duplicate search per saved test case. "
@@ -813,14 +825,11 @@ def test_created_bug_linked_to_test_execution(
 def test_incident_creation_consulted_vector_db(
     execute_tests_response: httpx.Response, http_client: httpx.Client
 ) -> None:
-    """The duplicate search must run a hybrid (dense + sparse, RRF-fused) query."""
-    data = wait_for_recorded(http_client, QDRANT_RECORDED_URL, lambda d: bool(d.get("hybrid_queries")))
-    hybrid_queries = data.get("hybrid_queries", [])
-    assert hybrid_queries, f"No hybrid query reached the vector DB. Recorded: {data}"
-    query = hybrid_queries[0]
-    using_names = {p.get("using") for p in query.get("prefetches", [])}
-    assert using_names == {"dense", "sparse"}, f"Expected dense + sparse prefetches, got {using_names}"
-    assert query.get("fusion") == "rrf", f"Expected RRF fusion, got {query.get('fusion')}"
+    """The duplicate search must run a gated dense query, embedding the incident like the stored issues."""
+    data = wait_for_recorded(http_client, QDRANT_RECORDED_URL, lambda d: bool(d.get("dense_queries")))
+    dense_queries = data.get("dense_queries", [])
+    assert dense_queries, f"No dense query reached the vector DB. Recorded: {data}"
+    _assert_dense_gated(dense_queries[0])
 
 
 def test_incident_duplicate_query_is_scoped_to_the_project(
@@ -830,16 +839,14 @@ def test_incident_duplicate_query_is_scoped_to_the_project(
     data = wait_for_recorded(
         http_client,
         QDRANT_RECORDED_URL,
-        lambda d: any(q.get("collection") == TICKETS_COLLECTION_NAME for q in d.get("hybrid_queries", [])),
+        lambda d: any(q.get("collection") == TICKETS_COLLECTION_NAME for q in d.get("dense_queries", [])),
     )
-    queries = [q for q in data.get("hybrid_queries", []) if q.get("collection") == TICKETS_COLLECTION_NAME]
+    queries = [q for q in data.get("dense_queries", []) if q.get("collection") == TICKETS_COLLECTION_NAME]
     assert queries, f"The incident flow issued no duplicate query. Recorded: {data}"
     for query in queries:
-        for prefetch in query.get("prefetches", []):
-            must = {
-                (c.get("key"), c.get("match", {}).get("value")) for c in (prefetch.get("filter") or {}).get("must", [])
-            }
-            assert ("project_key", SEEDED_PROJECT_KEY) in must, f"A duplicate query is not project-scoped: {query}"
+        must = {(c.get("key"), c.get("match", {}).get("value")) for c in (query.get("filter") or {}).get("must", [])}
+        assert ("project_key", SEEDED_PROJECT_KEY) in must, f"A duplicate query is not project-scoped: {query}"
+        _assert_dense_gated(query)
 
 
 def _dashboard_tasks(http_client: httpx.Client, auth_headers: dict[str, str]) -> list[dict]:
@@ -874,14 +881,13 @@ def test_untyped_test_case_is_skipped(
     assert f"Skipping test case {SEEDED_UNTYPED_TC_KEY}: no recognized test-type label." in messages, messages[:20]
 
 
-def test_manual_execution_reaches_zephyr_without_creating_a_bug(
+def test_manual_execution_creates_no_upload_and_no_bug(
     execute_tests_response: httpx.Response,
     http_client: httpx.Client,
     auth_headers: dict[str, str],
     webhook_headers: dict[str, str],
 ) -> None:
-    """/execute-test runs one test case on the explicitly chosen agent, uploads its result to
-    Zephyr and never requests incident creation."""
+    """/execute-test runs one test case on the explicitly chosen agent and returns only its result."""
     agents = http_client.get(f"{ORCHESTRATOR_URL}/api/dashboard/agents", headers=auth_headers).json()
     agent_id = next(agent["id"] for agent in agents if agent.get("name") == EXECUTION_AGENT_NAME)
 
@@ -894,17 +900,34 @@ def test_manual_execution_reaches_zephyr_without_creating_a_bug(
     response = httpx.post(
         f"{ORCHESTRATOR_URL}/execute-test",
         headers=webhook_headers,
-        json={"test_case_key": SEEDED_EXECUTABLE_TC_KEY, "agent_id": agent_id, "project_key": SEEDED_PROJECT_KEY},
+        json={"test_case_key": SEEDED_EXECUTABLE_TC_KEY, "agent_id": agent_id},
         timeout=httpx.Timeout(600.0),
     )
 
     assert response.status_code == 200, f"Manual execution failed: {response.status_code} {response.text}"
     assert response.json().get("testCaseKey") == SEEDED_EXECUTABLE_TC_KEY, response.json()
-    assert response.json().get("reporting_failures") == [], response.json()
+    assert "reporting_failures" not in response.json(), response.json()
     zephyr = http_client.get(ZEPHYR_RECORDED_URL).json()
-    assert len(_executions(zephyr)) == executions_before + 1, f"The manual result never reached Zephyr: {zephyr}"
+    assert len(_executions(zephyr)) == executions_before, f"The manual result was uploaded to Zephyr: {zephyr}"
     created_issues = http_client.get(JIRA_MCP_RECORDED_URL).json().get("created_issues", [])
     assert len(created_issues) == bugs_before, f"The manual run created an issue in Jira: {created_issues}"
+
+
+def test_manual_execution_of_an_unknown_test_case_answers_404(
+    http_client: httpx.Client, auth_headers: dict[str, str], webhook_headers: dict[str, str]
+) -> None:
+    agents = http_client.get(f"{ORCHESTRATOR_URL}/api/dashboard/agents", headers=auth_headers).json()
+    agent_id = next(agent["id"] for agent in agents if agent.get("name") == EXECUTION_AGENT_NAME)
+
+    response = httpx.post(
+        f"{ORCHESTRATOR_URL}/execute-test",
+        headers=webhook_headers,
+        json={"test_case_key": "SMOKE-T999999", "agent_id": agent_id},
+        timeout=httpx.Timeout(60.0),
+    )
+
+    assert response.status_code == 404, f"Unexpected answer: {response.status_code} {response.text}"
+    assert response.json().get("detail") == "Test case SMOKE-T999999 was not found.", response.json()
 
 
 # --- RAG vector DB update flow (local mode via the sync service) -----------------------
@@ -932,7 +955,7 @@ def test_rag_sync_outcome_is_visible_on_dashboard(
 def test_rag_sync_upserted_seeded_story_into_vector_db(
     update_jira_db_response: httpx.Response, http_client: httpx.Client
 ) -> None:
-    """The sync must push the seeded story into the tickets collection of the vector DB, with dense + sparse vectors."""
+    """The sync must push the seeded story into the tickets collection of the vector DB, with only the dense vector."""
     data = wait_for_recorded(
         http_client,
         QDRANT_RECORDED_URL,
@@ -953,13 +976,12 @@ def test_rag_sync_upserted_seeded_story_into_vector_db(
     assert TICKETS_COLLECTION_NAME in data.get("created_collections", []), (
         f"The tickets collection was never created. Recorded: {data}"
     )
-    # The collection is created with the hybrid schema and the story carries both named vectors.
     schema = data.get("collection_schemas", {}).get(TICKETS_COLLECTION_NAME, {})
-    assert schema.get("vectors") == ["dense"] and schema.get("sparse_vectors") == ["sparse"], (
-        f"The tickets collection lacks the named dense + sparse vector schema: {schema}"
+    assert schema.get("vectors") == ["dense"] and schema.get("sparse_vectors") == [], (
+        f"The tickets collection does not have exactly the named dense vector: {schema}"
     )
-    assert upserts[0].get("vector_names") == ["dense", "sparse"], (
-        f"The upserted story does not carry dense + sparse vectors: {upserts[0]}"
+    assert upserts[0].get("vector_names") == ["dense"], (
+        f"The upserted story does not carry exactly the dense vector: {upserts[0]}"
     )
 
 
@@ -1122,6 +1144,134 @@ def test_second_confluence_sync_reembeds_nothing(
         "The second sync re-embedded unchanged Confluence items: "
         f"{len(after.get('embedding_calls', []))} vs {embedding_calls_before} calls"
     )
+
+
+CONFLUENCE_SITE_URL = "http://confluence_mock:8095"
+# The second space of the Confluence REST mock, whose page and attachment names the rename test changes.
+RENAME_SPACE_KEY = "RENAMEDOC"
+
+
+def test_confluence_page_chunks_keep_sibling_breadcrumbs_quotes_and_the_absolute_link(
+    update_confluence_db_response: httpx.Response, http_client: httpx.Client
+) -> None:
+    """Sibling sections stay siblings, a box is quoted, every part links to its page with the site's address,
+    and the attachment listing asks for a sort order the Confluence API accepts."""
+    data = wait_for_recorded(
+        http_client,
+        QDRANT_RECORDED_URL,
+        lambda d: any(
+            p.get("collection") == DOCUMENTS_COLLECTION_NAME
+            and p.get("payload", {}).get("breadcrumb") == "Password Reset Requirements > Security Considerations"
+            for p in d.get("upserted_points", [])
+        ),
+    )
+    page_chunks = [
+        p["payload"]
+        for p in data["upserted_points"]
+        if p.get("collection") == DOCUMENTS_COLLECTION_NAME
+        and p.get("payload", {}).get("space_key") == SEEDED_SPACE_KEY
+        and p["payload"].get("content_kind") == "page_body"
+    ]
+    breadcrumbs = {chunk["breadcrumb"] for chunk in page_chunks}
+    assert breadcrumbs >= {
+        "Password Reset Requirements > Reset Link Policy",
+        "Password Reset Requirements > Security Considerations",
+        "Password Reset Requirements > Rate Limits",
+    }, f"Sibling sections are not siblings in the breadcrumbs: {breadcrumbs}"
+    security = next(c for c in page_chunks if c["breadcrumb"].endswith("> Security Considerations"))
+    assert "> Reset links are single-use and bound to the requesting session." in security["text"], security
+    expected_link = f"{CONFLUENCE_SITE_URL}/wiki/spaces/{SEEDED_SPACE_KEY}/pages/6606"
+    assert {chunk["page_url"] for chunk in page_chunks} == {expected_link}, "The parts don't carry the absolute link."
+
+    listings = http_client.get(CONFLUENCE_RECORDED_URL).json().get("attachment_listings", [])
+    assert listings, "The sync never listed attachments."
+    assert {listing.get("sort") for listing in listings} == {"created-date"}, listings
+
+
+def test_unknown_confluence_space_fails_with_the_reason_and_leaves_the_scope_free(
+    webhook_headers: dict[str, str],
+) -> None:
+    """The failure carries the runner's message, and the lock is released, so a retry fails the same way (not 409)."""
+    for _ in range(2):
+        response = httpx.post(
+            f"{ORCHESTRATOR_URL}/update-confluence-db",
+            headers=webhook_headers,
+            json={"space_key": "NOSUCHSPACE"},
+            timeout=httpx.Timeout(300.0),
+        )
+        assert response.status_code == 503, f"{response.status_code} {response.text}"
+        assert "No Confluence space found for key 'NOSUCHSPACE'." in response.json()["detail"], response.text
+
+
+def test_renamed_confluence_page_and_attachment_are_processed_again_under_their_new_names(
+    http_client: httpx.Client, webhook_headers: dict[str, str]
+) -> None:
+    """A renamed page is a new version; a renamed attachment keeps its version. Both are stored again, so the
+    breadcrumbs and the text carry the new names."""
+
+    def sync() -> dict:
+        response = httpx.post(
+            f"{ORCHESTRATOR_URL}/update-confluence-db",
+            headers=webhook_headers,
+            json={"space_key": RENAME_SPACE_KEY},
+            timeout=httpx.Timeout(300.0),
+        )
+        assert response.status_code == 200, f"{response.status_code} {response.text}"
+        return response.json()["details"]
+
+    assert sync()["status"] == "completed"
+    suffix = uuid.uuid4().hex[:8]
+    new_page_title, new_attachment_name = f"Renamed Page {suffix}", f"renamed-{suffix}.txt"
+    control_url = CONFLUENCE_RECORDED_URL.replace("/__recorded", "/__control/rename")
+    http_client.post(control_url, params={"page_title": new_page_title, "attachment_name": new_attachment_name})
+
+    details = sync()
+    assert details["status"] == "completed", details
+    # The page, the renamed attachment and the workbook of the renamed page.
+    assert details["processed_count"] == 3, f"Expected the page and both attachments to be processed again: {details}"
+
+    recorded = http_client.get(QDRANT_RECORDED_URL).json()
+    renamed = [
+        p["payload"]
+        for p in recorded["upserted_points"]
+        if p.get("collection") == DOCUMENTS_COLLECTION_NAME and p.get("payload", {}).get("page_title") == new_page_title
+    ]
+    body = next(p for p in renamed if p["content_kind"] == "page_body")
+    assert body["breadcrumb"] == f"{new_page_title} > Section" and body["text"].startswith(body["breadcrumb"]), body
+    attachment = next(p for p in renamed if p["content_kind"] == "attachment")
+    chain = f"{new_page_title} > {new_attachment_name} > page 1 of 1"
+    assert attachment["breadcrumb"] == chain and attachment["text"].startswith(chain), attachment
+    assert attachment["attachment_name"] == attachment["document_name"] == new_attachment_name, attachment
+    workbook_chain = f"{new_page_title} > limits.xls > page 1 of 2"
+    workbook = next(p for p in renamed if p.get("attachment_name") == "limits.xls" and p["page_number"] == 1)
+    assert workbook["breadcrumb"] == workbook_chain and workbook["text"].startswith(workbook_chain), workbook
+
+
+def test_legacy_workbook_is_ingested_with_the_full_text_of_its_cells(
+    http_client: httpx.Client, webhook_headers: dict[str, str]
+) -> None:
+    """A legacy .xls is converted by LibreOffice and read sheet by sheet; a PDF conversion would clip the
+    texts of its default-width cells."""
+    response = httpx.post(
+        f"{ORCHESTRATOR_URL}/update-confluence-db",
+        headers=webhook_headers,
+        json={"space_key": RENAME_SPACE_KEY},
+        timeout=httpx.Timeout(300.0),
+    )
+    assert response.status_code == 200, f"{response.status_code} {response.text}"
+    assert response.json()["details"]["status"] == "completed", response.text
+
+    recorded = http_client.get(QDRANT_RECORDED_URL).json()
+    sheets = {
+        p["payload"]["page_number"]: p["payload"]
+        for p in recorded["upserted_points"]
+        if p.get("collection") == DOCUMENTS_COLLECTION_NAME
+        and p.get("payload", {}).get("attachment_name") == "limits.xls"
+    }
+    assert sorted(sheets) == [1, 2], f"Expected one record per sheet: {sheets}"
+    assert "Reset requests allowed per hour for one account" in sheets[1]["text"], sheets[1]
+    assert "Reset link validity window in minutes" in sheets[2]["text"], sheets[2]
+    assert all(payload["page_count"] == 2 and not payload["image"] for payload in sheets.values()), sheets
 
 
 def test_concurrent_confluence_sync_yields_exactly_one_409(
@@ -1457,11 +1607,13 @@ def test_sharepoint_document_reached_vector_db_with_reconciliation_chain(
     assert upserts, f"No SharePoint document reached the vector DB. Recorded: {data}"
     payload = upserts[0]["payload"]
     assert payload.get("document_name") == SHAREPOINT_FILE_NAME, f"Wrong document ingested: {payload}"
-    assert payload.get("folder_path") == "Docs", f"The folder path is missing: {payload}"
+    # Graph names the drive root "root"; the path is relative to it, never "root/Docs".
+    assert payload.get("folder_path") == "Docs", f"The folder path is not relative to the drive root: {payload}"
+    assert payload.get("folder_ancestors") == ["Docs"], f"The folder scope prefixes are missing: {payload}"
     assert payload.get("drive_id") == SHAREPOINT_DRIVE_ID, f"The drive id is missing: {payload}"
     assert "Docs" in payload.get("breadcrumb", ""), f"The reconciliation chain is missing: {payload}"
-    assert upserts[0].get("vector_names") == ["dense", "sparse"], (
-        f"The SharePoint document does not carry dense + sparse vectors: {upserts[0]}"
+    assert upserts[0].get("vector_names") == ["dense"], (
+        f"The SharePoint document does not carry exactly the dense vector: {upserts[0]}"
     )
 
 

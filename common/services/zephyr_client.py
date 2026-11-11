@@ -12,7 +12,7 @@ import httpx
 import config
 from common import utils
 from common.models import ListedTestCase, TestCase, TestExecutionResult, TestStep
-from common.services.test_management_base import TestManagementClientBase
+from common.services.test_management_base import TestCaseNotFoundError, TestManagementClientBase
 
 TEST_FOR_EXECUTION_READY_STATUS_NAME = "Approved"
 
@@ -459,7 +459,12 @@ class ZephyrClient(TestManagementClientBase):
         with httpx.Client() as client:
             url = self._get_test_case_url(test_case_key)
             logger.info(f"Fetching test case: {test_case_key} from {url}")
-            test_case_data = self._get_test_case_data(client, url)
+            try:
+                test_case_data = self._get_test_case_data(client, url)
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code == 404:
+                    raise TestCaseNotFoundError(f"Test case {test_case_key} was not found.") from e
+                raise
             return self._parse_tc_json(client, None, test_case_data)
 
     def fetch_linked_issues(self, test_case_key: str) -> list[Any]:

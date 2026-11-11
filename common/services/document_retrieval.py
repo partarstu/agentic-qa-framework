@@ -2,10 +2,10 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
-"""Scoped hybrid retrieval over the per-source document collections.
+"""Scoped dense retrieval over the per-source document collections.
 
-One retrieval turns a query text plus an optional scope (Confluence: space key, page ID;
-SharePoint: drive ID, folder path; shared: document-name pattern) into assembled,
+One retrieval turns one or more query texts plus an optional scope (Confluence: space key, page ID;
+SharePoint: drive ID, folder path including its subfolders; shared: document-name pattern) into assembled,
 review-ready documentation parts from every enabled source:
 
 1. Every enabled source is queried **concurrently** against its own collection, and every
@@ -17,17 +17,20 @@ review-ready documentation parts from every enabled source:
    distinct document names under the remaining filters are scrolled, matched client-side and
    queried with an exact MatchAny filter. No match means an empty result for that source
    without running the query at all.
-4. The shared hybrid query runs with the page image excluded from the payload; the configured
-   minimum similarity score reaches the dense prefetch.
+4. The dense search runs every query text with the page image excluded from the payload and
+   the configured minimum similarity score as its relevance gate; each point keeps its best
+   score across the query texts.
 5. Hits are grouped per page (an attachment page is one attachment ID + page number; a
-   page-body chunk stands alone) and the best rank per page wins.
-6. The per-source page lists are merged by rank interleaving up to the page bound: fused
+   page-body chunk stands alone) and the best rank per page wins; the pages are grouped per
+   document (an attachment or a page body), which keeps at most ``RAG_MAX_RETRIEVED_PAGES_PER_DOCUMENT``
+   pages, and at most ``RAG_MAX_RESULTS`` documents per source survive.
+6. The per-source document lists are merged by rank interleaving up to the document bound: fused
    scores are not comparable across collections, but ranks are.
 7. The page image of each surviving page is fetched by reconstructing its deterministic
    part-0 point ID.
 
-A source that fails at runtime is logged and skipped; the result names it as unavailable so
-the review can say so.
+A source that fails at runtime fails the whole retrieval, so a review never runs on a partial
+knowledge base.
 """
 
 import asyncio
@@ -52,6 +55,7 @@ _HIT_PAYLOAD_INCLUDE = [
     "page_id",
     "page_title",
     "page_url",
+    "folder_path",
     "attachment_id",
     "attachment_name",
     "content_kind",
@@ -82,20 +86,26 @@ class RetrievalScope:
     folder_path: str | None = None
 
 
-@dataclass(frozen=True, slots=True)
-class RetrievalResult:
-    """Merged pages of one retrieval plus the sources that failed at runtime."""
-
-    pages: list["RetrievedPage"]
-    unavailable_sources: list[str]
+def _identification(part: DocumentPagePart) -> str:
+    """An attachment page by its file name and page number, a page-body chunk by its page title and chunk number."""
+    if part.content_kind == "attachment":
+        of_total = f" of {part.page_count}" if part.page_count else ""
+        return f"{part.attachment_name}, page {part.page_number}{of_total}"
+    return f"{part.page_title}, chunk {part.part_index + 1}"
 
 
 def _header(part: DocumentPagePart) -> str:
-    """The header text part: the breadcrumb, plus the page URL where a page body has one."""
-    header = f"Reference documentation: {part.breadcrumb}"
+    """The header text part: the identification and the metadata of the part's document."""
+    details = [f"source: {part.source}"]
+    if part.source == SHAREPOINT_SOURCE:
+        details.append(f"folder: {part.folder_path or '(drive root)'}")
+    else:
+        details.append(f"space: {part.space_key}")
+        if part.content_kind == "attachment":
+            details.append(f"Confluence page: {part.page_title}")
     if part.content_kind != "attachment" and part.page_url:
-        header = f"{header} ({part.page_url})"
-    return header
+        details.append(f"URL: {part.page_url}")
+    return f"Reference documentation: {_identification(part)} ({'; '.join(details)})"
 
 
 def _enabled_sources() -> list[str]:
@@ -123,8 +133,9 @@ def _scope_filter(scope: RetrievalScope | None, source: str) -> models.Filter | 
         elif source == SHAREPOINT_SOURCE:
             if scope.drive_id:
                 must.append(models.FieldCondition(key="drive_id", match=models.MatchValue(value=scope.drive_id)))
-            if scope.folder_path:
-                must.append(models.FieldCondition(key="folder_path", match=models.MatchValue(value=scope.folder_path)))
+            folder_path = (scope.folder_path or "").strip("/")
+            if folder_path:
+                must.append(models.FieldCondition(key="folder_ancestors", match=models.MatchValue(value=folder_path)))
     return models.Filter(must=must)
 
 
@@ -148,30 +159,28 @@ class RetrievedPage:
 
 
 async def retrieve_documents(
-    documents_db: VectorDbService,
-    query_text: str,
+    documents_db: VectorDbService | None,
+    query_texts: list[str],
     scope: RetrievalScope | None = None,
     limit: int | None = None,
     sharepoint_db: VectorDbService | None = None,
-) -> RetrievalResult:
-    """Queries every enabled source concurrently and merges the surviving pages.
+) -> list[RetrievedPage]:
+    """Queries every enabled source concurrently and returns the pages of at most ``limit`` unique documents.
 
     ``documents_db`` is the Confluence collection service; ``sharepoint_db`` the SharePoint
-    one. A failing source is logged, skipped and reported as unavailable, so one broken
-    source never fails the review on its own. It only raises when *every* enabled source
-    fails, so the caller can distinguish "no results" from "the store is down".
+    one. A source that fails raises, so the caller never reviews on a partial knowledge base.
     """
     limit = limit or config.QdrantConfig.MAX_RESULTS
     sources = _enabled_sources()
     if not sources:
         logger.warning("No document source has retrieval enabled; returning no reference documentation.")
-        return RetrievalResult([], [])
+        return []
 
     results = await asyncio.gather(
         *[
             _retrieve_source(
                 documents_db if source == CONFLUENCE_SOURCE else sharepoint_db,
-                query_text,
+                query_texts,
                 scope,
                 limit,
                 source,
@@ -181,40 +190,31 @@ async def retrieve_documents(
         return_exceptions=True,
     )
 
-    merged_lists: list[list[RetrievedPage]] = []
-    unavailable: list[str] = []
-    failed = 0
-    for source, result in zip(sources, results, strict=True):
-        if isinstance(result, BaseException):
-            # gather(return_exceptions=True) returns the exception instead of raising it, so
-            # there is no active exception for logger.exception to read a traceback from.
-            logger.error(
-                "%s document retrieval failed; the source is unavailable for this review.",
-                source,
-                exc_info=result,
-            )
-            unavailable.append(source)
-            failed += 1
-        else:
-            merged_lists.append(result)
-    if failed == len(sources):
-        raise RuntimeError(f"All document sources failed: {', '.join(unavailable)}.")
+    failures = {
+        source: result for source, result in zip(sources, results, strict=True) if isinstance(result, BaseException)
+    }
+    for source, failure in failures.items():
+        # gather(return_exceptions=True) returns the exception instead of raising it, so
+        # there is no active exception for logger.exception to read a traceback from.
+        logger.error("%s document retrieval failed.", source, exc_info=failure)
+    if failures:
+        raise RuntimeError(f"Document retrieval failed for: {', '.join(failures)}.") from next(iter(failures.values()))
 
-    interleaved = _interleave(merged_lists)
-    pages = interleaved[:limit]
+    documents = _interleave(results)[:limit]
+    pages = [page for document in documents for page in document]
     for source_db, source in ((documents_db, CONFLUENCE_SOURCE), (sharepoint_db, SHAREPOINT_SOURCE)):
         await _attach_page_images(source_db, [page for page in pages if page.part.source == source])
-    return RetrievalResult(pages, unavailable)
+    return pages
 
 
 async def _retrieve_source(
     documents_db: VectorDbService | None,
-    query_text: str,
+    query_texts: list[str],
     scope: RetrievalScope | None,
     limit: int,
     source: str,
-) -> list[RetrievedPage]:
-    """One source's scoped hybrid retrieval, returning that source's pages in rank order."""
+) -> list[list[RetrievedPage]]:
+    """One source's scoped dense retrieval: its documents in rank order, each with its best-ranked pages."""
     if documents_db is None:
         raise RuntimeError(f"The {source} collection service is not configured even though its retrieval is enabled.")
     pattern = None
@@ -230,9 +230,10 @@ async def _retrieve_source(
         name_condition = models.FieldCondition(key="document_name", match=models.MatchAny(any=matched_names))
         query_filter = models.Filter(must=[*query_filter.must, name_condition])
 
-    hits = await documents_db.hybrid_search(
-        query_text,
-        limit=limit,
+    pages_per_document = config.QdrantConfig.MAX_RETRIEVED_PAGES_PER_DOCUMENT
+    hits = await documents_db.dense_search(
+        query_texts,
+        limit=limit * pages_per_document,
         score_threshold=config.QdrantConfig.MIN_SIMILARITY_SCORE,
         query_filter=query_filter,
         with_payload=models.PayloadSelectorInclude(include=_HIT_PAYLOAD_INCLUDE),
@@ -254,21 +255,22 @@ async def _retrieve_source(
             best_per_page[key] = hit
             order.append(key)
 
-    pages: list[RetrievedPage] = []
-    for key in order[:limit]:
-        hit = best_per_page[key]
-        part = DocumentPagePart.model_validate(hit.payload or {})
-        pages.append(RetrievedPage(part, None))
-    return pages
+    documents: dict[str, list[RetrievedPage]] = {}
+    for key in order:
+        part = DocumentPagePart.model_validate(best_per_page[key].payload or {})
+        document_pages = documents.setdefault(part.attachment_id or part.page_id, [])
+        if len(document_pages) < pages_per_document:
+            document_pages.append(RetrievedPage(part, None))
+    return list(documents.values())[:limit]
 
 
-def _interleave(source_pages: list[list[RetrievedPage]]) -> list[RetrievedPage]:
-    """Rank-interleaves the per-source page lists: first each source's best page, then the second..."""
-    merged: list[RetrievedPage] = []
-    for rank in range(max((len(pages) for pages in source_pages), default=0)):
-        for pages in source_pages:
-            if rank < len(pages):
-                merged.append(pages[rank])
+def _interleave(source_documents: list[list[list[RetrievedPage]]]) -> list[list[RetrievedPage]]:
+    """Rank-interleaves the per-source document lists: first each source's best document, then the second..."""
+    merged: list[list[RetrievedPage]] = []
+    for rank in range(max((len(documents) for documents in source_documents), default=0)):
+        for documents in source_documents:
+            if rank < len(documents):
+                merged.append(documents[rank])
     return merged
 
 

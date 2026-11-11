@@ -10,7 +10,7 @@ import httpx
 import config
 from common import utils
 from common.models import ListedTestCase, TestCase, TestExecutionResult, TestStep
-from common.services.test_management_base import TestManagementClientBase
+from common.services.test_management_base import TestCaseNotFoundError, TestManagementClientBase
 
 logger = utils.get_logger(__name__)
 
@@ -327,7 +327,7 @@ class XrayClient(TestManagementClientBase):
         jql = f"issue = {test_case_key}"
         results = self._fetch_test_cases_by_jql(jql)
         if not results:
-            raise ValueError(f"Test case with key {test_case_key} not found.")
+            raise TestCaseNotFoundError(f"Test case {test_case_key} was not found.")
         return results[0]
 
     def _fetch_test_cases_by_jql(self, jql: str, max_results=100) -> list[TestCase]:

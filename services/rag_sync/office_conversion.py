@@ -19,7 +19,7 @@ _semaphore: asyncio.Semaphore | None = None
 
 
 class OfficeConversionError(RuntimeError):
-    """An office document could not be converted to PDF."""
+    """An office document could not be converted."""
 
 
 def conversion_available() -> bool:
@@ -35,6 +35,15 @@ def conversion_available() -> bool:
 
 async def convert_to_pdf(source_bytes: bytes, file_name: str) -> bytes:
     """Converts one office attachment to PDF under the configured timeout."""
+    return await _convert(source_bytes, file_name, "pdf")
+
+
+async def convert_to_xlsx(source_bytes: bytes, file_name: str) -> bytes:
+    """Converts one spreadsheet attachment to XLSX under the configured timeout."""
+    return await _convert(source_bytes, file_name, "xlsx")
+
+
+async def _convert(source_bytes: bytes, file_name: str, target_format: str) -> bytes:
     global _semaphore
     if _semaphore is None:
         _semaphore = asyncio.Semaphore(config.DocumentRagConfig.OFFICE_CONVERSION_CONCURRENCY)
@@ -48,8 +57,8 @@ async def convert_to_pdf(source_bytes: bytes, file_name: str) -> bytes:
             output_directory = work / "out"
             output_directory.mkdir()
             try:
-                pdf = await asyncio.wait_for(
-                    asyncio.to_thread(_run_soffice, source, output_directory),
+                converted = await asyncio.wait_for(
+                    asyncio.to_thread(_run_soffice, source, output_directory, target_format),
                     timeout=config.DocumentRagConfig.OFFICE_CONVERSION_TIMEOUT_SECONDS + 1,
                 )
             except (TimeoutError, subprocess.TimeoutExpired) as error:
@@ -57,10 +66,10 @@ async def convert_to_pdf(source_bytes: bytes, file_name: str) -> bytes:
                     f"Converting '{safe_name}' timed out after "
                     f"{config.DocumentRagConfig.OFFICE_CONVERSION_TIMEOUT_SECONDS} seconds."
                 ) from error
-            return pdf.read_bytes()
+            return converted.read_bytes()
 
 
-def _run_soffice(source: Path, output_directory: Path) -> Path:
+def _run_soffice(source: Path, output_directory: Path, target_format: str) -> Path:
     """Runs one synchronous LibreOffice process with an isolated temporary profile."""
     soffice = shutil.which("soffice")
     if soffice is None:
@@ -77,7 +86,7 @@ def _run_soffice(source: Path, output_directory: Path) -> Path:
             "--nofirststartwizard",
             f"-env:UserInstallation={Path(profile).as_uri()}",
             "--convert-to",
-            "pdf",
+            target_format,
             "--outdir",
             str(output_directory),
             str(source),
@@ -92,7 +101,7 @@ def _run_soffice(source: Path, output_directory: Path) -> Path:
         if result.returncode != 0:
             raise OfficeConversionError(f"soffice exited with {result.returncode}: {result.stderr.strip()}")
 
-    produced = output_directory / f"{source.stem}.pdf"
+    produced = output_directory / f"{source.stem}.{target_format}"
     if not produced.exists():
-        raise OfficeConversionError(f"soffice produced no PDF for {source.name}.")
+        raise OfficeConversionError(f"soffice produced no {target_format.upper()} for {source.name}.")
     return produced

@@ -151,7 +151,7 @@ class ConfluenceClient:
             {
                 "limit": config.DocumentRagConfig.LIST_PAGE_SIZE,
                 "status": ["current"],
-                "sort": "created",
+                "sort": "created-date",
             },
         )
 

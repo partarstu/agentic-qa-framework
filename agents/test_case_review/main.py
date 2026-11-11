@@ -183,11 +183,12 @@ class TestCaseReviewer:
         """Finds the existing test cases of the project whose coverage overlaps the reviewed one."""
         test_case_key = record.test_case_key
         with _fail_loudly("search", project_key, [test_case_key]):
-            hits = await self.vector_db_service.hybrid_search(
-                record.text,
+            hits = await self.vector_db_service.dense_search(
+                [record.text],
                 limit=config.QdrantConfig.TEST_CASE_DUPLICATE_MAX_CANDIDATES,
                 score_threshold=config.QdrantConfig.TEST_CASE_DUPLICATE_MIN_SCORE,
                 query_filter=_duplicate_candidates_filter(project_key, test_case_key),
+                as_documents=True,
             )
         candidates = _unique_candidates(hits, test_case_key)
         if not candidates:
