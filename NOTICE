@@ -189,9 +189,9 @@ The Dockerfiles install the following software from its publishers while an imag
 
   * Python 3.14 slim base image (Debian trixie)  -  Python Software Foundation License; Debian packages under their own licenses
     https://hub.docker.com/_/python
-  * uv (copied into the base image)  -  dual-licensed Apache-2.0 OR MIT
+  * uv (mounted only while the base image installs its dependencies, not part of any image)  -  dual-licensed Apache-2.0 OR MIT
     https://github.com/astral-sh/uv
-  * OpenJDK 25 JRE (orchestrator image, Debian package)  -  GNU GPL 2.0 with the Classpath Exception
+  * Eclipse Temurin 25 (orchestrator image: a Java runtime reduced with jlink to the modules Allure needs)  -  GNU GPL 2.0 with the Classpath Exception
     https://openjdk.org/legal/gplv2+ce.html
   * Allure Commandline 2.34.1 (orchestrator image)  -  Apache License 2.0
     https://github.com/allure-framework/allure2

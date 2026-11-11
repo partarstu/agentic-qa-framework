@@ -45,6 +45,11 @@ for _agent in (
 os.environ["QWEN_NON_THINKING_PRESENCE_PENALTY"] = ""
 os.environ["QWEN_THINKING_PRESENCE_PENALTY"] = ""
 
+# Document retrieval is off like in CI: a developer's .env may enable it, which makes agent construction
+# require an embedding service. Tests that need retrieval enable it explicitly.
+os.environ["CONFLUENCE_RETRIEVAL_ENABLED"] = "false"
+os.environ["SHAREPOINT_RETRIEVAL_ENABLED"] = "false"
+
 # Provide dummy auth configuration so the now fail-closed auth has valid settings under test,
 # and keep prompt-injection checks off by default (tests that need them opt in explicitly).
 os.environ.setdefault("ORCHESTRATOR_API_KEY", "test-orchestrator-key")
