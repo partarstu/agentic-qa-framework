@@ -198,6 +198,9 @@ jobs:
     runs-on: ubuntu-latest
     # Mostly the image builds: the scripted LLM mock answers every model call at once.
     timeout-minutes: 30
+    env:
+      # tests/smoke/ci.bake.hcl tags the images with this project name, so Compose finds them without building.
+      COMPOSE_PROJECT_NAME: smoke
     steps:
       - name: Checkout repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -214,28 +217,17 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
-      # The base image carries all locked dependencies, so caching it saves the
-      # bulk of the cold-build time; the compose images derive from it and only
-      # copy code on top.
-      - name: Build base image (GHA-cached)
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+      - name: Build the smoke images (GHA-cached)
+        uses: docker/bake-action@59cb1203cd42bcefd40a1b6d73b589e48c86040e # v7.5.0
         with:
-          context: .
-          file: Dockerfile.base
-          tags: agentic-qa-base:latest
+          source: .
+          files: |
+            docker-compose.smoke.yml
+            tests/smoke/ci.bake.hcl
           load: true
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      # The compose build below must see the base image via the local daemon's
-      # image store, which the docker-container builder above does not share.
-      - name: Switch back to the default builder
-        run: docker buildx use default
 
       - name: Start the smoke topology
-        env:
-          COMPOSE_BAKE: "false"
-        run: docker compose -f docker-compose.smoke.yml up -d --build --wait
+        run: docker compose -f docker-compose.smoke.yml up -d --no-build --wait
 
       - name: Run smoke tests
         run: uv run pytest tests/smoke -m smoke -v --durations=10 -o log_cli=true --log-cli-level=INFO
