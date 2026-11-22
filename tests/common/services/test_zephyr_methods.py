@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 
+import config
 from common.models import TestCase, TestExecutionResult, TestStep, TestStepResult
 from common.services.test_management_base import TestCaseNotFoundError
 from common.services.zephyr_client import ZephyrClient
@@ -224,3 +225,29 @@ def test_fetch_test_case_by_key_raises_not_found_only_for_a_missing_test_case(
     response = httpx.Response(status_code, request=httpx.Request("GET", "http://zephyr/testcases/PROJ-T9"))
     with patch("httpx.Client.get", return_value=response), pytest.raises(expected_error):
         zephyr_client.fetch_test_case_by_key("PROJ-T9")
+
+
+def test_fetch_test_case_by_key_does_not_retry_a_missing_test_case(zephyr_client):
+    response = httpx.Response(404, request=httpx.Request("GET", "http://zephyr/testcases/PROJ-T9"))
+    with (
+        patch("httpx.Client.get", return_value=response) as mock_get,
+        patch("common.services.zephyr_client.time.sleep") as mock_sleep,
+        pytest.raises(TestCaseNotFoundError),
+    ):
+        zephyr_client.fetch_test_case_by_key("PROJ-T9")
+
+    assert mock_get.call_count == 1
+    mock_sleep.assert_not_called()
+
+
+def test_other_test_case_requests_still_retry_a_404(zephyr_client):
+    response = httpx.Response(404, request=httpx.Request("GET", "http://zephyr/testcases/PROJ-T9"))
+    with (
+        patch("httpx.Client.get", return_value=response) as mock_get,
+        patch("common.services.zephyr_client.time.sleep") as mock_sleep,
+        pytest.raises(httpx.HTTPStatusError),
+    ):
+        zephyr_client.add_labels_to_test_case("PROJ-T9", ["smoke"])
+
+    assert mock_get.call_count == config.RetryConfig.MAX_RETRIES
+    assert mock_sleep.call_count == config.RetryConfig.MAX_RETRIES - 1

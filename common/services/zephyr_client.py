@@ -4,7 +4,7 @@
 
 import time
 from collections import defaultdict
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from typing import Any
 
 import httpx
@@ -65,8 +65,16 @@ class ZephyrClient(TestManagementClientBase):
             raise ValueError("ZEPHYR_API_TOKEN is not configured in config.py or environment variables.")
         self.headers = {"Authorization": f"Bearer {self.api_token}", "Content-Type": "application/json"}
 
-    def _request(self, request_fn: Callable[..., httpx.Response], *args, **kwargs) -> httpx.Response:
+    def _request(
+        self,
+        request_fn: Callable[..., httpx.Response],
+        *args,
+        retryable_status_codes: Collection[int] | None = None,
+        **kwargs,
+    ) -> httpx.Response:
         """Makes an HTTP request with retry on transient errors."""
+        if retryable_status_codes is None:
+            retryable_status_codes = config.RetryConfig.RETRYABLE_STATUS_CODES
         for attempt in range(config.RetryConfig.MAX_RETRIES):
             try:
                 response = request_fn(*args, **kwargs)
@@ -83,10 +91,7 @@ class ZephyrClient(TestManagementClientBase):
                 else:
                     raise
             except httpx.HTTPStatusError as e:
-                if (
-                    e.response.status_code in config.RetryConfig.RETRYABLE_STATUS_CODES
-                    and attempt < config.RetryConfig.MAX_RETRIES - 1
-                ):
+                if e.response.status_code in retryable_status_codes and attempt < config.RetryConfig.MAX_RETRIES - 1:
                     delay = config.RetryConfig.RETRY_BASE_DELAY_SECONDS * (2**attempt)
                     logger.warning(
                         f"Zephyr API HTTP {e.response.status_code} error "
@@ -443,9 +448,15 @@ class ZephyrClient(TestManagementClientBase):
     def _get_test_case_url(self, test_case_key):
         return f"{self.base_url}/testcases/{test_case_key}"
 
-    def _get_test_case_data(self, client, tc_url):
+    def _get_test_case_data(self, client, tc_url, retryable_status_codes: Collection[int] | None = None):
         logger.debug(f"Fetching current data for test case from {tc_url}")
-        test_case_response = self._request(client.get, tc_url, headers=self.headers, timeout=CLIENT_TIMEOUT)
+        test_case_response = self._request(
+            client.get,
+            tc_url,
+            headers=self.headers,
+            timeout=CLIENT_TIMEOUT,
+            retryable_status_codes=retryable_status_codes,
+        )
         return test_case_response.json()
 
     @staticmethod
@@ -460,7 +471,10 @@ class ZephyrClient(TestManagementClientBase):
             url = self._get_test_case_url(test_case_key)
             logger.info(f"Fetching test case: {test_case_key} from {url}")
             try:
-                test_case_data = self._get_test_case_data(client, url)
+                # An unknown key is the caller's mistake, not a transient failure, so it fails on the first answer.
+                test_case_data = self._get_test_case_data(
+                    client, url, retryable_status_codes=config.RetryConfig.RETRYABLE_STATUS_CODES - {404}
+                )
             except httpx.HTTPStatusError as e:
                 if e.response.status_code == 404:
                     raise TestCaseNotFoundError(f"Test case {test_case_key} was not found.") from e
